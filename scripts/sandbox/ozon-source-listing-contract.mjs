@@ -14,6 +14,7 @@ const CONFIRMATION_PHRASE = 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING';
 const READONLY_CONFIRMATION_PHRASE = 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK';
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_PREFLIGHT_BYTES = 64 * 1024;
+const MAX_APPROVAL_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_PREFLIGHT_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -39,6 +40,7 @@ function usage() {
     'Usage:',
     '  node scripts/sandbox/ozon-source-listing-contract.mjs --execute --payload <compiled.json> [options]',
     '  node scripts/sandbox/ozon-source-listing-contract.mjs --preflight --offer-id <reserved-offer-id> [options]',
+    '  node scripts/sandbox/ozon-source-listing-contract.mjs --reconcile --audit <existing-audit.json> [options]',
     '',
     'Required environment:',
     `  OZON_SANDBOX_CONFIRM=${CONFIRMATION_PHRASE}`,
@@ -53,6 +55,8 @@ function usage() {
     '  --offer-id <id>             Reserved offer ID for --preflight',
     '  --preflight-receipt <path>  Exact v2 read-only receipt required by --execute',
     '  --preflight-sha256 <digest> Approved receipt SHA-256 required by --execute',
+    '  --approval-manifest <path> Independent write approval bound to payload and preflight',
+    '  --approval-sha256 <digest> Approved write approval SHA-256 required by --execute',
     '  --audit <path>              Audit JSON path (default: tmp/sandbox-audits/<run>.json)',
     '  --poll-interval-ms <ms>     1000..60000 (default: 5000)',
     '  --poll-timeout-ms <ms>      10000..1800000 (default: 300000)',
@@ -75,10 +79,13 @@ function parseArguments(argv) {
   const options = {
     execute: false,
     preflight: false,
+    reconcile: false,
     help: false,
     payloadPath: null,
     preflightReceiptPath: null,
     preflightSha256: null,
+    approvalManifestPath: null,
+    approvalSha256: null,
     auditPath: null,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     pollTimeoutMs: DEFAULT_POLL_TIMEOUT_MS,
@@ -86,16 +93,17 @@ function parseArguments(argv) {
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--execute' || argument === '--preflight' || argument === '--help') {
+    if (argument === '--execute' || argument === '--preflight' || argument === '--reconcile' || argument === '--help') {
       if (seen.has(argument)) throw new ContractError(`Duplicate argument: ${argument}`);
       seen.add(argument);
       if (argument === '--execute') options.execute = true;
       if (argument === '--preflight') options.preflight = true;
+      if (argument === '--reconcile') options.reconcile = true;
       if (argument === '--help') options.help = true;
       continue;
     }
     if (![
-      '--payload', '--offer-id', '--preflight-receipt', '--preflight-sha256', '--audit',
+      '--payload', '--offer-id', '--preflight-receipt', '--preflight-sha256', '--approval-manifest', '--approval-sha256', '--audit',
       '--poll-interval-ms', '--poll-timeout-ms',
     ].includes(argument)) {
       throw new ContractError(`Unknown argument: ${argument}`);
@@ -109,6 +117,8 @@ function parseArguments(argv) {
     if (argument === '--offer-id') options.offerId = value;
     if (argument === '--preflight-receipt') options.preflightReceiptPath = resolve(value);
     if (argument === '--preflight-sha256') options.preflightSha256 = value.toLowerCase();
+    if (argument === '--approval-manifest') options.approvalManifestPath = resolve(value);
+    if (argument === '--approval-sha256') options.approvalSha256 = value.toLowerCase();
     if (argument === '--audit') options.auditPath = resolve(value);
     if (argument === '--poll-interval-ms') {
       options.pollIntervalMs = parseInteger(value, argument, 1_000, 60_000);
@@ -121,14 +131,17 @@ function parseArguments(argv) {
 }
 
 function requireExecutionGates(options, environment) {
-  if (options.execute === options.preflight) {
-    throw new ContractError('Refusing to run without the explicit --execute flag or --preflight flag; writes require explicit --execute.');
+  if ([options.execute, options.preflight, options.reconcile].filter(Boolean).length !== 1) {
+    throw new ContractError('Refusing to run without an explicit --execute flag, --preflight flag, or --reconcile flag.');
   }
   if (options.execute && environment.OZON_SANDBOX_CONFIRM !== CONFIRMATION_PHRASE) {
     throw new ContractError('Refusing to run without the exact OZON_SANDBOX_CONFIRM phrase.');
   }
   if (options.preflight && environment.OZON_SANDBOX_READONLY_CONFIRM !== READONLY_CONFIRMATION_PHRASE) {
     throw new ContractError('Refusing to run without the exact OZON_SANDBOX_READONLY_CONFIRM phrase.');
+  }
+  if (options.reconcile && environment.OZON_SANDBOX_READONLY_CONFIRM !== READONLY_CONFIRMATION_PHRASE) {
+    throw new ContractError('Refusing to reconcile without the exact OZON_SANDBOX_READONLY_CONFIRM phrase.');
   }
   if (environment.OZON_SANDBOX_TEST_SHOP !== 'true') {
     throw new ContractError('Refusing to run unless OZON_SANDBOX_TEST_SHOP=true identifies dedicated test credentials.');
@@ -149,6 +162,18 @@ function requireExecutionGates(options, environment) {
   if (options.execute && (!options.preflightReceiptPath || !/^[a-f0-9]{64}$/u.test(options.preflightSha256 || ''))) {
     throw new ContractError('--preflight-receipt and --preflight-sha256 are required for --execute.');
   }
+  if (options.execute && !options.approvalManifestPath) {
+    throw new ContractError('--approval-manifest and --approval-sha256 are required for --execute.');
+  }
+  if (options.execute && !/^[a-f0-9]{64}$/u.test(options.approvalSha256 || '')) {
+    throw new ContractError('--approval-sha256 is required for --execute.');
+  }
+  if (options.reconcile && !options.auditPath) {
+    throw new ContractError('--audit is required with --reconcile.');
+  }
+  if (options.reconcile && (options.payloadPath || options.preflightReceiptPath || options.preflightSha256 || options.offerId)) {
+    throw new ContractError('--reconcile accepts only the existing --audit path.');
+  }
   if (options.execute && options.offerId) {
     throw new ContractError('--offer-id is only valid with --preflight; execute derives it from the compiler envelope.');
   }
@@ -157,6 +182,9 @@ function requireExecutionGates(options, environment) {
   }
   if (options.preflight && (options.preflightReceiptPath || options.preflightSha256)) {
     throw new ContractError('Preflight receipt arguments are only valid with --execute.');
+  }
+  if (!options.execute && (options.approvalManifestPath || options.approvalSha256)) {
+    throw new ContractError('--approval-manifest and --approval-sha256 are only valid with --execute.');
   }
   if (options.preflight) {
     validateReservedOfferId(options.offerId, '--offer-id');
@@ -568,6 +596,84 @@ async function readPreflightReceipt(options, credentials, environment, offerId) 
   };
 }
 
+async function readApprovalManifest(options, credentials, environment, offerId, payloadBytes, preflight) {
+  const bytes = await readFile(options.approvalManifestPath);
+  if (bytes.byteLength < 1 || bytes.byteLength > MAX_APPROVAL_BYTES) {
+    throw new ContractError('Approval manifest size is invalid');
+  }
+  if (sha256(bytes) !== options.approvalSha256) {
+    throw new ContractError('Approval manifest SHA-256 does not match the file.');
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new ContractError('Approval manifest is not valid JSON');
+  }
+  const value = record(manifest, 'Approval manifest');
+  const expectedKeys = [
+    'approvalId', 'approvedAt', 'clientIdSha256', 'credentialRevisionSha256', 'deviceId',
+    'expiresAt', 'offerId', 'operations', 'operatorId', 'payloadSha256',
+    'preflightReceiptSha256', 'schema', 'sellerName', 'shopAlias',
+  ];
+  if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new ContractError('Approval manifest contains unexpected or missing fields');
+  }
+  const approvedAt = Date.parse(value.approvedAt);
+  const expiresAt = Date.parse(value.expiresAt);
+  const now = Date.now();
+  if (value.schema !== 'ss-erp/ozon-source-listing-approval/v1') {
+    throw new ContractError('Approval manifest schema is invalid.');
+  }
+  if (!exactBoundedText(value.approvalId, 200)
+    || !exactBoundedText(value.operatorId, 200)
+    || !exactBoundedText(value.deviceId, 200)) {
+    throw new ContractError('Approval manifest approval, operator, and device identities are invalid.');
+  }
+  if (!Number.isFinite(approvedAt) || !Number.isFinite(expiresAt)
+    || approvedAt > now + MAX_CLOCK_SKEW_MS
+    || expiresAt <= now
+    || expiresAt <= approvedAt
+    || expiresAt - approvedAt > MAX_PREFLIGHT_AGE_MS) {
+    throw new ContractError('Approval manifest is expired or has an invalid approval window.');
+  }
+  if (!exactBoundedText(value.shopAlias, 100)
+    || value.shopAlias !== environment.OZON_SANDBOX_TEST_SHOP_ALIAS) {
+    throw new ContractError('Approval manifest shop identity does not match the configured test shop.');
+  }
+  if (!exactBoundedText(value.sellerName, 200)
+    || value.sellerName !== environment.OZON_SANDBOX_EXPECTED_SELLER_NAME) {
+    throw new ContractError('Approval manifest seller identity does not match the expected Ozon seller.');
+  }
+  if (value.offerId !== offerId) {
+    throw new ContractError('Approval manifest offer ID does not match the compiler payload.');
+  }
+  if (value.preflightReceiptSha256 !== preflight.sha256) {
+    throw new ContractError('Approval manifest preflight receipt SHA-256 does not match.');
+  }
+  if (value.payloadSha256 !== sha256(payloadBytes)) {
+    throw new ContractError('Approval manifest payload SHA-256 does not match.');
+  }
+  if (value.clientIdSha256 !== clientIdFingerprint(credentials.clientId)) {
+    throw new ContractError('Approval client ID fingerprint does not match current credentials.');
+  }
+  if (value.credentialRevisionSha256 !== credentialFingerprint(credentials)) {
+    throw new ContractError('Approval credential revision does not match current credentials.');
+  }
+  if (!Array.isArray(value.operations)
+    || JSON.stringify(value.operations) !== JSON.stringify(['IMPORT', 'ARCHIVE'])) {
+    throw new ContractError('Approval operations must be exactly IMPORT and ARCHIVE.');
+  }
+  return {
+    sha256: options.approvalSha256,
+    approvalId: value.approvalId,
+    operatorId: value.operatorId,
+    deviceId: value.deviceId,
+    approvedAt: new Date(approvedAt).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
+  };
+}
+
 let importCallCount = 0;
 
 async function submitProductOnce(credentials, payload) {
@@ -760,6 +866,71 @@ async function cleanupPublishedProducts(credentials, offerIds, knownResults) {
   };
 }
 
+async function reconcileExistingAudit(options, credentials, environment) {
+  const bytes = await readFile(options.auditPath);
+  if (bytes.byteLength < 1 || bytes.byteLength > MAX_PAYLOAD_BYTES) {
+    throw new ContractError('Existing audit size is invalid');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new ContractError('Existing audit is not valid JSON');
+  }
+  const audit = record(parsed, 'Existing sandbox audit');
+  if (audit.schema !== 'ss-erp/ozon-source-listing-sandbox-audit/v1'
+    || audit.automaticResubmitAllowed !== false) {
+    throw new ContractError('Reconcile requires an immutable sandbox audit with resubmission disabled.');
+  }
+  const shop = record(audit.shop, 'Existing sandbox audit shop');
+  const offerIds = Array.isArray(audit.payload?.offerIds)
+    ? [...new Set(audit.payload.offerIds.map((value) => validateReservedOfferId(value)))].sort()
+    : [];
+  if (offerIds.length !== 1) {
+    throw new ContractError('Reconcile requires exactly one reserved offer ID from the audit.');
+  }
+  const expectedClientIdHash = clientIdFingerprint(credentials.clientId);
+  const expectedCredentialHash = credentialFingerprint(credentials);
+  if (shop.alias !== environment.OZON_SANDBOX_TEST_SHOP_ALIAS
+    || shop.sellerName !== environment.OZON_SANDBOX_EXPECTED_SELLER_NAME
+    || shop.clientIdSha256 !== expectedClientIdHash
+    || shop.credentialRevisionSha256 !== expectedCredentialHash) {
+    throw new ContractError('Existing audit identity does not match the current dedicated test credentials.');
+  }
+  const seller = await lookupSeller(credentials);
+  if (seller.name !== environment.OZON_SANDBOX_EXPECTED_SELLER_NAME) {
+    throw new ContractError('Current Seller Info identity differs from the audited test shop.');
+  }
+  const products = await lookupProducts(credentials, offerIds);
+  const matching = products.filter((item) => item.offerId === offerIds[0]);
+  const state = matching.length === 0
+    ? 'NOT_FOUND'
+    : matching.every((item) => item.archived) ? 'ARCHIVED' : 'FOUND_UNARCHIVED';
+  audit.reconciliation = {
+    attemptedAt: new Date().toISOString(),
+    mode: 'READ_ONLY_RECONCILE',
+    state,
+    offerIds,
+    products: matching.map((item) => ({
+      offerId: item.offerId,
+      productId: item.productId,
+      archived: item.archived,
+    })),
+    networkWritesSent: false,
+  };
+  const auditSha256 = await writeAudit(options.auditPath, audit, credentials);
+  console.log(JSON.stringify({
+    mode: 'READ_ONLY_RECONCILE',
+    state,
+    offerIds,
+    auditPath: options.auditPath,
+    auditSha256,
+    networkWritesSent: false,
+    cleanupAttempted: false,
+  }));
+  return state === 'FOUND_UNARCHIVED' ? 2 : 0;
+}
+
 function defaultAuditPath(runId) {
   const timestamp = new Date().toISOString().replace(/[:.]/gu, '-');
   return resolve('tmp', 'sandbox-audits', `ozon-source-listing-${timestamp}-${runId}.json`);
@@ -830,6 +1001,14 @@ async function main() {
     return audit.finalState === 'READY_FOR_SEPARATE_WRITE_APPROVAL' ? 0 : 2;
   }
 
+  if (options.reconcile) {
+    const credentials = {
+      clientId: process.env.OZON_SANDBOX_TEST_CLIENT_ID.trim(),
+      apiKey: process.env.OZON_SANDBOX_TEST_API_KEY.trim(),
+    };
+    return reconcileExistingAudit(options, credentials, process.env);
+  }
+
   const payloadBytes = await readFile(options.payloadPath);
   let parsed;
   try {
@@ -845,6 +1024,11 @@ async function main() {
     || options.preflightReceiptPath === auditPath) {
     throw new ContractError('Preflight receipt path must differ from payload and audit paths');
   }
+  if (options.approvalManifestPath === options.payloadPath
+    || options.approvalManifestPath === options.preflightReceiptPath
+    || options.approvalManifestPath === auditPath) {
+    throw new ContractError('Approval manifest path must differ from payload, preflight, and audit paths');
+  }
   const credentials = {
     clientId: process.env.OZON_SANDBOX_TEST_CLIENT_ID.trim(),
     apiKey: process.env.OZON_SANDBOX_TEST_API_KEY.trim(),
@@ -854,6 +1038,14 @@ async function main() {
     credentials,
     process.env,
     compiled.offerIds[0],
+  );
+  const approval = await readApprovalManifest(
+    options,
+    credentials,
+    process.env,
+    compiled.offerIds[0],
+    payloadBytes,
+    preflight,
   );
   const audit = {
     schema: 'ss-erp/ozon-source-listing-sandbox-audit/v1',
@@ -873,6 +1065,15 @@ async function main() {
       sha256: preflight.sha256,
       runId: preflight.runId,
       finishedAt: preflight.finishedAt,
+    },
+    approval: {
+      schema: 'ss-erp/ozon-source-listing-approval/v1',
+      sha256: approval.sha256,
+      approvalId: approval.approvalId,
+      operatorId: approval.operatorId,
+      deviceId: approval.deviceId,
+      approvedAt: approval.approvedAt,
+      expiresAt: approval.expiresAt,
     },
     payload: {
       sha256: sha256(payloadBytes),

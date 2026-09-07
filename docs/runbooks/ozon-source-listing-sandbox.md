@@ -15,7 +15,7 @@ node scripts/sandbox/ozon-source-listing-contract.mjs \
   --audit tmp/sandbox-audits/ozon-source-listing-readonly-<suffix>.json
 ```
 
-Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately approved write. Record the emitted preflight receipt SHA-256 in that approval. `OFFER_NOT_AVAILABLE` or `PREFLIGHT_FAILED` blocks the write.
+Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately approved write. Record the emitted preflight receipt SHA-256 in a separate approval manifest. `OFFER_NOT_AVAILABLE` or `PREFLIGHT_FAILED` blocks the write.
 
 ## Preconditions
 
@@ -24,6 +24,7 @@ Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately app
 3. Give the item a new lowercase offer ID beginning with `ss-erp-sbx-`, for example `ss-erp-sbx-20260715-a1b2c3`. Never reuse an offer ID from an earlier probe.
 4. Confirm all images are intentionally public test assets and that the item contains no real customer, supplier, credential, or personal data.
 5. Choose a new audit path. Existing audit evidence is never overwritten intentionally.
+6. Obtain an immutable approval manifest for exactly `IMPORT` and `ARCHIVE`, binding the ERP/Ozon shop identity, Seller name, credential revision fingerprint, preflight receipt SHA-256, payload SHA-256, reserved offer ID, approval ID, operator, device, and expiry.
 
 The script performs a pre-submit offer lookup and fails closed if the reserved offer already exists. It accepts exactly one item to limit blast radius.
 
@@ -42,7 +43,9 @@ node scripts/sandbox/ozon-source-listing-contract.mjs \
   --execute \
   --payload tmp/sandbox/compiled-ozon-envelope.json \
   --preflight-receipt /operator-private/ozon-readonly-preflight.json \
-  --preflight-sha256 <approved-receipt-sha256>
+  --preflight-sha256 <approved-receipt-sha256> \
+  --approval-manifest /operator-private/ozon-write-approval.json \
+  --approval-sha256 <approved-approval-sha256>
 ```
 
 The secret injector must provide these two variables without echoing their values:
@@ -64,6 +67,8 @@ node scripts/sandbox/ozon-source-listing-contract.mjs \
   --payload tmp/sandbox/compiled-ozon-envelope.json \
   --preflight-receipt /operator-private/ozon-readonly-preflight.json \
   --preflight-sha256 <approved-receipt-sha256> \
+  --approval-manifest /operator-private/ozon-write-approval.json \
+  --approval-sha256 <approved-approval-sha256> \
   --audit tmp/sandbox-audits/ozon-source-listing-20260715-a1b2c3.json
 ```
 
@@ -80,6 +85,15 @@ The script:
 7. Uses known `product_id` values or `/v3/product/info/list` offer lookup, then attempts `/v1/product/archive` cleanup.
 
 Archive acceptance is followed by a product-info lookup. Only `ARCHIVE_VERIFIED` is a completed cleanup; `ARCHIVE_ACCEPTED`, `CLEANUP_PENDING`, or a failed cleanup must be completed manually in the test shop and recorded beside the audit artifact.
+
+For an `UNKNOWN`, `CLEANUP_PENDING`, or `CLEANUP_FAILED` audit, use read-only reconciliation. It reuses only the audited reserved offer ID and current credential fingerprints; it never calls import or archive:
+
+```bash
+export OZON_SANDBOX_READONLY_CONFIRM=READ_ONLY_SELLER_INFO_AND_OFFER_CHECK
+node scripts/sandbox/ozon-source-listing-contract.mjs \
+  --reconcile \
+  --audit tmp/sandbox-audits/ozon-source-listing-20260715-a1b2c3.json
+```
 
 ## UNKNOWN Outcomes
 

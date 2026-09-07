@@ -141,6 +141,55 @@ function writePreflightReceipt(directory, {
   return { receiptPath, receiptSha256: sha256(bytes) };
 }
 
+function writeApprovalManifest(directory, {
+  payloadBytes,
+  preflightReceiptSha256,
+  offerId,
+  clientId = 'test-client-id',
+  apiKey = 'test-api-key',
+  shopAlias = 'TEST',
+  sellerName = 'Dedicated Test Shop',
+  operations = ['IMPORT', 'ARCHIVE'],
+} = {}) {
+  const manifestPath = join(directory, 'approval.json');
+  const manifest = {
+    schema: 'ss-erp/ozon-source-listing-approval/v1',
+    approvalId: 'ozon-approval-1',
+    operatorId: 'operator-1',
+    deviceId: 'device-1',
+    approvedAt: new Date(Date.now() - 1_000).toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+    shopAlias,
+    sellerName,
+    clientIdSha256: clientIdFingerprint(clientId),
+    credentialRevisionSha256: credentialFingerprint(clientId, apiKey),
+    preflightReceiptSha256,
+    offerId,
+    payloadSha256: sha256(payloadBytes),
+    operations,
+  };
+  const bytes = `${JSON.stringify(manifest, null, 2)}\n`;
+  writeFileSync(manifestPath, bytes);
+  return { manifestPath, manifestSha256: sha256(bytes) };
+}
+
+function approvalArgs(directory, payloadPath, preflight, {
+  offerId,
+  clientId = 'test-client-id',
+  apiKey = 'test-api-key',
+  ...overrides
+} = {}) {
+  const approval = writeApprovalManifest(directory, {
+    payloadBytes: readFileSync(payloadPath),
+    preflightReceiptSha256: preflight.receiptSha256,
+    offerId,
+    clientId,
+    apiKey,
+    ...overrides,
+  });
+  return ['--approval-manifest', approval.manifestPath, '--approval-sha256', approval.manifestSha256];
+}
+
 function executionEnvironment(extra = {}) {
   return cleanEnvironment({
     OZON_SANDBOX_CONFIRM: 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING',
@@ -154,10 +203,11 @@ function executionEnvironment(extra = {}) {
 }
 
 function run(args, environment = {}) {
+  const finalEnvironment = cleanEnvironment(environment);
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: cleanEnvironment(environment),
+    env: finalEnvironment,
     timeout: 10_000,
   });
 }
@@ -352,6 +402,7 @@ test('sandbox probe rejects a non-reserved offer before any network request', ()
       '--execute', '--payload', payloadPath,
       '--preflight-receipt', preflight.receiptPath,
       '--preflight-sha256', preflight.receiptSha256,
+      ...approvalArgs(directory, payloadPath, preflight, { offerId }),
     ], executionEnvironment());
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /reserved ss-erp-sbx- lowercase prefix/u);
@@ -375,10 +426,18 @@ test('sandbox execution rejects raw payloads and missing or drifted preflight bi
     const preflight = writePreflightReceipt(directory, {
       offerId, clientId: 'test-client-id', apiKey: 'test-api-key',
     });
+    const missingApproval = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', preflight.receiptSha256,
+    ], executionEnvironment({ SS_ERP_DISABLE_AUTO_APPROVAL: 'true' }));
+    assert.equal(missingApproval.status, 64);
+    assert.match(missingApproval.stderr, /--approval-manifest and --approval-sha256 are required/u);
     const rawPayload = run([
       '--execute', '--payload', payloadPath,
       '--preflight-receipt', preflight.receiptPath,
       '--preflight-sha256', preflight.receiptSha256,
+      ...approvalArgs(directory, payloadPath, preflight, { offerId }),
     ], executionEnvironment());
     assert.equal(rawPayload.status, 64);
     assert.match(rawPayload.stderr, /production compiler envelope/u);
@@ -388,6 +447,7 @@ test('sandbox execution rejects raw payloads and missing or drifted preflight bi
       '--execute', '--payload', payloadPath,
       '--preflight-receipt', preflight.receiptPath,
       '--preflight-sha256', '0'.repeat(64),
+      ...approvalArgs(directory, payloadPath, preflight, { offerId }),
     ], executionEnvironment());
     assert.equal(wrongDigest.status, 64);
     assert.match(wrongDigest.stderr, /preflight receipt SHA-256 does not match/u);
@@ -396,6 +456,7 @@ test('sandbox execution rejects raw payloads and missing or drifted preflight bi
       '--execute', '--payload', payloadPath,
       '--preflight-receipt', preflight.receiptPath,
       '--preflight-sha256', preflight.receiptSha256,
+      ...approvalArgs(directory, payloadPath, preflight, { offerId }),
     ], executionEnvironment({ OZON_SANDBOX_TEST_API_KEY: 'rotated-test-api-key' }));
     assert.equal(wrongCredential.status, 64);
     assert.match(wrongCredential.stderr, /credential revision does not match/u);
@@ -410,6 +471,7 @@ test('sandbox execution rejects raw payloads and missing or drifted preflight bi
       '--execute', '--payload', payloadPath,
       '--preflight-receipt', stalePreflight.receiptPath,
       '--preflight-sha256', stalePreflight.receiptSha256,
+      ...approvalArgs(directory, payloadPath, stalePreflight, { offerId }),
     ], executionEnvironment());
     assert.equal(staleReceipt.status, 64);
     assert.match(staleReceipt.stderr, /Preflight receipt is stale/u);
@@ -417,6 +479,39 @@ test('sandbox execution rejects raw payloads and missing or drifted preflight bi
       `${missingReceipt.stdout}${missingReceipt.stderr}${rawPayload.stdout}${rawPayload.stderr}${wrongDigest.stdout}${wrongDigest.stderr}${wrongCredential.stdout}${wrongCredential.stderr}${staleReceipt.stdout}${staleReceipt.stderr}`,
       /api-seller\.ozon\.ru|test-api-key|rotated-test-api-key/u,
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('sandbox execution rejects approval manifests with missing operation or identity bindings before network', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-approval-'));
+  const payloadPath = join(directory, 'compiled.json');
+  const offerId = 'ss-erp-sbx-approval-1';
+  try {
+    const payloadBytes = Buffer.from(JSON.stringify(compiledCandidate(offerId)));
+    writeFileSync(payloadPath, payloadBytes);
+    const preflight = writePreflightReceipt(directory, {
+      offerId,
+      clientId: 'test-client-id',
+      apiKey: 'test-api-key',
+    });
+    for (const [label, overrides, expected] of [
+      ['missing archive operation', { operations: ['IMPORT'] }, /Approval/u],
+      ['wrong seller', { sellerName: 'Other Seller' }, /Approval/u],
+      ['wrong payload', { payloadBytes: Buffer.from(JSON.stringify(compiledCandidate('ss-erp-sbx-other-1'))) }, /Approval/u],
+    ]) {
+      const args = [
+        '--execute', '--payload', payloadPath,
+        '--preflight-receipt', preflight.receiptPath,
+        '--preflight-sha256', preflight.receiptSha256,
+        ...approvalArgs(directory, payloadPath, preflight, { offerId, ...overrides }),
+      ];
+      const result = run(args, executionEnvironment({ SS_ERP_DISABLE_AUTO_APPROVAL: 'true' }));
+      assert.equal(result.status, 64, label);
+      assert.match(result.stderr, expected, label);
+      assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /api-seller\.ozon\.ru/u, label);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -469,6 +564,13 @@ globalThis.fetch = async (input) => {
       OZON_SANDBOX_TEST_API_KEY: 'test-api-secret',
       SS_ERP_SANDBOX_CALL_LOG: callLogPath,
     });
+    const approval = writeApprovalManifest(directory, {
+      payloadBytes: readFileSync(payloadPath),
+      preflightReceiptSha256: preflight.receiptSha256,
+      offerId,
+      clientId: 'test-client-credential',
+      apiKey: 'test-api-secret',
+    });
     const result = spawnSync(process.execPath, [
       '--import',
       pathToFileURL(preloadPath).href,
@@ -480,6 +582,10 @@ globalThis.fetch = async (input) => {
       preflight.receiptPath,
       '--preflight-sha256',
       preflight.receiptSha256,
+      '--approval-manifest',
+      approval.manifestPath,
+      '--approval-sha256',
+      approval.manifestSha256,
       '--audit',
       auditPath,
     ], {
@@ -553,6 +659,12 @@ globalThis.fetch = async (input) => {
 };
 `);
 
+    const approval = writeApprovalManifest(directory, {
+      payloadBytes: readFileSync(payloadPath),
+      preflightReceiptSha256: preflight.receiptSha256,
+      offerId,
+    });
+
     const result = spawnSync(process.execPath, [
       '--import',
       pathToFileURL(preloadPath).href,
@@ -564,6 +676,10 @@ globalThis.fetch = async (input) => {
       preflight.receiptPath,
       '--preflight-sha256',
       preflight.receiptSha256,
+      '--approval-manifest',
+      approval.manifestPath,
+      '--approval-sha256',
+      approval.manifestSha256,
       '--audit',
       auditPath,
     ], {
@@ -590,6 +706,63 @@ globalThis.fetch = async (input) => {
     assert.equal(audit.poll.total, 1);
     assert.equal(audit.cleanup.state, 'ARCHIVE_VERIFIED');
     assert.deepEqual(audit.cleanup.productIds, [888]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('read-only reconcile reuses an audit offer and never imports or archives', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-reconcile-'));
+  const auditPath = join(directory, 'audit.json');
+  const callLogPath = join(directory, 'calls.log');
+  const preloadPath = join(directory, 'mock-fetch.mjs');
+  const offerId = 'ss-erp-sbx-reconcile-1';
+  try {
+    const audit = {
+      schema: 'ss-erp/ozon-source-listing-sandbox-audit/v1',
+      automaticResubmitAllowed: false,
+      shop: {
+        alias: 'TEST', sellerName: 'Dedicated Test Shop',
+        clientIdSha256: clientIdFingerprint('test-client-id'),
+        credentialRevisionSha256: credentialFingerprint('test-client-id', 'test-api-key'),
+      },
+      payload: { offerIds: [offerId] },
+    };
+    writeFileSync(auditPath, JSON.stringify(audit));
+    writeFileSync(preloadPath, `
+import { appendFileSync } from 'node:fs';
+const json = (value) => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
+globalThis.fetch = async (input) => {
+  const path = new URL(String(input)).pathname;
+  appendFileSync(process.env.SS_ERP_SANDBOX_CALL_LOG, path + '\\n');
+  if (path === '/v1/seller/info') return json({ company: { name: 'Dedicated Test Shop' } });
+  if (path === '/v3/product/info/list') return json({ items: [{ offer_id: '${offerId}', id: 901, is_archived: true }] });
+  throw new Error('unexpected mutating endpoint: ' + path);
+};
+`);
+    const result = spawnSync(process.execPath, [
+      '--import', pathToFileURL(preloadPath).href,
+      scriptPath, '--reconcile', '--audit', auditPath,
+    ], {
+      cwd: process.cwd(), encoding: 'utf8',
+      env: cleanEnvironment({
+        OZON_SANDBOX_READONLY_CONFIRM: 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK',
+        OZON_SANDBOX_TEST_SHOP: 'true',
+        OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
+        OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+        OZON_SANDBOX_TEST_SHOP_ALIAS: 'TEST',
+        OZON_SANDBOX_EXPECTED_SELLER_NAME: 'Dedicated Test Shop',
+        SS_ERP_SANDBOX_CALL_LOG: callLogPath,
+      }),
+      timeout: 10_000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(readFileSync(callLogPath, 'utf8').trim().split(/\r?\n/u), [
+      '/v1/seller/info', '/v3/product/info/list',
+    ]);
+    const updated = JSON.parse(readFileSync(auditPath, 'utf8'));
+    assert.equal(updated.reconciliation.state, 'ARCHIVED');
+    assert.equal(updated.reconciliation.networkWritesSent, false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
