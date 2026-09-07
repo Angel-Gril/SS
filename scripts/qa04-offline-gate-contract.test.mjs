@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import test from 'node:test';
 import {
   QA04_OFFLINE_STEPS,
   qa04OfflineManifest,
@@ -266,6 +268,65 @@ const drift = runQa04OfflineGate({
 });
 assert.equal(drift, 1);
 assert.match(driftStderr.value(), /Git provenance changed while the gate was running/u);
+
+for (const status of ['M  tracked.mjs\n', '?? extra.mjs\n']) {
+  let executed = 0;
+  const git = gitRunnerSequence({ repositoryRoot, firstStatus: status });
+  assert.equal(runQa04OfflineGate({
+    repositoryRoot, gitRunner: git.runner, stdout: memoryWriter(), stderr: memoryWriter(),
+    runner() { executed += 1; return { status: 0 }; },
+  }), 1);
+  assert.equal(executed, 0, 'staged and untracked changes must fail before QA commands');
+}
+
+test('real Git proves clean, unstaged, staged, untracked, root and post-run worktree boundaries', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-qa04-git-'));
+  try {
+    const hooks = path.join(root, 'empty-hooks');
+    mkdirSync(hooks);
+    const git = (...args) => {
+      const result = spawnSync('git', [
+        '-c', `core.hooksPath=${hooks}`, '-c', 'commit.gpgsign=false',
+        '-c', 'user.name=QA04 Fixture', '-c', 'user.email=qa04@example.invalid', ...args,
+      ], { cwd: root, encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    git('init', '--quiet');
+    const tracked = path.join(root, 'tracked.mjs');
+    const original = 'export const value = 1;\n';
+    writeFileSync(tracked, original);
+    git('add', '--', 'tracked.mjs');
+    git('commit', '--quiet', '-m', 'fixture');
+    assert.equal(readQa04GitProvenance({ repositoryRoot: root }).gitCommit, git('rev-parse', 'HEAD'));
+    writeFileSync(tracked, 'export const value = 2;\n');
+    assert.throws(() => readQa04GitProvenance({ repositoryRoot: root }), /worktree is not clean/u);
+    git('add', '--', 'tracked.mjs');
+    assert.throws(() => readQa04GitProvenance({ repositoryRoot: root }), /worktree is not clean/u);
+    writeFileSync(tracked, original);
+    git('add', '--', 'tracked.mjs');
+    const untracked = path.join(root, 'untracked.mjs');
+    writeFileSync(untracked, 'export {};\n');
+    git('config', 'status.showUntrackedFiles', 'no');
+    assert.throws(() => readQa04GitProvenance({ repositoryRoot: root }), /worktree is not clean/u);
+    rmSync(untracked);
+    assert.throws(() => readQa04GitProvenance({ repositoryRoot: hooks }), /root does not match/u);
+    let executed = 0;
+    const stderr = memoryWriter();
+    assert.equal(runQa04OfflineGate({
+      repositoryRoot: root, stdout: memoryWriter(), stderr,
+      runner() {
+        executed += 1;
+        if (executed === QA04_OFFLINE_STEPS.length) writeFileSync(tracked, 'export const value = 3;\n');
+        return { status: 0 };
+      },
+    }), 1);
+    assert.equal(executed, QA04_OFFLINE_STEPS.length);
+    assert.match(stderr.value(), /Git provenance rejected after checks: worktree is not clean/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const listResult = spawnSync(process.execPath, ['scripts/qa04-offline-gate.mjs', '--list'], {
   cwd: repositoryRoot,
