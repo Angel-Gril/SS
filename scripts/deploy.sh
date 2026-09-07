@@ -118,7 +118,10 @@ if [[ ! "$KEEP_RELEASES" =~ ^[1-9][0-9]{0,2}$ ]] || [ "$KEEP_RELEASES" -gt 100 ]
   fail "KEEP_RELEASES must be an integer from 1 through 100"
 fi
 
-SSH_ARGS=(-o BatchMode=yes)
+# Keep the long build/migration session alive while the remote host is quiet.
+# Apply the bounded policy to both ssh and scp so the control channel cannot
+# silently expire during a deployment.
+SSH_ARGS=(-o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=20)
 if [ -n "$SSH_CONFIG_FILE" ]; then
   platform="$(uname -s)"
   if [[ "$platform" =~ ^(MINGW|MSYS) ]]; then

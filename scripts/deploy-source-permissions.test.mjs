@@ -37,6 +37,11 @@ function run(command, args, options = {}) {
 
 function releasePublicationInstallerBlock() {
   const deploy = readFileSync(join(process.cwd(), 'scripts', 'deploy.sh'), 'utf8');
+  assert.match(
+    deploy,
+    /SSH_ARGS=\(-o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=20\)/u,
+    'deployment SSH channel must use bounded keepalive settings',
+  );
   const start = deploy.indexOf('EXTENSION_RELEASE_SIGNATURE_BASENAME=');
   const end = deploy.indexOf('\necho "[deploy] Recording closed post-build source manifest"', start);
   assert.ok(start >= 0 && end > start, 'release publication installer block must remain extractable');
