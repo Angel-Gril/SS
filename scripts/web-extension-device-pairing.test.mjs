@@ -192,7 +192,7 @@ test('pairing choices stay immutable while a claim or manual-code request is in 
     'loadingContext',
     'extensionConnection',
     "currentSessionId: currentDeviceSession?.id || ''",
-    'hydratedSessionId: hydratedSessionRef.current',
+    'hydratedSessionId',
   ]) {
     assert.match(source, new RegExp(input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -240,6 +240,8 @@ test('grant comparison detects both added and removed permissions', () => {
 });
 
 test('pairing choices stay locked until the verified active session is hydrated', () => {
+  assert.match(source, /const \[hydratedSessionId, setHydratedSessionId\] = useState\(''\)/);
+  assert.match(source, /hydratedSessionRef\.current = session\.id;\s*setHydratedSessionId\(session\.id\)/);
   const ready = {
     connecting: false,
     pairingBusy: false,

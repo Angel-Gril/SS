@@ -186,6 +186,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [copied, setCopied] = useState<CopyTarget>(null);
   const pairingGenerationRef = useRef(0);
   const hydratedSessionRef = useRef('');
+  const [hydratedSessionId, setHydratedSessionId] = useState('');
   const requestedScopesRef = useRef<string[]>([]);
 
   const erpUrl = typeof window !== 'undefined' ? getApiBase() : '';
@@ -219,7 +220,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     loadingContext,
     extensionConnection,
     currentSessionId: currentDeviceSession?.id || '',
-    hydratedSessionId: hydratedSessionRef.current,
+    hydratedSessionId,
   });
   const pairingFields: Array<[label: string, value: string, target: Exclude<CopyTarget, null>]> =
     pairing
@@ -241,7 +242,10 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
 
   function handleOpenChange(nextOpen: boolean) {
     beginPairingGeneration();
-    if (nextOpen) hydratedSessionRef.current = '';
+    if (nextOpen) {
+      hydratedSessionRef.current = '';
+      setHydratedSessionId('');
+    }
     if (!nextOpen) {
       requestedScopesRef.current = [];
       setLoadingContext(false);
@@ -420,6 +424,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       || session.shopIds.some((id) => !shops.some((shop) => shop.id === id))
       || hydratedSessionRef.current === session.id) return;
     hydratedSessionRef.current = session.id;
+    setHydratedSessionId(session.id);
     setSelectedShopIds(session.shopIds.slice());
     const requestedScopes = requestedScopesRef.current;
     setSelectedScopes([
