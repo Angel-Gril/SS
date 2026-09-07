@@ -206,10 +206,12 @@ describe('source listing workflow attribute integration', () => {
       freshness: 'OFFICIAL_REFRESH_REQUIRED',
     }));
     expect(authoritativeContext.loadSourceContext).toHaveBeenCalledTimes(1);
-    expect(authoritativeContext.loadDictionary).toHaveBeenCalledTimes(1);
-    expect(authoritativeContext.loadDictionary).toHaveBeenCalledWith(expect.objectContaining({
+    expect(authoritativeContext.loadDictionary).not.toHaveBeenCalled();
+    expect(authoritativeContext.searchDictionary).toHaveBeenCalledTimes(1);
+    expect(authoritativeContext.searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
       freshness: 'OFFICIAL_REFRESH_REQUIRED',
       schema,
+      queries: ['Белый'],
     }));
 
     const compatibleContext = build();
@@ -219,11 +221,12 @@ describe('source listing workflow attribute integration', () => {
     expect(compatible).toEqual(authoritative.result);
     expect(compatibleContext.loadSchema).toHaveBeenCalledTimes(1);
     expect(compatibleContext.loadSourceContext).toHaveBeenCalledTimes(1);
-    expect(compatibleContext.loadDictionary).toHaveBeenCalledTimes(1);
+    expect(compatibleContext.loadDictionary).not.toHaveBeenCalled();
+    expect(compatibleContext.searchDictionary).toHaveBeenCalledTimes(1);
   });
 
   it('resolves source suggestions through exact official search results and explains blockers', async () => {
-    const { service, loadDictionary } = build();
+    const { service, loadDictionary, searchDictionary } = build();
     const workspace = await service.getWorkspace({ ownerUserId: 'owner-1', draft: draft() });
 
     expect(workspace.schemaRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -257,7 +260,12 @@ describe('source listing workflow attribute integration', () => {
       'attributes.100.skuValues.sku-1',
       'attributes.300',
     ]);
-    expect(loadDictionary).toHaveBeenCalledTimes(1);
+    expect(loadDictionary).not.toHaveBeenCalled();
+    expect(searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      field: expect.objectContaining({ attributeId: 100 }),
+      queries: ['白色', 'Белый'],
+      freshness: 'OFFICIAL_REFRESH_REQUIRED',
+    }));
   });
 
   it('rejects a forged strict-dictionary hint and stores only canonical server values', async () => {
@@ -749,7 +757,7 @@ describe('source listing workflow attribute integration', () => {
   });
 
   it('retains only reviewed values that remain valid in the replacement schema', async () => {
-    const { service } = build();
+    const { service, searchDictionary } = build();
     const current = draft({
       attributes: {
         values: {
@@ -773,6 +781,38 @@ describe('source listing workflow attribute integration', () => {
       '100': current.attributes.values['100'],
       packageWeightG: current.attributes.values.packageWeightG,
     });
+    expect(searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      field: expect.objectContaining({ attributeId: 100 }),
+      freshness: 'OFFICIAL_REFRESH_REQUIRED',
+    }));
+  });
+
+  it('drops a reviewed dictionary value that is not official in the replacement category', async () => {
+    const active = build();
+    active.searchDictionary.mockResolvedValue({
+      scope: 'SEARCH_RESULTS',
+      catalogRevision: 'catalog-1',
+      source: 'ozon_api',
+      resultExhaustive: true,
+      values: [{ id: 202, value: 'Красный' }],
+    });
+    const current = draft({
+      attributes: { values: {
+        '100': reviewedSkuColors(),
+        packageWeightG: {
+          value: 500, source: 'MANUAL', reviewed: true, evidence: ['owner:package-label'],
+        },
+      } },
+    });
+
+    const retained = await active.service.retainCompatibleReviewedValues({
+      ownerUserId: 'owner-1',
+      draft: current,
+      category: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' },
+    });
+
+    expect(retained).toEqual({ packageWeightG: current.attributes.values.packageWeightG });
+    expect(active.loadDictionary).not.toHaveBeenCalled();
   });
 
   it('searches only the current official dictionary with a bounded result set', async () => {
@@ -809,10 +849,71 @@ describe('source listing workflow attribute integration', () => {
     active.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
     const workspace = await active.service.getWorkspace({ ownerUserId: 'owner-1', draft: draft() });
     expect(workspace.validationPreview.status).toBe('INVALID');
-    expect(workspace.suggestions['100']).toBeUndefined();
+    expect(workspace.suggestions['100']).toMatchObject({
+      value: ['白色'],
+      dictionaryMatches: [{ dictionaryValueId: 201, canonicalValue: 'Белый' }],
+    });
     expect(workspace.validationPreview.blockers).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'OZON_ATTRIBUTE_SKU_VALUE_REQUIRED' }),
     ]));
+    expect(active.loadDictionary).not.toHaveBeenCalled();
+    expect(active.searchDictionary).toHaveBeenCalled();
+  });
+
+  it('keeps a workspace readable from self-consistent persisted selections without a full dictionary', async () => {
+    const active = build({
+      sourceStandard: { ...sourceStandard, colors: [] },
+      skuStandards: {},
+    });
+    active.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+    const workspace = await active.service.getWorkspace({
+      ownerUserId: 'owner-1',
+      draft: draft({
+        attributes: { values: {
+          '100': reviewedSkuColors(),
+          '300': {
+            value: 'Фабрика Вектор', source: 'MANUAL', reviewed: true,
+            evidence: ['owner:supplier-document'], manualReview: 'CONFIRMED',
+          },
+        } },
+      }),
+    });
+
+    expect(workspace.validationPreview).toMatchObject({ status: 'VALID', blockers: [] });
+    expect(active.loadDictionary).not.toHaveBeenCalled();
+    expect(active.searchDictionary).not.toHaveBeenCalled();
+  });
+
+  it('refreshes persisted selections with targeted official search but keeps publish cache-only', async () => {
+    const current = draft({
+      attributes: { values: {
+        '100': reviewedSkuColors(),
+        '300': {
+          value: 'Фабрика Вектор', source: 'MANUAL', reviewed: true,
+          evidence: ['owner:supplier-document'], manualReview: 'CONFIRMED',
+        },
+      } },
+    });
+    const active = build();
+    active.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+
+    await expect(active.service.validateAuthoritative({
+      ownerUserId: 'owner-1', draft: current,
+    })).resolves.toMatchObject({ result: { status: 'VALID', blockers: [] } });
+    expect(active.searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      field: expect.objectContaining({ attributeId: 100 }),
+      queries: ['Белый'],
+      freshness: 'OFFICIAL_REFRESH_REQUIRED',
+    }));
+    expect(active.loadDictionary).not.toHaveBeenCalled();
+
+    await expect(active.service.validateForPublish({
+      ownerUserId: 'owner-1', draft: current,
+    })).rejects.toThrow('dictionary exceeded row limit');
+    expect(active.loadDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      freshness: 'PUBLISH_CACHE_REQUIRED',
+      field: expect.objectContaining({ attributeId: 100 }),
+    }));
   });
 
   it('verifies an explicit official selection with targeted search when the full dictionary is too large', async () => {

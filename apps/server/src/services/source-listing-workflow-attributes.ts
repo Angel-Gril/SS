@@ -655,6 +655,98 @@ export function createSourceListingWorkflowAttributeService(
     return value;
   }
 
+  function persistedDictionarySelections(input: {
+    draft: OzonListingDraft;
+    field: OzonNormalizedAttributeField;
+    value: OzonListingDraftAttributeValue;
+  }): Array<{ id: number; value: string }> | null {
+    const leaves = input.field.ownership === 'SKU'
+      ? selectedSkuKeys(input.draft).map((skuKey) => input.value.skuValues?.[skuKey])
+      : [input.value];
+    const selections: Array<{ id: number; value: string }> = [];
+    for (const leaf of leaves) {
+      if (!leaf) return null;
+      const rawValues = fieldValues(leaf.value, input.field);
+      if (!rawValues) return null;
+      const matches = Array.isArray(leaf.dictionaryMatches) && leaf.dictionaryMatches.length
+        ? leaf.dictionaryMatches
+        : rawValues.length === 1 && leaf.dictionaryMatch?.dictionaryValueId
+          ? [{
+              inputValue: rawValues[0],
+              dictionaryValueId: leaf.dictionaryMatch.dictionaryValueId,
+              canonicalValue: leaf.dictionaryMatch.canonicalValue,
+            }]
+          : [];
+      if (matches.length !== rawValues.length) return null;
+      for (let index = 0; index < rawValues.length; index += 1) {
+        const match = matches[index];
+        const id = Number(match?.dictionaryValueId);
+        const canonicalValue = String(match?.canonicalValue ?? '')
+          .normalize('NFKC')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!Number.isSafeInteger(id)
+          || id <= 0
+          || !canonicalValue
+          || normalizedText(rawValues[index]) !== normalizedText(canonicalValue)) return null;
+        selections.push({ id, value: canonicalValue });
+      }
+    }
+    return [...new Map(selections.map((selection) => [selection.id, selection])).values()];
+  }
+
+  async function targetedValidationDictionary(input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+    schema: OzonNormalizedAttributeSchema;
+    field: OzonNormalizedAttributeField;
+    selections: Array<{ id: number; value: string }>;
+  }): Promise<SourceListingAttributeDictionary> {
+    if (!options.searchDictionary) {
+      return dictionaryFor({ ...input, freshness: 'OFFICIAL_REFRESH_REQUIRED' });
+    }
+    let results: SourceListingAttributeDictionarySearchResult[];
+    try {
+      results = await mapWithConcurrency(input.selections, 4, (selection) => options.searchDictionary!({
+        ownerUserId: input.ownerUserId,
+        draft: input.draft,
+        schema: input.schema,
+        field: input.field,
+        queries: [selection.value],
+        freshness: 'OFFICIAL_REFRESH_REQUIRED',
+      }));
+    } catch (error) {
+      throw new SourceListingWorkflowAttributeError(
+        'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+        503,
+        `${input.field.name} official selections could not be refreshed`,
+        { cause: error },
+      );
+    }
+    if (results.some((result) => result.source !== 'ozon_api'
+      || result.catalogRevision !== input.schema.catalogRevision)) {
+      throw new SourceListingWorkflowAttributeError(
+        'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+        503,
+        `${input.field.name} official selection authority is stale`,
+      );
+    }
+    const officialValues = [...new Map(results.flatMap((result) => result.values)
+      .map((entry) => [Number(entry.id), entry])).values()];
+    return {
+      complete: true,
+      source: 'ozon_api',
+      values: input.selections.flatMap((selection) => {
+        const official = officialValues.find((entry) => Number(entry.id) === selection.id
+          && normalizedText(entry.value) === normalizedText(selection.value));
+        return official ? [{
+          id: selection.id,
+          value: String(official.value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim(),
+        }] : [];
+      }),
+    };
+  }
+
   async function validationFields(input: {
     ownerUserId: string;
     draft: OzonListingDraft;
@@ -669,7 +761,26 @@ export function createSourceListingWorkflowAttributeService(
       if (!value || field.valuePolicy === 'FREE_TEXT' || !field.dictionaryId) {
         return { ...field, key };
       }
-      const dictionary = await dictionaryFor({ ...input, field });
+      const freshness = input.freshness || 'CACHE_ALLOWED';
+      const persistedSelections = persistedDictionarySelections({
+        draft: input.draft,
+        field,
+        value,
+      });
+      const dictionary = freshness === 'PUBLISH_CACHE_REQUIRED' || !persistedSelections
+        ? await dictionaryFor({ ...input, field })
+        : freshness === 'OFFICIAL_REFRESH_REQUIRED'
+          ? await targetedValidationDictionary({
+              ownerUserId: input.ownerUserId,
+              draft: input.draft,
+              schema: input.schema,
+              field,
+              selections: persistedSelections,
+            })
+          : {
+              complete: true,
+              values: persistedSelections,
+            };
       return {
         ...field,
         key,
@@ -942,16 +1053,36 @@ export function createSourceListingWorkflowAttributeService(
       if (!field || field.valuePolicy === 'FREE_TEXT') continue;
       let dictionary: SourceListingAttributeDictionary;
       try {
-        dictionary = await dictionaryFor({
-          ownerUserId: input.ownerUserId,
-          draft: input.draft,
-          schema: input.schema,
-          field,
-          dictionaryMemo: input.dictionaryMemo,
-        });
+        if (options.searchDictionary) {
+          const aliases = (await Promise.all(values.map((value) => aliasesFor({
+            field,
+            value,
+            sourceContext: input.sourceContext,
+          })))).flat();
+          const result = await options.searchDictionary({
+            ownerUserId: input.ownerUserId,
+            draft: input.draft,
+            schema: input.schema,
+            field,
+            queries: [...new Set(aliases.map((value) => String(value ?? '').normalize('NFKC').trim())
+              .filter(Boolean))],
+            freshness: 'OFFICIAL_REFRESH_REQUIRED',
+          });
+          if (result.source !== 'ozon_api'
+            || result.catalogRevision !== input.schema.catalogRevision) continue;
+          dictionary = { complete: true, source: 'ozon_api', values: result.values };
+        } else {
+          dictionary = await dictionaryFor({
+            ownerUserId: input.ownerUserId,
+            draft: input.draft,
+            schema: input.schema,
+            field,
+            dictionaryMemo: input.dictionaryMemo,
+          });
+        }
       } catch {
-        // An oversized or temporarily unavailable full dictionary cannot
-        // authorize an AI suggestion. Preserve the blocked source value.
+        // Unavailable official authority cannot authorize an AI suggestion.
+        // Preserve the source value as blocked for explicit manual review.
         continue;
       }
       if (!dictionary.complete) continue;
@@ -1495,6 +1626,7 @@ export function createSourceListingWorkflowAttributeService(
               schema: { ...schema, fields: [field] },
               values: { [key]: candidateRoot },
               selectedSkuKeys: [skuKey],
+              freshness: 'OFFICIAL_REFRESH_REQUIRED',
               dictionaryMemo,
             });
             if (fieldAccepted(result, field.attributeId)) {
@@ -1515,6 +1647,7 @@ export function createSourceListingWorkflowAttributeService(
           ...input,
           schema: { ...schema, fields: [field] },
           values: { [key]: value },
+          freshness: 'OFFICIAL_REFRESH_REQUIRED',
           dictionaryMemo,
         });
         if (fieldAccepted(result, field.attributeId)) retained[key] = structuredClone(value);
