@@ -108,8 +108,8 @@ function compiledCandidate(offerId) {
 
 function writePreflightReceipt(directory, {
   offerId,
-  clientId,
-  apiKey,
+  clientId = 'test-client-id',
+  apiKey = 'test-api-key',
   shopAlias = 'TEST',
   sellerName = 'Dedicated Test Shop',
   finishedAt = new Date(Date.now() - 1_000).toISOString(),
@@ -711,6 +711,72 @@ globalThis.fetch = async (input) => {
   }
 });
 
+test('successful import with unverified archive is marked CLEANUP_PENDING instead of SUCCEEDED', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-cleanup-pending-'));
+  const payloadPath = join(directory, 'compiled.json');
+  const auditPath = join(directory, 'audit.json');
+  const callLogPath = join(directory, 'calls.log');
+  const preloadPath = join(directory, 'mock-fetch.mjs');
+  const offerId = 'ss-erp-sbx-contract-pending-1';
+  try {
+    writeFileSync(payloadPath, JSON.stringify(compiledCandidate(offerId)));
+    const preflight = writePreflightReceipt(directory, { offerId });
+    const approval = writeApprovalManifest(directory, {
+      payloadBytes: readFileSync(payloadPath),
+      preflightReceiptSha256: preflight.receiptSha256,
+      offerId,
+    });
+    writeFileSync(preloadPath, `
+import { appendFileSync } from 'node:fs';
+let lookupCount = 0;
+const json = (value) => new Response(JSON.stringify(value), {
+  status: 200,
+  headers: { 'content-type': 'application/json' },
+});
+globalThis.fetch = async (input) => {
+  const path = new URL(String(input)).pathname;
+  appendFileSync(process.env.SS_ERP_SANDBOX_CALL_LOG, path + '\\n');
+  if (path === '/v1/seller/info') return json({ company: { name: 'Dedicated Test Shop' } });
+  if (path === '/v3/product/info/list') {
+    lookupCount += 1;
+    return json({ items: lookupCount === 1 ? [] : [{
+      offer_id: '${offerId}', id: 999, is_archived: false,
+    }] });
+  }
+  if (path === '/v3/product/import') return json({ result: { task_id: 321 } });
+  if (path === '/v1/product/import/info') return json({
+    result: { items: [{ offer_id: '${offerId}', product_id: 999, status: 'imported', errors: [] }] },
+  });
+  if (path === '/v1/product/archive') return json({ result: true });
+  throw new Error('unexpected mocked endpoint: ' + path);
+};
+`);
+    const result = spawnSync(process.execPath, [
+      '--import', pathToFileURL(preloadPath).href,
+      scriptPath, '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', preflight.receiptSha256,
+      '--approval-manifest', approval.manifestPath,
+      '--approval-sha256', approval.manifestSha256,
+      '--audit', auditPath,
+      '--poll-interval-ms', '1000',
+    ], {
+      cwd: process.cwd(), encoding: 'utf8',
+      env: executionEnvironment({ SS_ERP_SANDBOX_CALL_LOG: callLogPath }),
+      timeout: 15_000,
+    });
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    const audit = JSON.parse(readFileSync(auditPath, 'utf8'));
+    assert.equal(audit.finalState, 'CLEANUP_PENDING');
+    assert.equal(audit.cleanup.state, 'ARCHIVE_ACCEPTED');
+    assert.notEqual(audit.finalState, 'SUCCEEDED');
+    assert.equal(readFileSync(callLogPath, 'utf8').split(/\r?\n/u).filter(Boolean)
+      .filter((path) => path === '/v3/product/import').length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('read-only reconcile reuses an audit offer and never imports or archives', () => {
   const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-reconcile-'));
   const auditPath = join(directory, 'audit.json');
@@ -760,9 +826,12 @@ globalThis.fetch = async (input) => {
     assert.deepEqual(readFileSync(callLogPath, 'utf8').trim().split(/\r?\n/u), [
       '/v1/seller/info', '/v3/product/info/list',
     ]);
-    const updated = JSON.parse(readFileSync(auditPath, 'utf8'));
+    const summary = JSON.parse(result.stdout.trim());
+    assert.equal(summary.sourceAuditPath, auditPath);
+    const updated = JSON.parse(readFileSync(summary.auditPath, 'utf8'));
     assert.equal(updated.reconciliation.state, 'ARCHIVED');
     assert.equal(updated.reconciliation.networkWritesSent, false);
+    assert.notEqual(summary.auditPath, auditPath);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

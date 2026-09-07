@@ -853,7 +853,7 @@ async function findCleanupProducts(credentials, offerIds, knownResults) {
 
 async function cleanupPublishedProducts(credentials, offerIds, knownResults) {
   const productIds = await findCleanupProducts(credentials, offerIds, knownResults);
-  if (!productIds.length) return { state: 'NO_PRODUCT_FOUND', productIds: [] };
+  if (!productIds.length) return { state: 'CLEANUP_PENDING', productIds: [] };
   const response = await ozonRequest(credentials, ARCHIVE_PATH, { product_id: productIds });
   if (!response.ok || response.body?.result !== true) {
     throw new Error(`Ozon archive returned HTTP ${response.status}`);
@@ -918,12 +918,14 @@ async function reconcileExistingAudit(options, credentials, environment) {
     })),
     networkWritesSent: false,
   };
-  const auditSha256 = await writeAudit(options.auditPath, audit, credentials);
+  const reconciledAuditPath = `${options.auditPath}.reconciled-${randomUUID()}.json`;
+  const auditSha256 = await writeAudit(reconciledAuditPath, audit, credentials);
   console.log(JSON.stringify({
     mode: 'READ_ONLY_RECONCILE',
     state,
     offerIds,
-    auditPath: options.auditPath,
+    sourceAuditPath: options.auditPath,
+    auditPath: reconciledAuditPath,
     auditSha256,
     networkWritesSent: false,
     cleanupAttempted: false,
