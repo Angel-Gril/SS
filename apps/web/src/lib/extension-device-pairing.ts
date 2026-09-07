@@ -4,6 +4,23 @@ export function equalStringSets(left: readonly string[], right: readonly string[
   return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value));
 }
 
+export function extensionPairingSelectionLocked(input: {
+  connecting: boolean;
+  pairingBusy: boolean;
+  hasPairingCode: boolean;
+  loadingContext: boolean;
+  extensionConnection: 'checking' | 'unavailable' | 'unpaired' | 'paired' | 'error';
+  currentSessionId: string;
+  hydratedSessionId: string;
+}): boolean {
+  if (input.connecting || input.pairingBusy || input.hasPairingCode || input.loadingContext) {
+    return true;
+  }
+  if (input.extensionConnection === 'checking') return true;
+  return input.extensionConnection === 'paired'
+    && (!input.currentSessionId || input.hydratedSessionId !== input.currentSessionId);
+}
+
 export interface AutoConnectShopCandidate {
   id: string;
   platform: string;

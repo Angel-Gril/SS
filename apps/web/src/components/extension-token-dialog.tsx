@@ -17,7 +17,10 @@ import { api, getApiBase, type ApiResponse } from '@/lib/api';
 import {
   sendToExtension,
 } from '@/lib/extension-device-bridge';
-import { equalStringSets } from '@/lib/extension-device-pairing';
+import {
+  equalStringSets,
+  extensionPairingSelectionLocked,
+} from '@/lib/extension-device-pairing';
 
 interface ExtensionTokenDialogProps {
   trigger?: React.ReactNode;
@@ -209,7 +212,15 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     shopIds: selectedShopIds,
     scopes: selectedScopes,
   });
-  const pairingSelectionLocked = connecting || pairingBusy || Boolean(pairing);
+  const pairingSelectionLocked = extensionPairingSelectionLocked({
+    connecting,
+    pairingBusy,
+    hasPairingCode: Boolean(pairing),
+    loadingContext,
+    extensionConnection,
+    currentSessionId: currentDeviceSession?.id || '',
+    hydratedSessionId: hydratedSessionRef.current,
+  });
   const pairingFields: Array<[label: string, value: string, target: Exclude<CopyTarget, null>]> =
     pairing
       ? [

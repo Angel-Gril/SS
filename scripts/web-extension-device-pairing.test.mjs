@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {
   equalStringSets,
+  extensionPairingSelectionLocked,
   singleActiveOzonShopIds,
 } from '../apps/web/src/lib/extension-device-pairing.ts';
 
@@ -183,7 +184,18 @@ test('one-click pairing revokes a visible manual pairing code before issuing ano
 });
 
 test('pairing choices stay immutable while a claim or manual-code request is in flight', () => {
-  assert.match(source, /const pairingSelectionLocked = connecting \|\| pairingBusy \|\| Boolean\(pairing\)/);
+  assert.match(source, /const pairingSelectionLocked = extensionPairingSelectionLocked\(\{/);
+  for (const input of [
+    'connecting',
+    'pairingBusy',
+    'hasPairingCode: Boolean(pairing)',
+    'loadingContext',
+    'extensionConnection',
+    "currentSessionId: currentDeviceSession?.id || ''",
+    'hydratedSessionId: hydratedSessionRef.current',
+  ]) {
+    assert.match(source, new RegExp(input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
   assert.match(source, /disabled=\{pairingSelectionLocked\}/);
 });
 
@@ -225,6 +237,39 @@ test('grant comparison detects both added and removed permissions', () => {
   assert.equal(equalStringSets(['capture:write'], ['capture:write', 'media:execute']), false);
   assert.equal(equalStringSets(['capture:write', 'media:execute'], ['capture:write']), false);
   assert.equal(equalStringSets(['shop-b', 'shop-a'], ['shop-a', 'shop-b']), true);
+});
+
+test('pairing choices stay locked until the verified active session is hydrated', () => {
+  const ready = {
+    connecting: false,
+    pairingBusy: false,
+    hasPairingCode: false,
+    loadingContext: false,
+    extensionConnection: 'paired',
+    currentSessionId: 'session-1',
+    hydratedSessionId: 'session-1',
+  };
+  assert.equal(extensionPairingSelectionLocked(ready), false);
+  assert.equal(extensionPairingSelectionLocked({ ...ready, loadingContext: true }), true);
+  assert.equal(extensionPairingSelectionLocked({
+    ...ready,
+    extensionConnection: 'checking',
+  }), true);
+  assert.equal(extensionPairingSelectionLocked({
+    ...ready,
+    hydratedSessionId: '',
+  }), true);
+  assert.equal(extensionPairingSelectionLocked({
+    ...ready,
+    currentSessionId: '',
+    hydratedSessionId: '',
+  }), true);
+  assert.equal(extensionPairingSelectionLocked({
+    ...ready,
+    extensionConnection: 'unpaired',
+    currentSessionId: '',
+    hydratedSessionId: '',
+  }), false);
 });
 
 test('tenant owners can inspect and revoke paired devices', () => {
