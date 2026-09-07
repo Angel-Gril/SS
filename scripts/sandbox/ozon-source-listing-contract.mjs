@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -410,11 +410,19 @@ async function writeAudit(auditPath, audit, credentials) {
   const safeAudit = redactedClone(audit);
   const credentialSafeAudit = redactCredentialValues(safeAudit, credentials);
   const serialized = JSON.stringify(credentialSafeAudit, null, 2);
-  await writeFile(auditPath, `${serialized}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
-  return sha256(`${serialized}\n`);
+  const bytes = `${serialized}\n`;
+  const temporaryPath = `${auditPath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, bytes, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await rename(temporaryPath, auditPath);
+  } finally {
+    await unlink(temporaryPath).catch(() => {});
+  }
+  return sha256(bytes);
 }
 
 async function sleep(milliseconds) {

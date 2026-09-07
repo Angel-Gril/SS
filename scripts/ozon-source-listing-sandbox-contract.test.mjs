@@ -607,6 +607,9 @@ test('sandbox source keeps submission single-shot, prefix-bound, redacted, and n
   assert.match(source, /'\[REDACTED\]'/u);
   assert.match(source, /redactCredentialValues/u);
   assert.match(source, /'\[REDACTED_SECRET\]'/u);
+  assert.match(source, /flag: 'wx'/u);
+  assert.match(source, /await rename\(temporaryPath, auditPath\)/u);
+  assert.match(source, /await unlink\(temporaryPath\)\.catch/u);
   assert.match(source, /OZON_SANDBOX_TEST_CLIENT_ID/u);
   assert.match(source, /OZON_SANDBOX_TEST_API_KEY/u);
   assert.match(source, /OZON_SANDBOX_EXPECTED_SELLER_NAME/u);
