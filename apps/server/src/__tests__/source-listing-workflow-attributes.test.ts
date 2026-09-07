@@ -815,6 +815,77 @@ describe('source listing workflow attribute integration', () => {
     ]));
   });
 
+  it('verifies an explicit official selection with targeted search when the full dictionary is too large', async () => {
+    const active = build();
+    active.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+
+    const values = await active.service.prepareManualValues({
+      ownerUserId: 'owner-1',
+      actorUserId: 'owner-1',
+      draft: draft(),
+      changes: [{
+        attributeId: 100,
+        skuKey: 'sku-1',
+        value: ['Белый'],
+        dictionaryValueIds: [201],
+        evidence: ['ozon-api-search:100:201'],
+      }],
+    });
+
+    expect(values['100']?.skuValues?.['sku-1']).toMatchObject({
+      value: ['Белый'],
+      source: 'MANUAL',
+      reviewed: true,
+      evidence: ['ozon-api-search:100:201'],
+      dictionaryMatches: [{
+        inputValue: 'Белый',
+        dictionaryValueId: 201,
+        canonicalValue: 'Белый',
+      }],
+    });
+    expect(active.searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      field: expect.objectContaining({ attributeId: 100 }),
+      queries: ['Белый'],
+      freshness: 'OFFICIAL_REFRESH_REQUIRED',
+    }));
+    expect(active.loadDictionary).not.toHaveBeenCalled();
+  });
+
+  it('rejects a forged targeted-search selection and reports unavailable official authority', async () => {
+    const forged = build();
+    forged.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+    await expect(forged.service.prepareManualValues({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', draft: draft(),
+      changes: [{
+        attributeId: 100,
+        skuKey: 'sku-1',
+        value: ['Белый'],
+        dictionaryValueIds: [202],
+        evidence: ['ozon-api-search:100:202'],
+      }],
+    })).rejects.toMatchObject({
+      code: 'OZON_ATTRIBUTE_VALUE_INVALID',
+      statusCode: 422,
+    });
+
+    const unavailable = build();
+    unavailable.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+    unavailable.searchDictionary.mockRejectedValue(new Error('Ozon search unavailable'));
+    await expect(unavailable.service.prepareManualValues({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', draft: draft(),
+      changes: [{
+        attributeId: 100,
+        skuKey: 'sku-1',
+        value: ['Белый'],
+        dictionaryValueIds: [201],
+        evidence: ['ozon-api-search:100:201'],
+      }],
+    })).rejects.toMatchObject({
+      code: 'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+      statusCode: 503,
+    });
+  });
+
   it('classifies real top-level package, stock and freight facts by affected operation', async () => {
     const { service } = build({
       operationalFacts: {

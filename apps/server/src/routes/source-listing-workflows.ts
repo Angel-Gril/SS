@@ -588,6 +588,7 @@ async function routeError(
     || (loweredCode.includes('conflict') || loweredCode.includes('stale') ? 409 : 500);
   const safeServiceError = credentialError !== null
     || code === 'ai_media_workflow_disabled'
+    || code === 'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE'
     || code === 'source_listing_ai_copy_unavailable';
   const body: Record<string, unknown> = {
     code: 0,

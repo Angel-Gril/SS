@@ -8,6 +8,7 @@ import {
 import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-draft.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 import { SourceWorkflowOzonCredentialsUnavailableError } from '../services/source-workflow-ozon-client.js';
+import { SourceListingWorkflowAttributeError } from '../services/source-listing-workflow-attributes.js';
 
 function draft(overrides: Record<string, unknown> = {}) {
   return {
@@ -710,6 +711,44 @@ describe('source listing workflow routes', () => {
       expectedRevision: 2,
       values: canonicalValues,
     }));
+    await app.close();
+  });
+
+  it('preserves a safe typed error when official attribute selection cannot be verified', async () => {
+    const current = draft({ category: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' } });
+    const attributeWorkflow = {
+      prepareManualValues: vi.fn(async () => {
+        throw new SourceListingWorkflowAttributeError(
+          'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+          503,
+          'Бренд official selection could not be verified',
+        );
+      }),
+    };
+    const service = { getDraft: vi.fn(async () => current) };
+    const { app } = build(service, { attributeWorkflow });
+    await app.ready();
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/draft-1/attributes',
+      payload: {
+        expectedRevision: 2,
+        changes: [{
+          attributeId: 85,
+          value: 'Нет бренда',
+          dictionaryValueId: 126745801,
+          evidence: ['ozon-api-search:85:126745801'],
+        }],
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 0,
+      errorCode: 'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+      msg: 'Бренд official selection could not be verified',
+    });
     await app.close();
   });
 

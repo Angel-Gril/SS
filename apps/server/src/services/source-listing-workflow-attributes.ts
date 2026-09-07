@@ -173,13 +173,15 @@ export class SourceListingWorkflowAttributeError extends Error {
       | 'OZON_ATTRIBUTE_SCHEMA_MISMATCH'
       | 'OZON_ATTRIBUTE_FIELD_UNKNOWN'
       | 'OZON_ATTRIBUTE_FIELD_READ_ONLY'
+      | 'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE'
       | 'OZON_ATTRIBUTE_VALUE_INVALID'
       | 'OZON_ATTRIBUTE_SUGGESTION_UNAVAILABLE'
       | 'OZON_ATTRIBUTE_SUGGESTION_STALE',
-    public readonly statusCode: 409 | 422,
+    public readonly statusCode: 409 | 422 | 503,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'SourceListingWorkflowAttributeError';
   }
 }
@@ -807,7 +809,9 @@ export function createSourceListingWorkflowAttributeService(
     sourceContext: SourceListingAttributeSourceContext;
     hintedIds?: number[];
     dictionaryMemo?: DictionaryMemo;
-  }): Promise<Pick<OzonListingDraftAttributeValue, 'value' | 'dictionaryMatch' | 'dictionaryMatches' | 'manualReview'>> {
+  }): Promise<Pick<OzonListingDraftAttributeValue, 'value' | 'dictionaryMatch' | 'dictionaryMatches' | 'manualReview'> & {
+    validationDictionary?: SourceListingAttributeDictionary;
+  }> {
     const rawValues = fieldValues(input.value, input.field);
     if (!rawValues) throw new SourceListingWorkflowAttributeError(
       'OZON_ATTRIBUTE_VALUE_INVALID', 422, `${input.field.name} has invalid cardinality`,
@@ -820,16 +824,54 @@ export function createSourceListingWorkflowAttributeService(
         manualReview: 'CONFIRMED',
       };
     }
-    const dictionary = await dictionaryFor({
-      ownerUserId: input.ownerUserId,
-      draft: input.draft,
-      schema: input.schema,
-      field: input.field,
-      dictionaryMemo: input.dictionaryMemo,
-    });
-    if (!dictionary.complete) throw new SourceListingWorkflowAttributeError(
-      'OZON_ATTRIBUTE_VALUE_INVALID', 422, `${input.field.name} official dictionary is incomplete`,
-    );
+    let dictionary: SourceListingAttributeDictionary | null = null;
+    let validationDictionary: SourceListingAttributeDictionary | undefined;
+    if (input.hintedIds?.length && options.searchDictionary) {
+      let results: SourceListingAttributeDictionarySearchResult[];
+      try {
+        results = await mapWithConcurrency(rawValues, 4, (value) => options.searchDictionary!({
+          ownerUserId: input.ownerUserId,
+          draft: input.draft,
+          schema: input.schema,
+          field: input.field,
+          queries: [String(value).normalize('NFKC').trim()],
+          freshness: 'OFFICIAL_REFRESH_REQUIRED',
+        }));
+      } catch (error) {
+        throw new SourceListingWorkflowAttributeError(
+          'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+          503,
+          `${input.field.name} official selection could not be verified`,
+          { cause: error },
+        );
+      }
+      if (results.some((result) => result.source !== 'ozon_api'
+        || result.catalogRevision !== input.schema.catalogRevision)) {
+        throw new SourceListingWorkflowAttributeError(
+          'OZON_ATTRIBUTE_DICTIONARY_UNAVAILABLE',
+          503,
+          `${input.field.name} official selection authority is stale`,
+        );
+      }
+      dictionary = {
+        complete: true,
+        source: 'ozon_api',
+        values: [...new Map(results.flatMap((result) => result.values)
+          .map((entry) => [Number(entry.id), entry])).values()],
+      };
+      validationDictionary = dictionary;
+    } else {
+      dictionary = await dictionaryFor({
+        ownerUserId: input.ownerUserId,
+        draft: input.draft,
+        schema: input.schema,
+        field: input.field,
+        dictionaryMemo: input.dictionaryMemo,
+      });
+      if (!dictionary.complete) throw new SourceListingWorkflowAttributeError(
+        'OZON_ATTRIBUTE_VALUE_INVALID', 422, `${input.field.name} official dictionary is incomplete`,
+      );
+    }
     const resolution = await resolveDictionaryMatches({
       field: input.field,
       values: rawValues,
@@ -862,6 +904,7 @@ export function createSourceListingWorkflowAttributeService(
       },
       dictionaryMatches: storedMatches,
       manualReview: allMatched ? 'CONFIRMED' : 'REQUIRED',
+      ...(validationDictionary ? { validationDictionary } : {}),
     };
   }
 
@@ -1239,7 +1282,7 @@ export function createSourceListingWorkflowAttributeService(
             'OZON_ATTRIBUTE_VALUE_INVALID', 422, `${field.name} dictionary selections do not match its values`,
           );
         }
-        const canonical = await canonicalValue({
+        const canonicalResult = await canonicalValue({
           ...input,
           schema,
           field,
@@ -1248,6 +1291,13 @@ export function createSourceListingWorkflowAttributeService(
           hintedIds,
           dictionaryMemo,
         });
+        const { validationDictionary, ...canonical } = canonicalResult;
+        if (validationDictionary) {
+          dictionaryMemo.set(
+            `CACHE_ALLOWED:${field.attributeId}`,
+            Promise.resolve(validationDictionary),
+          );
+        }
         const candidate: OzonListingDraftAttributeValue = {
           ...canonical,
           source: 'MANUAL',
