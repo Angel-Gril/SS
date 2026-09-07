@@ -242,6 +242,9 @@ test('grant comparison detects both added and removed permissions', () => {
 test('pairing choices stay locked until the verified active session is hydrated', () => {
   assert.match(source, /const \[hydratedSessionId, setHydratedSessionId\] = useState\(''\)/);
   assert.match(source, /hydratedSessionRef\.current = session\.id;\s*setHydratedSessionId\(session\.id\)/);
+  assert.match(source, /const pairingOperationLocked = connecting \|\| pairingBusy \|\| Boolean\(pairing\)/);
+  assert.match(source, /if \(!open \|\| loadingContext \|\| pairingOperationLocked/);
+  assert.doesNotMatch(source, /if \(!open \|\| loadingContext \|\| pairingSelectionLocked/);
   const ready = {
     connecting: false,
     pairingBusy: false,

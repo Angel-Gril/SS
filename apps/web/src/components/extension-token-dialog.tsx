@@ -213,6 +213,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     shopIds: selectedShopIds,
     scopes: selectedScopes,
   });
+  const pairingOperationLocked = connecting || pairingBusy || Boolean(pairing);
   const pairingSelectionLocked = extensionPairingSelectionLocked({
     connecting,
     pairingBusy,
@@ -417,7 +418,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   useEffect(() => {
     const status = extensionDeviceStatus;
     const session = currentDeviceSession;
-    if (!open || loadingContext || pairingSelectionLocked
+    if (!open || loadingContext || pairingOperationLocked
       || status?.state !== 'paired' || !session || session.status !== 'ACTIVE'
       || status.ownerUserId !== currentOwnerUserId || status.sessionId !== session.id
       || !equalStringSets(status.scopes || [], session.scopes)
@@ -437,7 +438,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     extensionDeviceStatus,
     loadingContext,
     open,
-    pairingSelectionLocked,
+    pairingOperationLocked,
     shops,
   ]);
 
