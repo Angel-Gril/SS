@@ -61,6 +61,7 @@ const gitignore = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8');
 const dockerignore = fs.readFileSync(path.join(repoRoot, '.dockerignore'), 'utf8');
 const ciWorkflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
 const webPackage = JSON.parse(fs.readFileSync(path.join(webRoot, 'package.json'), 'utf8'));
+const postcssConfig = fs.readFileSync(path.join(webRoot, 'postcss.config.js'), 'utf8');
 const tsconfig = JSON.parse(fs.readFileSync(path.join(webRoot, 'tsconfig.json'), 'utf8'));
 
 assert.equal(
@@ -68,6 +69,8 @@ assert.equal(
   'module',
   'Web package must declare ESM for imported TypeScript modules and Next config',
 );
+assert.match(postcssConfig, /^export default \{/m, 'PostCSS config must use ESM in the ESM Web package');
+assert.doesNotMatch(postcssConfig, /\bmodule\.exports\b/u, 'PostCSS config must not use CommonJS globals');
 
 assert.match(gitignore, /^\.next-dev\/$/m, 'root .next-dev output should be ignored');
 assert.match(gitignore, /^\*\*\/\.next-dev\/$/m, 'workspace .next-dev output should be ignored');
