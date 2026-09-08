@@ -552,6 +552,26 @@ test('rejects billing that is not settled within the approved limit', () => {
   );
 });
 
+for (const billingGate of ['COST_BASIS_MISMATCH', 'PASS']) {
+  test(`does not promote an operator console-review receipt marked ${billingGate}`, () => {
+    withBundle(
+      {
+        mutateReceipt(receipts) {
+          receipts[0].schemaVersion = 6;
+          receipts[0].correlationMethod = 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW';
+          receipts[0].billingGate = billingGate;
+        },
+      },
+      ({ manifestPath }) => {
+        assert.throws(
+          () => reviewAiImageCapabilityCandidate(manifestPath),
+          /BILLING_EVIDENCE_INVALID/u,
+        );
+      },
+    );
+  });
+}
+
 test('rejects a failed human quality check', () => {
   withBundle(
     {

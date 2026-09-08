@@ -24,7 +24,7 @@ The finalizer derives these paths from the validated Operation ID and the privat
 It does not trust `intentPath`, `imagePath`, or other absolute paths stored in a report. Historical
 timestamp-less v2 reports, `PRE_DISPATCH_FAILED`, a report whose generation-specific actual-cost
 field was modified, and any mismatched intent/report/claim are ineligible. Exact intent v3 and
-report v5 require an exact billing attestation (v2 or v3); legacy generations cannot be mixed with
+report v5 require a compatible exact billing attestation; legacy generations cannot be mixed with
 them even when the numeric amount is equivalent. For v4/v5 reports the finalizer validates the explicit
 `operationEndpointSha256` against the immutable intent while retaining `apiBaseSha256` as the exact
 Registry-promotion digest. Exact v3 intents independently bind that same API Base digest.
@@ -309,6 +309,84 @@ does not expose evidence compatible with the exact meter and correlation rules a
 open until the attestation contract is explicitly extended and reviewed; the public list price must
 not be copied into `actualCost` as a substitute.
 
+## Xiaoyi Console Bill And Account-Credit Review
+
+Attestation v5 is a separate, opt-in evidence contract for a successful Xiaoyi `TEXT_TO_IMAGE`
+request. It supports the exact image API/model and the square or portrait single-image profile.
+It cannot settle another Provider, an edit, a rejection, or an unresolved technical outcome.
+The existing v1-v4 contracts are unchanged.
+
+Use this only when the account owner supplies the request-specific console bill and explicitly
+confirms that one displayed USD credit costs one CNY. A dollar symbol or the platform's general
+exchange-rate setting does not establish this account-specific recharge rule. Preserve the raw
+displayed charge and the CNY cash cost separately. This contract does not support arbitrary exchange
+rates, discounts inferred from token counts, or a zero-cost claim from unchanged cumulative meters.
+
+Start from the v3 attestation fields, set `schemaVersion: 5` and
+`correlationMethod: PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW`, remove `meterEvidence`, and add the
+following object. `actualCost` is the confirmed CNY amount. Keep all original approval, pricing,
+account, intent, report, fingerprint, observation and Token-log bindings unchanged:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "XIAOYI_ACCOUNT_CREDIT_CONSOLE_V1",
+  "displayedCurrency": "USD",
+  "displayedCharge": { "amount": 5, "scale": 2 },
+  "loggedQuota": 25000,
+  "cashUnitsPerDisplayedUnit": { "amount": 1, "scale": 0 },
+  "screenshotPath": "/secure/ai-image-sandbox/private/console-bill.png",
+  "screenshotSha256": "<reviewed-screenshot-sha256>",
+  "userConfirmationPath": "/secure/ai-image-sandbox/private/user-confirmation.json",
+  "userConfirmationSha256": "<reviewed-confirmation-sha256>"
+}
+```
+
+The confirmation is a separate private canonical JSON record:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "AI_IMAGE_SANDBOX_USER_BILLING_CONFIRMATION",
+  "statement": "I_CONFIRM_THIS_REQUEST_BILL_AND_ACCOUNT_CREDIT_CASH_VALUE",
+  "operationId": "<same-operation-id>",
+  "confirmedAt": "<actual-post-request-review-time-in-UTC>",
+  "reconcilerRef": "<same-trusted-reconciler-reference>",
+  "providerAccountRef": "<same-approval-bound-account-reference>",
+  "billingRequestIdSha256": "<sha256-of-the-private-relay-request-id>",
+  "screenshotSha256": "<same-reviewed-screenshot-sha256>",
+  "displayedCurrency": "USD",
+  "displayedCharge": { "amount": 5, "scale": 2 },
+  "cashCost": { "currency": "CNY", "amount": 5, "scale": 2 },
+  "cashUnitsPerDisplayedUnit": { "amount": 1, "scale": 0 }
+}
+```
+
+All placeholders require an actual review. The screenshot must be bounded PNG/JPEG bytes; it and
+the confirmation must reside under the private evidence root and be distinct from each other and
+the before/after and Token-log files. The finalizer checks file integrity and request/account/time
+bindings; it does not OCR the screenshot, authenticate a bank transfer, or prove the operator's
+statement. The named reconciler owns the visual and account-rule review. Never assert that a user
+performed a review merely because these files were generated.
+
+The authenticated Token-log entry must still be the unique model/path/quota/time/duration match,
+with the same reviewed user and token identifiers. `loggedQuota / 500000` must exactly equal the
+displayed charge and, under this specific 1:1 rule, the CNY cost. Before/after snapshots remain
+immutable observation evidence; they are not described as proving a cash delta in this mode.
+No new Provider call or management-console login is performed by finalization.
+
+V5 produces a schema v6 receipt and uses the existing global billing-entry claim and append-only
+operation settlement. It preserves both request-ID hashes, the original quote/maximum and the
+unchanged submit report. An old USD approval paired with confirmed CNY cost yields
+`billingGate: COST_BASIS_MISMATCH`, even if its numeric limit is higher; this is not `PASS` and never
+rewrites the old approval. The receipt separately records whether the displayed number exceeded the
+original numeric maximum. A correctly CNY-denominated approval retains normal exact-scale and
+maximum-cost checks.
+
+The capability-candidate consumer deliberately does not accept v6 receipts for promotion, including
+ones with a cash-budget `PASS`. Recording this reviewed bill alone does not close all QA-02 operations,
+change capability policy, authorize another paid request, or satisfy release gates.
+
 ## Run Offline
 
 Unset Provider secrets and paid confirmation first. The finalizer rejects
@@ -374,6 +452,9 @@ their `usage.imageCount` as a billing amount.
 - `billingGate: PASS`: the settled cost is within the approved maximum.
 - `billingGate: COST_LIMIT_EXCEEDED`: the real bill exceeded the approved maximum. The amount is
   still recorded faithfully and capability promotion remains blocked.
+- `billingGate: COST_BASIS_MISMATCH`: the reviewed account-credit cash cost and the original approval
+  use different currency bases. Both are retained; no cross-currency amount comparison or automatic
+  capability promotion is performed.
 - `submitState: RECONCILIATION_REQUIRED`: billing is closed but the technical outcome is still
   unknown. Never retry the same request.
 

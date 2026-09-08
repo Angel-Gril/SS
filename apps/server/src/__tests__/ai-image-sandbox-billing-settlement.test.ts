@@ -102,10 +102,11 @@ function xiaoyiEvidenceBindings(overrides: {
   apiBaseSha256?: string;
   endpoint?: string;
   model?: string;
-  operation?: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
+  operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
   requestProfile?:
     | typeof AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
     | typeof AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE
+    | 'OZON_PORTRAIT_SINGLE_V1'
     | 'OPENAI_SQUARE_SINGLE_V1';
   currency?: 'CNY' | 'USD';
 } = {}) {
@@ -119,16 +120,18 @@ function xiaoyiEvidenceBindings(overrides: {
   const maskDimensions = operation === 'INPAINT' ? { width: 1024, height: 1024 } : null;
   const xiaoyiProfileSelected = requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
     || requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
+  const height = requestProfile === 'OZON_PORTRAIT_SINGLE_V1' ? 1536 : 1024;
+  const sourceSha256 = operation === 'TEXT_TO_IMAGE' ? [] : ['5'.repeat(64)];
   const request = {
     operation,
     requestProfile,
     n: 1,
     width: 1024,
-    height: 1024,
-    size: '1024x1024',
+    height,
+    size: `1024x${height}`,
     promptSha256: '4'.repeat(64),
-    sourceSha256: ['5'.repeat(64)],
-    sourceDimensions: [{ width: 1024, height: 1024 }],
+    sourceSha256,
+    sourceDimensions: sourceSha256.map(() => ({ width: 1024, height: 1024 })),
     maskSha256,
     maskDimensions,
     approvalEvidence: approvalEvidence({ currency }),
@@ -168,6 +171,10 @@ function xiaoyiEvidenceBindings(overrides: {
       model,
       apiBaseSha256: overrides.apiBaseSha256 || xiaoyiApiBaseSha256,
       operationEndpointSha256: endpointSha256,
+      sourceSha256: request.sourceSha256,
+      maskSha256: request.maskSha256,
+      requestedSize: request.size,
+      height,
     },
     providerLogEntryOverrides: { model_name: model },
   };
@@ -811,11 +818,210 @@ async function fixture(input: {
   };
 }
 
+async function consoleBillFixture(input: {
+  approvalCurrency?: 'USD' | 'CNY';
+  maximumAmount?: number;
+  confirmationOverrides?: Record<string, unknown>;
+  consoleOverrides?: Record<string, unknown>;
+  attestationOverrides?: Record<string, unknown>;
+  reportOverrides?: Record<string, unknown>;
+  providerLogBodyOverrides?: Record<string, unknown>;
+} = {}) {
+  const bindings = xiaoyiEvidenceBindings({
+    operation: 'TEXT_TO_IMAGE',
+    endpoint: `${AI_IMAGE_XIAOYI_API_BASE}/images/generations`,
+    requestProfile: 'OZON_PORTRAIT_SINGLE_V1',
+    currency: input.approvalCurrency || 'USD',
+  });
+  const originalCost = { currency: input.approvalCurrency || 'USD', amount: input.maximumAmount || 4, scale: 2 };
+  const reportOverrides: Record<string, unknown> = {
+    ...bindings.reportOverrides, quotedCost: originalCost, maximumCost: originalCost, ...input.reportOverrides,
+  };
+  if (reportOverrides.state && reportOverrides.state !== 'SUCCEEDED') delete reportOverrides.height;
+  const value = await fixture({
+    ...bindings,
+    intentSchemaVersion: 3,
+    reportSchemaVersion: 5,
+    attestationSchemaVersion: 3,
+    approvalOverrides: { currency: originalCost.currency },
+    intentOverrides: { ...bindings.intentOverrides, quotedCost: originalCost, maximumCost: originalCost },
+    reportOverrides,
+    providerLogEntryOverrides: {
+      ...bindings.providerLogEntryOverrides,
+      quota: 25_000,
+      content: 'synthetic consume entry',
+      other: JSON.stringify({ request_path: '/v1/images/generations' }),
+    },
+    providerLogRequestOverrides: { uri: `${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/api/log/token` },
+    providerLogBodyOverrides: input.providerLogBodyOverrides,
+  });
+  const screenshotPath = join(value.root, 'private', 'synthetic-console-screenshot.png');
+  const screenshot = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6B6sAAAAASUVORK5CYII=', 'base64');
+  await writeFile(screenshotPath, screenshot, { mode: 0o600 });
+  const userConfirmationPath = join(value.root, 'private', 'user-confirmation.json');
+  const actualCost = { currency: 'CNY', amount: 5, scale: 2 };
+  const displayedCharge = { amount: 5, scale: 2 };
+  const userConfirmation = await writeCanonicalJson(userConfirmationPath, {
+    schemaVersion: 1,
+    kind: 'AI_IMAGE_SANDBOX_USER_BILLING_CONFIRMATION',
+    statement: 'I_CONFIRM_THIS_REQUEST_BILL_AND_ACCOUNT_CREDIT_CASH_VALUE',
+    operationId,
+    confirmedAt: '2030-01-01T00:04:00.000Z',
+    reconcilerRef: 'billing-operator-review',
+    providerAccountRef: 'provider-account-main',
+    billingRequestIdSha256: sha256(providerBillingRequestId),
+    screenshotSha256: sha256(screenshot),
+    displayedCurrency: 'USD',
+    displayedCharge,
+    cashCost: actualCost,
+    cashUnitsPerDisplayedUnit: { amount: 1, scale: 0 },
+    ...input.confirmationOverrides,
+  });
+  const old = JSON.parse(await readFile(value.settlementPath, 'utf8'));
+  delete old.meterEvidence;
+  const reviewed = await writeCanonicalJson(value.settlementPath, {
+    ...old,
+    schemaVersion: 5,
+    correlationMethod: 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW',
+    actualCost,
+    consoleBillEvidence: {
+      schemaVersion: 1,
+      kind: 'XIAOYI_ACCOUNT_CREDIT_CONSOLE_V1',
+      displayedCurrency: 'USD',
+      displayedCharge,
+      loggedQuota: 25_000,
+      cashUnitsPerDisplayedUnit: { amount: 1, scale: 0 },
+      screenshotPath,
+      screenshotSha256: sha256(screenshot),
+      userConfirmationPath,
+      userConfirmationSha256: userConfirmation.sha256,
+      ...input.consoleOverrides,
+    },
+    ...input.attestationOverrides,
+  });
+  return { ...value, screenshotPath, userConfirmationPath, settlementSha256: reviewed.sha256 };
+}
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 describe('AI image sandbox billing settlement', () => {
+  it.each([
+    ['USD', 6, 'COST_BASIS_MISMATCH'],
+    ['CNY', 6, 'PASS'],
+    ['CNY', 4, 'COST_LIMIT_EXCEEDED'],
+  ] as const)('evaluates a console cash bill against the %s budget basis at %s', async (approvalCurrency, maximumAmount, billingGate) => {
+    const value = await consoleBillFixture({ approvalCurrency, maximumAmount });
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root, evidenceRoot: value.root, operationId,
+      settlementPath: value.settlementPath, settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40), now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+    expect(result.receipt.billingGate).toBe(billingGate);
+  });
+
+  it('replays a console bill byte-for-byte and rejects a changed review', async () => {
+    const value = await consoleBillFixture();
+    const request = {
+      repositoryRoot: value.root, evidenceRoot: value.root, operationId,
+      settlementPath: value.settlementPath, settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40), now: new Date('2030-01-01T00:10:00.000Z'),
+    };
+    const result = await finalizeAiImageSandboxBillingSettlement(request);
+    const originalReceipt = await readFile(result.receiptPath);
+    const replay = await finalizeAiImageSandboxBillingSettlement({ ...request, finalizationAdapterRevision: 'c'.repeat(40) });
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt.finalizationAdapterRevision).toBe('b'.repeat(40));
+    expect(await readFile(result.receiptPath)).toEqual(originalReceipt);
+    const raw = JSON.parse(await readFile(value.settlementPath, 'utf8'));
+    const changed = await writeCanonicalJson(value.settlementPath, { ...raw, settlementId: 'another-console-review-0001' });
+    await expect(finalizeAiImageSandboxBillingSettlement({ ...request, settlementSha256: changed.sha256 }))
+      .rejects.toMatchObject({ code: 'SANDBOX_BILLING_CONFLICT' });
+    expect(await readFile(result.receiptPath)).toEqual(originalReceipt);
+    expect(await readdir(join(value.root, 'billing', '.provider-entries'))).toHaveLength(1);
+  });
+
+  it('rejects console screenshot digest drift and aliased before/after evidence', async () => {
+    for (const drift of ['screenshot', 'snapshot-alias']) {
+      const value = await consoleBillFixture();
+      const raw = JSON.parse(await readFile(value.settlementPath, 'utf8'));
+      if (drift === 'screenshot') raw.consoleBillEvidence.screenshotSha256 = '0'.repeat(64);
+      else {
+        raw.settledBillingSnapshotPath = raw.preCallBillingSnapshotPath;
+        raw.settledBillingSnapshotSha256 = raw.preCallBillingSnapshotSha256;
+      }
+      const changed = await writeCanonicalJson(value.settlementPath, raw);
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root, evidenceRoot: value.root, operationId,
+        settlementPath: value.settlementPath, settlementSha256: changed.sha256,
+        finalizationAdapterRevision: 'b'.repeat(40), now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: drift === 'screenshot' ? 'SANDBOX_BILLING_DIGEST_MISMATCH' : 'SANDBOX_BILLING_ATTESTATION_INVALID' });
+      await expect(readFile(join(value.root, 'billing', '.claims', `${operationId}.billing.claim.json`)))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  });
+
+  it('does not resolve an unknown Provider outcome with a console bill', async () => {
+    const value = await consoleBillFixture({ reportOverrides: { state: 'RECONCILIATION_REQUIRED', failureCode: 'NETWORK_TIMEOUT' } });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root, evidenceRoot: value.root, operationId,
+      settlementPath: value.settlementPath, settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40), now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('records a request-bound console bill without passing an incompatible original currency budget', async () => {
+    const value = await consoleBillFixture();
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 6,
+      correlationMethod: 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW',
+      actualCost: { currency: 'CNY', amount: 5, scale: 2 },
+      maximumCost: { currency: 'USD', amount: 4, scale: 2 },
+      providerDisplayedCharge: { amount: 5, scale: 2 },
+      billingGate: 'COST_BASIS_MISMATCH',
+      displayedChargeExceedsOriginalNumericMaximum: true,
+      sameRequestRetryAllowed: false,
+    });
+    expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
+    expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+    const receipt = await readFile(result.receiptPath, 'utf8');
+    for (const privateValue of [providerBillingRequestId, value.screenshotPath, value.userConfirmationPath, 'provider-account-main']) {
+      expect(receipt).not.toContain(privateValue);
+    }
+  });
+
+  it.each([
+    ['request identity', { confirmationOverrides: { billingRequestIdSha256: '0'.repeat(64) } }],
+    ['account identity', { confirmationOverrides: { providerAccountRef: 'another-account' } }],
+    ['screenshot binding', { confirmationOverrides: { screenshotSha256: '0'.repeat(64) } }],
+    ['pre-submit review', { confirmationOverrides: { confirmedAt: '2030-01-01T00:00:00.000Z' } }],
+    ['currency conversion', { consoleOverrides: { cashUnitsPerDisplayedUnit: { amount: 677, scale: 2 } } }],
+    ['lower claimed cost', { attestationOverrides: { actualCost: { currency: 'CNY', amount: 1, scale: 2 } } }],
+  ])('rejects console bill evidence with a changed %s before writing claims', async (_name, changes) => {
+    const value = await consoleBillFixture(changes);
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: expect.stringMatching(/^SANDBOX_BILLING_(?:ATTESTATION_INVALID|MISMATCH)$/u) });
+    await expect(readFile(join(value.root, 'billing', '.claims', `${operationId}.billing.claim.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('writes one sanitized charged settlement without modifying original evidence', async () => {
     const value = await fixture();
 

@@ -16,6 +16,8 @@ import {
   type AiImageSandboxMoney,
   aiImageSandboxPowerOfTen,
   aiImageSandboxMoneyEquals,
+  aiImageSandboxDecimalsEqual,
+  compareAiImageSandboxDecimals,
   assertAiImageSandboxMoneyPair,
   parseAiImageSandboxDecimal,
   parseAiImageSandboxMoney,
@@ -110,6 +112,28 @@ const ATTESTATION_V4_KEYS = new Set([
   )),
   'actualCost',
   'cumulativeUsageEvidence',
+]);
+
+const ATTESTATION_V5_KEYS = new Set([
+  ...ATTESTATION_COMMON_KEYS,
+  'actualCost',
+  'consoleBillEvidence',
+  'providerTokenLogSnapshotPath',
+  'providerTokenLogSnapshotSha256',
+  'providerTokenLogUserId',
+  'providerTokenLogTokenId',
+]);
+
+const CONSOLE_BILL_EVIDENCE_KEYS = new Set([
+  'schemaVersion', 'kind', 'displayedCurrency', 'displayedCharge', 'loggedQuota',
+  'cashUnitsPerDisplayedUnit', 'screenshotPath', 'screenshotSha256',
+  'userConfirmationPath', 'userConfirmationSha256',
+]);
+
+const USER_BILLING_CONFIRMATION_KEYS = new Set([
+  'schemaVersion', 'kind', 'statement', 'operationId', 'confirmedAt',
+  'reconcilerRef', 'providerAccountRef', 'billingRequestIdSha256', 'screenshotSha256',
+  'displayedCurrency', 'displayedCharge', 'cashCost', 'cashUnitsPerDisplayedUnit',
 ]);
 
 const METER_EVIDENCE_KEYS = new Set([
@@ -348,6 +372,7 @@ type CorrelationMethod =
   | 'PROVIDER_REQUEST_ID'
   | 'UNIQUE_ACCOUNT_TIME_WINDOW'
   | 'PROVIDER_TOKEN_LOG_ENTRY'
+  | 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW'
   | 'API_KEY_CUMULATIVE_ZERO_USAGE';
 
 interface PrivateFileEvidence {
@@ -1356,6 +1381,42 @@ function assertIntentRequest(request: Record<string, unknown>) {
   }
 }
 
+function parseConsoleBillEvidence(value: unknown, actualCost: AiImageSandboxMoney) {
+  const code = 'SANDBOX_BILLING_ATTESTATION_INVALID' as const;
+  if (!isRecord(value) || !hasExactKeys(value, CONSOLE_BILL_EVIDENCE_KEYS)
+    || value.schemaVersion !== 1 || value.kind !== 'XIAOYI_ACCOUNT_CREDIT_CONSOLE_V1'
+    || value.displayedCurrency !== 'USD' || actualCost.currency !== 'CNY') {
+    throw new AiImageSandboxBillingSettlementError(code, 'Console bill account-unit evidence is invalid');
+  }
+  let displayedCharge: ReturnType<typeof parseAiImageSandboxDecimal>;
+  let cashUnitsPerDisplayedUnit: ReturnType<typeof parseAiImageSandboxDecimal>;
+  try {
+    displayedCharge = parseAiImageSandboxDecimal(value.displayedCharge, 'Console displayed charge');
+    cashUnitsPerDisplayedUnit = parseAiImageSandboxDecimal(value.cashUnitsPerDisplayedUnit, 'Account cash unit');
+  } catch {
+    throw new AiImageSandboxBillingSettlementError(code, 'Console bill exact decimals are invalid');
+  }
+  const loggedQuota = requiredPositiveInteger(value, 'loggedQuota', code);
+  if (displayedCharge.amount <= 0
+    || cashUnitsPerDisplayedUnit.amount !== 1 || cashUnitsPerDisplayedUnit.scale !== 0
+    || !aiImageSandboxDecimalsEqual(displayedCharge, { amount: actualCost.amount, scale: actualCost.scale })
+    || BigInt(loggedQuota) * aiImageSandboxPowerOfTen(displayedCharge.scale)
+      !== BigInt(displayedCharge.amount) * 500_000n) {
+    throw new AiImageSandboxBillingSettlementError(code, 'Console bill charge and confirmed account cash value disagree');
+  }
+  return {
+    kind: 'XIAOYI_ACCOUNT_CREDIT_CONSOLE_V1' as const,
+    displayedCurrency: 'USD' as const,
+    displayedCharge,
+    loggedQuota,
+    cashUnitsPerDisplayedUnit,
+    screenshotPath: requiredString(value, 'screenshotPath', code, 2_048),
+    screenshotSha256: requiredSha256(value, 'screenshotSha256', code),
+    userConfirmationPath: requiredString(value, 'userConfirmationPath', code, 2_048),
+    userConfirmationSha256: requiredSha256(value, 'userConfirmationSha256', code),
+  };
+}
+
 function parseAttestation(record: Record<string, unknown>, now: Date) {
   const schemaVersion = record.schemaVersion;
   const expectedKeys = schemaVersion === 1
@@ -1366,7 +1427,9 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
         ? ATTESTATION_V3_KEYS
         : schemaVersion === 4
           ? ATTESTATION_V4_KEYS
-          : null;
+          : schemaVersion === 5
+            ? ATTESTATION_V5_KEYS
+            : null;
   if (!expectedKeys || !hasExactKeys(record, expectedKeys)) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1439,6 +1502,7 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
   let actualCost: AiImageSandboxMoney | null = null;
   let meterEvidence: ReturnType<typeof parseMeterEvidence> | null = null;
   let cumulativeUsageEvidence: ReturnType<typeof parseCumulativeUsageEvidence> | null = null;
+  let consoleBillEvidence: ReturnType<typeof parseConsoleBillEvidence> | null = null;
   if (schemaVersion === 1) {
     currency = requiredString(
       record,
@@ -1470,6 +1534,8 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
         record.cumulativeUsageEvidence,
         actualCost,
       );
+    } else if (schemaVersion === 5) {
+      consoleBillEvidence = parseConsoleBillEvidence(record.consoleBillEvidence, actualCost);
     } else {
       meterEvidence = parseMeterEvidence(record.meterEvidence, actualCost);
     }
@@ -1479,23 +1545,28 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
       'PROVIDER_REQUEST_ID',
       'UNIQUE_ACCOUNT_TIME_WINDOW',
       'PROVIDER_TOKEN_LOG_ENTRY',
+      'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW',
       'API_KEY_CUMULATIVE_ZERO_USAGE',
     ].includes(correlationMethod)
     || providerRequestId === undefined
     || (correlationMethod === 'PROVIDER_REQUEST_ID' && !providerRequestId)
     || (correlationMethod === 'UNIQUE_ACCOUNT_TIME_WINDOW' && providerRequestId !== null)
     || (correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY' && !providerRequestId)
+    || (correlationMethod === 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW' && !providerRequestId)
     || (correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE' && providerRequestId !== null)
     || (schemaVersion === 3 && correlationMethod !== 'PROVIDER_TOKEN_LOG_ENTRY')
     || (schemaVersion !== 3 && correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY')
     || (schemaVersion === 4 && correlationMethod !== 'API_KEY_CUMULATIVE_ZERO_USAGE')
     || (schemaVersion !== 4 && correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE')
+    || (schemaVersion === 5 && correlationMethod !== 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW')
+    || (schemaVersion !== 5 && correlationMethod === 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW')
     || !['CHARGED', 'NO_CHARGE'].includes(billingOutcome)
     || (schemaVersion === 1 && billingOutcome === 'CHARGED' && Number(actualCostCents) <= 0)
     || (schemaVersion === 1 && billingOutcome === 'NO_CHARGE' && actualCostCents !== 0)
     || (schemaVersion !== 1 && billingOutcome === 'CHARGED' && actualCost!.amount <= 0)
     || (schemaVersion !== 1 && billingOutcome === 'NO_CHARGE' && actualCost!.amount !== 0)
     || (schemaVersion === 4 && billingOutcome !== 'NO_CHARGE')
+    || (schemaVersion === 5 && billingOutcome !== 'CHARGED')
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1503,7 +1574,7 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     );
   }
   return {
-    schemaVersion: schemaVersion as 1 | 2 | 3 | 4,
+    schemaVersion: schemaVersion as 1 | 2 | 3 | 4 | 5,
     generation: schemaVersion === 1 ? 'LEGACY' as const : 'EXACT' as const,
     settlementId,
     operationId,
@@ -1551,7 +1622,8 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     actualCost,
     meterEvidence,
     cumulativeUsageEvidence,
-    providerTokenLogSnapshotPath: schemaVersion === 3
+    consoleBillEvidence,
+    providerTokenLogSnapshotPath: schemaVersion === 3 || schemaVersion === 5
       ? requiredString(
           record,
           'providerTokenLogSnapshotPath',
@@ -1559,21 +1631,21 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
           2_048,
         )
       : null,
-    providerTokenLogSnapshotSha256: schemaVersion === 3
+    providerTokenLogSnapshotSha256: schemaVersion === 3 || schemaVersion === 5
       ? requiredSha256(
           record,
           'providerTokenLogSnapshotSha256',
           'SANDBOX_BILLING_ATTESTATION_INVALID',
         )
       : null,
-    providerTokenLogUserId: schemaVersion === 3
+    providerTokenLogUserId: schemaVersion === 3 || schemaVersion === 5
       ? requiredPositiveInteger(
           record,
           'providerTokenLogUserId',
           'SANDBOX_BILLING_ATTESTATION_INVALID',
         )
       : null,
-    providerTokenLogTokenId: schemaVersion === 3
+    providerTokenLogTokenId: schemaVersion === 3 || schemaVersion === 5
       ? requiredPositiveInteger(
           record,
           'providerTokenLogTokenId',
@@ -1592,6 +1664,8 @@ function parseProviderTokenLogSnapshot(input: {
 }) {
   const code = 'SANDBOX_BILLING_EVIDENCE_INVALID' as const;
   const { record, now, attestation, intent, report } = input;
+  const expectedQuota = attestation.consoleBillEvidence?.loggedQuota
+    ?? attestation.meterEvidence!.rawQuotaDelta;
   if (
     !hasExactKeys(record, PROVIDER_TOKEN_LOG_SNAPSHOT_KEYS)
     || record.schemaVersion !== 1
@@ -1717,7 +1791,7 @@ function parseProviderTokenLogSnapshot(input: {
     if (
       value.type !== 2
       || value.model_name !== intent.model
-      || value.quota !== attestation.meterEvidence!.rawQuotaDelta
+      || value.quota !== expectedQuota
       || createdAtSeconds === null
       || createdAtTime === null
       || useTime === null
@@ -1788,7 +1862,7 @@ function parseProviderTokenLogSnapshot(input: {
     || userId !== attestation.providerTokenLogUserId
     || tokenId !== attestation.providerTokenLogTokenId
     || model !== intent.model
-    || quota !== attestation.meterEvidence!.rawQuotaDelta
+    || quota !== expectedQuota
     || candidate.requestPath !== expectedRequestPath
     || createdAtSeconds !== candidate.createdAtSeconds
     || createdAtTime !== candidate.createdAtTime
@@ -2155,6 +2229,20 @@ function assertArtifactsMatch(input: {
     && request.operation === 'IMAGE_TO_IMAGE'
     && request.requestProfile === 'OPENAI_SQUARE_SINGLE_V1'
     && reportRecord.provider === 'custom-openai-compatible';
+  const consoleBillIdentity = intent.generation === 'EXACT'
+    && report.schemaVersion === 5
+    && intentRecord.apiBaseSha256 === sha256(AI_IMAGE_XIAOYI_API_BASE)
+    && intentRecord.endpointSha256 === sha256(`${AI_IMAGE_XIAOYI_API_BASE}/images/generations`)
+    && intent.model === AI_IMAGE_XIAOYI_EDIT_PROFILE.model
+    && request.operation === 'TEXT_TO_IMAGE'
+    && ['OPENAI_SQUARE_SINGLE_V1', 'OZON_PORTRAIT_SINGLE_V1'].includes(String(request.requestProfile))
+    && request.width === 1024
+    && request.height === (request.requestProfile === 'OZON_PORTRAIT_SINGLE_V1' ? 1536 : 1024)
+    && reportRecord.state === 'SUCCEEDED'
+    && ['USD', 'CNY'].includes(intent.maximumCost.currency);
+  const accountUnitBasisMismatch = attestation.schemaVersion === 5
+    && attestation.actualCost?.currency === 'CNY'
+    && intent.maximumCost.currency === 'USD';
   if (
     attestation.generation !== intent.generation
     || intent.generation !== report.generation
@@ -2172,6 +2260,7 @@ function assertArtifactsMatch(input: {
       || reportRecord.provider !== 'dashscope-wanx21-image-edit'
     ))
     || (sub2CumulativeUsageSelected && !sub2CumulativeUsageIdentity)
+    || (attestation.schemaVersion === 5 && !consoleBillIdentity)
     || (!wanxProfileSelected && reportRecord.provider !== 'custom-openai-compatible')
   ) {
     throw new AiImageSandboxBillingSettlementError(
@@ -2239,11 +2328,13 @@ function assertArtifactsMatch(input: {
       !== intent.approvalEvidence.preCallBillingSnapshotRefSha256
     || sha256(attestation.billingReconciliationRef)
       !== intent.approvalEvidence.billingReconciliationRefSha256
-    || attestation.currency !== intent.approvalEvidence.currency
+    || (attestation.currency !== intent.approvalEvidence.currency && !accountUnitBasisMismatch)
     || (attestation.generation === 'EXACT' && (
       !attestation.actualCost
-      || attestation.actualCost.currency !== intent.maximumCost.currency
-      || attestation.actualCost.scale !== intent.maximumCost.scale
+      || (!accountUnitBasisMismatch && (
+        attestation.actualCost.currency !== intent.maximumCost.currency
+        || attestation.actualCost.scale !== intent.maximumCost.scale
+      ))
     ))
     || canonicalJson(report.approvalEvidence) !== canonicalJson(intent.approvalEvidence)
     || (intent.generation === 'EXACT'
@@ -2288,7 +2379,7 @@ function assertArtifactsMatch(input: {
         || attestation.providerRequestId !== null
         || attestation.settledObservedAt.time - attestation.preCallObservedAt.time
           > MAX_CORRELATION_WINDOW_MS))
-    || (attestation.correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY'
+    || (['PROVIDER_TOKEN_LOG_ENTRY', 'PROVIDER_CONSOLE_ACCOUNT_UNIT_REVIEW'].includes(attestation.correlationMethod)
       && (!providerRequestIdHash || !attestation.providerRequestId))
     || (attestation.correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE'
       && (
@@ -2493,7 +2584,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
   let providerTokenLogEvidence: PrivateJsonEvidence | null = null;
   let providerTokenLog: ReturnType<typeof parseProviderTokenLogSnapshot> | null = null;
   let providerBillingEntryKey: string | null = null;
-  if (attestation.schemaVersion === 3) {
+  if (attestation.schemaVersion === 3 || attestation.schemaVersion === 5) {
     providerTokenLogEvidence = await loadPrivateCanonicalJson({
       repositoryRoot: evidenceRoot,
       path: attestation.providerTokenLogSnapshotPath!,
@@ -2546,8 +2637,69 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     );
   }
 
+  let consoleUserConfirmedAt: string | null = null;
+  if (attestation.schemaVersion === 5) {
+    const consoleBill = attestation.consoleBillEvidence!;
+    const screenshot = await loadPrivateFile({
+      repositoryRoot: evidenceRoot,
+      path: consoleBill.screenshotPath,
+      expectedSha256: consoleBill.screenshotSha256,
+      maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
+      allowedRoot: evidenceRoot,
+    });
+    const confirmation = await loadPrivateCanonicalJson({
+      repositoryRoot: evidenceRoot,
+      path: consoleBill.userConfirmationPath,
+      expectedSha256: consoleBill.userConfirmationSha256,
+      maxBytes: MAX_ATTESTATION_BYTES,
+      kind: 'evidence',
+      allowedRoot: evidenceRoot,
+    });
+    const files = [preCallSnapshotEvidence!, settledSnapshotEvidence, providerTokenLogEvidence!, screenshot, confirmation];
+    for (let index = 0; index < files.length; index += 1) {
+      if (!hasStableFileIdentity(files[index]!.device, files[index]!.inode)
+        || files.slice(0, index).some((other) => (
+          samePath(other.canonicalPath, files[index]!.canonicalPath)
+          || sameFileIdentity(other, files[index]!)
+        ))) {
+        throw new AiImageSandboxBillingSettlementError('SANDBOX_BILLING_ATTESTATION_INVALID', 'Console evidence must use distinct private files');
+      }
+    }
+    const isPng = screenshot.bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
+    const isJpeg = screenshot.bytes.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'));
+    if ((!isPng && !isJpeg) || screenshot.bytes.length < 32) {
+      throw new AiImageSandboxBillingSettlementError('SANDBOX_BILLING_ATTESTATION_INVALID', 'Console screenshot must be bounded PNG or JPEG bytes');
+    }
+    const reviewed = confirmation.record;
+    if (!hasExactKeys(reviewed, USER_BILLING_CONFIRMATION_KEYS)
+      || reviewed.schemaVersion !== 1 || reviewed.kind !== 'AI_IMAGE_SANDBOX_USER_BILLING_CONFIRMATION'
+      || reviewed.statement !== 'I_CONFIRM_THIS_REQUEST_BILL_AND_ACCOUNT_CREDIT_CASH_VALUE') {
+      throw new AiImageSandboxBillingSettlementError('SANDBOX_BILLING_ATTESTATION_INVALID', 'User billing confirmation is invalid');
+    }
+    const confirmedAt = canonicalTimestamp(reviewed, 'confirmedAt', 'SANDBOX_BILLING_ATTESTATION_INVALID');
+    if (reviewed.operationId !== operationId
+      || reviewed.reconcilerRef !== attestation.reconcilerRef
+      || reviewed.providerAccountRef !== attestation.providerAccountRef
+      || reviewed.billingRequestIdSha256 !== providerTokenLog!.requestIdHash
+      || reviewed.screenshotSha256 !== screenshot.sha256
+      || reviewed.displayedCurrency !== consoleBill.displayedCurrency
+      || canonicalJson(reviewed.displayedCharge) !== canonicalJson(consoleBill.displayedCharge)
+      || canonicalJson(reviewed.cashCost) !== canonicalJson(attestation.actualCost)
+      || canonicalJson(reviewed.cashUnitsPerDisplayedUnit) !== canonicalJson(consoleBill.cashUnitsPerDisplayedUnit)
+      || confirmedAt.time < report.completedAt.time
+      || confirmedAt.time > attestation.settledObservedAt.time
+      || confirmedAt.time > now.getTime() + MAX_CLOCK_SKEW_MS) {
+      throw new AiImageSandboxBillingSettlementError('SANDBOX_BILLING_MISMATCH', 'User console confirmation does not bind this request and account unit');
+    }
+    consoleUserConfirmedAt = confirmedAt.value;
+  }
+
   const billedUnits = attestation.billingOutcome === 'CHARGED' ? 1 : 0;
-  const billingGate = attestation.generation === 'EXACT'
+  const accountUnitBasisMismatch = attestation.schemaVersion === 5
+    && attestation.actualCost!.currency !== intent.maximumCost.currency;
+  const billingGate = accountUnitBasisMismatch
+    ? 'COST_BASIS_MISMATCH'
+    : attestation.generation === 'EXACT'
     ? BigInt(attestation.actualCost!.amount) > BigInt(intent.maximumCost.amount)
       ? 'COST_LIMIT_EXCEEDED'
       : 'PASS'
@@ -2558,7 +2710,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
   const claimDirectory = resolve(billingDirectory, '.claims');
   const settlementClaimPath = resolve(claimDirectory, `${operationId}.billing.claim.json`);
   const receiptPath = resolve(billingDirectory, `${operationId}.billing.settlement.json`);
-  if (attestation.schemaVersion === 3) {
+  if (attestation.schemaVersion === 3 || attestation.schemaVersion === 5) {
     const providerEntryClaimDirectory = resolve(billingDirectory, '.provider-entries');
     const providerEntryClaimPath = resolve(
       providerEntryClaimDirectory,
@@ -2633,7 +2785,9 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     : { endpointSha256: intent.record.endpointSha256 };
   const receipt = attestation.generation === 'EXACT'
     ? {
-        schemaVersion: attestation.schemaVersion === 4
+        schemaVersion: attestation.schemaVersion === 5
+          ? 6
+          : attestation.schemaVersion === 4
           ? 5
           : attestation.schemaVersion === 3
             ? 4
@@ -2662,7 +2816,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
         finalizationAdapterRevision: receiptFinalizationRevision,
         correlationMethod: attestation.correlationMethod,
         providerRequestIdHash: report.record.providerRequestIdHash,
-        ...(attestation.schemaVersion === 3 ? {
+        ...(attestation.schemaVersion === 3 || attestation.schemaVersion === 5 ? {
           providerBillingEntryRequestIdHash: providerTokenLog!.requestIdHash,
           providerBillingEntryKey: providerBillingEntryKey!,
           providerRequestIdBridge: providerTokenLog!.requestIdBridge,
@@ -2674,6 +2828,21 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
         } : {}),
         ...(attestation.schemaVersion === 4 ? {
           cumulativeUsageEvidenceKind: attestation.cumulativeUsageEvidence!.kind,
+        } : {}),
+        ...(attestation.schemaVersion === 5 ? {
+          consoleBillEvidenceKind: attestation.consoleBillEvidence!.kind,
+          providerDisplayedCurrency: attestation.consoleBillEvidence!.displayedCurrency,
+          providerDisplayedCharge: attestation.consoleBillEvidence!.displayedCharge,
+          cashUnitsPerDisplayedUnit: attestation.consoleBillEvidence!.cashUnitsPerDisplayedUnit,
+          consoleScreenshotSha256: attestation.consoleBillEvidence!.screenshotSha256,
+          userConfirmationSha256: attestation.consoleBillEvidence!.userConfirmationSha256,
+          userConfirmedAt: consoleUserConfirmedAt!,
+          aggregateMeterRole: 'OBSERVATION_ONLY_NOT_CHARGE_EVIDENCE',
+          originalBudgetCurrencyMatchesCashCost: !accountUnitBasisMismatch,
+          displayedChargeExceedsOriginalNumericMaximum: compareAiImageSandboxDecimals(
+            attestation.consoleBillEvidence!.displayedCharge,
+            { amount: intent.maximumCost.amount, scale: intent.maximumCost.scale },
+          ) > 0,
         } : {}),
         billingOutcome: attestation.billingOutcome,
         billingGate,
