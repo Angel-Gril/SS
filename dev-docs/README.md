@@ -31,5 +31,5 @@
 
 - 实现检查点 `c10cdc61` 已推送并通过完整 QA-04 offline gate 和 Linux/Node 22 发布关键合同；旧运行版本的备份恢复与 verifier 证据已记录。后续已执行一次真实 Xiaoyi 图像生成并取得结果，但正式计费核对未关闭；Ozon 完成只读资料检查。新部署与官网切换仍未执行，详细结果与下一步见[当前状态审计](current-state-audit.md)。
 - 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。
-- 当前主风险：Xiaoyi 请求日志与累计计量不一致，旧 Wanx 编辑仍有独立的计费账户错配；Ozon 已有自有归档商品资料，但测试隔离、素材及精确 compiler/pilot 绑定未完成。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
-- 推荐下一步：只读关闭原 Provider 请求的账单差异，不重发；按执行清单核实 Ozon 测试隔离及正常编译链。不能用单张生成成功代替完整 QA-02、正式 QA-04 或发布批准。
+- 当前主风险：Xiaoyi 本次费用已由用户截图和账户充值规则确认，离线凭单对账仍须保留原审批币种差异；旧 Wanx 编辑有独立的计费账户错配。Ozon 归档参数和主图已具备，但 DOTH 样本存在 FBS 库存，不能当作已证实的专用测试店。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
+- 推荐下一步：用已保存的截图和请求日志执行离线凭单对账，不再登录管理后台查本次金额或重发；独立推进 Ozon 的 ERP-only 准备。不能用单张生成或人工确认金额代替完整 QA-02、正式 QA-04 或发布批准。
