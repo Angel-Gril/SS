@@ -46,12 +46,21 @@
 - 根因修复：`apps/server/src/routes/listing.ts` 的幂等事务改为仓库已有的 `SELECT 1 AS "locked" FROM pg_advisory_xact_lock(...)` 模式，保留原锁键、种子与事务范围。此前单元测试把 `$queryRaw` 固定返回为整数，且该接口文件未进入 PostgreSQL runner，因而漏掉驱动返回类型错误。新增接口回归让实际 SQL 经过 Prisma/PostgreSQL，其余身份/商店/任务存储使用 fixture；先观察 HTTP 500 的 RED，修复后 `65/65` 通过，并由独立连接证明锁在事务内持有、事务结束后释放。相关审核/开关回归 `57/57`，加入既有 PostgreSQL runner 后 148 migrations 回放及 `13 files / 168 tests` 全通过。独立只读对照在 Prisma 6.19.3 / PostgreSQL 16.13 复现同类错误并验证新查询；不是用 mock 成功冒充生产草稿完成。
 - 当前线上仍未应用此修复：本轮未修改 VPS 运行包、部署或官网 pointer。ERP-only 草稿创建须在修复版本按既有发布门禁部署后重新验收；DOTH 的专用测试隔离问题仍独立存在，不能因修好 500 而解禁真实 import/archive。
 
+### 完整隔离链路与历史编辑证据复核
+
+- 隔离验收补齐：测试实现检查点为 `a362545d`，新增 `apps/server/src/__tests__/browser-one-click-isolation.postgres.integration.test.ts` 并接入原 PostgreSQL runner。对 `dual_read` 和 `v2_only` 分别通过真实 HTTP handler、Prisma、capture service/repository、默认 workflow adapter、配置 evaluator 与 context owner，完成并发创建同一任务、提交合成 Ozon 来源行、SupplyGoods/subject/snapshot/workflow/draft/event 落库、停在 `review_required`、POST/PATCH 幂等重放和跨 owner 拒绝。身份认证与队列/Ozon 出站边界使用 fixture；不替换被验证的采集、草稿或持久化实现，不把该测试称作真实登录、浏览器或线上草稿验收。
+- 本轮为 T1 既有行为覆盖，不修改生产业务规则。既有路由基线为 `64 passed / 1 PostgreSQL 条件 skipped`；补齐后在本机 loopback 的随机 `logistics_test_*` schema 回放 148 migrations，`14 files / 170 tests` 全通过。两条新链路的 publish intent、Ozon attempt 与队列/Provider/Ozon 出站调用均为 0。测试 schema 删除后复查不存在；用不可连接的合成数据库地址另验 `public` schema 在 datasource 导入前被拒绝。server typecheck、定向 ESLint、runner Node 语法与 `git diff --check` 通过。
+- Wanx 三次历史操作已逐一核验原审批、intent/fingerprint、成功报告、异步证据、源图、结果图、mask 和人工质量确认的摘要绑定；三张 PNG 均能完整解码为 `1024×1024`，每次原始 create 为 1，poll 分别为 8/9/6。本次没有重发或查询 Provider。报告 SHA-256：I2I `a0671f5c6e4c37d81fc6fb8520e094fc64e668b0ca9f217f0d04975273caed42`；FULL_EDIT `9e1ee9e367e3367e51efedcf5322a568ff1c235299e1b5f0c9fa258a55a912cd`；INPAINT `51060c57b2c39bf4d6d02f40336b1e1c588011d490799d394e41815408778f6d`。原始文件、图片与账户标识继续留在私有/ignored 证据根，不进入 Git。
+- 技术与费用分开裁决：历史三项编辑技术/质量验收资料完整，不能继续笼统写成“三项编辑未验收”。本次目视与 INPAINT 像素复算一致：编辑区 25,600 像素、平均通道差 3.418；保留区 1,022,976 像素、平均差 0.015，仅 0.07% 像素有通道差超过 5。保留已批准的轻微蓝灰变化和矩形硬边界限制，不扩大质量结论。三项账单仍为 `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH` / `actualCost:null`，人工质量确认仍为 `billingDecision:NOT_ATTESTED`；Xiaoyi 的 CNY 0.05999 及 1:1 账户规则不能替它们结算。
+- 发布前置仍未关闭：sandbox runbook 关闭的是 `QA-02 technical sandbox acceptance`；billing runbook 仍把未匹配账单列为 QA-02 未关闭部分，`docs/deployment.md` 要求完整 QA-02/QA-04 后才生成正式扩展候选。Provider capability candidate 与区域扩展候选不是同一产物；现有 canary 只核验正式 QA-04 中的 `qa02Prerequisite:COMPLETE`，并不重读 Provider 账单，不能利用这个检查缺口填造 COMPLETE。未找到现成的全暗态维护版豁免；若要先部署修复、继续保持 AI/Ozon 写入关闭，须先明确批准该发布范围及相应验收合同，不直接修改原发布规则。
+- 隔离边界保持：本地合成两 owner/两 shop 证明 ERP 数据归属与零发布，不证明真实 Ozon 店铺隔离。DOTH 已有 FBS 库存的反证仍有效，不为它新增“专用测试店”标签，不重试 import/archive。本轮未访问 VPS、查询计费后台、修改线上配置、部署或切换官网；线上健康状态沿用前次快照，未冒充新鲜检查。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | Xiaoyi 单张成功且已消费用户截图/1:1 充值规则完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留 | 不再查询这笔金额或重发该请求。完整操作验收、旧 Wanx 账户错配及能力晋升仍是独立事项 |
-| Ozon 测试店与商品事实 | 归档参数/对应主图及私有准备包齐备；ERP-only 实跑发现幂等锁 500，已在源码修复并通过真实 PostgreSQL 回归；所有临时配置已恢复 | 按发布门禁部署修复后重验 ERP 审核草稿。DOTH 样本有 FBS 库存，专用测试隔离仍未成立，继续禁止 import/archive |
+| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；Wanx 三项历史编辑技术/质量证据已复核完整 | 不再查询 Xiaoyi 这笔金额或重发任何已消费请求。Wanx 账单归属、完整 QA-02 与能力晋升仍未关闭 |
+| Ozon 测试店与商品事实 | 归档参数/主图/私有准备包齐备；审核任务 500 源码修复及两种 rollout 的完整 PostgreSQL 隔离链路通过；线上临时配置已恢复 | 按发布门禁部署修复后重验 ERP 审核草稿。DOTH 样本有 FBS 库存，真实专用测试隔离仍未成立，本地测试不能授权 import/archive |
 | 新提交与部署证据 | `c10cdc61` 已推送且完整 offline gate 通过；旧 v1 已签署发布继续验证 | 部署流程已获本轮授权，仍须补齐 QA-02/正式 QA-04，生成目标 clean commit 的区域四件套与签名，并取得对应运行包的新 canary |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |
 | 官网公开指针 | 两地仍服务旧批准版本；本轮没有切换 pointer | 切换流程已获本轮授权，待目标区域真实暗态 gate 通过后，按现有 signed approval、CAS、下载 probe 和同路径升级流程执行 |

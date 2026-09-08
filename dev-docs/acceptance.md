@@ -74,7 +74,7 @@
 - 当前结果：`可继续开发`，不是 `可发布`。
 - 本地代码、CI、隔离数据库和 server/Web 构建证据已收口。
 - 本地认证 challenge、扩展静态/package 权限、SSRF、AI quota、跨实例 operation claim、CI 供应链、生产基础只读 smoke 与受管扩展 live worker 已收口。
-- 真实 Provider 单张生成及用户凭单离线对账已完成，原审批币种差异、其他操作与完整 QA-02 仍需独立验收。Ozon 资料及主图已核实，ERP-only 实跑暴露的 500 已在源码修复，尚待部署后重验；未执行 Ozon 商品写入。最新结果只维护在 [当前状态审计](current-state-audit.md)。Redis 集群拓扑与外部告警仍未验证；远端备份当前明确延期。
+- 真实 Provider 单张生成及用户凭单离线对账已完成；Wanx 三项历史编辑技术/质量证据已复核完整，但原审批币种差异、Wanx 账单归属和完整 QA-02 仍未关闭。Ozon 资料及主图已核实，ERP-only 实跑暴露的 500 已在源码修复，完整数据库隔离链路已通过，线上草稿尚待部署后重验；未执行 Ozon 商品写入。最新结果只维护在 [当前状态审计](current-state-audit.md)。Redis 集群拓扑与外部告警仍未验证；远端备份当前明确延期。
 
 ## 停止条件
 
