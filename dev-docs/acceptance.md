@@ -74,7 +74,7 @@
 - 当前结果：`可继续开发`，不是 `可发布`。
 - 本地代码、CI、隔离数据库和 server/Web 构建证据已收口。
 - 本地认证 challenge、扩展静态/package 权限、SSRF、AI quota、跨实例 operation claim、CI 供应链、生产基础只读 smoke 与受管扩展 live worker 已收口。
-- 真实 Provider/Ozon 写入、Redis 集群拓扑与外部告警、CN 远端备份仍未验证；远端备份当前明确延期。
+- 真实 Provider 的单张生成已有新鲜成功证据，但费用核对、其他操作和完整 QA-02 仍未关闭；Ozon 仅做只读资料核实，未执行商品写入。最新结果只维护在 [当前状态审计](current-state-audit.md) 的“直接试点续接”。Redis 集群拓扑与外部告警仍未验证；远端备份当前明确延期。
 
 ## 停止条件
 

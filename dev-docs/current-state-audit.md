@@ -1,8 +1,10 @@
 # SS ERP 当前状态审计
 
-接续核对日期：2026-09-08，本轮源码整改基线为 `cede0e4f`。下方 2026-09-06 的运行记录是历史快照；最新 Git、授权与只读运行证据见接续记录，不能用旧部署记录声明当前线上状态。
+接续核对日期：2026-09-08，本轮源码整改基线为 `cede0e4f`。源码加固与备份阶段、后续直接试点分开记录；后者已经执行一次真实 Provider 请求。下方 2026-09-06 的运行记录是历史快照，不能用旧部署记录声明当前线上状态。
 
 ## 2026-09-08 接续核对与本轮边界
+
+以下是源码加固与备份阶段记录；授权后的最新外部试点结果见下方“直接试点续接”，不再以此前的“尚未执行 Provider”概括当前状态。
 
 - 真源冲突裁决：`git log -8 --oneline`、clean `git status --short --branch` 和当前源码确认分支已到 `cede0e4f`，原文的 `0ede34eb` 只是较早检查点。QA-04 首尾 clean HEAD 校验已存在；Ozon approval manifest 与 append-only reconcile 已在 `2a05dda7` / `cede0e4f` 完成。旧文档不得被用来重复实施这些修复。
 - 新鲜本地基线：QA-04、REL-04、Ozon sandbox 联合合同为 `32 passed / 0 failed`；这不是正式 QA-04 完成证据，也不证明任何真实外部试点或部署成功。
@@ -19,12 +21,24 @@
 - 剩余真实阻塞：三个 Wanx 编辑操作的私有回执仍记录 `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`，API Key 所属计费账户与已登录 Bailian 控制台账户不一致；尚未获得新的匹配账单和费用上限，也未获得测试商品包裹/类目/价格事实。用户已授权后续流程，但不能由代理填造这些输入或把旧未结算证据标为 QA-02 COMPLETE。已向用户请求非密资料；正式 canary/官网签署继续受该证据门禁限制。
 - 操作记录：脱敏 operator summary 保存在受保护目录，SHA-256 为 `a3be906d112ac60ae0b3992411f57cf90df842d79903444fedbcd93be1eae85f`。它记录本次命令结果与副作用，不是正式 QA-04 或新候选部署回执。
 
+### 直接试点续接（用户授权后）
+
+- 授权与范围：用户明确委托直接测试，不再要求其填写内部审批字段。保留一次性精确审批、费用记录与失败恢复要求；不把“所有权限”当作真实商品事实或账单。内部整轮参考预算为 CNY 1，单张分配约 CNY 0.25，不是 Provider 硬消费限额。未修改业务开关、库存、部署或官网 pointer。
+- Provider 身份核实：当前 Xiaoyi 的图像 API 为 `https://image.xiaoyiapi.xyz/v1`、计量域为 `https://xiaoyiapi.xyz`、模型为 `gpt-image-2`。官方 `/api/status` 显示 USD、每单位 500,000 quota、参考汇率 6.77 CNY/USD。历史 CNY 0.0119 的成功记录属于另一端点，不能充当 Xiaoyi 报价。人民币草稿未批准、未执行，原样保留；美元草稿按现有 owner 生成并校验，内部预留与上限同为 USD 0.036926。
+- 真实生成：在 COM 当前部署提交 `0b8c664a5e58a4a9f580c69ac43a1cc15b42749d` 的私有 clean checkout 执行 `TEXT_TO_IMAGE / OZON_PORTRAIT_SINGLE_V1`。前置 GET-only 预检、独立 approval 与无密钥 verify 通过后，仅发送一次生成请求，25.513 秒完成。结果为一张 `1024×1536` PNG，1,569,879 bytes，SHA-256 `d042df51cfaff605b4505f629b47a30df23152a2190bc65e50525cee97b08339`。已目视检查白杯/灰背景，无可见文字、Logo 或个人信息；它是合成测试图，不证明真实商品属性，也不证明编辑或局部重绘能力。
+- 账单仍未关闭：同一凭据的 before/after 各 7 个只读请求通过。前置日志为空，后置出现唯一的模型、路径、时间及耗时匹配消费条目，记录 29,995 quota，按平台单位折合 USD 0.05999（参考约 CNY 0.4061323）。但 Token 标记 `unlimited_quota=true`，`total_used` 与 `total_usage` 增量均为零；去缓存复查的 3 个响应仍一致，Cloudflare 状态为 `DYNAMIC`。日志值超过已批准单张上限，因此停止后续付费请求；不能用零累计值宣称 `NO_CHARGE`，也不能把日志换算值伪装成已通过双计量核对的 `actualCost`。原 report 维持 `actualCost:null`，没有生成正式 settlement 或 QA-02 COMPLETE。
+- 证据保全：原 CLI 固定写入 checkout 的 `tmp/ai-image-sandbox`，不消费 `AI_IMAGE_SANDBOX_EVIDENCE_ROOT`。本次原始 intent、fingerprint claim、report 未修改；另以独占创建保存字节一致副本到共享私有证据根，并保留 custody 记录。不得用新路径、新 ID 或新 checkout 重发同一 fingerprint。私有观察摘要 SHA-256 为 `86cf26f0610b6df6be371f0ccdd6d63b395c1a78ea933c1feb85983c21f712f0`；原始账单、账号字段、凭据和图片不进入 Git。
+- Ozon 真实只读检查：通过现有 OzonClient，对指定 ERP 别名 `DOTH` / Seller `DOIT` 完成 5 个只读 RPC。`ARCHIVED` 查询 total 为 259，`ALL` 查询 total 为 23；只抽样各 10 行，不能据此断言全店没有测试商品。抽样未找到保留测试前缀；一件已归档商品具有类目、包裹重量/尺寸、币种、价格及 VAT，已能从自有店铺取得资料，不必让用户编造参数。但其图片数组为空，测试专用隔离、正常 capture/workflow/compiler 绑定仍未证实；没有复制商品、改库存、import 或 archive。私有证据 SHA-256 为 `5e63a305333cd8296138e5e36c6682c1afefdedf4dc9a94a68375d417d1db271`。
+- 测试分类与回归：本次真实 Provider/Ozon 观察为 T3；仅补现有计费 owner 的 T1 特征测试，不改变业务规则或结算格式。先建立 `81 passed / 1 Windows 条件 skipped` 基线，再加入“零累计计量 + 正数消费日志”下拒绝伪造零费用和拒绝无计量支持的收费结算两例；结果为 `83 passed / 1 skipped`，拒绝前不产生结算 claim/receipt，原始 intent/report 保持不变。没有声称对既有实现补做历史 RED。
+- 提交前验证：受影响测试文件 ESLint、server typecheck、`git diff --check` 与内部文档 adoption 结构检查通过；GitHub API 只读确认远端为 private。2026-09-08 06:21 UTC 再次读取 COM/CN 当前 commit 与 pointer，仍分别为 `0b8c664a / 1.0.316` 和 `a986d0f6 / 1.0.311`，两地三个服务均 active，公网 `/ready` 均正常。该轻量读回不是重新运行完整 VPS verifier，也不刷新旧备份认证。
+- 发布结论：真实单张生成已验证，但完整 QA-02/正式 QA-04 尚未关闭。按现有发布合同，不能为满足进度把该结果升级为正式候选、canary 或官网发布批准；新代码部署、签署官网 approval 和 pointer 切换均未执行。远端备份延期和 Redis 拓扑不变；旧备份恢复认证在部署前仍须按 120 分钟时效重新检查。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | [approval draft/verify](../docs/runbooks/ai-image-provider-sandbox-approval.md)、[billing finalize](../docs/runbooks/ai-image-provider-sandbox-billing.md) 已有；不另建第二套审批工具 | 需补齐能关联该凭据的计费账户/前置账单、endpoint/model/operation 和明确费用上限，再形成精确一次性审批绑定；不把 API Key 粘贴进文档或聊天 |
-| Ozon 测试店与商品事实 | production compiler、只读 preflight、approval/execute/reconcile 已有；[runbook](../docs/runbooks/ozon-source-listing-sandbox.md) 新增完整审批字段模板和 envelope 字节摘要说明 | 需确定测试 owner/shop/device/operator 和真实类目/属性、包裹重量/尺寸/单位、价格/币种/VAT；实际 import/archive 必须消费这些事实及当前精确审批回执 |
+| Provider 费用账户与 pilot | [approval draft/verify](../docs/runbooks/ai-image-provider-sandbox-approval.md) 已消费；Xiaoyi 单张生成成功。账单观察与 [billing finalize](../docs/runbooks/ai-image-provider-sandbox-billing.md) 的双计量合同不一致 | 只读核对此次原请求的账户账单或获得已修正的计量来源；保留日志超单张限额与累计计量为零的差异，不重发、不更改旧审批。旧 Wanx 编辑的账户错配仍是独立问题 |
+| Ozon 测试店与商品事实 | 已通过 5 个只读 RPC 找到自有店铺归档商品资料；production compiler、preflight、approval/execute/reconcile 与 [runbook](../docs/runbooks/ozon-source-listing-sandbox.md) 均已有 | 先证实专用测试隔离、补齐可用且对应商品的测试素材，再经正常 capture/workflow/compiler 绑定真实来源。合成图与宽泛授权不能替代这些事实；未满足前不得 import/archive |
 | 新提交与部署证据 | `c10cdc61` 已推送且完整 offline gate 通过；旧 v1 已签署发布继续验证 | 部署流程已获本轮授权，仍须补齐 QA-02/正式 QA-04，生成目标 clean commit 的区域四件套与签名，并取得对应运行包的新 canary |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |
 | 官网公开指针 | 两地仍服务旧批准版本；本轮没有切换 pointer | 切换流程已获本轮授权，待目标区域真实暗态 gate 通过后，按现有 signed approval、CAS、下载 probe 和同路径升级流程执行 |

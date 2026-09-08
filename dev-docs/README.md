@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 实现检查点 `c10cdc61` 已推送并通过完整 QA-04 offline gate 和 Linux/Node 22 发布关键合同。两地已刷新本地备份与恢复认证，当前版本完整 VPS verifier 都为 `0 failure / 1 warning`。正式试点仍缺计费关联、明确费用上限和商品事实；尚未部署新代码或切换官网指针。详细结果与下一步见[当前状态审计](current-state-audit.md)。
+- 实现检查点 `c10cdc61` 已推送并通过完整 QA-04 offline gate 和 Linux/Node 22 发布关键合同；旧运行版本的备份恢复与 verifier 证据已记录。后续已执行一次真实 Xiaoyi 图像生成并取得结果，但正式计费核对未关闭；Ozon 完成只读资料检查。新部署与官网切换仍未执行，详细结果与下一步见[当前状态审计](current-state-audit.md)。
 - 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。
-- 当前主风险：真实 Provider pilot 尚缺可关联计费账户和明确费用上限；Ozon 最近预检与合成测试图 OSS 上传已有证据，但仍需真实测试商品事实及精确 owner/shop/device 的 pilot 绑定。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
-- 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再为 Ozon 测试店绑定明确的写入/回滚 pilot；远端备份按当前用户决定暂不配置。
+- 当前主风险：Xiaoyi 请求日志与累计计量不一致，旧 Wanx 编辑仍有独立的计费账户错配；Ozon 已有自有归档商品资料，但测试隔离、素材及精确 compiler/pilot 绑定未完成。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
+- 推荐下一步：只读关闭原 Provider 请求的账单差异，不重发；按执行清单核实 Ozon 测试隔离及正常编译链。不能用单张生成成功代替完整 QA-02、正式 QA-04 或发布批准。
