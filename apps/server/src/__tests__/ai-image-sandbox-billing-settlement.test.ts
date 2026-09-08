@@ -1550,6 +1550,59 @@ describe('AI image sandbox billing settlement', () => {
     expect(stored).not.toContain(value.providerTokenLogSnapshotPath);
   });
 
+  it.each([
+    ['NO_CHARGE', 0, 'SANDBOX_BILLING_MISMATCH'],
+    ['CHARGED', 119, 'SANDBOX_BILLING_ATTESTATION_INVALID'],
+  ] as const)(
+    'refuses %s when zero cumulative meters conflict with a positive consume entry',
+    async (billingOutcome, amount, failureCode) => {
+      const value = await fixture({
+        intentSchemaVersion: 3,
+        reportSchemaVersion: 5,
+        attestationSchemaVersion: 3,
+        attestationOverrides: {
+          billingOutcome,
+          actualCost: { currency: 'CNY', amount, scale: 4 },
+          meterEvidence: exactMeterEvidence({
+            rawQuotaDelta: 0,
+            displayTotalUsageDelta: { amount: 0, scale: 0 },
+          }),
+        },
+      });
+      const unchangedMeters = {
+        tokenUsage: { data: { unlimited_quota: true, total_used: 0 } },
+        displayUsage: { total_usage: 0 },
+      };
+      const before = await writeCanonicalJson(value.preCallBillingSnapshotPath, unchangedMeters);
+      const after = await writeCanonicalJson(value.settledBillingSnapshotPath, unchangedMeters);
+      const billingAttestation = JSON.parse(await readFile(value.settlementPath, 'utf8'));
+      const reviewedAttestation = await writeCanonicalJson(value.settlementPath, {
+        ...billingAttestation,
+        preCallBillingSnapshotSha256: before.sha256,
+        settledBillingSnapshotSha256: after.sha256,
+      });
+
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: reviewedAttestation.sha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: failureCode });
+
+      for (const output of [
+        join(value.root, 'billing', `${operationId}.billing.settlement.json`),
+        join(value.root, 'billing', '.claims', `${operationId}.billing.claim.json`),
+      ]) {
+        await expect(readFile(output)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
+      expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+    },
+  );
+
   it('binds the reviewed Xiaoyi image API to its separate billing origin', async () => {
     const value = await fixture({
       ...xiaoyiEvidenceBindings(),
