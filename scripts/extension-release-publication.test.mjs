@@ -332,6 +332,22 @@ function runWebsiteApprovalSigner(value, overrides = {}) {
   });
 }
 
+function bindCandidate(value) {
+  value.darkCanary.schemaVersion = 2;
+  value.darkCanary.bindings.release = {
+    candidate: {
+      gitCommit: value.gitCommit, apiOrigin: origin, region: 'COM', version: value.version,
+      releaseEvidenceSha256: sha256(readFileSync(value.evidencePath)),
+      releaseSignatureSha256: sha256(value.signatureBytes),
+    },
+    vpsVerificationSha256: 'f'.repeat(64),
+    vpsStartedAt: '2030-01-01T00:00:15.000Z',
+    vpsVerifiedAt: '2030-01-01T00:00:30.000Z',
+  };
+  writeFileSync(value.darkCanaryPath, `${JSON.stringify(value.darkCanary, null, 2)}\n`);
+  value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
+}
+
 function runSigner(value, overrides = {}) {
   return spawnSync(process.execPath, [
     'scripts/sign-extension-release.mjs',
@@ -359,6 +375,7 @@ function signedFixture() {
   value.signatureBytes = readFileSync(value.signaturePath);
   value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
   assert.equal(value.signatureBytes.toString('utf8'), canonicalReleaseSignatureJson(value.signature));
+  bindCandidate(value);
   const approvalResult = runWebsiteApprovalSigner(value);
   assert.equal(approvalResult.status, 0, `${approvalResult.stdout}\n${approvalResult.stderr}`);
   assert.doesNotMatch(`${approvalResult.stdout}\n${approvalResult.stderr}`, /BEGIN PRIVATE KEY|MC4CAQ/iu);
@@ -370,6 +387,50 @@ function signedFixture() {
   );
   return value;
 }
+
+test('new website approval refuses a legacy canary before accessing the signing key', () => {
+  const value = fixture();
+  const signed = runSigner(value);
+  assert.equal(signed.status, 0, signed.stderr);
+  value.signatureBytes = readFileSync(value.signaturePath);
+  const result = runWebsiteApprovalSigner(value, {
+    EXTENSION_RELEASE_SIGNING_KEY_PATH: path.join(value.root, 'missing-signing-key.pem'),
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /v2 candidate-bound/u);
+  assert.equal(existsSync(value.approvalPath), false);
+});
+
+test('new website approval rejects VPS evidence completed before the candidate signature', () => {
+  const value = fixture();
+  const signed = runSigner(value);
+  assert.equal(signed.status, 0, signed.stderr);
+  value.signatureBytes = readFileSync(value.signaturePath);
+  bindCandidate(value);
+  value.darkCanary.bindings.release.vpsVerifiedAt = '2029-12-31T23:59:00.000Z';
+  value.darkCanary.bindings.release.vpsStartedAt = '2029-12-31T23:58:00.000Z';
+  writeFileSync(value.darkCanaryPath, `${JSON.stringify(value.darkCanary, null, 2)}\n`);
+  value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
+  const result = runWebsiteApprovalSigner(value);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /VPS.*signature|VPS.*order/iu);
+  assert.equal(existsSync(value.approvalPath), false);
+});
+
+test('new website approval rejects a VPS run started before signing even if it finishes later', () => {
+  const value = fixture();
+  const signed = runSigner(value);
+  assert.equal(signed.status, 0, signed.stderr);
+  value.signatureBytes = readFileSync(value.signaturePath);
+  bindCandidate(value);
+  value.darkCanary.bindings.release.vpsStartedAt = '2029-12-31T23:59:00.000Z';
+  writeFileSync(value.darkCanaryPath, `${JSON.stringify(value.darkCanary, null, 2)}\n`);
+  value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
+  const result = runWebsiteApprovalSigner(value);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /VPS.*signature/iu);
+  assert.equal(existsSync(value.approvalPath), false);
+});
 
 function latestBytes(value, mutate) {
   const latest = {
@@ -499,9 +560,10 @@ test('rejects a REL-04 observation that predates its release signature at every 
   assert.equal(signatureResult.status, 0, `${signatureResult.stdout}\n${signatureResult.stderr}`);
   signing.signatureBytes = readFileSync(signing.signaturePath);
   signing.signature = parseReleaseSignature(JSON.parse(signing.signatureBytes));
+  bindCandidate(signing);
   const approvalResult = runWebsiteApprovalSigner(signing);
   assert.notEqual(approvalResult.status, 0);
-  assert.match(approvalResult.stderr, /dark canary observation must not predate/u);
+  assert.match(approvalResult.stderr, /VPS verification started before the release signature/u);
 
   const value = signedFixture();
   const { receipt } = await completePublication(value);
@@ -517,9 +579,11 @@ test('rejects a REL-04 observation that predates its release signature at every 
   value.signatureBytes = readFileSync(value.signaturePath);
   value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
 
+  bindCandidate(value);
   const unsignedApproval = parseWebsitePublicationApproval({
     ...value.approval,
     releaseSignatureSha256: sha256(value.signatureBytes),
+    darkCanarySha256: sha256(value.darkCanaryBytes),
     signatureBase64: Buffer.alloc(64).toString('base64'),
   });
   value.approval = parseWebsitePublicationApproval({
@@ -542,6 +606,7 @@ test('rejects a REL-04 observation that predates its release signature at every 
     ...receipt,
     releaseSignatureSha256: sha256(value.signatureBytes),
     websitePublicationApprovalSha256: sha256(value.approvalBytes),
+    darkCanarySha256: sha256(value.darkCanaryBytes),
     signatureBase64: Buffer.alloc(64).toString('base64'),
   });
   const replacementReceipt = parseDistributionReceipt({
@@ -570,11 +635,11 @@ test('rejects a REL-04 observation that predates its release signature at every 
     keyId,
     observedAt,
     now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /predates/u);
+  }), /VPS verification started before the release signature/u);
   assert.equal(noNetwork.calls.length, 0);
   assert.throws(
     () => verifyExtensionPublication(verificationInput(value)),
-    /dark canary observation predates/u,
+    /VPS verification started before the release signature/u,
   );
 });
 
@@ -584,6 +649,7 @@ test('uses one environment-selected keyring for release and website approval ver
   assert.equal(releaseResult.status, 0, `${releaseResult.stdout}\n${releaseResult.stderr}`);
   value.signatureBytes = readFileSync(value.signaturePath);
 
+  bindCandidate(value);
   const result = spawnSync(process.execPath, [
     'scripts/sign-extension-website-publication.mjs',
     '--dark-canary', value.darkCanaryPath,

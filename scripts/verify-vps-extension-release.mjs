@@ -173,7 +173,8 @@ function runFormalReleaseVerifier({ buildRoot, expectedOrigins }) {
   ], {
     cwd: path.resolve(import.meta.dirname, '..'),
     env: process.env,
-    stdio: 'inherit',
+    // Keep stdout as one JSON result for the full VPS verifier's evidence writer.
+    stdio: ['ignore', 2, 2],
     timeout: 10 * 60 * 1000,
     windowsHide: true,
   });

@@ -253,6 +253,34 @@ test('verifies the exact four-file candidate and canonical cloud logistics entry
   }
 });
 
+test('keeps formal-verifier progress off the machine-readable JSON result', () => {
+  const value = fixture();
+  try {
+    const script = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      childProcess.spawnSync = (_command, _args, options) => {
+        const output = options.stdio === 'inherit' || options.stdio[1] === 1
+          ? process.stdout : process.stderr;
+        output.write('formal verification progress\\n');
+        return { status: 0, signal: null };
+      };
+      syncBuiltinESMExports();
+      const { verifyVpsExtensionRelease } = await import('./scripts/verify-vps-extension-release.mjs');
+      console.log(JSON.stringify(verifyVpsExtensionRelease(JSON.parse(process.argv[1]))));
+    `;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(input(value))], {
+      cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotThrow(() => JSON.parse(result.stdout), 'stdout must contain only the verifier JSON');
+    assert.equal(JSON.parse(result.stdout).gitCommit, commit);
+    assert.match(result.stderr, /formal verification progress/u);
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('fixed legacy baseline skips only Ed25519 and still runs formal candidate verification', () => {
   const value = fixture({
     gitCommit: LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT,

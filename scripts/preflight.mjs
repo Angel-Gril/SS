@@ -178,6 +178,11 @@ const steps = [
     args: ['--test', 'scripts/rel04-dark-canary.test.mjs'],
   },
   {
+    name: 'full VPS verification evidence contract',
+    command: 'node',
+    args: ['--test', 'scripts/vps-verification-evidence.test.mjs'],
+  },
+  {
     name: 'extension website publication gate contract',
     command: 'node',
     args: ['--test', 'scripts/extension-website-publication-gate.test.mjs'],

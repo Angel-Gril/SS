@@ -9,6 +9,10 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import {
+  parseRel04CandidateIdentity,
+  validateRel04ReleaseBinding,
+} from '../packages/shared/src/rel04-release-evidence.ts';
+import {
   MAX_KEYRING_BYTES,
   MAX_PUBLICATION_APPROVAL_BYTES,
   canonicalTrustedKeyringJson,
@@ -362,18 +366,40 @@ export function validateRel04DarkCanarySummary(summary, input) {
   ], 'REL-04 dark canary evidence');
   const bindings = exactKeys(value.bindings, [
     'apiOrigin', 'expectedGitCommit', 'extensionOrigin', 'publishReconciliation',
-    'shopIdHash',
+    'shopIdHash', ...(value.schemaVersion === 2 ? ['release'] : []),
   ], 'REL-04 dark canary bindings');
   const reconciliation = validateReconciliationBinding(bindings.publishReconciliation);
   const observedAt = canonicalTimestamp(value.observedAt, 'REL-04 dark canary observedAt');
   rel04Digest(bindings.shopIdHash, 'REL-04 shop hash');
-  if (value.schemaVersion !== 1
+  if (![1, 2].includes(value.schemaVersion)
     || value.kind !== 'SS_ERP_REL04_DARK_CANARY'
     || value.status !== 'PASS'
     || bindings.expectedGitCommit !== expectedGitCommit
     || bindings.apiOrigin !== expectedApiOrigin
     || !/^chrome-extension:\/\/[a-p]{32}$/u.test(bindings.extensionOrigin)) {
     fail('REL-04 dark canary identity or bindings are invalid');
+  }
+  if (input.requireReleaseBinding && value.schemaVersion !== 2) {
+    fail('REL-04 v2 candidate-bound evidence is required for a new website approval');
+  }
+  if (value.schemaVersion === 2) {
+    let candidate;
+    try {
+      const expected = input.expectedCandidate || {};
+      candidate = parseRel04CandidateIdentity({
+        gitCommit: expected.gitCommit, apiOrigin: expected.apiOrigin,
+        region: expected.region, version: expected.version,
+        releaseEvidenceSha256: expected.releaseEvidenceSha256,
+        releaseSignatureSha256: expected.releaseSignatureSha256,
+      });
+    } catch {
+      fail('REL-04 expected candidate identity is incomplete or invalid');
+    }
+    if (candidate.gitCommit !== expectedGitCommit || candidate.apiOrigin !== expectedApiOrigin) {
+      fail('REL-04 expected candidate does not match the publication target');
+    }
+    const releaseSignedAt = canonicalTimestamp(input.expectedReleaseSignedAt, 'REL-04 expected release signature timestamp');
+    validateRel04ReleaseBinding(bindings.release, candidate, observedAt, releaseSignedAt);
   }
 
   if (!Array.isArray(value.checks) || value.checks.length !== REL04_CHECK_IDS.length) {
@@ -537,6 +563,9 @@ export function verifyRel04DarkCanaryEvidence(input) {
   const { observedAt } = validateRel04DarkCanarySummary(raw, {
     expectedGitCommit,
     expectedApiOrigin,
+    expectedCandidate: input.expectedCandidate,
+    expectedReleaseSignedAt: input.expectedReleaseSignedAt,
+    requireReleaseBinding: input.requireReleaseBinding,
   });
   const age = now.getTime() - Date.parse(observedAt);
   if (Date.parse(observedAt) > Date.parse(approvedAt)

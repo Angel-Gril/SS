@@ -274,6 +274,16 @@ function fixture() {
 
   const darkCanaryPath = path.join(privateRoot, 'rel04-dark-canary-test.json');
   const darkCanary = darkCanaryFixture(evidence.expectedOrigins.api);
+  darkCanary.schemaVersion = 2;
+  darkCanary.bindings.release = {
+    candidate: {
+      gitCommit, apiOrigin: evidence.expectedOrigins.api, region: 'COM', version,
+      releaseEvidenceSha256: sha256(readFileSync(evidencePath)), releaseSignatureSha256,
+    },
+    vpsVerificationSha256: 'f'.repeat(64),
+    vpsStartedAt: '2030-01-01T00:03:00.000Z',
+    vpsVerifiedAt: '2030-01-01T00:04:00.000Z',
+  };
   writeFileSync(darkCanaryPath, `${JSON.stringify(darkCanary, null, 2)}\n`, { mode: 0o600 });
   chmodSync(darkCanaryPath, 0o600);
   const darkCanarySha256 = sha256(readFileSync(darkCanaryPath));

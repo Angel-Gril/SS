@@ -242,6 +242,8 @@ export function verifyExtensionPublication({
     expectedSha256: approval.darkCanarySha256,
     expectedGitCommit: evidence.gitCommit,
     expectedApiOrigin: evidence.expectedOrigins.api,
+    expectedCandidate: { ...approval, apiOrigin: approval.distributionOrigin },
+    expectedReleaseSignedAt: signature.signedAt,
     approvedAt: approval.approvedAt,
     now,
   });

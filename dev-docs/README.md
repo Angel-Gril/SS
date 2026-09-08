@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 加固与发布验收阶段：stage-1 至 stage-20 已完成；当前实现检查点为 `0ede34eb`，其中运行时安全修复提交 `a986d0f6` 已推送并部署到日本、国内两台 VPS。两地 VPS 当前均运行 `a986d0f6`；扩展候选为 `1.0.317` 且保持暗部署，COM 官网指针仍按批准状态绑定 `b64b723c` / `1.0.316`，CN 官网指针仍绑定 `d27b3ad8` / `1.0.311`。`0ede34eb` 的 QA-04/Ozon sandbox 加固属于仓库工具与合同更新，尚未部署。
-- 已验证：完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要。
+- 本轮源码整改基线为 `cede0e4f`；2026-09-08 已补齐 REL-04 区域候选、VPS 回执和签名时序绑定、官网消费者，以及 QA-04 的真实 Git 负例覆盖。用户已要求继续提交/推送和完整发布验收；进展、授权及缺失输入以[当前状态审计](current-state-audit.md)为准。COM 只读盘点仍运行 `0b8c664a`，尚未执行本轮部署或官网切换。
+- 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。
 - 当前主风险：真实 Provider pilot 尚缺可关联计费账户和独立费用批准；Ozon 指定测试店 v2 preflight 与合成测试图 OSS 上传已通过，但来源 Capture/Workflow master 仍全关，创建草稿前需单独批准 exact owner/shop pilot，并提供不可虚构的测试商品包裹事实；两台 VPS 的 Redis 均为 standalone、无副本/集群和专用告警，CN 远端备份仍按决定未配置；Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
 - 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再为 Ozon 测试店绑定明确的写入/回滚 pilot；远端备份按当前用户决定暂不配置。

@@ -332,6 +332,8 @@ export async function probeWebsiteDistribution({
     expectedSha256: approval.darkCanarySha256,
     expectedGitCommit: evidence.gitCommit,
     expectedApiOrigin: distributionOrigin,
+    expectedCandidate: { ...approval, apiOrigin: approval.distributionOrigin },
+    expectedReleaseSignedAt: signature.signedAt,
     approvedAt: approval.approvedAt,
     now,
   });

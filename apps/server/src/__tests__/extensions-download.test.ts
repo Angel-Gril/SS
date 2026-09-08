@@ -202,6 +202,7 @@ async function publishedFixture(input: {
   root: string;
   buildRoot: string;
   version?: string;
+  canaryVersion?: 1 | 2;
   mutateApproval?: (value: Record<string, unknown>) => void;
   mutateDarkCanary?: (value: Record<string, unknown>) => void;
 }) {
@@ -265,7 +266,7 @@ async function publishedFixture(input: {
   await writeFile(releaseSignaturePath, releaseSignatureBytes);
 
   const darkCanary = {
-    schemaVersion: 1,
+    schemaVersion: input.canaryVersion || 1,
     kind: 'SS_ERP_REL04_DARK_CANARY',
     status: 'PASS',
     observedAt: '2030-01-01T00:05:00.000Z',
@@ -274,6 +275,18 @@ async function publishedFixture(input: {
       expectedGitCommit: gitCommit,
       extensionOrigin: `chrome-extension://${'a'.repeat(32)}`,
       shopIdHash: 'c'.repeat(64),
+      ...(input.canaryVersion === 2 ? {
+        release: {
+          candidate: {
+            gitCommit, apiOrigin: 'https://api.example.com', region: 'COM', version,
+            releaseEvidenceSha256: sha256(release.evidenceBytes),
+            releaseSignatureSha256: sha256(releaseSignatureBytes),
+          },
+          vpsVerificationSha256: 'f'.repeat(64),
+          vpsStartedAt: '2030-01-01T00:03:00.000Z',
+          vpsVerifiedAt: '2030-01-01T00:04:00.000Z',
+        },
+      } : {}),
       publishReconciliation: {
         attemptIdHash: null,
         mode: 'TARGET_COMMIT_QA04_REGRESSION',
@@ -567,6 +580,50 @@ describe('extensionDownloadRoutes', () => {
     expect(cloud.rawPayload.equals(published.release.cloudBytes)).toBe(true);
   });
 
+  it('serves a signed v2 canary bundle with exact candidate evidence', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 2 });
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    const latest = await app.inject({ method: 'GET', url: '/latest' });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.json().data.publicationApprovalSha256).toBe(published.approvalSha256);
+    const cloud = await app.inject({
+      method: 'GET', url: routePath(latest.json().data.targets.cloud.downloadUrl),
+    });
+    expect(cloud.statusCode).toBe(200);
+    expect(cloud.rawPayload.equals(published.release.cloudBytes)).toBe(true);
+    await app.close();
+  });
+
+  it.each([
+    ['version', '9.9.9'], ['region', 'CN'], ['gitCommit', 'e'.repeat(40)],
+    ['releaseEvidenceSha256', 'e'.repeat(64)], ['releaseSignatureSha256', 'e'.repeat(64)],
+  ])('rejects a signed v2 canary whose candidate %s belongs to another release', async (field, replacement) => {
+    const value = await fixture();
+    const published = await publishedFixture({
+      ...value, canaryVersion: 2,
+      mutateDarkCanary(canary) {
+        const binding = canary.bindings as { release: { candidate: Record<string, unknown> } };
+        binding.release.candidate[field!] = replacement;
+      },
+    });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.com', expectedRegion: 'COM',
+      trustedOwnerUid: null,
+    })).rejects.toThrow(/candidate|region/u);
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    expect((await app.inject({ method: 'GET', url: '/latest' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/download/cloud' })).statusCode).toBe(404);
+    await app.close();
+  });
+
   it('rejects a dark canary observation that predates the release signature', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const value = await fixture();
@@ -591,6 +648,22 @@ describe('extensionDownloadRoutes', () => {
     });
     expect((await app.inject({ method: 'GET', url: '/latest' })).statusCode).toBe(404);
     expect((await app.inject({ method: 'GET', url: '/download/cloud' })).statusCode).toBe(404);
+  });
+
+  it('rejects a signed v2 canary whose VPS verification started before its release signature', async () => {
+    const value = await fixture();
+    const published = await publishedFixture({
+      ...value, canaryVersion: 2,
+      mutateDarkCanary(canary) {
+        const binding = canary.bindings as { release: { vpsStartedAt: string } };
+        binding.release.vpsStartedAt = '2029-12-31T23:59:00.000Z';
+      },
+    });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: published.publicationRoot, keyringPath: published.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.com', expectedRegion: 'COM',
+      trustedOwnerUid: null,
+    })).rejects.toThrow(/VPS verification started before the release signature/u);
   });
 
   it('fails closed after a valid pointer is removed instead of serving a cached release', async () => {

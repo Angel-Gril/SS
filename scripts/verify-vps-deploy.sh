@@ -34,6 +34,13 @@ readonly VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT="$LEGACY_UNSIGNED_EXTEN
 
 FAILURES=0
 WARNINGS=0
+VERIFY_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_EVIDENCE_OUTPUT="${VERIFY_EVIDENCE_OUTPUT:-}"
+VERIFY_EVIDENCE_REGION="${VERIFY_EVIDENCE_REGION:-}"
+VERIFY_EVIDENCE_STARTED_AT=""
+VERIFY_EVIDENCE_INITIAL_COMMIT=""
+VERIFY_EVIDENCE_API_ORIGIN=""
+VERIFY_EVIDENCE_RELEASE_VERIFICATION=""
 
 pass() {
   echo "PASS $1"
@@ -47,6 +54,19 @@ warn() {
 fail() {
   FAILURES=$((FAILURES + 1))
   echo "FAIL $1"
+}
+
+write_verification_evidence() {
+  if [ -z "$VERIFY_EVIDENCE_OUTPUT" ]; then return 0; fi
+  node "$VERIFY_SCRIPT_DIR/vps-verification-evidence.mjs" \
+    --output "$VERIFY_EVIDENCE_OUTPUT" \
+    --deployment-root "$DEPLOY_DIR" \
+    --initial-git-commit "$VERIFY_EVIDENCE_INITIAL_COMMIT" \
+    --api-origin "$VERIFY_EVIDENCE_API_ORIGIN" \
+    --region "$VERIFY_EVIDENCE_REGION" \
+    --started-at "$VERIFY_EVIDENCE_STARTED_AT" \
+    --failures "$FAILURES" --warnings "$WARNINGS" \
+    --release-verification "$VERIFY_EVIDENCE_RELEASE_VERIFICATION"
 }
 
 validate_boolean_setting() {
@@ -1101,7 +1121,11 @@ process.stdout.write(match[1]);
       --expected-signature-sha256 "$signature_sha256"
     )
   fi
-  if node "$release_verifier" "${release_verifier_args[@]}"; then
+  local release_verification
+  if release_verification=$(node "$release_verifier" "${release_verifier_args[@]}"); then
+    printf '%s\n' "$release_verification"
+    VERIFY_EVIDENCE_RELEASE_VERIFICATION="$release_verification"
+    VERIFY_EVIDENCE_API_ORIGIN="$expected_api_origin"
     pass "formal extension release, cloud logistics, and signature policy are verified"
   else
     fail "formal extension release or cloud logistics verification failed"
@@ -1272,6 +1296,15 @@ require_command nginx
 require_command systemctl
 require_command timeout
 
+if [ -n "$VERIFY_EVIDENCE_OUTPUT" ]; then
+  case "$VERIFY_EVIDENCE_REGION" in
+    COM|CN) ;;
+    *) echo "[verify-vps] ERROR: VERIFY_EVIDENCE_REGION must be COM or CN" >&2; exit 1 ;;
+  esac
+  VERIFY_EVIDENCE_STARTED_AT="$(node -e 'process.stdout.write(new Date().toISOString())')"
+  VERIFY_EVIDENCE_INITIAL_COMMIT="$(cat "$DEPLOY_DIR/DEPLOYED_COMMIT")"
+fi
+
 if [ -f "${DEPLOY_DIR}/DEPLOYED_COMMIT" ]; then
   pass "DEPLOYED_COMMIT=$(cat "${DEPLOY_DIR}/DEPLOYED_COMMIT")"
 else
@@ -1322,3 +1355,4 @@ echo "=== Result: ${FAILURES} failure(s), ${WARNINGS} warning(s) ==="
 if [ "$FAILURES" -gt 0 ]; then
   exit 1
 fi
+write_verification_evidence

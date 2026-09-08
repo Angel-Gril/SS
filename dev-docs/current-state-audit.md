@@ -1,8 +1,34 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-06，最新实现检查点为 `0ede34eb`；日本、国内 VPS 当前运行安全修复提交 `a986d0f6`。公开扩展仍按批准状态绑定 `b64b723c` / `1.0.316`（COM）和 `d27b3ad8` / `1.0.311`（CN），`1.0.317` 仅为暗部署候选。该结论来自当前分支、文件和新鲜命令，不用诊断/helper 提交冒充运行包证据。
+接续核对日期：2026-09-08，本轮源码整改基线为 `cede0e4f`。下方 2026-09-06 的运行记录是历史快照；最新 Git、授权与只读运行证据见接续记录，不能用旧部署记录声明当前线上状态。
+
+## 2026-09-08 接续核对与本轮边界
+
+- 真源冲突裁决：`git log -8 --oneline`、clean `git status --short --branch` 和当前源码确认分支已到 `cede0e4f`，原文的 `0ede34eb` 只是较早检查点。QA-04 首尾 clean HEAD 校验已存在；Ozon approval manifest 与 append-only reconcile 已在 `2a05dda7` / `cede0e4f` 完成。旧文档不得被用来重复实施这些修复。
+- 新鲜本地基线：QA-04、REL-04、Ozon sandbox 联合合同为 `32 passed / 0 failed`；这不是正式 QA-04 完成证据，也不证明任何真实外部试点或部署成功。
+- 本轮实现：REL-04 v2 绑定区域、版本、release evidence、签名和完整 VPS verifier 回执。共享合同为 `packages/shared/src/rel04-release-evidence.ts`，canary 负责生成，website approval 与 API 分发负责消费，`verify-vps-deploy.sh` 负责完整运行验证的结果。VPS 回执仅在全部检查结束、无 failure、候选签名有效且 deployed commit 未漂移时生成；warning 保留，输出不可覆盖。
+- 验收边界：新 canary 使用 v2；新 website approval 必须消费 v2 且匹配候选摘要；已签署 v1 的历史官网发布继续验证。缺失、错配、过期或失败的证据必须在网络/设备配对前拒绝。T2 先观察上述负例 RED，再实现并运行发布消费者回归；QA-04 补 staged/untracked/运行后 dirty 的既有行为覆盖。
+- 新鲜验证：新增 canary/发布消费者、服务端下载和 verifier JSON 输出用例均先观察到目标 RED 后转 GREEN。十组 Node 合同联合运行 `103 passed / 2 skipped / 0 failed`；server `extensions-download.test.ts` 为 `22 passed / 3 skipped / 0 failed`。跳过项为既有 Windows/POSIX 条件用例。shared/server typecheck、受影响文件 ESLint、server build、Node/Bash 语法、`git diff --check` 和文档 adoption 结构检查通过。
+- Git 与证据状态：用户随后明确要求提交/推送并按清单完成部署、官网与真实试点。QA-04 覆盖已形成 `e5826543`，Ozon 模板已形成 `e7a3550e`；发布证据链独立复核发现并修复签名前 VPS 回执可被接受的问题，v2 现在同时绑定 `vpsStartedAt/vpsVerifiedAt`，所有发布消费者使用已验证签名时间作为下界。完整 clean commit 的 QA-04 offline 验收将在源码提交后执行；此前聚焦结果不能替代它。
+- 提交前追加验证：签名前完成和跨签名窗口均先复现再修复，发布/VPS 五组合同 `78 passed / 1 skipped`，下载服务 `23 passed / 3 skipped`，shared/server typecheck 与受影响 ESLint 通过。独立复核确认时序修复及所有消费者接线，无剩余阻断发现；该复核没有访问外部系统。
+- 当前授权：提交/推送、测试、区域候选准备、签名、既有区域 VPS 部署/验收和官网切换已由用户新请求纳入任务。各步骤仍以通过的实际证据为前提；真实 Provider 写入仍缺可对账账户和明确费用上限，Ozon 写入仍缺真实测试商品事实，不能虚构输入。远端备份继续延期，Redis 拓扑改造未包含在本次验收授权中。
+- 新鲜只读盘点：本地 PostgreSQL/Redis 均 healthy，隔离 schema 测试的数据库目标为 `127.0.0.1`；COM VPS 仍运行 `0b8c664a5e58a4a9f580c69ac43a1cc15b42749d`，API/Web/Worker 均 active。尚未执行本轮部署、官网指针切换或 Provider/Ozon 写入。
+
+### 剩余五项的执行入口
+
+| 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
+| --- | --- | --- |
+| Provider 费用账户与 pilot | [approval draft/verify](../docs/runbooks/ai-image-provider-sandbox-approval.md)、[billing finalize](../docs/runbooks/ai-image-provider-sandbox-billing.md) 已有；不另建第二套审批工具 | 能关联该凭据的计费账户引用与前置账单、endpoint/model/operation、单次费用上限及独立一次性批准；不把 API Key 粘贴进文档或聊天 |
+| Ozon 测试店与商品事实 | production compiler、只读 preflight、approval/execute/reconcile 已有；[runbook](../docs/runbooks/ozon-source-listing-sandbox.md) 新增完整审批字段模板和 envelope 字节摘要说明 | 明确测试 owner/shop/device/operator，真实类目/属性、包裹重量/尺寸/单位、价格/币种/VAT；先完成已授权的 ERP 测试草稿，实际 import/archive 另行批准 |
+| 新提交与部署证据 | 本轮闭合 v2 canary、完整 VPS 回执、新官网签署和服务端下载的候选绑定；旧 v1 已签署发布继续验证 | 最终 clean commit 的区域四件套及独立签名、区域部署/canary 批准；本轮代码包含服务端消费者，后续部署必须重建并验证对应运行包 |
+| 备份、Redis、域名验收 | 远端备份保持已记录的延期；只读 Redis 诊断和域名 smoke 入口已有 | 副本/告警需先明确可用性目标、运维接收者、成本/停机边界并独立批准；新部署需重新收集该提交的域名和完整 VPS 回执 |
+| 官网公开指针 | 本轮只实现新证据的签署/消费合同，没有切换任何 pointer | 目标区域暗部署通过后，签署独立 website approval，再按现有 CAS 激活、下载 probe 和同路径升级流程验收 |
+
+上述表格是已实现入口与缺失输入的对应关系，不代表费用、Ozon 写入或生产发布已获批准。
 
 ## 现状证据
+
+以下各节保留 2026-09-06 的历史审计上下文。当前 Git、验证结果和授权范围以上方接续记录为准。
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。

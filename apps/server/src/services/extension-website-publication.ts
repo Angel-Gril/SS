@@ -2,6 +2,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { validateRel04ReleaseBinding } from 'shared/rel04-release-evidence';
 import {
   loadVerifiedExtensionReleaseSet,
   type VerifiedExtensionReleaseSet,
@@ -441,23 +442,33 @@ function validateCanary(
   value: unknown,
   approval: WebsitePublicationApproval,
   apiOrigin: string,
+  releaseSignedAt: string,
 ) {
   const summary = exactObject(value, [
     'bindings', 'checks', 'cleanup', 'kind', 'observedAt', 'requestAudit', 'schemaVersion', 'status',
   ], 'REL-04 dark canary');
   const bindings = exactObject(summary.bindings, [
     'apiOrigin', 'expectedGitCommit', 'extensionOrigin', 'publishReconciliation', 'shopIdHash',
+    ...(summary.schemaVersion === 2 ? ['release'] : []),
   ], 'REL-04 dark canary bindings');
   const reconciliation = exactObject(bindings.publishReconciliation, [
     'attemptIdHash', 'mode', 'notBefore', 'regressionEvidenceSha256', 'workflowIdHash',
   ], 'REL-04 publish reconciliation binding');
   rel04Digest(bindings.shopIdHash, 'REL-04 shop hash');
-  if (summary.schemaVersion !== 1 || summary.kind !== 'SS_ERP_REL04_DARK_CANARY'
+  if ((summary.schemaVersion !== 1 && summary.schemaVersion !== 2) || summary.kind !== 'SS_ERP_REL04_DARK_CANARY'
     || summary.status !== 'PASS' || !bindings || bindings.expectedGitCommit !== approval.gitCommit
     || bindings.apiOrigin !== apiOrigin
     || typeof bindings.extensionOrigin !== 'string'
     || !/^chrome-extension:\/\/[a-p]{32}$/u.test(bindings.extensionOrigin)) {
     fail('REL-04 dark canary does not authorize this website publication');
+  }
+  if (summary.schemaVersion === 2) {
+    validateRel04ReleaseBinding(
+      bindings.release,
+      { ...approval, apiOrigin },
+      timestamp(summary.observedAt, 'REL-04 dark canary observedAt'),
+      releaseSignedAt,
+    );
   }
   if (reconciliation.mode === 'LIVE_ATTEMPT') {
     rel04Digest(reconciliation.workflowIdHash, 'REL-04 workflow hash');
@@ -843,7 +854,7 @@ export async function loadPublishedExtensionRelease(input: {
     MAX_CANARY_BYTES,
     'REL-04 dark canary evidence',
     ownerUid,
-    (value) => validateCanary(value, approval, release.expectedOrigins.api),
+    (value) => validateCanary(value, approval, release.expectedOrigins.api, releaseSignature.signedAt),
   );
   const canaryObservedAt = timestamp(
     canaryFile.value.observedAt,

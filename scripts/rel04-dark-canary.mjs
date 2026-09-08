@@ -18,6 +18,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { publicOriginForPublication } from './extension-release-publication-contract.mjs';
 import { verifyAiMediaDarkPolicy } from './verify-ai-media-dark-policy.mjs';
+import { verifyExtensionReleaseSignature } from './verify-extension-release-signature.mjs';
+import { readStablePublicationFile } from './extension-website-publication-approval.mjs';
+import {
+  canonicalExtensionReleaseEvidenceJson,
+  parseExtensionReleaseEvidence,
+} from './extension-release-contract.mjs';
+import {
+  parseVpsVerificationEvidence,
+  validateRel04ReleaseBinding,
+} from '../packages/shared/src/rel04-release-evidence.ts';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_JSON_RESPONSE_BYTES = 256 * 1024;
@@ -347,6 +357,55 @@ function credential(environment, name, repositoryRoot) {
   return direct ? exactToken(direct, name) : readTokenFile(file, repositoryRoot, name);
 }
 
+function readReleaseBinding(environment, repositoryRoot, expectedGitCommit, apiOrigin, observedAt) {
+  const version = String(environment.REL04_VERSION || '');
+  const buildRoot = assertExistingRealDirectoryTree(
+    String(environment.REL04_RELEASE_BUILD_ROOT || ''), 'RELEASE_BUILD_ROOT',
+  );
+  const evidencePath = path.join(buildRoot, `ss-erp-extension-${version}.release-evidence.json`);
+  // The signature verifier enforces the candidate's canonical filename, bounded
+  // evidence bytes, active public key, and operator-approved signature digest.
+  const signature = verifyExtensionReleaseSignature({
+    buildRoot,
+    signaturePath: String(environment.REL04_RELEASE_SIGNATURE_FILE || ''),
+    expectedGitCommit,
+    expectedSignatureSha256: String(environment.REL04_RELEASE_SIGNATURE_SHA256 || ''),
+    keyringPath: path.join(repositoryRoot, 'config/extension-release-trusted-keys.json'),
+  });
+  if (signature.version !== version
+    || signature.releaseEvidenceSha256 !== environment.REL04_RELEASE_EVIDENCE_SHA256
+    || Date.parse(signature.signedAt) > Date.parse(observedAt)) fail('RELEASE_BINDING_MISMATCH');
+  const evidenceBytes = readStablePublicationFile(evidencePath, 65_536, 'release evidence');
+  const vpsBytes = readPrivateFileBytes(
+    environment.REL04_VPS_VERIFICATION_FILE, repositoryRoot, 'VPS_VERIFICATION', 65_536,
+  );
+  try {
+    const evidence = parseExtensionReleaseEvidence(JSON.parse(evidenceBytes.toString('utf8')));
+    if (canonicalExtensionReleaseEvidenceJson(evidence) !== evidenceBytes.toString('utf8')
+      || sha256(evidenceBytes) !== signature.releaseEvidenceSha256
+      || evidence.expectedOrigins.api !== apiOrigin) fail('RELEASE_BINDING_MISMATCH');
+    const vps = parseVpsVerificationEvidence(JSON.parse(vpsBytes.toString('utf8')));
+    if (canonicalJson(vps) !== vpsBytes.toString('utf8')
+      || sha256(vpsBytes) !== environment.REL04_VPS_VERIFICATION_SHA256
+      || Date.parse(vps.startedAt) < Date.parse(signature.signedAt)) {
+      fail('VPS_VERIFICATION_BINDING_MISMATCH');
+    }
+    return validateRel04ReleaseBinding({
+      candidate: vps.candidate,
+      vpsVerificationSha256: sha256(vpsBytes),
+      vpsStartedAt: vps.startedAt,
+      vpsVerifiedAt: vps.completedAt,
+    }, {
+      gitCommit: expectedGitCommit, apiOrigin, region: environment.REL04_REGION,
+      version, releaseEvidenceSha256: signature.releaseEvidenceSha256,
+      releaseSignatureSha256: signature.releaseSignatureSha256,
+    }, observedAt, signature.signedAt);
+  } finally {
+    evidenceBytes.fill(0);
+    vpsBytes.fill(0);
+  }
+}
+
 function defaultPrivateRoot(environment) {
   if (process.platform === 'win32') {
     const base = String(environment.LOCALAPPDATA || '').trim();
@@ -411,6 +470,13 @@ export function parseRel04DarkCanaryEnvironment(
   const observedAt = canonicalTimestamp(now, 'OBSERVED_AT');
   const apiOrigin = publicOriginForPublication(environment.REL04_API_ORIGIN);
   const expectedGitCommit = exactGitCommit(environment.REL04_TARGET_GIT_COMMIT);
+  if (!['COM', 'CN'].includes(environment.REL04_REGION)) fail('RELEASE_REGION_INVALID');
+  if (!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(environment.REL04_VERSION || '')) {
+    fail('RELEASE_VERSION_INVALID');
+  }
+  const releaseBinding = readReleaseBinding(
+    environment, trustedRepositoryRoot, expectedGitCommit, apiOrigin, observedAt,
+  );
   const extensionOrigin = exactExtensionOrigin(environment.REL04_EXTENSION_ORIGIN);
   const shopId = exactIdentifier(environment.REL04_SHOP_ID, 'SHOP_ID');
   const publishReconciliation = publishReconciliationBinding({
@@ -440,6 +506,7 @@ export function parseRel04DarkCanaryEnvironment(
   return {
     apiOrigin,
     expectedGitCommit,
+    releaseBinding,
     extensionOrigin,
     shopId,
     publishWorkflowId: publishReconciliation.workflowId,
@@ -584,6 +651,9 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   const ownerToken = exactToken(input.ownerToken, 'OWNER_TOKEN');
   const adminToken = exactToken(input.adminToken, 'ADMIN_TOKEN');
   const observedAt = canonicalTimestamp(input.observedAt || new Date(), 'OBSERVED_AT');
+  const releaseBinding = validateRel04ReleaseBinding(
+    input.releaseBinding, { gitCommit: expectedGitCommit, apiOrigin }, observedAt,
+  );
   if (typeof fetcher !== 'function') fail('FETCH_UNAVAILABLE');
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') fail('TLS_VERIFICATION_DISABLED');
 
@@ -1069,13 +1139,14 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   await cleanup();
   const passed = checks.every((check) => check.status === 'PASS');
   const summary = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'SS_ERP_REL04_DARK_CANARY',
     status: passed ? 'PASS' : 'FAIL',
     observedAt,
     bindings: {
       apiOrigin,
       expectedGitCommit,
+      release: releaseBinding,
       extensionOrigin,
       shopIdHash: identityHash('SHOP', shopId),
       publishReconciliation: publishReconciliation.mode === 'LIVE_ATTEMPT'

@@ -359,6 +359,8 @@ export function activateExtensionWebsitePublication(input) {
     expectedSha256: approval.darkCanarySha256,
     expectedGitCommit: approval.gitCommit,
     expectedApiOrigin: evidenceFile.evidence.expectedOrigins.api,
+    expectedCandidate: { ...approval, apiOrigin: approval.distributionOrigin },
+    expectedReleaseSignedAt: signatureVerification.signedAt,
     approvedAt: approval.approvedAt,
     now: input.now,
   });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import {
   chmodSync,
   mkdirSync,
@@ -13,6 +13,12 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { validateRel04DarkCanarySummary } from './extension-website-publication-approval.mjs';
+import { canonicalExtensionReleaseEvidenceJson, parseExtensionReleaseEvidence } from './extension-release-contract.mjs';
+import {
+  canonicalReleaseSignatureJson, canonicalTrustedKeyringJson, releaseSignaturePayload,
+  sha256,
+} from './extension-release-publication-contract.mjs';
 import {
   REL04_DARK_CONFIG_KEYS,
   parseRel04DarkCanaryEnvironment,
@@ -106,7 +112,7 @@ function fixtureFetcher(options = {}) {
       credentials: init.credentials,
       signal: init.signal,
     });
-    assert.equal(url.origin, apiOrigin);
+    assert.equal(url.origin, options.apiOrigin || apiOrigin);
     assert.equal(init.headers.origin, extensionOrigin);
     assert.equal(init.headers['accept-encoding'], 'identity');
 
@@ -309,6 +315,7 @@ function input(overrides = {}) {
   return {
     apiOrigin,
     expectedGitCommit: gitCommit,
+    releaseBinding: releaseBinding(),
     extensionOrigin,
     shopId,
     publishWorkflowId: workflowId,
@@ -325,6 +332,153 @@ function input(overrides = {}) {
     ...overrides,
   };
 }
+
+function releaseBinding() {
+  return {
+    candidate: {
+      gitCommit,
+      apiOrigin,
+      region: 'COM',
+      version: '1.2.3',
+      releaseEvidenceSha256: 'c'.repeat(64),
+      releaseSignatureSha256: 'd'.repeat(64),
+    },
+    vpsVerificationSha256: 'f'.repeat(64),
+    vpsStartedAt: '2029-12-31T23:58:00.000Z',
+    vpsVerifiedAt: '2029-12-31T23:59:00.000Z',
+  };
+}
+
+function signedCandidateEnvironment(repository, privateRoot) {
+  const candidateRoot = path.join(repository, 'candidate');
+  mkdirSync(candidateRoot);
+  mkdirSync(path.join(repository, 'config'));
+  const version = '1.2.3';
+  const evidence = parseExtensionReleaseEvidence({
+    schemaVersion: 1, gitCommit, version,
+    provenance: { commitSource: 'GIT_HEAD', sourceMode: 'REPOSITORY_SOURCE', packageInputsSha256: 'a'.repeat(64) },
+    expectedOrigins: {
+      web: 'https://app.example.com', admin: 'https://admin.example.com', api: apiOrigin,
+      local: 'http://127.0.0.1:3001',
+    },
+    artifacts: Object.fromEntries(['cloud', 'local'].map((target) => [target, {
+      target, filename: `ss-erp-${target}-${version}.zip`, zipSha256: 'b'.repeat(64), fileCount: 1,
+    }])),
+    checksumFilename: `ss-erp-extension-${version}.sha256`, signature: { status: 'EXTERNAL_REQUIRED' },
+  });
+  const evidenceBytes = Buffer.from(canonicalExtensionReleaseEvidenceJson(evidence));
+  const evidenceName = `ss-erp-extension-${version}.release-evidence.json`;
+  writeFileSync(path.join(candidateRoot, evidenceName), evidenceBytes);
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const keyId = 'canary-fixture-key';
+  writeFileSync(path.join(repository, 'config/extension-release-trusted-keys.json'), canonicalTrustedKeyringJson({
+    schemaVersion: 1, kind: 'SS_ERP_EXTENSION_RELEASE_TRUSTED_KEYS',
+    keys: [{ algorithm: 'Ed25519', keyId, status: 'ACTIVE',
+      publicKeyBase64: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') }],
+  }));
+  const signature = {
+    schemaVersion: 1, kind: 'SS_ERP_EXTENSION_RELEASE_SIGNATURE', algorithm: 'Ed25519', keyId,
+    signedAt: '2030-01-01T00:00:00.000Z', releaseEvidenceFilename: evidenceName,
+    releaseEvidenceSha256: sha256(evidenceBytes), signatureBase64: '',
+  };
+  signature.signatureBase64 = sign(null, releaseSignaturePayload(signature, evidenceBytes), privateKey).toString('base64');
+  const signatureFile = path.join(privateRoot, `ss-erp-extension-${version}.release-signature.json`);
+  const signatureBytes = Buffer.from(canonicalReleaseSignatureJson(signature));
+  writeFileSync(signatureFile, signatureBytes, { mode: 0o600 });
+  const vpsFile = path.join(privateRoot, 'vps-verification.json');
+  const vps = {
+    schemaVersion: 1, kind: 'SS_ERP_VPS_VERIFICATION', scope: 'FULL', status: 'PASS',
+    startedAt: '2030-01-01T23:58:00.000Z', completedAt: '2030-01-01T23:59:00.000Z',
+    failures: 0, warnings: 1,
+    candidate: {
+      gitCommit, apiOrigin, region: 'COM', version,
+      releaseEvidenceSha256: sha256(evidenceBytes), releaseSignatureSha256: sha256(signatureBytes),
+    },
+  };
+  const vpsBytes = Buffer.from(`${JSON.stringify(vps, null, 2)}\n`);
+  writeFileSync(vpsFile, vpsBytes, { mode: 0o600 });
+  return {
+    REL04_REGION: 'COM', REL04_VERSION: version, REL04_RELEASE_BUILD_ROOT: candidateRoot,
+    REL04_RELEASE_SIGNATURE_FILE: signatureFile, REL04_RELEASE_SIGNATURE_SHA256: sha256(signatureBytes),
+    REL04_RELEASE_EVIDENCE_SHA256: sha256(evidenceBytes),
+    REL04_VPS_VERIFICATION_FILE: vpsFile, REL04_VPS_VERIFICATION_SHA256: sha256(vpsBytes),
+  };
+}
+
+test('new canaries bind the exact regional signed candidate and full VPS verification receipt', async () => {
+  const binding = releaseBinding();
+  const summary = await runRel04DarkCanary(input({ releaseBinding: binding }), {
+    fetcher: fixtureFetcher(),
+  });
+  assert.equal(summary.status, 'PASS');
+  assert.equal(summary.schemaVersion, 2);
+  assert.deepEqual(summary.bindings.release, binding);
+});
+
+test('a CN canary retains its independent regional candidate identity', async () => {
+  const cnOrigin = 'https://api.example.cn';
+  const binding = releaseBinding();
+  binding.candidate.apiOrigin = cnOrigin;
+  binding.candidate.region = 'CN';
+  const summary = await runRel04DarkCanary(input({ apiOrigin: cnOrigin, releaseBinding: binding }), {
+    fetcher: fixtureFetcher({ apiOrigin: cnOrigin }),
+  });
+  assert.equal(summary.status, 'PASS');
+  assert.deepEqual(summary.bindings.release, binding);
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, {
+    expectedGitCommit: gitCommit, expectedApiOrigin: cnOrigin, expectedCandidate: binding.candidate,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z',
+  }));
+});
+
+test('missing or mismatched candidate evidence is rejected before any request', async () => {
+  for (const binding of [
+    undefined,
+    { ...releaseBinding(), candidate: { ...releaseBinding().candidate, gitCommit: 'e'.repeat(40) } },
+    { ...releaseBinding(), candidate: { ...releaseBinding().candidate, apiOrigin: 'https://api.example.cn' } },
+    { ...releaseBinding(), vpsVerifiedAt: '2029-12-01T00:00:00.000Z' },
+  ]) {
+    const fetcher = fixtureFetcher();
+    await assert.rejects(runRel04DarkCanary(input({ releaseBinding: binding }), { fetcher }));
+    assert.equal(fetcher.calls.length, 0);
+  }
+});
+
+test('new website approvals require candidate-bound evidence while historical v1 remains verifiable', async () => {
+  const summary = await runRel04DarkCanary(input({ releaseBinding: releaseBinding() }), {
+    fetcher: fixtureFetcher(),
+  });
+  const legacy = structuredClone(summary);
+  legacy.schemaVersion = 1;
+  delete legacy.bindings.release;
+  const expected = {
+    expectedGitCommit: gitCommit, expectedApiOrigin: apiOrigin,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z',
+  };
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(legacy, expected));
+  assert.throws(() => validateRel04DarkCanarySummary(legacy, {
+    ...expected,
+    requireReleaseBinding: true,
+    expectedCandidate: releaseBinding().candidate,
+  }), /candidate|release|v2/iu);
+});
+
+test('v2 publication verification requires the complete expected candidate', async () => {
+  const summary = await runRel04DarkCanary(input(), { fetcher: fixtureFetcher() });
+  const expected = {
+    expectedGitCommit: gitCommit, expectedApiOrigin: apiOrigin,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z',
+  };
+  assert.throws(() => validateRel04DarkCanarySummary(summary, expected), /expected candidate/iu);
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, {
+    ...expected, expectedCandidate: releaseBinding().candidate,
+  }));
+  for (const field of ['version', 'releaseEvidenceSha256', 'releaseSignatureSha256']) {
+    assert.throws(() => validateRel04DarkCanarySummary(summary, {
+      ...expected, expectedCandidate: { ...releaseBinding().candidate, [field]: field === 'version' ? '9.9.9' : 'e'.repeat(64) },
+    }), /candidate/iu);
+  }
+});
 
 test('runs the bounded dark canary, reads reconciliation, and revokes its device session', async () => {
   const fetcher = fixtureFetcher();
@@ -605,7 +759,8 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   writeFileSync(acceptanceFile, acceptanceBytes, { mode: 0o600 });
   for (const file of [ownerTokenFile, adminTokenFile, acceptanceFile]) chmodSync(file, 0o600);
   const acceptanceSha256 = createHash('sha256').update(acceptanceBytes).digest('hex');
-  const parsed = parseRel04DarkCanaryEnvironment({
+  const environment = {
+    ...signedCandidateEnvironment(repository, privateRoot),
     REL04_API_ORIGIN: apiOrigin,
     REL04_TARGET_GIT_COMMIT: gitCommit,
     REL04_EXTENSION_ORIGIN: extensionOrigin,
@@ -618,10 +773,44 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
     REL04_OWNER_TOKEN_FILE: ownerTokenFile,
     REL04_ADMIN_TOKEN_FILE: adminTokenFile,
     REL04_CANARY_OUTPUT: path.join(privateRoot, 'canary-output.json'),
-  }, repository, new Date('2030-01-02T00:00:00.000Z'));
+  };
+  const parse = (env) => parseRel04DarkCanaryEnvironment(env, repository, new Date('2030-01-02T00:00:00.000Z'));
+  const parsed = parse(environment);
   assert.equal(parsed.publishReconciliationRegressionSha256, acceptanceSha256);
   assert.equal(parsed.ownerToken, ownerToken);
   assert.equal(parsed.adminToken, adminToken);
+  assert.equal(parsed.releaseBinding.candidate.version, '1.2.3');
+  assert.equal(parsed.releaseBinding.vpsVerificationSha256, environment.REL04_VPS_VERIFICATION_SHA256);
+  for (const key of [
+    'REL04_REGION', 'REL04_VERSION', 'REL04_RELEASE_EVIDENCE_SHA256',
+    'REL04_RELEASE_SIGNATURE_SHA256', 'REL04_VPS_VERIFICATION_FILE', 'REL04_VPS_VERIFICATION_SHA256',
+  ]) {
+    assert.throws(() => parse({ ...environment, [key]: '' }), `${key} must be required`);
+  }
+  for (const replacement of [
+    { REL04_REGION: 'CN' }, { REL04_VERSION: '9.9.9' },
+    { REL04_RELEASE_EVIDENCE_SHA256: 'e'.repeat(64) },
+    { REL04_RELEASE_SIGNATURE_SHA256: 'e'.repeat(64) },
+    { REL04_VPS_VERIFICATION_SHA256: 'e'.repeat(64) },
+  ]) assert.throws(() => parse({ ...environment, ...replacement }));
+
+  const original = readFileSync(environment.REL04_VPS_VERIFICATION_FILE);
+  const receipt = JSON.parse(original);
+  for (const mutate of [
+    (v) => { v.failures = 1; }, (v) => { v.scope = 'EXTENSION_ONLY'; },
+    (v) => { v.candidate.releaseEvidenceSha256 = 'e'.repeat(64); },
+    (v) => { v.candidate.releaseSignatureSha256 = 'e'.repeat(64); },
+    (v) => { v.candidate.region = 'CN'; }, (v) => { v.candidate.gitCommit = 'e'.repeat(40); },
+    (v) => { v.completedAt = '2030-01-02T00:01:00.000Z'; },
+    (v) => { v.startedAt = '2029-12-01T00:00:00.000Z'; v.completedAt = '2029-12-01T00:01:00.000Z'; },
+  ]) {
+    const changed = structuredClone(receipt);
+    mutate(changed);
+    const bytes = Buffer.from(`${JSON.stringify(changed, null, 2)}\n`);
+    writeFileSync(environment.REL04_VPS_VERIFICATION_FILE, bytes);
+    assert.throws(() => parse({ ...environment, REL04_VPS_VERIFICATION_SHA256: sha256(bytes) }));
+  }
+  writeFileSync(environment.REL04_VPS_VERIFICATION_FILE, original);
 });
 
 test('root package exposes the dark canary and focused contract test', () => {

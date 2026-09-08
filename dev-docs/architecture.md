@@ -39,6 +39,7 @@
 | 上传配额 | `upload-limiter.ts` | Redis 原子配额 owner | allowed/denied result | 单进程 Map | repair |
 | 第三方接入 | 现有 provider/client/adapter | 同左 | provider contract + error mapping | 页面直调和日志字符串 | keep |
 | 部署/配置 | env templates、deploy scripts、SystemConfig | 各自保持启动/业务配置职责 | env/deploy contract | 页面常量和历史计划 | repair |
+| REL-04 候选证据 | `packages/shared/src/rel04-release-evidence.ts` | 同左 | canary v2、完整 VPS verifier v1；CLI 与 API 共用候选绑定校验 | 日志文本、页面和手写运行回执 | keep |
 
 ## 数据、合同与安全边界
 

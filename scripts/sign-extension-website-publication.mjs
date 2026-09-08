@@ -150,6 +150,16 @@ function main() {
     expectedSha256: expectedDarkCanarySha256,
     expectedGitCommit: evidence.gitCommit,
     expectedApiOrigin: evidence.expectedOrigins.api,
+    requireReleaseBinding: true,
+    expectedReleaseSignedAt: signatureVerification.signedAt,
+    expectedCandidate: {
+      gitCommit: evidence.gitCommit,
+      apiOrigin: evidence.expectedOrigins.api,
+      region,
+      version: evidence.version,
+      releaseEvidenceSha256: signatureVerification.releaseEvidenceSha256,
+      releaseSignatureSha256: signatureVerification.releaseSignatureSha256,
+    },
     approvedAt: approvalTime,
     now: new Date(approvalTime),
   });
