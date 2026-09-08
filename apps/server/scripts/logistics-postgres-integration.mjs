@@ -33,6 +33,7 @@ function run(args, extraEnv = {}) {
 }
 
 const testFiles = [
+  'src/__tests__/browser-one-click-isolation.postgres.integration.test.ts',
   'src/__tests__/listing-browser-one-click-job.test.ts',
   'src/__tests__/extension-command-grants.postgres.integration.test.ts',
   'src/__tests__/extension-device-session.postgres.integration.test.ts',
