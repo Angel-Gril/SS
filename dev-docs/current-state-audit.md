@@ -41,13 +41,17 @@
 - 该实现按 T2 先复现“不支持新凭单格式”的 RED，再实现 GREEN。settlement 合同为 `96 passed / 1 Windows 条件 skipped`；能力候选及 CLI 绑定合同合计 `46 passed`。覆盖同币种预算、跨币种不可通过、错误请求/账户/截图/时间/充值比例、费用少报、不可变重放、修改回执冲突和原始资料不变。能力候选消费者继续拒绝 v6 自动晋升，包括其中现金预算为 PASS 的记录；未把人工凭单当成完整 QA-02 或发布批准。
 - Ozon 主图已核实：归档商品 `images` 数组为空不代表没有图片，其 `primary_image` 有对应 Ozon CDN 资源。本机首次下载被公网地址校验拒绝，未放宽门禁；随后在 COM VPS 使用同一下载 owner 成功读取并检查单页 JPEG，1773×2364、401,557 bytes，SHA-256 `4d7e96794279e9bf908511c53d280aafecfbf6fc8f63dbae249c493d894f5ffd`。历史类目、包裹、价格、VAT 和对应图片已组成私有准备包，SHA-256 `cb5a1ea27d67a6369a86a20cb1a4de805d83e38561877f61901bc2902f57ca1c`；它不是 production compiler envelope 或写入批准。
 - Ozon 隔离存在明确反证：前次 `ALL` 的 10 行样本中 7 行 `has_fbs_stocks=true`，因此不得继续把 DOTH 当成已证实的专用测试店。保持其现有商品、库存和 publisher 不变；可继续核对 ERP-only 草稿准备路径，但在隔离条件成立前不执行 import/archive。
+- 离线凭单执行已完成：`4c315052` 实现和 `f60d070d` 真源记录已推送；在 COM 的独立私有 clean `f60d070d` checkout 中运行原 billing CLI，未加载 Provider 凭据或查询管理后台。新增 v6 receipt 的 SHA-256 为 `b75643e213470a3b0fa65db0b85d948c5c4cc126cf0b403ebdc404700af5f951`，实际成本为 CNY 0.05999。原 quote/maximum 的 USD 基准继续作为 `COST_BASIS_MISMATCH` 保留，原 report/approval 字节未改。金额核对已完成，不应再向用户索取这笔金额；该回执不是能力晋升或完整 QA-02 的替代品。
+- ERP-only 实跑与回滚：确认该真实源 SKU 在 ERP 中没有旧 SupplyGoods、SourceCaptureSubject 或同名任务后，仅给指定 owner/shop 临时开启 `SOURCE_CAPTURE_V2=shadow_write` 与 `SOURCE_LISTING_WORKFLOW=dual_read`。正常账户会话、配置 CAS 及恢复均通过；`POST /api/listing/browser-one-click-jobs` 返回 500，生产日志定位为 Prisma `P2010`：无法反序列化 `pg_advisory_xact_lock` 的 `void` 返回列。数据库复核同名任务为 0，未创建采购资料或草稿；两开关、原 rollout policy 已恢复，临时会话已撤销，publisher 仍为 false / revision 38，Provider/Ozon 写入为 0。
+- 根因修复：`apps/server/src/routes/listing.ts` 的幂等事务改为仓库已有的 `SELECT 1 AS "locked" FROM pg_advisory_xact_lock(...)` 模式，保留原锁键、种子与事务范围。此前单元测试把 `$queryRaw` 固定返回为整数，且该接口文件未进入 PostgreSQL runner，因而漏掉驱动返回类型错误。新增接口回归让实际 SQL 经过 Prisma/PostgreSQL，其余身份/商店/任务存储使用 fixture；先观察 HTTP 500 的 RED，修复后 `65/65` 通过，并由独立连接证明锁在事务内持有、事务结束后释放。相关审核/开关回归 `57/57`，加入既有 PostgreSQL runner 后 148 migrations 回放及 `13 files / 168 tests` 全通过。独立只读对照在 Prisma 6.19.3 / PostgreSQL 16.13 复现同类错误并验证新查询；不是用 mock 成功冒充生产草稿完成。
+- 当前线上仍未应用此修复：本轮未修改 VPS 运行包、部署或官网 pointer。ERP-only 草稿创建须在修复版本按既有发布门禁部署后重新验收；DOTH 的专用测试隔离问题仍独立存在，不能因修好 500 而解禁真实 import/archive。
 
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | Xiaoyi 单张成功；用户截图已与私有日志匹配，并确认 1:1 充值规则。新增 [凭单对账分支](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review) 保留原审批币种差异 | 从验证通过的 clean 工具提交执行一次离线凭单对账，不查询管理后台、不重发。完整操作验收与旧 Wanx 编辑的账户错配仍是独立问题 |
-| Ozon 测试店与商品事实 | 自有归档商品参数及对应主图已核实，私有准备包已生成；[runbook](../docs/runbooks/ozon-source-listing-sandbox.md) 的真实写入门禁保持不变 | DOTH 样本存在 FBS 库存，专用测试隔离未成立。只推进正常 ERP-only 准备与验证；测试店隔离成立前不执行 import/archive |
+| Provider 费用账户与 pilot | Xiaoyi 单张成功且已消费用户截图/1:1 充值规则完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留 | 不再查询这笔金额或重发该请求。完整操作验收、旧 Wanx 账户错配及能力晋升仍是独立事项 |
+| Ozon 测试店与商品事实 | 归档参数/对应主图及私有准备包齐备；ERP-only 实跑发现幂等锁 500，已在源码修复并通过真实 PostgreSQL 回归；所有临时配置已恢复 | 按发布门禁部署修复后重验 ERP 审核草稿。DOTH 样本有 FBS 库存，专用测试隔离仍未成立，继续禁止 import/archive |
 | 新提交与部署证据 | `c10cdc61` 已推送且完整 offline gate 通过；旧 v1 已签署发布继续验证 | 部署流程已获本轮授权，仍须补齐 QA-02/正式 QA-04，生成目标 clean commit 的区域四件套与签名，并取得对应运行包的新 canary |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |
 | 官网公开指针 | 两地仍服务旧批准版本；本轮没有切换 pointer | 切换流程已获本轮授权，待目标区域真实暗态 gate 通过后，按现有 signed approval、CAS、下载 probe 和同路径升级流程执行 |

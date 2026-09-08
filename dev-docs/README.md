@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 实现检查点 `c10cdc61` 已推送并通过完整 QA-04 offline gate 和 Linux/Node 22 发布关键合同；旧运行版本的备份恢复与 verifier 证据已记录。后续已执行一次真实 Xiaoyi 图像生成并取得结果，但正式计费核对未关闭；Ozon 完成只读资料检查。新部署与官网切换仍未执行，详细结果与下一步见[当前状态审计](current-state-audit.md)。
+- 实现检查点 `c10cdc61` 已推送并通过对应完整 QA-04 offline gate；后续 Xiaoyi 单张生成及用户凭单离线对账已完成，原审批币种差异保留。Ozon 资料与主图已核实；ERP-only 实跑发现并在源码修复幂等锁 500，但尚未部署。新部署与官网切换仍未执行，详细结果与下一步见[当前状态审计](current-state-audit.md)。
 - 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。
-- 当前主风险：Xiaoyi 本次费用已由用户截图和账户充值规则确认，离线凭单对账仍须保留原审批币种差异；旧 Wanx 编辑有独立的计费账户错配。Ozon 归档参数和主图已具备，但 DOTH 样本存在 FBS 库存，不能当作已证实的专用测试店。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
-- 推荐下一步：用已保存的截图和请求日志执行离线凭单对账，不再登录管理后台查本次金额或重发；独立推进 Ozon 的 ERP-only 准备。不能用单张生成或人工确认金额代替完整 QA-02、正式 QA-04 或发布批准。
+- 当前主风险：旧 Wanx 编辑仍有独立的计费账户错配和完整操作验收缺口。Ozon ERP-only 草稿需部署修复后重验；DOTH 样本存在 FBS 库存，不能当作已证实的专用测试店。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
+- 推荐下一步：保存并验证当前修复检查点，按既有 QA-02/QA-04 和签名门禁推进后续部署；不再查询已确认的 Xiaoyi 单笔金额或重发。真实 Ozon 写入仍等待专用测试隔离，不能用 ERP 草稿准备或单张生成代替完整试点验收。
