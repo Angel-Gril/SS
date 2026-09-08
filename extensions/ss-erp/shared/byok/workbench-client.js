@@ -51,6 +51,7 @@
     EDIT_REFERENCES: 'ss-erp:ai-image-workbench-edit-references',
     EDIT_START: 'ss-erp:ai-image-workbench-edit-start',
     EDIT_SELECT: 'ss-erp:ai-image-workbench-edit-select',
+    EDIT_REVIEW: 'ss-erp:ai-image-workbench-edit-review',
     EDIT_REGENERATE: 'ss-erp:ai-image-workbench-edit-regenerate',
     EDIT_PREVIEW: 'ss-erp:ai-image-workbench-edit-preview',
     EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',
@@ -874,6 +875,19 @@
           return send(MESSAGE_TYPES.EDIT_SELECT, {
             attemptId: attemptId(attemptIdValue),
           }).then(editSnapshot);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      prepareEditReview: function (attemptIdValue, expectedSlotRevision) {
+        try {
+          if (!Number.isSafeInteger(expectedSlotRevision) || expectedSlotRevision < 1) {
+            throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+          }
+          return send(MESSAGE_TYPES.EDIT_REVIEW, {
+            attemptId: attemptId(attemptIdValue),
+            expectedSlotRevision: expectedSlotRevision,
+          });
         } catch (error) {
           return Promise.reject(error);
         }

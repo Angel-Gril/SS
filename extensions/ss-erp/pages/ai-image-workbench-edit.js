@@ -88,6 +88,7 @@
   var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
+  var EDIT_REVIEW_READY_EVENT = 'ss-erp:workbench-edit-review-ready';
   var SOURCE_OPERATION_READY_EVENT = 'ss-erp:workbench-source-operation-ready';
   var SOURCE_OPERATION_VERSION = 'extension-byok-workbench-source-operation/v1';
   var OPERATION_LABELS = {
@@ -227,6 +228,8 @@
       SS_ERP_BYOK_EDIT_RESULT_EXPIRED: '该候选已超过临时保留时间，请重新生成。',
       SS_ERP_BYOK_EDIT_WORKER_RESTARTED: '扩展后台已重启，上一次请求结果可能未知。确认重复扣费风险后才能重置。',
       SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT: '当前页面已有另一种 Provider 任务，请先完成或清理该任务。',
+      SS_ERP_BYOK_EDIT_REVIEW_SELECTION_STALE: '候选选择已更新，请刷新后重新选择要审核的图片。',
+      SS_ERP_BYOK_EDIT_REVIEW_BUSY: '当前编辑任务尚未结束，请等待结果核对完成后再审核。',
     };
     return labels[code] || '编辑操作失败，请核对素材与能力证据后重试。';
   }
@@ -771,11 +774,11 @@
         : started ? 'STARTED' : 'IDLE';
     document.body.dataset.editTaskState = editTaskState;
     document.body.dataset.editTaskLocked = editTaskState === 'IDLE' ? 'false' : 'true';
-    document.body.classList.toggle('is-edit-operation', editing);
+    document.body.classList.toggle('is-edit-operation', editing && !generationLocked);
     nodes.generateButton.hidden = editing;
     nodes.runEditButton.hidden = !editing;
     nodes.editInputPanel.hidden = !editing;
-    nodes.editResultPanel.hidden = !editing;
+    nodes.editResultPanel.hidden = !editing || generationLocked;
     nodes.referenceInputGroup.hidden = state.operation !== 'IMAGE_TO_IMAGE';
     nodes.sourceInputGroup.hidden = !['FULL_EDIT', 'INPAINT'].includes(state.operation);
     nodes.maskTools.hidden = state.operation !== 'INPAINT';
@@ -844,6 +847,10 @@
     } else if (state.restartBlocked) {
       setMediaPrimaryStatus('上一次 Provider 请求结果未知，请先核对恢复操作', 'warning');
       nodes.mediaPrimaryAction.textContent = '查看恢复操作';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (editReviewSelection()) {
+      setMediaPrimaryStatus('进入审核仅保留当前选图，其他临时候选将清理；批准后仍需单独接收', 'success');
+      nodes.mediaPrimaryAction.textContent = '审核候选图';
       nodes.mediaPrimaryAction.disabled = false;
     } else if (started) {
       setMediaPrimaryStatus('编辑任务已创建，继续查看任务状态与候选');
@@ -1275,6 +1282,49 @@
     }
   }
 
+  function editReviewSelection() {
+    var snapshot = state.snapshot;
+    if (!snapshot || !snapshot.slot || !snapshot.scheduler
+      || snapshot.scheduler.state !== 'REVIEW'
+      || snapshot.scheduler.activeCount !== 0 || snapshot.scheduler.queuedCount !== 0
+      || !Number.isSafeInteger(snapshot.slot.revision) || snapshot.slot.revision < 1
+      || !Array.isArray(snapshot.alternatives)) return null;
+    return snapshot.alternatives.find(function (candidate) {
+      return candidate.selected === true && candidate.state === 'CANDIDATE_READY'
+        && candidate.attemptId === snapshot.slot.selectedAttemptId
+        && candidate.candidateId === snapshot.slot.selectedCandidateId;
+    }) || null;
+  }
+
+  async function prepareEditReview() {
+    if (!hostedByokExecutionAllowed() || mainGenerationLocked() || state.busy || state.restartBlocked) return;
+    var selected = editReviewSelection();
+    if (!selected) return;
+    var expectedSlotRevision = state.snapshot.slot.revision;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    state.busy = true;
+    renderControls();
+    try {
+      var candidate = await client.prepareEditReview(selected.attemptId, expectedSlotRevision);
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!candidate || candidate.resultId !== selected.candidateId) {
+        throw new Error('Edit review handoff did not return the selected result');
+      }
+      state.snapshot = null;
+      Array.from(state.previews.keys()).forEach(revokePreview);
+      // The parent reads the committed session result; this event carries no authority.
+      dispatchWorkspaceEvent(EDIT_REVIEW_READY_EVENT, null);
+    } catch (error) {
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      setNotice(errorLabel(error), 'error');
+    } finally {
+      if (state.lifecycleEpoch === lifecycleEpoch) {
+        state.busy = false;
+        renderControls();
+      }
+    }
+  }
+
   async function selectAlternative(attemptId) {
     if (!hostedByokExecutionAllowed() || state.busy) return;
     state.busy = true;
@@ -1536,6 +1586,10 @@
     var reason = operationInputReason();
     if (state.restartBlocked) {
       focusCommandTarget(nodes.restartRecovery);
+      return;
+    }
+    if (editReviewSelection()) {
+      void prepareEditReview();
       return;
     }
     if (state.snapshot && state.snapshot.operation) {

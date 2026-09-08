@@ -189,6 +189,7 @@ let deferredEditState = null;
 let deferredStartEdit = null;
 let nextStartEditError = null;
 let nextStartEditSnapshot = null;
+let deferredEditReview = null;
 const editStateOutcomes = [];
 
 function createDeferred() {
@@ -342,6 +343,12 @@ const client = {
   async selectEditAlternative(attemptId) {
     calls.push(['select', attemptId]);
     return reviewSnapshot(true);
+  },
+  async prepareEditReview(attemptId, expectedSlotRevision) {
+    calls.push(['edit-review', attemptId, expectedSlotRevision]);
+    return deferredEditReview ? deferredEditReview.promise : {
+      resultId: candidateId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED',
+    };
   },
   async regenerateEdit(value) { calls.push(['regenerate', value]); return reviewSnapshot(true); },
   async openEditPreview(id) {
@@ -683,6 +690,46 @@ const regenerated = calls.find((row) => row[0] === 'regenerate')[1];
 assert.deepEqual(JSON.parse(JSON.stringify(regenerated.chargeAcknowledgement)), {
   warningVersion: 'external-provider-charge/v1', confirmed: true,
 });
+
+const reviewEventOffset = documentEvents.length;
+assert.match(nodes.mediaPrimaryStatus.textContent, /仅保留当前选图.*其他临时候选将清理/u,
+  'the handoff discloses cleanup of unselected temporary candidates before activation');
+const startsBeforeReview = calls.filter((row) => row[0] === 'start').length;
+deferredEditReview = createDeferred();
+nodes.mediaPrimaryAction.dispatch('click', { isTrusted: false });
+assert.equal(calls.filter((row) => row[0] === 'edit-review').length, 0);
+nodes.mediaPrimaryAction.dispatch('click');
+await tick();
+assert.deepEqual(calls.filter((row) => row[0] === 'edit-review').at(-1),
+  ['edit-review', 'attempt-000001', 4],
+  'review explicitly sends the selected attempt and current slot revision');
+assert.equal(nodes.mediaPrimaryAction.disabled, true, 'handoff fences duplicate clicks');
+nodes.mediaPrimaryAction.dispatch('click');
+assert.equal(calls.filter((row) => row[0] === 'edit-review').length, 1);
+assert.equal(documentEvents.slice(reviewEventOffset).some((event) => (
+  event.type === 'ss-erp:workbench-edit-review-ready'
+)), false, 'no review transition before the background handoff commits');
+deferredEditReview.resolve({
+  resultId: candidateId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED',
+});
+deferredEditReview = null;
+await tick();
+await tick();
+const editReviewEvent = documentEvents.slice(reviewEventOffset).find((event) => (
+  event.type === 'ss-erp:workbench-edit-review-ready'
+));
+assert.equal(editReviewEvent?.detail, null, 'handoff only requests authoritative public-state reload');
+assert.equal(calls.filter((row) => row[0] === 'start').length, startsBeforeReview,
+  'review handoff never sends another paid image request');
+body.dataset.byokGenerationLocked = 'true';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:media-generation-lock-change'));
+assert.equal(body.classList.contains('is-edit-operation'), false,
+  'an authoritative review result must not remain hidden by the edit-only CSS class');
+assert.equal(nodes.editResultPanel.hidden, true);
+body.dataset.byokGenerationLocked = 'false';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:media-generation-lock-change'));
+assert.equal(body.classList.contains('is-edit-operation'), true,
+  'returning to editable inputs restores the existing edit layout');
 
 const refreshRestartOffset = documentEvents.length;
 const lateNormalState = createDeferred();

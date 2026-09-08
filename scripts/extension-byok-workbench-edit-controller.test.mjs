@@ -469,6 +469,61 @@ test('uses trusted operation readiness, runner concurrency one, and global/slot 
   assert.equal(fixture.releaseCalls.length, 1);
 });
 
+for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+  test(`preserves multiline positive and negative prompts for ${operation}`, async () => {
+    const fixture = createFixture();
+    const trustedOwner = owner();
+    const prompt = 'Keep the exact product.\nUse a clean background.\r\nLighting:\tsoft';
+    const negativePrompt = 'watermark\nextra text\rDistortion:\tnone';
+    fixture.controller.open(trustedOwner);
+    if (operation === 'IMAGE_TO_IMAGE') {
+      fixture.controller.setReferences(trustedOwner, {
+        scope: 'SESSION_GLOBAL', handles: ['global-1'],
+      });
+    }
+
+    await fixture.controller.start(trustedOwner, command(operation, { prompt, negativePrompt }));
+    const snapshot = await fixture.controller.whenSettled(trustedOwner);
+
+    assert.equal(snapshot.alternatives[0].state, 'CANDIDATE_READY');
+    assert.equal(fixture.editCalls.length, 1);
+    assert.equal(fixture.editCalls[0].prompt, prompt);
+    assert.equal(fixture.editCalls[0].negativePrompt, negativePrompt);
+  });
+}
+
+test('rejects non-text controls in edit prompts before readiness or Provider calls', async () => {
+  const fixture = createFixture();
+  const trustedOwner = owner();
+  fixture.controller.open(trustedOwner);
+  for (const control of ['\u0000', '\u0008', '\u000b', '\u000c', '\u001b', '\u001f', '\u007f']) {
+    for (const field of ['prompt', 'negativePrompt']) {
+      await assert.rejects(
+        fixture.controller.start(trustedOwner, command('FULL_EDIT', {
+          [field]: `Keep${control}product`,
+        })),
+        (error) => error?.code === 'SS_ERP_BYOK_EDIT_INPUT_INVALID'
+          && error.outcome === 'FAILED_RETRYABLE',
+      );
+    }
+  }
+  assert.equal(fixture.readinessCalls.length, 0);
+  assert.equal(fixture.editCalls.length, 0);
+});
+
+test('keeps multiline whitespace forbidden in edit owner identities', () => {
+  const fixture = createFixture();
+  for (const control of ['\n', '\r', '\t']) {
+    const skuKey = `sku${control}1`;
+    assert.throws(
+      () => fixture.controller.open(owner({ context: { skuKey, slotKey: `sku:${skuKey}:hero` } })),
+      (error) => error?.code === 'SS_ERP_BYOK_EDIT_OWNER_INVALID',
+    );
+  }
+  assert.equal(fixture.readinessCalls.length, 0);
+  assert.equal(fixture.editCalls.length, 0);
+});
+
 test('rejects invalid reference counts and mask mismatches before any edit call', async () => {
   const noReferences = createFixture();
   const firstOwner = owner({ tabId: 41, documentId: 'document-no-refs' });

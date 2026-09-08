@@ -59,6 +59,7 @@ const MESSAGE_TYPES = {
   EDIT_SELECT: 'edit-select',
   EDIT_REGENERATE: 'edit-regenerate',
   EDIT_PREVIEW: 'edit-preview',
+  EDIT_REVIEW: 'ss-erp:ai-image-workbench-edit-review',
   EDIT_CLEANUP: 'edit-cleanup',
 };
 const launchContext = {

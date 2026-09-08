@@ -206,6 +206,29 @@ const client = api.createClient({
   timeoutMs: 1000,
 });
 
+assert.equal(api.MESSAGE_TYPES.EDIT_REVIEW, 'ss-erp:ai-image-workbench-edit-review');
+responses.set(api.MESSAGE_TYPES.EDIT_REVIEW, {
+  ok: true,
+  data: { resultId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED' },
+});
+assert.deepEqual(JSON.parse(JSON.stringify(
+  await client.prepareEditReview('attempt-000001', 3),
+)), { resultId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED' });
+assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+  type: api.MESSAGE_TYPES.EDIT_REVIEW,
+  payload: { attemptId: 'attempt-000001', expectedSlotRevision: 3 },
+});
+const beforeInvalidEditReviews = messages.length;
+for (const [attempt, revision] of [
+  ['', 3], ['attempt-000001', 0], ['attempt-000001', -1],
+  ['attempt-000001', 1.5], ['attempt-000001', '3'], ['attempt-000001', null],
+]) {
+  await assert.rejects(() => client.prepareEditReview(attempt, revision),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+}
+assert.equal(messages.length, beforeInvalidEditReviews,
+  'invalid edit-review witnesses never reach the background or trigger image requests');
+
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getPublicState())), { mode: 'BYOK' });
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getReadiness('profile-1'))), readiness);
 const generated = await client.generate({

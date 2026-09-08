@@ -757,6 +757,7 @@ const MESSAGE_TYPES = {
   EDIT_SELECT: 'qa01-edit-select',
   EDIT_REGENERATE: 'qa01-edit-regenerate',
   EDIT_PREVIEW: 'qa01-edit-preview',
+  EDIT_REVIEW: 'ss-erp:ai-image-workbench-edit-review',
   EDIT_CLEANUP: 'qa01-edit-cleanup',
 };
 const sender = { tabId: 77, documentId: 'workbench-document-1', frameId: 0 };

@@ -289,7 +289,11 @@
   }
 
   function normalizeImageResponse(value, failure) {
-    if (!allowedKeys(value, ['id', 'created', 'data']) || !hasOwn(value, 'data')
+    // OpenAI ImagesResponse metadata is informational, never image or billing
+    // authority. Discard it here; bytes still pass the client's bounded inspector.
+    if (!allowedKeys(value, [
+      'id', 'created', 'data', 'background', 'output_format', 'quality', 'size', 'usage',
+    ]) || !hasOwn(value, 'data')
       || (hasOwn(value, 'id') && (typeof value.id !== 'string'
         || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/u.test(value.id)))
       || (hasOwn(value, 'created')

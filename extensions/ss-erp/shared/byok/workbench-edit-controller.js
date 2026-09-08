@@ -165,7 +165,7 @@
     if (nullable && value === null) return null;
     if (typeof value !== 'string' || value !== value.normalize('NFKC').trim()
       || (!nullable && !value) || value.length > maximum
-      || hasControlCharacters(value)) {
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) {
       throw controllerError('SS_ERP_BYOK_EDIT_INPUT_INVALID', 'FAILED_RETRYABLE');
     }
     return value || null;
@@ -762,6 +762,7 @@
           return attempt.resultHandle;
         }).filter(Boolean));
         ids.forEach(function (resultId) {
+          if (resultId === session.handoffResultId) return;
           try { if (releaseVaultResult(resultId)) released += 1; } catch {}
         });
       }
@@ -924,6 +925,9 @@
 
     function selectAlternative(ownerValue, value) {
       var session = claim(ownerValue);
+      if (session.commandInProgress) {
+        throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_BUSY', 'FAILED_RETRYABLE');
+      }
       if (!session.engine || !exactKeys(value, ['attemptId'])) {
         throw controllerError('SS_ERP_BYOK_EDIT_INPUT_INVALID', 'FAILED_RETRYABLE');
       }
@@ -939,6 +943,78 @@
         attemptId,
       );
       return publicSnapshot(session);
+    }
+
+    async function handoffForReview(ownerValue, value, commit) {
+      var session = claim(ownerValue);
+      if (!exactKeys(value, ['attemptId', 'expectedSlotRevision'])
+        || !Number.isSafeInteger(value.expectedSlotRevision) || value.expectedSlotRevision < 1
+        || typeof commit !== 'function') {
+        throw controllerError('SS_ERP_BYOK_EDIT_INPUT_INVALID', 'FAILED_RETRYABLE');
+      }
+      var attemptId = boundedId(value.attemptId, 'SS_ERP_BYOK_EDIT_INPUT_INVALID');
+      if (session.commandInProgress) {
+        throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_BUSY', 'FAILED_RETRYABLE');
+      }
+      var raw = session.engine && session.engine.getSnapshot();
+      var slot = raw && raw.slots.find(function (candidate) {
+        return candidate.slotKey === session.owner.context.slotKey;
+      });
+      if (!raw || raw.activeCount !== 0 || raw.queuedCount !== 0
+        || raw.schedulerState !== 'REVIEW'
+        || raw.attempts.some(function (attempt) {
+          return ['QUEUED', 'SUBMITTING', 'WAITING', 'UNKNOWN_OUTCOME'].includes(attempt.state);
+        })) {
+        throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_BUSY', 'FAILED_RETRYABLE');
+      }
+      if (!slot || slot.revision !== value.expectedSlotRevision
+        || slot.selectedAttemptId !== attemptId) {
+        throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_SELECTION_STALE', 'FAILED_RETRYABLE');
+      }
+      var selected = session.engine.getAttempt(attemptId);
+      if (!selected || selected.state !== 'CANDIDATE_READY'
+        || selected.operation !== session.operation
+        || !selected.resultHandle || selected.resultHandle !== slot.selectedCandidateId) {
+        throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_SELECTION_STALE', 'FAILED_RETRYABLE');
+      }
+      function assertSelectedCurrent() {
+        assertCurrent(session);
+        var entry;
+        try { entry = getVaultResult(selected.resultHandle); } catch {
+          throw controllerError('SS_ERP_BYOK_EDIT_RESULT_EXPIRED', 'FAILED_FINAL');
+        }
+        if (entry.reviewState !== 'CANDIDATE_READY' || entry.operation !== selected.operation) {
+          throw controllerError('SS_ERP_BYOK_EDIT_REVIEW_SELECTION_STALE', 'FAILED_RETRYABLE');
+        }
+        return entry;
+      }
+      assertSelectedCurrent();
+      session.commandInProgress = true;
+      session.handoffResultId = selected.resultHandle;
+      var committed = false;
+      try {
+        var result = await commit(Object.freeze({
+          contractVersion: 'extension-byok-edit-review-handoff/v1',
+          resultId: selected.resultHandle,
+          attemptId: attemptId,
+          expectedSlotRevision: slot.revision,
+          operation: selected.operation,
+        }), assertSelectedCurrent);
+        committed = true;
+        releaseSession(session);
+        if (sessions.get(String(session.owner.tabId)) === session) {
+          sessions.delete(String(session.owner.tabId));
+        }
+        return result;
+      } finally {
+        session.commandInProgress = false;
+        if (!committed) {
+          session.handoffResultId = null;
+          if (session.closed) {
+            try { releaseVaultResult(selected.resultHandle); } catch {}
+          }
+        }
+      }
     }
 
     async function whenSettled(ownerValue) {
@@ -1008,6 +1084,7 @@
       start: start,
       regenerate: regenerate,
       selectAlternative: selectAlternative,
+      handoffForReview: handoffForReview,
       whenSettled: whenSettled,
       getSnapshot: getSnapshot,
       cleanup: cleanup,

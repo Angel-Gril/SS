@@ -588,6 +588,11 @@ const steps = [
     args: ['scripts/extension-byok-workbench-edit-controller.test.mjs'],
   },
   {
+    name: 'extension BYOK selected edit review handoff contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-byok-edit-review-handoff.test.mjs'],
+  },
+  {
     name: 'extension BYOK edit workbench wiring contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-edit-wiring.test.mjs'],

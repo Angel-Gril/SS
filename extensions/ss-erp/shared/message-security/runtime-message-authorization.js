@@ -58,6 +58,7 @@
       EDIT_REFERENCES: 'ss-erp:ai-image-workbench-edit-references',
       EDIT_START: 'ss-erp:ai-image-workbench-edit-start',
       EDIT_SELECT: 'ss-erp:ai-image-workbench-edit-select',
+      EDIT_REVIEW: 'ss-erp:ai-image-workbench-edit-review',
       EDIT_REGENERATE: 'ss-erp:ai-image-workbench-edit-regenerate',
       EDIT_PREVIEW: 'ss-erp:ai-image-workbench-edit-preview',
       EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',

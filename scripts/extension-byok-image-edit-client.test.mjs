@@ -595,6 +595,80 @@ test('uses exact OpenAI multipart fields for reference, full-edit, and inpaint o
   }
 });
 
+for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+  test(`accepts image metadata in ${operation} without leaking it into outcome evidence`, async () => {
+    let fetchCalls = 0;
+    const loaded = loadClient({
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return jsonResponse({
+          created: 123,
+          data: [{ b64_json: Buffer.from(outputPng).toString('base64') }],
+          background: 'opaque', output_format: 'png', quality: 'high', size: '1024x1024',
+          usage: {
+            input_tokens: 25, output_tokens: 100, total_tokens: 125,
+            input_tokens_details: { image_tokens: 20, text_tokens: 5 },
+          },
+        });
+      },
+    });
+    const result = await loaded.client.edit(editRequest(operation));
+    assert.equal(result.outcome, 'SUCCEEDED');
+    assert.equal(result.image.sha256, createHash('sha256').update(outputPng).digest('hex'));
+    assert.equal(fetchCalls, 1);
+    assert.deepEqual(loaded.executionIntentCalls.map((call) => call.method), ['claim', 'reportOutcome']);
+    assert.equal(loaded.executionIntentCalls[1].value.outcome, 'SUCCEEDED');
+    for (const field of ['usage', 'background', 'output_format', 'quality', 'size']) {
+      assert.equal(Object.hasOwn(result, field), false);
+      assert.equal(Object.hasOwn(loaded.executionIntentCalls[1].value, field), false);
+    }
+  });
+
+  test(`sends multiline positive and negative prompts in ${operation} multipart requests`, async () => {
+    const calls = [];
+    const prompt = 'Keep the exact product.\nUse a clean background.\r\nLighting:\tsoft';
+    const negativePrompt = 'watermark\nextra text\rDistortion:\tnone';
+    const loaded = loadClient({
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return jsonResponse({ data: [{ b64_json: Buffer.from(outputPng).toString('base64') }] });
+      },
+    });
+
+    const result = await loaded.client.edit(editRequest(operation, { prompt, negativePrompt }));
+
+    assert.equal(result.outcome, 'SUCCEEDED');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.body.get('prompt'), `${prompt}\n\nAvoid: ${negativePrompt}`);
+    assert.equal(result.promptHash, sha256Text(prompt));
+    assert.equal(result.negativePromptHash, sha256Text(negativePrompt));
+  });
+}
+
+test('rejects non-text controls in edit prompts before credentials, intent, or network I/O', async () => {
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Provider fetch must not run');
+    },
+  });
+  for (const control of ['\u0000', '\u0008', '\u000b', '\u000c', '\u001b', '\u001f', '\u007f']) {
+    for (const field of ['prompt', 'negativePrompt']) {
+      await assert.rejects(
+        loaded.client.edit(editRequest('FULL_EDIT', { [field]: `Keep${control}product` })),
+        (error) => error?.code === 'SS_ERP_BYOK_IMAGE_EDIT_INPUT_INVALID'
+          && error.outcome === 'FAILED_RETRYABLE',
+      );
+    }
+  }
+  assert.equal(loaded.credentialReads, 0);
+  assert.equal(loaded.dispatches, 0);
+  assert.deepEqual(loaded.executionIntentCalls, []);
+  assert.equal(fetchCalls, 0);
+});
+
 test('normalizes a bare OpenAI-compatible origin to the effective v1 edits endpoint', async () => {
   const calls = [];
   const loaded = loadClient({

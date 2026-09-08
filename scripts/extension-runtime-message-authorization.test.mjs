@@ -56,6 +56,26 @@ function extensionSender(path, overrides = {}) {
   };
 }
 
+test('limits selected-edit review handoff to the exact workbench page', () => {
+  const { api, policy } = loadApi();
+  const type = 'ss-erp:ai-image-workbench-edit-review';
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    type, extensionSender('/pages/ai-image-workbench.html'), extensionId,
+  ), true);
+  assert.equal(api.MESSAGE_TYPES.WORKBENCH.EDIT_REVIEW, type);
+  for (const sender of [
+    extensionSender('/pages/settings.html'),
+    extensionSender('/pages/ai-provider-settings.html'),
+    extensionSender('/pages/media-editor.html'),
+    extensionSender('/pages/ai-image-workbench.html', { frameId: 1 }),
+    extensionSender('/pages/ai-image-workbench.html', { id: 'other-extension' }),
+    { id: extensionId, frameId: 0, url: 'https://detail.1688.com/offer/1.html' },
+    { id: extensionId, frameId: 0, url: 'https://ss-erp.com/image-processing' },
+  ]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false);
+  }
+});
+
 function readinessBinding(api, overrides = {}) {
   return {
     contractVersion: api.READINESS_BINDING_VERSION,

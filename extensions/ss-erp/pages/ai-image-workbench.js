@@ -118,6 +118,7 @@
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
   var WORKSPACE_AUTHORITATIVE_RELOAD_EVENT = 'ss-erp:workspace-authoritative-reload';
+  var EDIT_REVIEW_READY_EVENT = 'ss-erp:workbench-edit-review-ready';
   var WORKSPACE_AUTHORITATIVE_RELOAD_VERSION =
     'extension-byok-workbench-authoritative-reload/v1';
   var SOURCE_CATALOG_VERSION = 'extension-byok-workbench-source-catalog/v1';
@@ -2133,6 +2134,14 @@
       nodes.promptInput.value = detail.prompt;
       nodes.negativePromptInput.value = detail.negativePrompt;
       renderControls();
+    });
+    document.addEventListener(EDIT_REVIEW_READY_EVENT, function (event) {
+      if (!event || event.detail !== null || reviewPublishOnly() || !hostedByokExecutionAllowed()) return;
+      if (state.busy) {
+        state.authoritativeReloadPending = true;
+        return;
+      }
+      void reloadAuthoritativeState(state.lifecycleEpoch);
     });
     document.addEventListener(WORKSPACE_REFRESH_EVENT, function () {
       if (reviewPublishOnly()) {

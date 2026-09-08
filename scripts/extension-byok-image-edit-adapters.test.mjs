@@ -256,6 +256,47 @@ test('normalizes exactly one synchronous b64_json XOR url result and rejects tas
   }
 });
 
+test('discards OpenAI image response metadata while retaining the exact image result', () => {
+  const adapter = loadApi().OPENAI_MULTIPART_SYNC;
+  const metadata = {
+    background: 'opaque', output_format: 'png', quality: 'high', size: '1024x1024',
+    usage: {
+      input_tokens: 25, output_tokens: 100, total_tokens: 125,
+      input_tokens_details: { image_tokens: 20, text_tokens: 5 },
+      output_tokens_details: { image_tokens: 100, text_tokens: 0 },
+    },
+  };
+  for (const extra of [...Object.entries(metadata).map(([key, value]) => ({ [key]: value })), metadata]) {
+    for (const item of [{ b64_json: 'AQID' }, { url: 'https://results.example/image.png' }]) {
+      const base = { created: 123, data: [item] };
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(adapter.normalizeSubmitResponse({ ...base, ...extra }))),
+        JSON.parse(JSON.stringify(adapter.normalizeSubmitResponse(base))),
+      );
+    }
+  }
+});
+
+test('image metadata cannot authorize malformed results, unknown fields, or async tasks', () => {
+  const adapter = loadApi().OPENAI_MULTIPART_SYNC;
+  const metadata = { usage: { total_tokens: 1 }, output_format: 'png', size: '1024x1024' };
+  for (const body of [
+    {},
+    { data: [] },
+    { data: [{ b64_json: 'AQID' }, { b64_json: 'AQID' }] },
+    { data: [{ b64_json: 'AQID', url: 'https://results.example/image.png' }] },
+    { data: [{ b64_json: 'not base64' }] },
+    { data: [{ b64_json: 'AQID' }], error: { message: 'not a successful response' } },
+    { data: [{ b64_json: 'AQID' }], taskId: 'task-1' },
+    asyncEnvelope(),
+  ]) {
+    assert.throws(
+      () => adapter.normalizeSubmitResponse({ ...body, ...metadata }),
+      (error) => error?.code === 'SS_ERP_BYOK_IMAGE_EDIT_RESPONSE_INVALID',
+    );
+  }
+});
+
 test('uses an explicit async submit contract and never sniffs a synchronous response', () => {
   const api = loadApi();
   const adapter = api.EXPLICIT_ASYNC_TASK;

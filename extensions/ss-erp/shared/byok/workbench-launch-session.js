@@ -7,6 +7,7 @@
   var STORAGE_KEY = 'ss-erp:byok:workbench-launch-sessions:v1';
   var DOCUMENT_FENCE_STORAGE_KEY = 'ss-erp:byok:workbench-document-fences:v1';
   var BATCH_RECOVERY_STORAGE_KEY = 'ss-erp:byok:workbench-batch-recoveries:v1';
+  var EDIT_REVIEW_STORAGE_KEY = 'ss-erp:byok:workbench-edit-review-handoffs:v1';
   var DEFAULT_TTL_MS = 10 * 60 * 1000;
   var MAX_TTL_MS = 15 * 60 * 1000;
   var DEFAULT_LIMIT = 8;
@@ -273,8 +274,45 @@
     return authority;
   }
 
+  function normalizeEditReviewHandoff(value) {
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_INVALID';
+    if (!exactKeys(value, [
+      'contractVersion', 'resultId', 'attemptId', 'expectedSlotRevision', 'operation',
+    ]) || value.contractVersion !== 'extension-byok-edit-review-handoff/v1'
+      || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(value.operation)) {
+      throw sessionError(code);
+    }
+    var id = exactText(value.resultId, 128, code);
+    var attemptId = exactText(value.attemptId, 200, code);
+    if (!/^br_[a-f0-9]{48}$/u.test(id)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/u.test(attemptId)
+      || secretShapedIdentifier(attemptId)) throw sessionError(code);
+    return Object.freeze({
+      contractVersion: value.contractVersion,
+      resultId: id,
+      attemptId: attemptId,
+      expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
+      operation: value.operation,
+    });
+  }
+
   function normalizeResult(value) {
     if (value === null) return null;
+    if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'editReviewHandoff')) {
+      if (!exactKeys(value, RESULT_KEYS.concat(['editReviewHandoff']))) {
+        throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_INVALID');
+      }
+      var base = {};
+      RESULT_KEYS.forEach(function (key) { base[key] = value[key]; });
+      var normalized = normalizeResult(base);
+      var handoff = normalizeEditReviewHandoff(value.editReviewHandoff);
+      if (normalized.resultId !== handoff.resultId
+        || normalized.reviewState !== 'CANDIDATE_READY'
+        || normalized.deliveryState !== 'NOT_INGESTED') {
+        throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_INVALID');
+      }
+      return Object.freeze({ ...normalized, editReviewHandoff: handoff });
+    }
     var legacy = exactKeys(value, ['resultId', 'reviewState']);
     if (!legacy && !exactKeys(value, RESULT_KEYS)) {
       throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_INVALID');
@@ -619,17 +657,29 @@
 
     async function loadState(current) {
       var stored = await storage.get([
-        STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+        STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
       ]);
       var raw = stored && stored[STORAGE_KEY];
       var records = isRecord(raw) ? raw : {};
       var rawFences = stored && stored[DOCUMENT_FENCE_STORAGE_KEY];
       var rawRecoveries = stored && stored[BATCH_RECOVERY_STORAGE_KEY];
+      var rawEditReviews = stored && stored[EDIT_REVIEW_STORAGE_KEY];
       var valid = {};
       var fences = {};
       Object.keys(records).forEach(function (key) {
         var session = normalizeSession(records[key], current, ttlMs);
         if (session && String(session.workbenchTabId) === key) {
+          if (session.result && isRecord(rawEditReviews)
+            && Object.prototype.hasOwnProperty.call(rawEditReviews, key)) {
+            try {
+              session = Object.freeze({
+                ...session,
+                result: normalizeResult({
+                  ...session.result, editReviewHandoff: rawEditReviews[key],
+                }),
+              });
+            } catch {}
+          }
           if (session.operation && isRecord(rawRecoveries)
             && Object.prototype.hasOwnProperty.call(rawRecoveries, key)) {
             var recovery = null;
@@ -670,12 +720,13 @@
     async function storeState(records, fences) {
       if (!Object.keys(records).length) {
         await storage.remove([
-          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
         ]);
         return;
       }
       var serializedRecords = {};
       var recoveries = {};
+      var editReviews = {};
       Object.keys(records).forEach(function (key) {
         var session = records[key];
         if (session.operation) {
@@ -693,6 +744,12 @@
             expiresAt: legacyCurrent + ttlMs,
           };
         } else serializedRecords[key] = session;
+        if (session.result && session.result.editReviewHandoff) {
+          editReviews[key] = session.result.editReviewHandoff;
+          var result = {};
+          RESULT_KEYS.forEach(function (field) { result[field] = session.result[field]; });
+          serializedRecords[key] = { ...serializedRecords[key], result: result };
+        }
         if (session.operation && session.operation.recovery) {
           recoveries[key] = {
             operationIdempotencyKey: session.operation.idempotencyKey,
@@ -704,6 +761,7 @@
         [STORAGE_KEY]: serializedRecords,
         [DOCUMENT_FENCE_STORAGE_KEY]: fences,
         [BATCH_RECOVERY_STORAGE_KEY]: recoveries,
+        [EDIT_REVIEW_STORAGE_KEY]: editReviews,
       });
     }
 
@@ -1039,6 +1097,34 @@
       });
     }
 
+    function attachEditResult(sender, contextValue, handoffValue) {
+      var context = normalizeContext(contextValue);
+      var handoff = normalizeEditReviewHandoff(handoffValue);
+      return mutateForSender(sender, function (session, _identity, current) {
+        if (!sameContext(session.context, context)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID');
+        }
+        if (session.operation) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
+        }
+        if (session.result) {
+          if (session.result.reviewState !== 'CANDIDATE_READY'
+            || session.result.deliveryState !== 'NOT_INGESTED'
+            || JSON.stringify(session.result.editReviewHandoff) !== JSON.stringify(handoff)) {
+            throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_CONFLICT');
+          }
+          return session;
+        }
+        return renewLease({
+          ...session,
+          result: {
+            ...normalizeResult({ resultId: handoff.resultId, reviewState: 'CANDIDATE_READY' }),
+            editReviewHandoff: handoff,
+          },
+        }, current);
+      });
+    }
+
     function beginIngest(sender, resultIdValue, idempotencyKeyValue, authorityValue) {
       var normalizedResultId = exactText(
         resultIdValue,
@@ -1280,7 +1366,7 @@
         var raw = stored && stored[STORAGE_KEY];
         if (isRecord(raw)) Object.keys(raw).forEach(function (key) { discardResult(raw[key]); });
         await storage.remove([
-          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
         ]);
       });
     }
@@ -1314,6 +1400,7 @@
       updateOperationRecovery: updateOperationRecovery,
       clearOperation: clearOperation,
       attachResult: attachResult,
+      attachEditResult: attachEditResult,
       setReviewState: setReviewState,
       beginIngest: beginIngest,
       setIngestRequestHash: setIngestRequestHash,
@@ -1338,6 +1425,7 @@
     SUCCESSOR_RECOVERY_VERSION: SUCCESSOR_RECOVERY_VERSION,
     STORAGE_KEY: STORAGE_KEY,
     BATCH_RECOVERY_STORAGE_KEY: BATCH_RECOVERY_STORAGE_KEY,
+    EDIT_REVIEW_STORAGE_KEY: EDIT_REVIEW_STORAGE_KEY,
     DEFAULT_TTL_MS: DEFAULT_TTL_MS,
     createManager: createManager,
     normalizeContext: normalizeContext,

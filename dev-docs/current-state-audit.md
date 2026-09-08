@@ -55,6 +55,18 @@
 - 发布前置仍未关闭：sandbox runbook 关闭的是 `QA-02 technical sandbox acceptance`；billing runbook 仍把未匹配账单列为 QA-02 未关闭部分，`docs/deployment.md` 要求完整 QA-02/QA-04 后才生成正式扩展候选。Provider capability candidate 与区域扩展候选不是同一产物；现有 canary 只核验正式 QA-04 中的 `qa02Prerequisite:COMPLETE`，并不重读 Provider 账单，不能利用这个检查缺口填造 COMPLETE。未找到现成的全暗态维护版豁免；若要先部署修复、继续保持 AI/Ozon 写入关闭，须先明确批准该发布范围及相应验收合同，不直接修改原发布规则。
 - 隔离边界保持：本地合成两 owner/两 shop 证明 ERP 数据归属与零发布，不证明真实 Ozon 店铺隔离。DOTH 已有 FBS 库存的反证仍有效，不为它新增“专用测试店”标签，不重试 import/archive。本轮未访问 VPS、查询计费后台、修改线上配置、部署或切换官网；线上健康状态沿用前次快照，未冒充新鲜检查。
 
+### AI 生图/改图功能收口（2026-09-09 本地功能与隔离验收）
+
+- 用户将当前目标聚焦为“把 AI 改图/生图相关功能开发测试完”，不是批准维护版发布。本阶段验证正常四步工作台、四种图片操作、候选审核/接收与精确草稿绑定；不部署、不切官网、不调用真实 Provider/Ozon，不修改生产开关、价格或 capability 晋升。
+- 新鲜基线：AI/Web/扩展相关 Node 合同 `97 files / 566 passed`；服务端 AI 定向 172 个文件命令退出 0（其中数据库专用测试仍按环境门禁另跑）。AI PostgreSQL 专用 runner 回放 148 migrations，`21 files / 99 passed`；带历史数据升级及故意非法升级拒绝通过，全部本次测试 schema 清理复查通过。它们是隔离/fixture 验证，不是正式 QA-04 或真实 Provider 放行。
+- 已定位并按 T2 修复两项 BYOK 问题：三类改图正/负提示词错误拒绝 LF/CR/TAB；OpenAI ImagesResponse 合法附加 metadata 被误当成未知响应。前者先有 6 个多行正例 RED 后转 GREEN，身份字段与其他控制字符仍严格拒绝；后者先有 4 个解析/真实 client 正例 RED 后转 GREEN，只接受并丢弃 `usage/background/output_format/quality/size`，不以这些字段计算账单或绕过图片校验。联合 66 项定向测试通过。官方文档网页在本机返回 403，响应字段已改由 OpenAI 官方 Node SDK `src/resources/images.ts` 的当前类型交叉核验。
+- 浏览器发现并关闭了真实断点：三类改图此前能出图、选图并进入第四步，却没有可用的批准/接收操作；runtime 只把 T2I 结果绑定到普通审核会话。新增显式 `EDIT_REVIEW`，由真实 controller/engine/vault 验证已选 attempt、slot revision 与空闲状态，复核 live tab/document、owner/device、source/draft/SKU/slot 后交由 session owner 保存。保持 `CANDIDATE_READY`，不自动批准、上传或重发；旧 session/v1 序列化形状不变，交接重放证据另存会话键。成功后只释放未选图，保留已交接图；普通 preview/review/ingest 按真实 operation 复核，T2I 生成门禁未放宽。
+- 薄 client/page 只传交接 witness 并重新读取权威状态，复用原“批准候选图 → 接收并绑定 ERP”。两个 UI 行为测试先 RED 后 GREEN；真实浏览器进一步发现旧 `is-edit-operation` 样式仍隐藏普通审核面板，已通过页面 class 投影修复并回归，未改 CSS/版式。独立复核时追加“临时 authority 读取失败不能清掉已消费候选”的 RED→GREEN，拒绝本次读取但保留会话与图片，恢复后仍是同一候选且没有额外 Provider 请求。
+- 新增 `scripts/extension-byok-edit-review-handoff.test.mjs` 并接入正式 preflight：真实 controller/session/epoch/runtime 组合覆盖三操作交接→显式批准→接收绑定、同一请求重放、manager 重启、保存失败、选图/重生成并发、旧 revision、跨 tab/owner/device/context、过期、UNKNOWN 与候选清理。Provider 与 ERP 接收为明确 fixture；不是实际调用。独立安全复核及额外内存探针无重要发现；D2 scope 和 UI shape 前置 validator 通过，Host 自动 Hook 强制执行仍为 `UNVERIFIED`。
+- 主代理复跑 `node scripts/extension-ai-workbench-browser-acceptance.mjs` 退出 0。Chrome 147 中四操作均走原页面/真实 shared client、mask converter、vault、controller、launch session、epoch 与 runtime handler，完成生成→解码预览→交接→显式批准→抵达真实 ingest handler 的 fixture 拒绝边界。每操作仅 1 次 fixture Provider 请求，批准前 ingest 为 0；Enter/Space 激活、1440/390px、无横向溢出、metadata 丢弃与密钥隔离通过。INPAINT 65,536 像素逐个满足 `alpha=255-originalR`，mismatch 为 0，保留 84 个软边缘像素。本次 Chromium/profile 已清理；最终机器摘要 SHA-256 为 `4e8ce16acdae3167c2cfdc3bf70affadafb43f7bbea42d3645cd03cbbb38157a`。交接前已在页面和指南明确提示只保留选图、清理其余临时候选，补充披露后重新通过浏览器与双包验证。
+- 最终开发门禁：全仓 lint/typecheck、完整 `pnpm preflight`（含全后端测试与新增交接合同）通过；source/cloud/local 扩展 verifier 分别为 `459/464/460 passed`，全部 `0 failure / 0 warning`。双模式包仅在新建临时目录生成，未签名、未作为正式候选、未覆盖受管安装或旧发布产物。浏览器仍不覆盖真实 Chrome MV3 消息传输授权、真实 ERP ingest 客户端/存储或真实 Provider；这些证据不能被写成完整付费 QA-02、正式 QA-04 或生产放量批准。本轮没有真实 Provider/ERP/Ozon 写入或新费用，没有改线上开关、部署或官网 pointer。
+- Wanx 正常托管接线不混入此修复：历史 adapter 仅支持方图、800 字正向且拒绝 negativePrompt；现有套图为竖图，其固定正向约束已达 981 字。最后发包 fence、0 POST 输入失败分类、恢复及内部 USD/外部 CNY 也不能靠一个工厂分支解决。保留已验证 sandbox 的范围，后续需独立的完整正常传输合同，不截断约束、不假装已接通。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |

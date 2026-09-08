@@ -290,7 +290,7 @@
       'SOURCE_CATALOG', 'SOURCE_PREVIEW',
       'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST', 'PUBLISH',
       'EDIT_MEDIA_PREPARE', 'EDIT_MEDIA_RELEASE', 'EDIT_STATE', 'EDIT_REFERENCES',
-      'EDIT_START', 'EDIT_SELECT', 'EDIT_REGENERATE', 'EDIT_PREVIEW', 'EDIT_CLEANUP',
+      'EDIT_START', 'EDIT_SELECT', 'EDIT_REGENERATE', 'EDIT_PREVIEW', 'EDIT_REVIEW', 'EDIT_CLEANUP',
     ];
     var typeValues = requiredTypes.map(function (name) {
       return text(
@@ -589,13 +589,18 @@
           deliveryState: 'INGESTING',
         };
       }
+      var entry;
       try {
-        return { ...getPublicResult(session.result.resultId), deliveryState: 'NOT_INGESTED' };
+        entry = getVaultEntry(session.result.resultId);
       } catch (_error) {
         try { await clearResult(sender, session.result.resultId); } catch (_clearError) {}
         try { releasePreviewResult(session.result.resultId); } catch (_previewError) {}
         return null;
       }
+      // Unavailable authority is not evidence that an already generated image
+      // disappeared. Deny this read while retaining its recoverable session result.
+      await assertCandidateEntryAuthority(entry, session.context);
+      return { ...getPublicResult(session.result.resultId), deliveryState: 'NOT_INGESTED' };
     }
 
     function publishInput(session) {
@@ -737,6 +742,12 @@
         throw handlerError('SS_ERP_BYOK_DEVICE_AUTHORITY_STALE');
       }
       return authority;
+    }
+
+    function assertCandidateEntryAuthority(entry, context) {
+      return EDIT_OPERATIONS.includes(entry && entry.binding && entry.binding.operation)
+        ? assertEditEntryAuthority(entry, context)
+        : assertEntryAuthority(entry, context);
     }
 
     async function withReviewLock(sender, operation) {
@@ -893,19 +904,29 @@
       if (!exactKeys(input, ['attemptId'])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
       }
-      var session = await claimLive(handlerContext.sender);
-      var owner = editOwner(handlerContext.sender, session);
-      await assertEditEpoch(owner, { requireActive: true });
-      openEdit(owner);
-      return selectEditAlternative(owner, input);
+      return withModeTransitionLock(handlerContext.sender, async function () {
+        var session = await claimLive(handlerContext.sender);
+        if (session.operation || session.result) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+        }
+        var owner = editOwner(handlerContext.sender, session);
+        await assertEditEpoch(owner, { requireActive: true });
+        openEdit(owner);
+        return selectEditAlternative(owner, input);
+      });
     });
 
     handlers[messageTypes.EDIT_REGENERATE] = generationGuarded(async function (handlerContext) {
-      var session = await claimLive(handlerContext.sender);
-      var owner = editOwner(handlerContext.sender, session);
-      await assertEditEpoch(owner, { requireActive: true });
-      openEdit(owner);
-      return regenerateEdit(owner, handlerContext.payload || {});
+      return withModeTransitionLock(handlerContext.sender, async function () {
+        var session = await claimLive(handlerContext.sender);
+        if (session.operation || session.result) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+        }
+        var owner = editOwner(handlerContext.sender, session);
+        await assertEditEpoch(owner, { requireActive: true });
+        openEdit(owner);
+        return regenerateEdit(owner, handlerContext.payload || {});
+      });
     });
 
     handlers[messageTypes.EDIT_PREVIEW] = generationGuarded(async function (handlerContext) {
@@ -927,6 +948,67 @@
       var entry = getVaultEntry(id);
       await assertEditEntryAuthority(entry, session.context);
       return openPreview(entry);
+    });
+
+    handlers[messageTypes.EDIT_REVIEW] = generationGuarded(function (handlerContext) {
+      return withModeTransitionLock(handlerContext.sender, function () {
+        return withReviewLock(handlerContext.sender, async function () {
+          var input = handlerContext.payload || {};
+          if (!exactKeys(input, ['attemptId', 'expectedSlotRevision'])
+            || !Number.isSafeInteger(input.expectedSlotRevision) || input.expectedSlotRevision < 1
+            || typeof input.attemptId !== 'string'
+            || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/u.test(input.attemptId)) {
+            throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+          }
+          var session = await claimLive(handlerContext.sender);
+          if (session.operation) throw handlerError('SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+          var owner = editOwner(handlerContext.sender, session);
+          var handoff = requiredMethod(editController, 'handoffForReview');
+          var attached;
+          if (session.result) {
+            var receipt = session.result.editReviewHandoff;
+            if (!receipt || receipt.attemptId !== input.attemptId
+              || receipt.expectedSlotRevision !== input.expectedSlotRevision
+              || receipt.resultId !== session.result.resultId
+              || session.result.reviewState !== 'CANDIDATE_READY'
+              || session.result.deliveryState !== 'NOT_INGESTED') {
+              throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_PENDING');
+            }
+            var replayEntry = getVaultEntry(receipt.resultId);
+            await assertEditEntryAuthority(replayEntry, session.context);
+            if (replayEntry.operation !== receipt.operation
+              || replayEntry.reviewState !== 'CANDIDATE_READY') {
+              throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
+            }
+            try {
+              var editor = getEditSnapshot(owner);
+              if (editor.operation === null) cleanupEdit(owner);
+              else await handoff(owner, input, async function () { return session; });
+            } catch (error) {
+              if (!error || error.code !== 'SS_ERP_BYOK_EDIT_OWNER_STALE') throw error;
+            }
+            attached = session;
+          } else {
+            await assertEditEpoch(owner, { requireActive: true });
+            attached = await handoff(owner, input, async function (selection, assertSelectedCurrent) {
+              var entry = assertSelectedCurrent();
+              await assertEditEntryAuthority(entry, session.context);
+              var currentSession = await claimLive(handlerContext.sender);
+              if (!sameContext(currentSession.context, session.context)) {
+                throw handlerError('SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE');
+              }
+              await assertEditEntryAuthority(assertSelectedCurrent(), currentSession.context);
+              return requiredMethod(sessionManager, 'attachEditResult')(
+                handlerContext.sender, currentSession.context, selection,
+              );
+            });
+          }
+          await clearEditEpoch(owner);
+          var acceptedEntry = getVaultEntry(attached.result.resultId);
+          await assertEditEntryAuthority(acceptedEntry, session.context);
+          return { ...getPublicResult(attached.result.resultId), deliveryState: 'NOT_INGESTED' };
+        });
+      });
     });
 
     handlers[messageTypes.EDIT_CLEANUP] = generationGuarded(async function (handlerContext) {
@@ -1083,7 +1165,7 @@
         throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_NOT_FOUND');
       }
       var entry = getVaultEntry(id);
-      await assertEntryAuthority(entry, session.context);
+      await assertCandidateEntryAuthority(entry, session.context);
       return openPreview(entry);
     });
 
@@ -1129,7 +1211,7 @@
           throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
         }
         var entry = getVaultEntry(id);
-        await assertEntryAuthority(entry, session.context);
+        await assertCandidateEntryAuthority(entry, session.context);
         if (input.decision === 'APPROVE') {
           var approved = approveResult(id, entry.binding);
           await setReviewState(handlerContext.sender, id, 'APPROVED');
@@ -1170,7 +1252,7 @@
         }
         var ingestIdempotencyKey = newIngestIdempotencyKey();
         var approvedEntry = getVaultEntry(id);
-        var authority = await assertEntryAuthority(approvedEntry, session.context);
+        var authority = await assertCandidateEntryAuthority(approvedEntry, session.context);
         var sessionAuthority = ingestAuthorityProjection(authority);
         await beginIngest(handlerContext.sender, id, ingestIdempotencyKey, sessionAuthority);
         var committedSession = null;
@@ -1297,7 +1379,7 @@
           // identity when they are still available in this worker.
           try {
             var retryEntry = getVaultEntry(id);
-            await assertEntryAuthority(retryEntry, session.context);
+            await assertCandidateEntryAuthority(retryEntry, session.context);
           } catch (_vaultError) {
             await clearResult(handlerContext.sender, id).catch(function () {});
             releasePreviewResult(id);

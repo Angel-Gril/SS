@@ -85,7 +85,8 @@
   function promptText(value, maximum, label, nullable) {
     if (nullable && value == null) return null;
     if (typeof value !== 'string' || value !== value.normalize('NFKC').trim()
-      || (!nullable && !value) || value.length > maximum || /[\u0000-\u001f\u007f]/u.test(value)) {
+      || (!nullable && !value) || value.length > maximum
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) {
       throw clientError(
         'SS_ERP_BYOK_IMAGE_EDIT_INPUT_INVALID', label + ' is invalid', 'FAILED_RETRYABLE',
       );

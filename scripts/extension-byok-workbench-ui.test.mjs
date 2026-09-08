@@ -2273,4 +2273,37 @@ for (const [errorCode, expectedLabel] of [
     && row[1] === 'source-main-1' && row[2] === 'WORKING'), true);
 }
 
+{
+  const authoritative = { value: isolatedPublicState() };
+  const harness = createPageHarness({ authoritative, editTaskLocked: true, editTaskState: 'CANDIDATE_READY' });
+  await flushAsync(6);
+  const previousReads = harness.calls.filter((row) => row[0] === 'state').length;
+  authoritative.value = isolatedPublicState(isolatedCandidate());
+  harness.dispatchDocument('ss-erp:workbench-edit-review-ready', { resultId: 'forged-page-result' });
+  await flushAsync(2);
+  assert.equal(harness.calls.filter((row) => row[0] === 'state').length, previousReads);
+  harness.dispatchDocument('ss-erp:workbench-edit-review-ready', null);
+  await flushAsync(8);
+  assert.equal(harness.calls.filter((row) => row[0] === 'state').length, previousReads + 1);
+  assert.equal(harness.nodes.resultPanel.hidden, false,
+    'edited candidates must reach the existing explicit review panel');
+  assert.equal(harness.nodes.approveButton.disabled, true, 'decode must finish before approval');
+  harness.nodes.previewImage.complete = true;
+  harness.nodes.previewImage.naturalWidth = 1024;
+  harness.nodes.previewImage.naturalHeight = 1024;
+  harness.nodes.previewImage.listeners.load();
+  assert.equal(harness.nodes.approveButton.disabled, false);
+  assert.equal(harness.calls.some((row) => ['review', 'ingest', 'generate'].includes(row[0])), false);
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(6);
+  assert.equal(harness.calls.filter((row) => row[0] === 'review').length, 1);
+  assert.equal(harness.calls.some((row) => row[0] === 'ingest'), false);
+  assert.equal(harness.nodes.approveButton.textContent, '接收并绑定 ERP');
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(6);
+  assert.equal(harness.calls.filter((row) => row[0] === 'ingest').length, 1);
+  assert.equal(harness.nodes.approveButton.textContent, '已绑定 ERP');
+  assert.equal(harness.calls.some((row) => row[0] === 'publish-confirm'), false);
+}
+
 console.log('extension BYOK workbench UI tests passed');
