@@ -1,4 +1,6 @@
 import Fastify from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { PrismaClient } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildOzonMarkingCodeRepairItems,
@@ -8,6 +10,14 @@ import {
   readBrowserOneClickListingJobForActor,
 } from '../routes/listing.js';
 import { OzonClient } from '../services/ozon-client.js';
+
+const postgresRequested = process.env.RUN_LOGISTICS_POSTGRES_TESTS === '1';
+const postgresUrl = process.env.LOGISTICS_TEST_DATABASE_URL || '';
+let postgresSchema = '';
+try { postgresSchema = new URL(postgresUrl).searchParams.get('schema') || ''; } catch { /* Do not expose a malformed credential URL. */ }
+if (postgresRequested && !/^logistics_test_[a-z0-9_]+$/u.test(postgresSchema)) {
+  throw new Error('Browser idempotency PostgreSQL test requires an isolated logistics_test_* schema');
+}
 
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(async (request: any) => {
@@ -137,6 +147,51 @@ describe('browser one-click listing jobs', () => {
       captureHash: 'a'.repeat(64),
       profile: {},
     }));
+  });
+
+  it.runIf(postgresRequested)('creates a deferred job through a real PostgreSQL advisory-lock query', async () => {
+    const database = new PrismaClient({ datasources: { db: { url: postgresUrl } } });
+    const observer = new PrismaClient({ datasources: { db: { url: postgresUrl } } });
+    const clientRequestId = `postgres_lock_${randomUUID().replaceAll('-', '')}`;
+    const probeLock = () => observer.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
+      return tx.$queryRawUnsafe<Array<{ available: boolean }>>(
+        'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS available',
+        `user-1:${clientRequestId}`,
+      );
+    });
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE' });
+    mocks.syncJobCreate.mockImplementationOnce(async () => {
+      expect(await probeLock()).toEqual([{ available: false }]);
+      return { id: 'job-postgres-lock', status: 'RUNNING' };
+    });
+    // Keep unrelated auth/store boundaries as fixtures, but execute the owner's exact SQL
+    // through Prisma/PostgreSQL so unsupported result types cannot be hidden by a mock.
+    mocks.transaction.mockImplementation(async (callback: (client: any) => unknown) => database.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
+      return callback({
+        $queryRaw: tx.$queryRaw.bind(tx),
+        syncJob: { findFirst: mocks.syncJobFindFirst, create: mocks.syncJobCreate },
+      });
+    }));
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', sourceSkus: ['sku-a'], clientRequestId },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { jobId: 'job-postgres-lock', queued: false, deferred: true } });
+      expect(mocks.syncJobCreate).toHaveBeenCalledTimes(1);
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
+      expect(OzonClient).not.toHaveBeenCalled();
+      expect(await probeLock()).toEqual([{ available: true }]);
+    } finally {
+      mocks.syncJobCreate.mockReset();
+      await app.close();
+      await database.$disconnect();
+      await observer.$disconnect();
+    }
   });
 
   it('fails closed before persistence when capture or interactive listing policy is disabled', async () => {

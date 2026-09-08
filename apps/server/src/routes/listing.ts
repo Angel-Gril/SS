@@ -1551,7 +1551,7 @@ export async function createBrowserOneClickListingJobForActor(
           });
         }
         await (tx as any).$queryRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${actor.ownerUserId}:${parsed.data.clientRequestId}`}, 0))`,
+          Prisma.sql`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`${actor.ownerUserId}:${parsed.data.clientRequestId}`}, 0))`,
         );
         return createJob(tx);
       });
