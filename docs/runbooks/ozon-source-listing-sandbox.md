@@ -28,6 +28,43 @@ Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately app
 
 The script performs a pre-submit offer lookup and fails closed if the reserved offer already exists. It accepts exactly one item to limit blast radius.
 
+## Prepare The Independent Approval
+
+First complete the normal ERP draft and production compiler export with the operator's real test-product
+facts: category, required attributes, public test images, package weight and dimensions with units,
+price, currency, and VAT. A synthetic image does not establish those product facts. Capture/workflow
+pilot configuration and the eventual Ozon import/archive require their separately bound approvals.
+
+Use this field layout only as a review template. Placeholders deliberately fail the execution gate;
+save the completed approval outside the repository only after operator review:
+
+```json
+{
+  "schema": "ss-erp/ozon-source-listing-approval/v1",
+  "approvalId": "<unique-reviewed-approval-id>",
+  "operatorId": "<responsible-operator>",
+  "deviceId": "<approved-device>",
+  "approvedAt": "<review-time-in-UTC>",
+  "expiresAt": "<expiry-in-UTC>",
+  "shopAlias": "<exact-ERP-test-shop-alias>",
+  "sellerName": "<confirmed-Ozon-seller-name>",
+  "clientIdSha256": "<preflight-credential.clientIdSha256>",
+  "credentialRevisionSha256": "<preflight-credential.revisionSha256>",
+  "offerId": "<same-new-reserved-offer-as-the-compiler-export>",
+  "preflightReceiptSha256": "<SHA-256-of-the-exact-v2-preflight-file-bytes>",
+  "payloadSha256": "<SHA-256-of-the-exact-compiler-envelope-file-bytes>",
+  "operations": ["IMPORT", "ARCHIVE"]
+}
+```
+
+Copy credential fingerprints from the approved preflight receipt; do not expose or recompute them by
+pasting keys into shell commands. `payloadSha256` hashes the entire envelope file, including its
+serialization, and differs from the envelope's `requestPayloadHash`. The approval window must be
+positive, unexpired, and no longer than 24 hours; the v2 preflight must also be fresh. Compute
+`--approval-sha256` only after the final review. Changes to any bound input require new evidence and
+approval. The executable field and validation owner is `readApprovalManifest` in
+`scripts/sandbox/ozon-source-listing-contract.mjs`.
+
 ## Credential Setup
 
 Credentials are read only from dedicated environment variables. They must not be written to the payload, audit file, shell history, or issue tracker. Prefer a temporary secret-injection mechanism provided by the operator environment.
