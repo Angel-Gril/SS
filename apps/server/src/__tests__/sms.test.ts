@@ -17,6 +17,11 @@ vi.mock('node:crypto', async (importOriginal) => ({
 vi.mock('../lib/sms/index.js', () => ({
   getSmsProvider: vi.fn(async () => ({ send: smsMocks.send })),
 }));
+// Exercise the real configuration defaults without relying on the developer's
+// .env or a running database. Database failure policy has its own config tests.
+vi.mock('../lib/prisma.js', () => ({
+  prisma: { systemConfig: { findUnique: vi.fn(async () => null) } },
+}));
 
 import { sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 

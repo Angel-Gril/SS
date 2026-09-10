@@ -9,6 +9,11 @@ const includeBuild = args.has('--build') || args.has('--all');
 
 const steps = [
   {
+    name: 'preflight child-process exit contract',
+    command: 'node',
+    args: ['--experimental-vm-modules', '--test', 'scripts/preflight-process-exit.test.mjs'],
+  },
+  {
     name: 'server typecheck',
     command: 'pnpm',
     args: ['--filter', 'server', 'typecheck'],
@@ -787,7 +792,7 @@ function runStep(step) {
       env,
       stdio: 'inherit',
     });
-    child.on('close', (code) => resolve(code || 0));
+    child.on('close', (code, signal) => resolve(signal ? 1 : (code ?? 1)));
     child.on('error', (error) => {
       console.error(`[preflight] failed to start ${step.name}: ${error.message}`);
       resolve(1);
