@@ -4,6 +4,7 @@ import {
   AI_IMAGE_EDIT_PROVIDER,
   AiMediaCapabilityError,
   assertAiMediaCapability,
+  resolveAiImageProviderCapability,
   type AiMediaOperation,
 } from './ai-image-provider-capabilities.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
@@ -12,10 +13,11 @@ import {
   AI_MEDIA_INPAINT_TEMPLATE_KEY,
 } from './ai-prompt-templates.js';
 import {
-  AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+  parseAiImageProviderRuntimeContract,
   type AiImageProviderRuntimeContract,
 } from './ai-image-provider-runtime-contract.js';
 import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
+import { assertWanxHostedEditPrompt } from './ai-image-edit-provider-contract.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
 export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
@@ -206,14 +208,6 @@ function providerRuntimeError(message: string): never {
   throw new AiMediaWorkflowError('PROVIDER_NOT_READY', message);
 }
 
-function positiveRuntimeInteger(value: unknown, label: string) {
-  const normalized = Number(value);
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
-    providerRuntimeError(`${label} is invalid`);
-  }
-  return normalized;
-}
-
 function normalizeProviderRuntimeContract(
   value: unknown,
   expected: {
@@ -225,48 +219,23 @@ function normalizeProviderRuntimeContract(
     height?: number;
   },
 ): AiImageProviderRuntimeContract {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    providerRuntimeError('A frozen Provider runtime contract is required before paid dispatch');
+  let runtime: AiImageProviderRuntimeContract;
+  try {
+    runtime = parseAiImageProviderRuntimeContract(value);
+  } catch {
+    return providerRuntimeError('A valid frozen Provider runtime contract is required before paid dispatch');
   }
-  const runtime = value as Record<string, unknown>;
-  const provider = String(runtime.provider || '').trim();
-  const model = String(runtime.model || '').trim();
-  const baseUrlSha256 = String(runtime.baseUrlSha256 || '');
-  const unitCostCents = positiveRuntimeInteger(runtime.unitCostCents, 'Frozen Provider unit cost');
-  const imageCount = positiveRuntimeInteger(runtime.imageCount, 'Frozen Provider image count');
-  const width = positiveRuntimeInteger(runtime.width, 'Frozen Provider image width');
-  const height = positiveRuntimeInteger(runtime.height, 'Frozen Provider image height');
-  const maximumCostCents = positiveRuntimeInteger(
-    runtime.maximumCostCents,
-    'Frozen Provider maximum cost',
-  );
   if (
-    runtime.contractVersion !== AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
-    || provider.length > 500
-    || model.length > 500
-    || provider !== expected.provider
-    || model !== expected.model
-    || !/^[a-f0-9]{64}$/u.test(baseUrlSha256)
-    || imageCount !== expected.count
-    || (expected.width !== undefined && width !== expected.width)
-    || (expected.height !== undefined && height !== expected.height)
-    || !Number.isSafeInteger(unitCostCents * imageCount)
-    || maximumCostCents !== unitCostCents * imageCount
-    || maximumCostCents !== expected.estimatedCostCents
+    runtime.provider !== expected.provider
+    || runtime.model !== expected.model
+    || runtime.imageCount !== expected.count
+    || (expected.width !== undefined && runtime.width !== expected.width)
+    || (expected.height !== undefined && runtime.height !== expected.height)
+    || runtime.maximumCostCents !== expected.estimatedCostCents
   ) {
     providerRuntimeError('Frozen Provider runtime contract does not match the requested operation');
   }
-  return {
-    contractVersion: AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
-    provider,
-    model,
-    baseUrlSha256,
-    unitCostCents,
-    imageCount,
-    width,
-    height,
-    maximumCostCents,
-  };
+  return runtime;
 }
 
 export function normalizeAiMediaProviderExecutionConfig(
@@ -661,7 +630,9 @@ export function createAiImageEditWorkflowFingerprint(
   });
 }
 
-export function createAiMediaWorkflowService(repository: AiMediaWorkflowRepository) {
+export function createAiMediaWorkflowService(repository: AiMediaWorkflowRepository, options: {
+  resolveCapability?: typeof resolveAiImageProviderCapability;
+} = {}) {
   return {
     async createImageToImage(input: CreateAiMediaWorkflowInput) {
       if (!input.prompt.trim()) throw new AiMediaWorkflowError('INVALID_REQUEST', 'Prompt is required');
@@ -788,6 +759,7 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
     },
 
     async createImageEdit(input: CreateAiImageEditWorkflowInput) {
+      assertWanxHostedEditPrompt(input);
       const sourceAssetId = String(input.sourceAssetId || '').trim();
       const maskAssetId = String(input.maskAssetId || '').trim();
       const expectedTemplateKey = input.operation === 'FULL_EDIT'
@@ -830,7 +802,7 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
           operation: input.operation,
           inputCount: 1,
           maskCount: input.operation === 'INPAINT' ? 1 : 0,
-        });
+        }, options.resolveCapability);
         if (execution.paid && (
           capability.provider !== execution.provider
           || capability.model !== execution.model

@@ -1030,7 +1030,16 @@ const isDirectRun = process.argv[1]
   : false;
 
 if (isDirectRun) {
-  runAiImageProviderApprovalDraft({ requireGitCheckout: true }).catch((error) => {
+  const args = process.argv.slice(2);
+  const run = args.length === 0 ? () => runAiImageProviderApprovalDraft({ requireGitCheckout: true })
+    : args.length === 1 && ['--prepare-wanx-trial', '--verify-wanx-trial', '--draft-wanx-trial-approval'].includes(args[0]!)
+      ? async () => {
+          const { runAiImageWanxTrialCommand } = await import('./ai-image-wanx-trial-prepare.js');
+          return runAiImageWanxTrialCommand(args[0] === '--prepare-wanx-trial' ? 'prepare'
+            : args[0] === '--verify-wanx-trial' ? 'verify' : 'approval-draft');
+        }
+      : async () => { throw draftError('SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID', 'Unsupported preparation command argument'); };
+  run().catch((error) => {
     process.stderr.write(`${JSON.stringify({
       schemaVersion: 1,
       event: 'SANDBOX_APPROVAL_DRAFT_COMMAND_FAILED',

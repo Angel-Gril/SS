@@ -20,6 +20,7 @@ export type AiImageJobStatus =
 
 export interface AiImageJobCostReservation {
   id: string;
+  currency?: string;
   status: 'RESERVED' | 'SUBMISSION_UNCERTAIN' | 'RECONCILIATION_REQUIRED' | 'SETTLED' | 'RELEASED';
   estimatedCostMinor: number;
   maximumCostMinor: number;

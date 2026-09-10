@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { assertWanxHostedEditPrompt } from '../services/ai-image-edit-provider-contract.js';
 import {
   AI_MEDIA_WORKFLOW_MODEL,
   AI_MEDIA_WORKFLOW_PROVIDER,
@@ -685,6 +686,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
   }
 
   async createImageEdit(input: CreateAiImageEditWorkflowInput) {
+    assertWanxHostedEditPrompt(input);
     const execution = normalizeAiMediaProviderExecutionConfig(input, {
       provider: AI_IMAGE_EDIT_PROVIDER,
       model: AI_IMAGE_EDIT_MODEL,

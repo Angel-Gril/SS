@@ -231,13 +231,16 @@ export function createAiImageWanx21EditSandboxFetchGuard(input: {
       ) {
         throw new Error('The Wanx edit sandbox requires authorization, JSON and the async header');
       }
+      // Claim synchronously before body, DNS or approval checks can yield. A
+      // rejected pre-dispatch attempt cannot reopen this one-use guard; the
+      // counter below records only an actual network dispatch.
+      submitClaimed = true;
       parseExactRequest(await requestBody(request, init), input.contract);
       const safeUrl = await input.validateUrl(rawUrl);
       if (new URL(safeUrl).toString() !== endpoints.submitEndpoint) {
         throw new Error('The Wanx edit sandbox permits only its exact image-synthesis endpoint');
       }
       await input.beforeCreate();
-      submitClaimed = true;
       createRequests = 1;
       let response: Response;
       try {

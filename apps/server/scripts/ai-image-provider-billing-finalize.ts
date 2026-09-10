@@ -73,10 +73,7 @@ function safeFailureCode(error: unknown) {
     || 'SANDBOX_BILLING_FAILED';
 }
 
-export async function runAiImageProviderBillingFinalize(
-  options: AiImageProviderBillingFinalizeOptions = {},
-) {
-  const environment = options.environment || process.env;
+function assertOfflineEnvironment(environment: NodeJS.ProcessEnv) {
   if (environment.NODE_ENV !== 'sandbox') {
     throw Object.assign(new Error('NODE_ENV must equal sandbox for billing finalization'), {
       code: 'SANDBOX_BILLING_CONFIG_INVALID',
@@ -90,6 +87,13 @@ export async function runAiImageProviderBillingFinalize(
       { code: 'SANDBOX_BILLING_UNSAFE_ENV' },
     );
   }
+}
+
+export async function runAiImageProviderBillingFinalize(
+  options: AiImageProviderBillingFinalizeOptions = {},
+) {
+  const environment = options.environment || process.env;
+  assertOfflineEnvironment(environment);
   const repositoryRoot = options.repositoryRoot
     || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
@@ -135,18 +139,68 @@ export async function runAiImageProviderBillingFinalize(
   return result;
 }
 
+export async function runAiImageProviderBillingInspect(
+  options: Omit<AiImageProviderBillingFinalizeOptions, 'finalizeBilling'> = {},
+) {
+  const environment = options.environment || process.env;
+  assertOfflineEnvironment(environment);
+  const unsafeNames = new Set([
+    'ALIBABA_CLOUD_ACCESS_KEY_ID', 'ALIBABA_CLOUD_ACCESS_KEY_SECRET', 'ALIBABA_CLOUD_SECURITY_TOKEN',
+    'ALIYUN_ACCESS_KEY_ID', 'ALIYUN_ACCESS_KEY_SECRET', 'ALIYUN_SECURITY_TOKEN', 'COOKIE',
+  ]);
+  if (Object.entries(environment).some(([name, value]) => unsafeNames.has(name.toUpperCase()) && String(value || '').trim())) {
+    throw Object.assign(new Error('Native bill inspection must not receive cloud credentials'), { code: 'SANDBOX_BILLING_UNSAFE_ENV' });
+  }
+  for (const name of ['AI_IMAGE_SANDBOX_OPERATION_ID', 'AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_PATH', 'AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_SHA256', 'AI_IMAGE_SANDBOX_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_APPROVAL_SHA256']) {
+    if (String(environment[name] || '').trim()) {
+      throw Object.assign(new Error('Observation and finalization inputs must not be mixed'), { code: 'SANDBOX_BILLING_CONFIG_INVALID' });
+    }
+  }
+  const repositoryRoot = options.repositoryRoot || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const revision = requiredEnvironment('AI_IMAGE_SANDBOX_ADAPTER_REVISION', environment).toLowerCase();
+  if (!AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(revision)) {
+    throw Object.assign(new Error('Inspection requires a full Git revision'), { code: 'SANDBOX_BILLING_CONFIG_INVALID' });
+  }
+  const resolveRevision = options.resolveRevision || resolveAiImageSandboxRepositoryRevision;
+  const trackedPaths = [...BILLING_FINALIZER_TRACKED_PATHS, 'apps/server/src/services/ai-image-alibaba-billing-observation.ts'];
+  const assertRevision = async () => {
+    if (await resolveRevision(repositoryRoot, undefined, trackedPaths, options.requireGitCheckout) !== revision) {
+      throw Object.assign(new Error('Inspection source revision changed'), { code: 'SANDBOX_ADAPTER_REVISION_MISMATCH' });
+    }
+  };
+  await assertRevision();
+  const { inspectAiImageAlibabaBillingObservation } = await import('../src/services/ai-image-alibaba-billing-observation.js');
+  const assessment = await inspectAiImageAlibabaBillingObservation({
+    repositoryRoot,
+    evidenceRoot: options.evidenceRoot || requiredEnvironment('AI_IMAGE_SANDBOX_EVIDENCE_ROOT', environment),
+    observationPath: requiredEnvironment('AI_IMAGE_SANDBOX_BILLING_OBSERVATION_PATH', environment),
+    observationSha256: requiredSha256('AI_IMAGE_SANDBOX_BILLING_OBSERVATION_SHA256', environment),
+    expectedAccountUidSha256: requiredSha256('AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256', environment),
+    now: options.now,
+  });
+  await assertRevision();
+  process.stdout.write(`${JSON.stringify({ ...assessment, inspectionAdapterRevision: revision }, null, 2)}\n`);
+  return assessment;
+}
+
 const isDirectRun = process.argv[1]
   ? resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
 if (isDirectRun) {
-  runAiImageProviderBillingFinalize({ requireGitCheckout: true }).catch((error) => {
+  const args = process.argv.slice(2);
+  const run = args.length === 0 ? runAiImageProviderBillingFinalize
+    : args.length === 1 && args[0] === '--inspect-alibaba' ? runAiImageProviderBillingInspect
+      : async () => { throw Object.assign(new Error('Unsupported billing command argument'), { code: 'SANDBOX_BILLING_CONFIG_INVALID' }); };
+  run({ requireGitCheckout: true }).catch((error) => {
     process.stderr.write(`${JSON.stringify({
       schemaVersion: 1,
       event: 'SANDBOX_BILLING_COMMAND_FAILED',
       failureCode: safeFailureCode(error),
     })}\n`);
-    process.stderr.write('AI image sandbox billing finalization failed.\n');
+    process.stderr.write(args.length === 1 && args[0] === '--inspect-alibaba'
+      ? 'Native Alibaba billing inspection failed.\n'
+      : 'AI image sandbox billing finalization failed.\n');
     process.exitCode = 1;
   });
 }

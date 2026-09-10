@@ -408,6 +408,8 @@ describe('AI image provider adapters', () => {
       width: 1024, height: 1536, images: [{ buffer: png, mimeType: 'image/png' }],
     })).rejects.toBe(fenceError);
 
+    expect(fenceError).toMatchObject({ providerSubmissionRejected: true });
+    expect(fenceError).not.toHaveProperty('providerSubmissionUncertain');
     expect(beforeProviderDispatch).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
   });

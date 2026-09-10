@@ -1,6 +1,32 @@
 import { createHash } from 'node:crypto';
-import type { AiImageAssetInput, AiImageJobStatus } from './ai-image-jobs.js';
+import type { AiImageAssetInput, AiImageJobRecord, AiImageJobStatus } from './ai-image-jobs.js';
 import type { AiMediaOperation } from './ai-image-provider-capabilities.js';
+import {
+  parseAiImageProviderRuntimeContract,
+  requiresAiImageProviderCredentialRevision,
+} from './ai-image-provider-runtime-contract.js';
+
+export function isWanxEditReconciliationOperation(input: {
+  provider: string; model: string; operation?: string;
+}): boolean {
+  return requiresAiImageProviderCredentialRevision(input.provider, input.model)
+    && (input.operation === 'FULL_EDIT' || input.operation === 'INPAINT');
+}
+
+export function hasWanxEditReconciliationContract(job: Pick<AiImageJobRecord,
+  'provider' | 'model' | 'operation' | 'operationConfig' | 'width' | 'height' | 'requestedImageCount' | 'estimatedCostCents'
+>): boolean {
+  if (!isWanxEditReconciliationOperation(job)) return false;
+  try {
+    const runtime = parseAiImageProviderRuntimeContract(job.operationConfig?.providerRuntime);
+    return runtime.provider === job.provider && runtime.model === job.model
+      && runtime.width === job.width && runtime.height === job.height
+      && runtime.imageCount === 1 && job.requestedImageCount === 1
+      && runtime.maximumCostCents === job.estimatedCostCents;
+  } catch {
+    return false;
+  }
+}
 
 export type AiProviderReconciliationStatus =
   | 'NOT_REQUIRED'
@@ -16,6 +42,9 @@ export type AiProviderReconciliationStatus =
 export interface AiProviderReconciliationClaim {
   jobId: string;
   workflowId: string | null;
+  workflowAttempt?: number | null;
+  attemptCount?: number;
+  requestFingerprint?: string | null;
   ownerUserId: string;
   actorUserId: string;
   operation: AiMediaOperation;
@@ -86,11 +115,25 @@ export interface AiProviderReconciliationRepository {
     errorMessage: string;
     billingDisposition: 'UNKNOWN' | 'NO_CHARGE';
   }): Promise<void>;
+  getClaimedEditJob?(claim: AiProviderReconciliationClaim): Promise<AiImageJobRecord>;
+  recordRecoveredEditRaw?(input: ClaimMutationInput & {
+    asset: AiImageAssetInput;
+  }): Promise<{ id: string }>;
+  completeRecoveredEdit?(input: ClaimMutationInput & {
+    providerStatus: string;
+    actualCostCents: number;
+    rawAssetId: string;
+    finalAsset: AiImageAssetInput | null;
+  }): Promise<void>;
 }
 
 export interface AiProviderReconciliationServiceOptions {
   repository: AiProviderReconciliationRepository;
   lookupProviderTask(claim: AiProviderReconciliationClaim): Promise<AiProviderTaskLookupResult>;
+  recoverEditOutput?(
+    claim: AiProviderReconciliationClaim,
+    result: Extract<AiProviderTaskLookupResult, { status: 'SUCCEEDED' }>,
+  ): Promise<void>;
   uploadBuffer(
     buffer: Buffer,
     filename: string,
@@ -216,7 +259,9 @@ export function createAiProviderReconciliationService(options: AiProviderReconci
           if (persisted) counts.manualReview += 1;
           continue;
         }
-        if (claim.operation !== 'IMAGE_TRANSLATE' || !claim.providerJobId.trim()) {
+        const editRecovery = isWanxEditReconciliationOperation(claim);
+        if ((claim.operation !== 'IMAGE_TRANSLATE' && (!editRecovery || !options.recoverEditOutput))
+          || !claim.providerJobId.trim()) {
           const persisted = await persistClaimMutation(() => options.repository.markManualReview({
             claim,
             errorCode: 'PROVIDER_LOOKUP_UNSUPPORTED',
@@ -260,6 +305,11 @@ export function createAiProviderReconciliationService(options: AiProviderReconci
             continue;
           }
 
+          if (editRecovery) {
+            await options.recoverEditOutput!(claim, result);
+            counts.recovered += 1;
+            continue;
+          }
           const image = normalizedResultImage(result.image);
           const sha256 = createHash('sha256').update(image.buffer).digest('hex');
           const filename = image.filename

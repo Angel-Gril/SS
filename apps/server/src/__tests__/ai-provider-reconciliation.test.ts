@@ -44,6 +44,25 @@ function repository(claims: AiProviderReconciliationClaim[] = [claim()]) {
 }
 
 describe('AI Provider result reconciliation', () => {
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('routes Wanx %s to the edit artifact owner, never the translation persistence path', async (operation) => {
+    const accepted = claim({ operation, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', estimatedCostCents: 7 });
+    const repo = repository([accepted]);
+    const recovered = {
+      status: 'SUCCEEDED' as const, providerJobId: accepted.providerJobId, providerStatus: 'SUCCEEDED',
+      image: { buffer: PNG, mimeType: 'image/png' }, actualCostCents: 7,
+    };
+    const recoverEditOutput = vi.fn(async () => undefined);
+    const uploadBuffer = vi.fn();
+    const service = createAiProviderReconciliationService({
+      repository: repo, lookupProviderTask: async () => recovered, recoverEditOutput,
+      uploadBuffer, now: () => NOW,
+    });
+    expect(await service.runTick({ workerId: 'edit-recovery' })).toMatchObject({ claimed: 1, recovered: 1, manualReview: 0 });
+    expect(recoverEditOutput).toHaveBeenCalledWith(accepted, recovered);
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(repo.completeRecovered).not.toHaveBeenCalled();
+  });
+
   it('recovers one accepted task without exposing a submission callback', async () => {
     const repo = repository();
     const lookupProviderTask = vi.fn(async (accepted: AiProviderReconciliationClaim) => ({

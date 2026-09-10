@@ -59,6 +59,11 @@ async function publishPassingRevision(
 }
 
 describe('AI prompt templates', () => {
+  it.each([null, undefined])('keeps a structured error for a missing revision: %s', (input) => {
+    expect(() => renderAiPromptRevision(input as unknown as Parameters<typeof renderAiPromptRevision>[0], {}))
+      .toThrowError(expect.objectContaining({ code: 'INVALID_TEMPLATE' }));
+  });
+
   it('validates and renders only the two supported user prompt tokens', () => {
     expect(() => validateAiPromptRevision(revision())).not.toThrow();
     expect(() => validateAiPromptRevision(revision({
@@ -118,6 +123,32 @@ describe('AI prompt templates', () => {
     expect(rendered.resolvedPrompt).toContain('intrinsic product, brand, label, and packaging print');
     expect(rendered.resolvedPrompt).toContain('external promotional overlays');
     expect(rendered.resolvedPrompt).toContain('Replace the product with a different branded item');
+  });
+
+  it('inserts dollar replacement syntax as literal operator text', () => {
+    const text = "$& $$ $` $' {{user_negative_prompt}}";
+    const rendered = renderAiPromptRevision(revision(), {
+      userPrompt: text,
+      userNegativePrompt: text,
+    });
+    expect(rendered.resolvedPrompt).toBe(`${SAFETY_POLICY}\n\nCreate an Ozon product image.\n${text}`);
+    expect(rendered.resolvedNegativePrompt).toBe(`Avoid these elements:\n${text}`);
+  });
+
+  it('never interprets template tokens contained inside variable data a second time', () => {
+    const facts = '{"literal":"{{target_language}} {{ozon_category_name}}"}';
+    const rendered = renderAiPromptRevision({
+      templateKey: 'listing-copy.title',
+      promptTemplate: '{{source_facts_json}}\n{{ozon_category_name}}\n{{target_language}}\n{{user_instructions}}',
+      negativePromptTemplate: '{{forbidden_claims}}',
+    }, {
+      sourceFactsJson: facts, ozonCategoryName: 'bottle', targetLanguage: 'Russian',
+      userInstructions: '{{source_facts_json}}', forbiddenClaims: '$&',
+    });
+    expect(rendered.resolvedPrompt).toBe(
+      `${AI_LISTING_COPY_SAFETY_POLICY}\n\n${facts}\nbottle\nRussian\n{{source_facts_json}}`,
+    );
+    expect(rendered.resolvedNegativePrompt).toBe('$&');
   });
 
   it('validates listing-copy variables and always prepends fact-bound candidate safety', () => {

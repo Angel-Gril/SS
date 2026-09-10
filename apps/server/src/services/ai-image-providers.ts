@@ -419,19 +419,25 @@ export async function requestJson(
   init: RequestInit,
   timeoutMs: number,
   maxJsonBytes = MAX_JSON_BYTES,
+  beforeProviderDispatch?: BeforeAiImageProviderDispatch,
 ) {
-  return fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
-    if (!response.ok) {
-      let body: any = null;
-      try {
-        body = await readJson(response, maxJsonBytes);
-      } catch {
-        // HTTP status remains authoritative when an error body is malformed or oversized.
+  try {
+    return await fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
+      if (!response.ok) {
+        let body: any = null;
+        try {
+          body = await readJson(response, maxJsonBytes);
+        } catch {
+          // HTTP status remains authoritative when an error body is malformed or oversized.
+        }
+        throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
       }
-      throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
-    }
-    return readJson(response, maxJsonBytes);
-  });
+      return readJson(response, maxJsonBytes);
+    }, beforeProviderDispatch);
+  } catch (error) {
+    if (error instanceof BeforeProviderDispatchError) throw error.original;
+    throw error;
+  }
 }
 
 function extensionForMime(mimeType: string) {
@@ -815,7 +821,9 @@ function createOpenAiImageEditProviderWithDialect(
           options.beforeProviderDispatch,
         );
       } catch (error) {
-        if (error instanceof BeforeProviderDispatchError) throw error.original;
+        if (error instanceof BeforeProviderDispatchError) {
+          throw withProviderSubmissionRejected(error.original);
+        }
         if (error && typeof error === 'object' && 'providerJobId' in error) throw error;
         if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
         throw withProviderSubmissionUncertain(error);

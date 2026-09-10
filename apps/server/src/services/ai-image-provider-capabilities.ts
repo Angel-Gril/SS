@@ -1,4 +1,5 @@
 import { aiImageProviderEndpointSha256 } from './ai-image-provider-runtime-contract.js';
+import { AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
 
 export type AiMediaOperation =
   | 'TEXT_TO_IMAGE'
@@ -52,6 +53,12 @@ export class AiMediaCapabilityError extends Error {
 }
 
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
+  {
+    provider: 'dashscope-wanx', model: AI_IMAGE_WANX21_EDIT_MODEL,
+    operations: ['FULL_EDIT', 'INPAINT'], maxReferences: 1, supportsMask: true,
+    inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'adapter-characterized',
+    evidence: 'bounded Wanx hosted edits; exact hosted endpoint, prompt profile, quality and billing acceptance are not promoted from legacy sandbox evidence',
+  },
   {
     provider: AI_IMAGE_EDIT_PROVIDER,
     model: AI_IMAGE_EDIT_MODEL,
@@ -221,6 +228,15 @@ export function supportsAiMediaOperation(
   maskCountOrHasMask: number | boolean = 0,
 ): boolean {
   const capability = resolveAiImageProviderCapability(provider, model);
+  return capabilitySupportsOperation(capability, operation, inputCount, maskCountOrHasMask);
+}
+
+function capabilitySupportsOperation(
+  capability: AiImageProviderCapability | null,
+  operation: AiMediaOperation,
+  inputCount: number,
+  maskCountOrHasMask: number | boolean,
+): boolean {
   if (!capability || !capability.operations.includes(operation)) return false;
   if (!Number.isInteger(inputCount) || inputCount < 0) return false;
   const maskCount = typeof maskCountOrHasMask === 'boolean'
@@ -241,9 +257,9 @@ export function assertAiMediaCapability(input: {
   inputCount?: number;
   maskCount?: number;
   hasMask?: boolean;
-}) {
-  const capability = resolveAiImageProviderCapability(input.provider, input.model);
-  if (!capability) {
+}, resolver = resolveAiImageProviderCapability) {
+  const capability = resolver(input.provider, input.model);
+  if (!capability || capability.provider !== input.provider || (capability.model !== input.model && capability.model !== '*')) {
     throw new AiMediaCapabilityError(
       'UNSUPPORTED_PROVIDER_MODEL',
       `AI provider/model capability is not registered: ${input.provider}/${input.model}`,
@@ -276,9 +292,8 @@ export function assertAiMediaCapability(input: {
     );
   }
   if (
-    !supportsAiMediaOperation(
-      input.provider,
-      input.model,
+    !capabilitySupportsOperation(
+      capability,
       input.operation,
       inputCount,
       maskCount,

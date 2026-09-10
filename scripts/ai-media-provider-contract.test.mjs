@@ -84,6 +84,31 @@ for (const [label, capability] of [
 }
 
 const root = process.cwd();
+const wanxCapability = {
+  provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+  operations: ['FULL_EDIT', 'INPAINT'], inputTransport: 'base64', resultMode: 'async',
+  maxReferences: 1, supportsMask: true, evidenceLevel: 'adapter-characterized',
+};
+const reviewedWanx = {
+  operations: new Set(['FULL_EDIT', 'INPAINT']), inputTransport: 'base64', resultMode: 'async',
+  maxReferences: 1, supportsMask: true, sandboxEvidence: null, allowTextToImage: false,
+};
+assert.equal(reviewedPaidDerivedCapabilityMatches(wanxCapability, reviewedWanx), true);
+for (const [label, changed] of [
+  ['text-to-image inheritance', { operations: ['TEXT_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] }],
+  ['unreviewed image-to-image', { operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] }],
+  ['wrong transport', { inputTransport: 'multipart' }],
+  ['wrong result mode', { resultMode: 'sync' }],
+  ['extra reference', { maxReferences: 2 }],
+  ['missing mask support', { supportsMask: false }],
+  ['unreviewed paid promotion', { evidenceLevel: 'sandbox-verified', sandboxEvidence: [{
+    endpointSha256: 'a'.repeat(64), operation: 'FULL_EDIT', inputTransport: 'base64', resultMode: 'async',
+  }] }],
+]) {
+  assert.equal(reviewedPaidDerivedCapabilityMatches({ ...wanxCapability, ...changed }, reviewedWanx), false,
+    `Wanx characterized contract must reject ${label}`);
+}
+assert.equal(reviewedPaidDerivedCapabilityMatches(wanxCapability, undefined), false);
 const script = path.join(root, 'scripts', 'sandbox', 'ai-media-provider-contract.mjs');
 const output = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
 assert.match(output, /PASS AI media provider foundation contract/);

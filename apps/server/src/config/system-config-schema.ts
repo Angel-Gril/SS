@@ -1267,20 +1267,42 @@ export async function getStrictConfig<K extends SystemConfigKey>(key: K): Promis
   return schema.parse(coerceConfigValue(key, decryptConfigValueStrict(key, record.value))) as SystemConfigValue<K>;
 }
 
-/**
- * Reads a security-sensitive group with one database statement so callers do
- * not compose a policy from rows observed at different instants.
- */
+export interface SystemConfigRecordRevision {
+  id: string;
+  revision: number;
+  updatedAt: Date;
+}
+
+type ConfigSnapshot<Keys extends readonly SystemConfigKey[]> = {
+  [Key in Keys[number]]: SystemConfigValue<Key>;
+};
+type RevisionedConfigSnapshot<Keys extends readonly SystemConfigKey[]> = {
+  values: ConfigSnapshot<Keys>;
+  revisions: { [Key in Keys[number]]: SystemConfigRecordRevision | null };
+};
+
+/** Read values and optional non-secret revision metadata from one database statement. */
+export function getStrictConfigSnapshot<const Keys extends readonly SystemConfigKey[]>(
+  keys: Keys,
+): Promise<ConfigSnapshot<Keys>>;
+export function getStrictConfigSnapshot<const Keys extends readonly SystemConfigKey[]>(
+  keys: Keys,
+  options: { includeRevisions: true },
+): Promise<RevisionedConfigSnapshot<Keys>>;
 export async function getStrictConfigSnapshot<const Keys extends readonly SystemConfigKey[]>(
   keys: Keys,
-): Promise<{ [Key in Keys[number]]: SystemConfigValue<Key> }> {
+  options?: { includeRevisions: true },
+): Promise<ConfigSnapshot<Keys> | RevisionedConfigSnapshot<Keys>> {
   const uniqueKeys = [...new Set<SystemConfigKey>(keys)];
   if (!uniqueKeys.length || uniqueKeys.length !== keys.length) {
     throw new Error('[SystemConfig] strict snapshot keys must be unique and non-empty');
   }
   const records = await prisma.systemConfig.findMany({
     where: { key: { in: uniqueKeys } },
-    select: { key: true, value: true },
+    select: {
+      key: true, value: true,
+      ...(options?.includeRevisions ? { id: true, revision: true, updatedAt: true } : {}),
+    },
   });
   const values = new Map(records.map((record) => [record.key, record.value]));
   const snapshot: Partial<Record<SystemConfigKey, unknown>> = {};
@@ -1291,7 +1313,14 @@ export async function getStrictConfigSnapshot<const Keys extends readonly System
       ? schema.parse(undefined)
       : schema.parse(coerceConfigValue(key, decryptConfigValueStrict(key, raw)));
   }
-  return snapshot as { [Key in Keys[number]]: SystemConfigValue<Key> };
+  const valuesSnapshot = snapshot as ConfigSnapshot<Keys>;
+  if (!options?.includeRevisions) return valuesSnapshot;
+  const recordsByKey = new Map(records.map((record) => [record.key, record]));
+  const revisions = Object.fromEntries(uniqueKeys.map((key) => {
+    const record = recordsByKey.get(key);
+    return [key, record ? { id: record.id, revision: record.revision, updatedAt: record.updatedAt } : null];
+  })) as RevisionedConfigSnapshot<Keys>['revisions'];
+  return { values: valuesSnapshot, revisions };
 }
 
 export async function setConfig<K extends SystemConfigKey>(
@@ -1311,8 +1340,10 @@ export async function setConfig<K extends SystemConfigKey>(
       label: meta.label,
       group: meta.group,
       description: meta.description,
+      ...(key === 'ai_image_api_key' ? { revision: 1 } : {}),
     },
-    update: { value: serialized },
+    // Image jobs bind this revision; same-millisecond writes must also invalidate the old identity.
+    update: { value: serialized, ...(key === 'ai_image_api_key' ? { revision: { increment: 1 } } : {}) },
   });
 }
 

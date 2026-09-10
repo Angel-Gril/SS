@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 function transactionClient(job: Record<string, unknown>) {
   const updateMany = vi.fn(async () => ({ count: 1 }));
@@ -18,6 +19,41 @@ function transactionClient(job: Record<string, unknown>) {
 }
 
 describe('AI Provider reconciliation initialization', () => {
+  it('keeps a legacy accepted Wanx task without a credential revision in manual review', async () => {
+    const { repository, updateMany } = transactionClient({
+      id: 'job-legacy', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'RUNNING',
+      operation: 'FULL_EDIT', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'legacy-task',
+      operationConfig: { providerRuntime: { contractVersion: 'ai-image-provider-runtime/v1' } },
+      providerDispatchedAt: new Date(), workflowId: null, attemptCount: 1,
+      providerReconciliationStatus: 'NOT_REQUIRED', providerReconciliationRevision: 0,
+    });
+    await repository.markFailed('job-legacy', { attemptCount: 1, errorCode: 'PROVIDER_TIMEOUT', errorMessage: 'interrupted' });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      status: 'FAILED', providerReconciliationStatus: 'MANUAL_REVIEW', providerReconciliationDeadlineAt: null,
+    }) }));
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('queues an accepted revision-bound Wanx %s without starting another attempt', async (operation) => {
+    const dispatchedAt = new Date('2026-09-09T10:00:00.000Z');
+    const runtime = createAiImageProviderRuntimeContract({
+      provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+      costPerImageCents: 7,
+      credentialRevision: { recordId: 'synthetic-record', revision: 2, updatedAt: dispatchedAt.toISOString() },
+    }, { count: 1, width: 1024, height: 1024 });
+    const { repository, updateMany } = transactionClient({
+      id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'RUNNING',
+      operation, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'wanx-task-1',
+      operationConfig: { providerRuntime: runtime }, width: 1024, height: 1024, requestedImageCount: 1,
+      estimatedCostCents: 7, providerDispatchedAt: dispatchedAt, workflowId: null, attemptCount: 1,
+      providerReconciliationStatus: 'NOT_REQUIRED', providerReconciliationRevision: 0,
+    });
+    await repository.markFailed('job-1', { attemptCount: 1, errorCode: 'PROVIDER_TIMEOUT', errorMessage: 'interrupted' });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      status: 'FAILED', providerReconciliationStatus: 'PENDING', providerReconciliationRevision: 1,
+      providerReconciliationDeadlineAt: new Date('2026-09-10T10:00:00.000Z'),
+    }) }));
+  });
+
   it('moves a submission with no recoverable task identity to manual review', async () => {
     const { repository, updateMany } = transactionClient({
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'RUNNING',

@@ -116,8 +116,8 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
-type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL';
-const SANDBOX_MODES = new Set<AiImageSandboxMode>(['SUBMIT', 'VERIFY_APPROVAL']);
+type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL' | 'TRIAL_SUBMIT' | 'TRIAL_VERIFY_APPROVAL';
+const SANDBOX_MODES = new Set<AiImageSandboxMode>(['SUBMIT', 'VERIFY_APPROVAL', 'TRIAL_SUBMIT', 'TRIAL_VERIFY_APPROVAL']);
 const REQUEST_PROFILES = Object.freeze({
   OPENAI_SQUARE_SINGLE_V1: Object.freeze({
     width: 1024,
@@ -567,7 +567,7 @@ async function resolvePublicDns(hostname: string) {
 export async function runAiImageProviderSingleSubmit(
   options: AiImageProviderSingleSubmitOptions = {},
 ) {
-  const environment = options.environment || process.env;
+  let environment = options.environment || process.env;
   const repositoryRoot = options.repositoryRoot
     || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
   if (environment.NODE_ENV !== 'sandbox') {
@@ -579,7 +579,11 @@ export async function runAiImageProviderSingleSubmit(
       code: 'SANDBOX_MODE_INVALID',
     });
   }
-  const mode = modeValue as AiImageSandboxMode;
+  const isTrial = modeValue === 'TRIAL_SUBMIT' || modeValue === 'TRIAL_VERIFY_APPROVAL';
+  const mode = modeValue === 'VERIFY_APPROVAL' || modeValue === 'TRIAL_VERIFY_APPROVAL' ? 'VERIFY_APPROVAL' : 'SUBMIT';
+  if (!isTrial && ['AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256'].some((name) => optionalEnvironment(name, environment))) {
+    throw Object.assign(new Error('Trial bindings require an explicit trial mode'), { code: 'WANX_TRIAL_MODE_REQUIRED' });
+  }
   if (mode === 'VERIFY_APPROVAL' && (
     optionalEnvironment('AI_IMAGE_SANDBOX_CONFIRM', environment)
     || optionalEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment)
@@ -601,12 +605,60 @@ export async function runAiImageProviderSingleSubmit(
     }
   }
 
+  const trialModule = isTrial ? await import('../src/services/ai-image-wanx-trial-execution.js') : null;
+  let trial: Awaited<ReturnType<NonNullable<typeof trialModule>['loadAiImageWanxTrialExecution']>> | null = null;
+  if (trialModule) {
+    if (options.outputDirectory) throw Object.assign(new Error('Trial output must use its approved private evidence root'), { code: 'WANX_TRIAL_ROOT_OVERRIDE_FORBIDDEN' });
+    const conflicting = [
+      'AI_IMAGE_SANDBOX_BASE_URL', 'AI_IMAGE_SANDBOX_MODEL', 'AI_IMAGE_SANDBOX_OPERATION_ID',
+      'AI_IMAGE_SANDBOX_EXPECTED_HOST', 'AI_IMAGE_SANDBOX_REQUEST_PROFILE',
+      'AI_IMAGE_SANDBOX_SOURCE_PATH', 'AI_IMAGE_SANDBOX_SOURCE_SHA256', 'AI_IMAGE_SANDBOX_MASK_PATH', 'AI_IMAGE_SANDBOX_MASK_SHA256',
+      'AI_IMAGE_SANDBOX_CURRENCY', 'AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT', 'AI_IMAGE_SANDBOX_MAX_COST_AMOUNT',
+      'AI_IMAGE_SANDBOX_COST_SCALE', 'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', 'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
+    ];
+    if (conflicting.some((name) => optionalEnvironment(name, environment))) {
+      throw Object.assign(new Error('Trial request and costs must come from the frozen manifest'), { code: 'WANX_TRIAL_REQUEST_OVERRIDE_FORBIDDEN' });
+    }
+    const expected = {
+      adapterRevision: requiredAdapterRevision(environment),
+      roundId: requiredEnvironment('AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', environment),
+      providerAccountUidSha256: requiredSha256('AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256', environment),
+      credentialRevision: requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment),
+    };
+    const assertRevision = async () => {
+      const actual = await resolveAiImageSandboxRepositoryRevision(repositoryRoot, undefined,
+        [...SINGLE_SUBMIT_TRACKED_PATHS, ...trialModule.AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS], true);
+      if (actual !== expected.adapterRevision) throw Object.assign(new Error('Trial execution code revision changed'), { code: 'SANDBOX_ADAPTER_REVISION_MISMATCH' });
+    };
+    await assertRevision();
+    trial = await trialModule.loadAiImageWanxTrialExecution({
+      repositoryRoot, evidenceRoot: requiredEnvironment('AI_IMAGE_SANDBOX_EVIDENCE_ROOT', environment),
+      manifestSha256: requiredSha256('AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256', environment),
+      operation: requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION', environment), expected, assertRevision,
+    });
+    const selected = trial.selected;
+    environment = {
+      ...environment,
+      AI_IMAGE_SANDBOX_BASE_URL: trial.manifest.request.apiBase,
+      AI_IMAGE_SANDBOX_MODEL: trial.manifest.request.model,
+      AI_IMAGE_SANDBOX_OPERATION_ID: selected.operationId,
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: trial.binding.requestProfile,
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: new URL(trial.manifest.request.apiBase).hostname,
+      AI_IMAGE_SANDBOX_SOURCE_PATH: trial.sourcePath, AI_IMAGE_SANDBOX_SOURCE_SHA256: selected.source.sha256,
+      AI_IMAGE_SANDBOX_MASK_PATH: trial.maskPath || '', AI_IMAGE_SANDBOX_MASK_SHA256: selected.mask?.sha256 || '',
+      AI_IMAGE_SANDBOX_CURRENCY: selected.quotedCost.currency,
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: String(selected.quotedCost.amount),
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: String(selected.maximumCost.amount),
+      AI_IMAGE_SANDBOX_COST_SCALE: String(selected.quotedCost.scale),
+    };
+  }
+
   const baseUrl = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
   const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL', environment);
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
   const credentialRevision = requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment);
   const adapterRevision = requiredAdapterRevision(environment);
-  const repositoryRevision = await resolveAiImageSandboxRepositoryRevision(
+  const repositoryRevision = trial ? trial.manifest.request.adapterRevision : await resolveAiImageSandboxRepositoryRevision(
     repositoryRoot,
     undefined,
     SINGLE_SUBMIT_TRACKED_PATHS,
@@ -792,7 +844,7 @@ export async function runAiImageProviderSingleSubmit(
   const operationEndpoint = new URL(preliminaryEndpoint).toString();
   const apiBaseSha256 = sha256(apiBase);
   const operationEndpointSha256 = sha256(operationEndpoint);
-  const prompt = fixedPrompt(operation, profile);
+  const prompt = trial ? trial.selected.frozenPrompt.resolvedPrompt : fixedPrompt(operation, profile);
   const sourceSha256 = source ? [source.sha256] : [];
   const maskSha256 = mask?.sha256 || null;
   const approvalEvidence = await loadAiImageSandboxApproval({
@@ -811,6 +863,7 @@ export async function runAiImageProviderSingleSubmit(
       adapterRevision,
       sourceSha256,
       maskSha256,
+      ...(trial ? { trialBinding: trial.trialBinding } : {}),
       ...(costs.kind === 'EXACT'
         ? { quotedCost: costs.quotedCost, maximumCost: costs.maximumCost }
         : {
@@ -820,9 +873,10 @@ export async function runAiImageProviderSingleSubmit(
     },
   });
   if (mode === 'VERIFY_APPROVAL') {
+    await trial?.assertCurrent();
     assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
     const verification = {
-      schemaVersion: costs.kind === 'EXACT' ? 3 : 2,
+      schemaVersion: trial ? 4 : costs.kind === 'EXACT' ? 3 : 2,
       event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
       operationId,
       operation,
@@ -843,6 +897,7 @@ export async function runAiImageProviderSingleSubmit(
             maximumCostCents: Number(costs.maximumCostCentsValue),
           }),
       approvalEvidence,
+      ...(trial ? { trialBinding: trial.trialBinding, executionScope: 'ISOLATED_WANX_TRIAL' } : {}),
     };
     process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
     return verification;
@@ -862,7 +917,7 @@ export async function runAiImageProviderSingleSubmit(
   };
   await validateAiImageProviderUrl(apiBase, dnsResolver);
   assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
-  const outputDirectory = options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
+  const outputDirectory = trial ? trial.evidenceRoot : options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
   await ensurePrivateDirectory(outputDirectory);
   const requestContract = {
     operation,
@@ -899,6 +954,13 @@ export async function runAiImageProviderSingleSubmit(
         }),
     now: currentTime(options),
   });
+  const trialClaim = trial && trialModule ? await trialModule.claimAiImageWanxTrialOperation({
+    execution: trial, approval: approvalEvidence, requestFingerprint: claim.intent.requestFingerprint,
+    now: () => currentTime(options),
+  }) : null;
+  const writeTrialEvidence = async (report: Record<string, unknown>) => trial && trialClaim && trialModule
+    ? trialModule.writeAiImageWanxTrialExecutionEvidence({ execution: trial, claim: trialClaim, report })
+    : null;
   const startedAtMs = Math.max(Date.now(), Date.parse(claim.intent.createdAt));
   const startedAt = new Date(startedAtMs).toISOString();
 
@@ -915,10 +977,10 @@ export async function runAiImageProviderSingleSubmit(
   }));
   const guardedTransport = {
     validateUrl: (url: string) => validateAiImageProviderUrl(url, dnsResolver),
-    beforeCreate: () => assertAiImageSandboxApprovalCurrent(
-      approvalEvidence,
-      currentTime(options),
-    ),
+    beforeCreate: async () => {
+      await trialClaim?.assertCurrent();
+      assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
+    },
     fetch: options.fetch || ((input, init) => undiciFetch(input as any, {
       ...(init as any),
       dispatcher: pinnedDispatcher,
@@ -1160,7 +1222,10 @@ export async function runAiImageProviderSingleSubmit(
   };
   await atomicWritePrivateJson(reportPath, report);
   reportWritten = true;
-  process.stdout.write(`${JSON.stringify({ ...report, reportPath }, null, 2)}\n`);
+  const trialEvidence = await writeTrialEvidence(report);
+  process.stdout.write(`${JSON.stringify({ ...report, reportPath,
+    ...(trialEvidence ? { executionScope: 'ISOLATED_WANX_TRIAL', trialEvidenceSha256: trialEvidence.sha256 } : {}),
+  }, null, 2)}\n`);
   return report;
   } catch (error) {
     if (wanxFetchGuard && !wanxAsyncEvidenceWritten) {
@@ -1217,6 +1282,12 @@ export async function runAiImageProviderSingleSubmit(
         intentPath: claim.intentPath,
       };
       await atomicWritePrivateJson(reportPath, report);
+      if (trial) {
+        try { await writeTrialEvidence(report); }
+        catch {
+          process.stderr.write(`${JSON.stringify({ schemaVersion: 1, event: 'SANDBOX_WANX_TRIAL_EVIDENCE_WRITE_FAILED', operationId })}\n`);
+        }
+      }
       if (isProviderHttpFailureStatus(evidence.providerHttpStatus)) {
         const diagnostic = {
           schemaVersion: 1,
@@ -1253,13 +1324,20 @@ const isDirectRun = process.argv[1]
   : false;
 
 if (isDirectRun) {
-  const directEnvironment = process.argv.slice(2).includes('--verify-approval')
-    ? { ...process.env, AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL' }
-    : process.env;
-  runAiImageProviderSingleSubmit({
-    environment: directEnvironment,
-    requireGitCheckout: true,
-  }).catch((error) => {
+  const runDirect = async () => {
+    const args = process.argv.slice(2);
+    const modes = {
+      '--verify-approval': 'VERIFY_APPROVAL',
+      '--submit-wanx-trial': 'TRIAL_SUBMIT',
+      '--verify-wanx-trial-approval': 'TRIAL_VERIFY_APPROVAL',
+    } as const;
+    if (args.length > 1 || (args.length === 1 && !Object.hasOwn(modes, args[0]!))) {
+      throw Object.assign(new Error('Select exactly one supported sandbox command mode'), { code: 'SANDBOX_MODE_INVALID' });
+    }
+    if (args.length === 1) process.env.AI_IMAGE_SANDBOX_MODE = modes[args[0] as keyof typeof modes];
+    return runAiImageProviderSingleSubmit({ environment: process.env, requireGitCheckout: true });
+  };
+  runDirect().catch((error) => {
     process.stderr.write(`${JSON.stringify({
       schemaVersion: 1,
       event: 'SANDBOX_COMMAND_FAILED',

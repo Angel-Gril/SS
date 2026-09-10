@@ -13,6 +13,7 @@ export function reviewedPaidDerivedCapabilityMatches(entry, reviewed) {
   }
   const operations = new Set(entry.operations);
   if (operations.size !== entry.operations.length) return false;
+  if (reviewed.allowTextToImage === false && operations.has('TEXT_TO_IMAGE')) return false;
   const paidDerivedOperations = entry.operations
     .filter((operation) => operation !== 'TEXT_TO_IMAGE');
   if (

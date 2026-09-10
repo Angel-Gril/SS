@@ -21,8 +21,15 @@ import {
   checksumAiPromptRevision,
   getAiPromptVariableSchema,
   renderAiPromptRevision,
+  validateAiPromptRenderingProfile,
+  type AiPromptRenderingProfile,
   type AiPromptTemplateStore,
 } from './ai-prompt-templates.js';
+import {
+  DEFAULT_FULL_IMAGE_EDIT_TEMPLATE,
+  DEFAULT_INPAINT_TEMPLATE,
+  DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE,
+} from './ai-image-edit-prompt-contract.js';
 
 export const DEFAULT_AI_IMAGE_TEMPLATE_KEY = 'text-to-image.base';
 export const LISTING_COPY_TITLE_TEMPLATE_KEY = 'listing-copy.title';
@@ -230,27 +237,6 @@ const DEFAULT_MEDIA_SUITE_GENERATION_TEMPLATE = [
 const DEFAULT_MEDIA_SUITE_GENERATION_CONSTRAINTS_TEMPLATE = [
   'Reject any result that violates this frozen constraint set:',
   '{{safety_constraints_json}}',
-].join('\n');
-const DEFAULT_FULL_IMAGE_EDIT_TEMPLATE = [
-  'Edit the supplied immutable source image while preserving the product and SKU identity.',
-  'Change only what the operator explicitly requests; preserve product count, geometry, proportions, color, material, structure, included parts, packaging, and intrinsic label placement.',
-  'Match the source lighting, perspective, scale, edges, texture, and shadows unless the requested edit explicitly replaces the full scene.',
-  'Operator direction:',
-  '{{user_prompt}}',
-  'Return one unapplied review candidate.',
-].join('\n');
-const DEFAULT_INPAINT_TEMPLATE = [
-  'Edit only the white region of the server-validated mask over the immutable source image.',
-  'Preserve the product and every pixel outside the selected region.',
-  'Blend the edited area with a seamless transition at the mask boundary, matching surrounding lighting, perspective, texture, and shadows.',
-  'Operator direction:',
-  '{{user_prompt}}',
-  'Return one unapplied review candidate.',
-].join('\n');
-const DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE = [
-  'Avoid watermarks, illegible text, invented claims, unrelated objects, and distorted products.',
-  'Operator exclusions (may be empty):',
-  '{{user_negative_prompt}}',
 ].join('\n');
 
 interface RegistryOptions {
@@ -528,12 +514,14 @@ export class AiPromptTemplateRegistryService {
     actorUserId: string;
     revisionId: string;
     variables: Record<string, unknown>;
+    renderingProfile?: AiPromptRenderingProfile;
   }) {
     const revision = await this.domain.getRevision(input.revisionId);
     this.assertRevisionConsumerCompatible(revision);
     const rendered = renderAiPromptRevision(
       revision,
       promptVariables(revision.templateKey, input.variables, { requireTestValues: false }),
+      input.renderingProfile,
     );
     validateResolvedPromptLengths(rendered);
     return {
@@ -622,9 +610,11 @@ export class AiPromptTemplateRegistryService {
     templateKey: string;
     userPrompt: string;
     userNegativePrompt: string;
+    renderingProfile?: AiPromptRenderingProfile;
   }) {
     return this.resolveTemplate({
       templateKey: input.templateKey,
+      renderingProfile: input.renderingProfile,
       variables: {
         userPrompt: input.userPrompt,
         userNegativePrompt: input.userNegativePrompt,
@@ -635,9 +625,11 @@ export class AiPromptTemplateRegistryService {
   async resolveTemplate(input: {
     templateKey: string;
     variables: Record<string, unknown>;
+    renderingProfile?: AiPromptRenderingProfile;
   }) {
     const batch = await this.resolveTemplateBatch({
       templateKey: input.templateKey,
+      renderingProfile: input.renderingProfile,
       items: [{ key: 'single', variables: input.variables }],
     });
     const item = batch.items[0]!;
@@ -654,11 +646,13 @@ export class AiPromptTemplateRegistryService {
 
   async resolveTemplateBatch(input: {
     templateKey: string;
+    renderingProfile?: AiPromptRenderingProfile;
     items: ReadonlyArray<{
       key: string;
       variables: Record<string, unknown>;
     }>;
   }) {
+    validateAiPromptRenderingProfile(input.templateKey, input.renderingProfile);
     if (!Array.isArray(input.items)
       || input.items.length < 1
       || input.items.length > MAX_PROMPT_BATCH_ITEMS) {
@@ -703,7 +697,7 @@ export class AiPromptTemplateRegistryService {
         item.variables,
         { requireTestValues: true },
       );
-      const rendered = renderAiPromptRevision(activeRevision, normalizedVariables);
+      const rendered = renderAiPromptRevision(activeRevision, normalizedVariables, input.renderingProfile);
       validateResolvedPromptLengths(rendered);
       return {
         key: item.key,
@@ -729,6 +723,7 @@ export class AiPromptTemplateRegistryService {
         negativePromptTemplate: activeRevision.negativePromptTemplate,
         outputMode: variableSchema.outputMode,
         variableSchemaVersion: 1,
+        ...(resolvedItems[0]!.renderingContract ? { renderingContract: resolvedItems[0]!.renderingContract } : {}),
         consumer: getAiPromptConsumerContract(input.templateKey),
         variableKeys: {
           prompt: variableSchema.prompt.map((variable) => variable.inputKey),
@@ -1033,6 +1028,7 @@ export function resolveActiveAiPrompt(input: {
   templateKey: string;
   userPrompt: string;
   userNegativePrompt: string;
+  renderingProfile?: AiPromptRenderingProfile;
 }) {
   return aiPromptTemplateRegistry.resolvePrompt(input);
 }
@@ -1040,6 +1036,7 @@ export function resolveActiveAiPrompt(input: {
 export function resolveActiveAiTemplate(input: {
   templateKey: string;
   variables: Record<string, unknown>;
+  renderingProfile?: AiPromptRenderingProfile;
 }) {
   return aiPromptTemplateRegistry.resolveTemplate(input);
 }

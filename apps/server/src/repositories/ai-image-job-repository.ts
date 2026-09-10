@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { assertAiImageEditRawAsset, matchesAiImageEditRaw, persistAiImageEditRawOutput } from './ai-image-edit-output.js';
 import type { AiImageAssetInput, AiImageJobRecord, AiImageJobRepository, ApplyAiImageJobInput, CreateAiImageJobInput, CreateWithQuotaResult } from '../services/ai-image-jobs.js';
 import {
   markAiCostSubmissionUncertainInTransaction,
@@ -13,6 +14,7 @@ import {
   appendAiProviderReconciliationEvent,
 } from '../services/ai-provider-reconciliation-events.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import { hasWanxEditReconciliationContract } from '../services/ai-provider-reconciliation.js';
 import {
   AI_IMAGE_BILLED_JOB_STATUSES,
   aiImageReservedQuotaWhere,
@@ -27,6 +29,7 @@ const costReservationRecord = (reservation: any) => reservation == null
   ? reservation
   : {
     id: reservation.id,
+    currency: reservation.currency,
     status: reservation.status,
     estimatedCostMinor: Number(reservation.estimatedCostMinor || 0),
     maximumCostMinor: Number(reservation.maximumCostMinor || 0),
@@ -63,6 +66,7 @@ const record = (row: any): AiImageJobRecord => ({
 
 const COST_RESERVATION_SELECT = {
   id: true,
+  currency: true,
   status: true,
   estimatedCostMinor: true,
   maximumCostMinor: true,
@@ -168,9 +172,11 @@ async function appendProviderReconciliationIdentityAnomaly(
 }
 
 function lateProviderReconciliationBindingData(job: any, providerAcceptedAt: Date) {
-  if (job.status !== 'FAILED'
-    || job.operation !== 'IMAGE_TRANSLATE'
-    || job.errorCode !== 'PROVIDER_SUBMISSION_UNCERTAIN'
+  const editRecovery = hasWanxEditReconciliationContract(job);
+  const eligibleState = (job.status === 'FAILED' && job.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN')
+    || (editRecovery && job.status === 'CANCELLED');
+  if (!eligibleState
+    || (job.operation !== 'IMAGE_TRANSLATE' && !editRecovery)
     || !['NOT_REQUIRED', 'MANUAL_REVIEW'].includes(
       String(job.providerReconciliationStatus || 'NOT_REQUIRED'),
     )) return {};
@@ -180,7 +186,8 @@ function lateProviderReconciliationBindingData(job: any, providerAcceptedAt: Dat
     providerReconciliationRevision: Number(job.providerReconciliationRevision || 0) + 1,
     providerReconciliationNextAt: now,
     providerReconciliationDeadlineAt: new Date(
-      providerAcceptedAt.getTime() + PROVIDER_RECONCILIATION_MAX_AGE_MS,
+      (editRecovery && job.providerDispatchedAt instanceof Date
+        ? job.providerDispatchedAt : providerAcceptedAt).getTime() + PROVIDER_RECONCILIATION_MAX_AGE_MS,
     ),
     providerReconciliationLastErrorCode: null,
     providerReconciliationLastErrorMessage: null,
@@ -338,7 +345,9 @@ function providerReconciliationFailureData(
       providerReconciliationDeadlineAt: null,
     };
   }
-  if (job.operation !== 'IMAGE_TRANSLATE' || PROVIDER_RECONCILIATION_MANUAL_ERRORS.has(errorCode || '')) {
+  const editRecovery = hasWanxEditReconciliationContract(job);
+  if ((job.operation !== 'IMAGE_TRANSLATE' && !editRecovery)
+    || PROVIDER_RECONCILIATION_MANUAL_ERRORS.has(errorCode || '')) {
     return {
       ...common,
       providerReconciliationStatus: 'MANUAL_REVIEW',
@@ -1065,31 +1074,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
     });
   }
   async recordProviderOutput(id: string, asset: AiImageAssetInput) {
-    if (
-      asset.jobId !== id
-      || asset.kind !== 'AI_PROVIDER_OUTPUT'
-      || !asset.sha256
-      || asset.storageBackend === 'ozon-cdn'
-      || !asset.storageKey
-    ) {
-      throw Object.assign(new Error('Provider output asset does not satisfy the edit persistence contract'), {
-        code: 'INVALID_PROVIDER_OUTPUT',
-      });
-    }
-    const matchesPersistedOutput = (existing: any) => Boolean(
-      existing
-      && existing.aiImageJobId === id
-      && existing.ownerUserId === asset.ownerUserId
-      && existing.kind === 'AI_PROVIDER_OUTPUT'
-      && existing.sha256 === asset.sha256
-      && existing.url === asset.url
-      && existing.storageBackend === asset.storageBackend
-      && existing.storageKey === asset.storageKey
-      && existing.mimeType === asset.mimeType
-      && Number(existing.sizeBytes) === asset.sizeBytes
-      && (existing.width ?? null) === (asset.width ?? null)
-      && (existing.height ?? null) === (asset.height ?? null),
-    );
+    assertAiImageEditRawAsset(id, asset);
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
         const job = await tx.aiImageJob.findUnique({ where: { id } });
@@ -1103,61 +1088,21 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
             code: 'INVALID_STATE',
           });
         }
-        const existing = await tx.mediaAsset.findFirst({
-          where: { aiImageJobId: id, ownerUserId: asset.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
-        });
-        if (existing) {
-          if (!matchesPersistedOutput(existing)) {
-            throw Object.assign(new Error('Provider output identity conflicts with the persisted attempt'), {
-              code: 'PROVIDER_OUTPUT_CONFLICT',
-            });
-          }
-          return { ...asset, ...existing };
-        }
-        const created = await tx.mediaAsset.create({ data: {
-          ownerUserId: asset.ownerUserId,
-          aiImageJobId: asset.jobId,
-          kind: 'AI_PROVIDER_OUTPUT',
-          url: asset.url,
-          storageBackend: asset.storageBackend,
-          storageKey: asset.storageKey,
-          mimeType: asset.mimeType,
-          sizeBytes: asset.sizeBytes,
-          width: asset.width ?? null,
-          height: asset.height ?? null,
-          sha256: asset.sha256,
-          metadata: asset.metadata || undefined,
-        } });
-        if (job.workflowId) {
-          const inputs = await tx.aiMediaWorkflowInput.findMany({
-            where: { workflowId: job.workflowId },
-            orderBy: [{ role: 'asc' }, { ordinal: 'asc' }],
-          });
-          for (const input of inputs) {
-            await tx.mediaAssetLineage.create({ data: {
-              ownerUserId: job.ownerUserId,
-              workflowId: job.workflowId,
-              jobId: job.id,
-              inputAssetId: input.assetId,
-              outputAssetId: created.id,
-              inputRole: input.role,
-              ordinal: input.ordinal,
-              operation: job.operation,
-            } });
-          }
+        const { output, created } = await persistAiImageEditRawOutput(tx, job, asset);
+        if (created && job.workflowId) {
           await appendWorkflowEvent(tx, job, 'PROVIDER_OUTPUT_PERSISTED', {
-            outputAssetId: created.id,
+            outputAssetId: output.id,
             sha256: asset.sha256,
           });
         }
-        return { ...asset, ...created };
+        return output;
       });
     } catch (error: any) {
       if (error?.code !== 'P2002') throw error;
       const winner = await (this.prisma as any).mediaAsset.findFirst({
         where: { aiImageJobId: id, ownerUserId: asset.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
       });
-      if (!matchesPersistedOutput(winner)) throw error;
+      if (!matchesAiImageEditRaw(winner, id, asset)) throw error;
       return { ...asset, ...winner };
     }
   }

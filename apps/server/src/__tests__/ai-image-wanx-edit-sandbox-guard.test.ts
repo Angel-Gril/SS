@@ -5,6 +5,7 @@ import {
 } from '../services/ai-image-wanx-edit-sandbox-guard.js';
 import {
   AI_IMAGE_WANX21_EDIT_MODEL,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
   AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
   AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
 } from '../services/ai-image-wanx-edit-profile.js';
@@ -174,6 +175,82 @@ describe('single-submit Wanx 2.1 edit sandbox guard', () => {
     await guard.fetch(contract().submitEndpoint, submitInit());
     await expect(guard.fetch(contract().submitEndpoint, submitInit())).rejects.toThrow('duplicate submit');
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['IMAGE_TO_IMAGE', AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE, 'dns'],
+    ['IMAGE_TO_IMAGE', AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE, 'approval'],
+    ['FULL_EDIT', AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE, 'dns'],
+    ['FULL_EDIT', AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE, 'approval'],
+    ['INPAINT', AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE, 'dns'],
+    ['INPAINT', AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE, 'approval'],
+  ] as const)('permits only one %s POST for %s during %s checks', async (operation, requestProfile, phase) => {
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const pause = async () => { entered(); await barrier; };
+    let actualPosts = 0;
+    const fetcher = vi.fn(async () => json({
+      output: { task_id: `task-${++actualPosts}`, task_status: 'PENDING' },
+    }));
+    const beforeCreate = vi.fn(async () => { if (phase === 'approval') await pause(); });
+    const guard = createAiImageWanx21EditSandboxFetchGuard({
+      contract: contract({
+        operation, requestProfile,
+        providerFunction: operation === 'INPAINT' ? 'description_edit_with_mask' : 'description_edit',
+        transportMaskSha256: operation === 'INPAINT' ? sha256(mask) : null,
+      }),
+      validateUrl: async (url) => { if (phase === 'dns') await pause(); return new URL(url).toString(); },
+      fetch: fetcher, beforeCreate, toResultDownloadUrl: normalizeAiImageWanx21EditResultUrl,
+    });
+    const body = submitBody({ input: {
+      function: operation === 'INPAINT' ? 'description_edit_with_mask' : 'description_edit',
+      prompt, base_image_url: dataUrl('image/png', source),
+      ...(operation === 'INPAINT' ? { mask_image_url: dataUrl('image/png', mask) } : {}),
+    } });
+    const first = guard.fetch(contract().submitEndpoint, submitInit(body));
+    await waiting;
+    expect(guard.getCreateRequests()).toBe(0);
+    expect(fetcher).not.toHaveBeenCalled();
+    const second = guard.fetch(contract().submitEndpoint, submitInit(body));
+    const joined = Promise.allSettled([first, second]);
+    release();
+    const results = await joined;
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(actualPosts).toBe(1);
+    expect(beforeCreate).toHaveBeenCalledOnce();
+    expect(guard.getCreateRequests()).toBe(actualPosts);
+    expect(guard.getEvidence()).toMatchObject({ state: 'ACCEPTED', providerTaskIdHash: sha256('task-1') });
+  });
+
+  it.each(['dns', 'approval'] as const)('does not retry or count a dispatched request after %s rejects a claimed submission', async (phase) => {
+    const fetcher = vi.fn();
+    const reject = () => { throw new Error('synthetic pre-dispatch rejection'); };
+    const guard = createAiImageWanx21EditSandboxFetchGuard({
+      contract: contract(),
+      validateUrl: async (url) => { if (phase === 'dns') reject(); return url; },
+      beforeCreate: async () => { if (phase === 'approval') reject(); },
+      fetch: fetcher, toResultDownloadUrl: normalizeAiImageWanx21EditResultUrl,
+    });
+    await expect(guard.fetch(contract().submitEndpoint, submitInit())).rejects.toThrow('pre-dispatch rejection');
+    await expect(guard.fetch(contract().submitEndpoint, submitInit())).rejects.toThrow('duplicate submit');
+    expect(guard.getCreateRequests()).toBe(0);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('never releases the one-use claim after a lost POST response', async () => {
+    const fetcher = vi.fn(async () => { throw new Error('synthetic response lost'); });
+    const guard = createAiImageWanx21EditSandboxFetchGuard({
+      contract: contract(), validateUrl: async (url) => url, beforeCreate: async () => undefined,
+      fetch: fetcher, toResultDownloadUrl: normalizeAiImageWanx21EditResultUrl,
+    });
+    await expect(guard.fetch(contract().submitEndpoint, submitInit())).rejects.toThrow('response lost');
+    await expect(guard.fetch(contract().submitEndpoint, submitInit())).rejects.toThrow('duplicate submit');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(guard.getCreateRequests()).toBe(1);
+    expect(guard.getEvidence().state).toBe('RECONCILIATION_REQUIRED');
   });
 
   it('persists a valid task identity before quarantining an inline terminal status', async () => {

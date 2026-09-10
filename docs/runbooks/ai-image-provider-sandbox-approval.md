@@ -193,6 +193,157 @@ and one trailing newline. Set `AI_IMAGE_SANDBOX_APPROVAL_PATH` and its newly com
 `AI_IMAGE_SANDBOX_APPROVAL_SHA256` only after that review. Never treat the draft event or its
 pre-review digest as paid-request authority.
 
+## Frozen Wanx Two-Operation Trial Preparation
+
+Use the following **offline preparation and verification** commands for the scoped CNY 1 trial:
+
+```bash
+pnpm --filter server sandbox:ai-image:wanx-trial:prepare
+pnpm --filter server sandbox:ai-image:wanx-trial:verify
+```
+
+These commands do not submit images, initialize or publish templates, create ERP jobs, reserve
+execution funds, query bills, or approve payment. Every result remains `canSubmit:false`,
+`actualCost:null`, and `sourceVerification:OFFLINE_CONSISTENCY_ONLY`. In particular, a valid local
+template snapshot is not evidence that its release or workflow exists in the selected ERP account.
+Trusted source export, task-to-settled-bill association, a reviewed execution checkpoint, exact
+per-operation approvals, and durable round/operation execution claims remain required before a
+future paid path can consume a preparation. The existing fixed-prompt single-submit command cannot
+consume this manifest as an approval. Do not change its fields to turn it into one.
+
+Both commands require `NODE_ENV=sandbox`, a verifiable clean Git checkout, and an existing private
+evidence root. Keep Provider/cloud credentials, cookies, Authorization, paid confirmation, and
+legacy approval/submission/billing input variables absent. The commands do not load `.env`.
+
+| Setting | Meaning |
+| --- | --- |
+| `AI_IMAGE_SANDBOX_ADAPTER_REVISION` | Full Git OID of the exact preparation and verification code |
+| `AI_IMAGE_SANDBOX_EVIDENCE_ROOT` | Existing operator-controlled private directory; `0700` on POSIX |
+| `AI_IMAGE_SANDBOX_TRIAL_ROUND_ID` | One bounded, non-secret round reference, 8–64 ASCII identifier characters |
+| `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION` | Non-secret credential version reference, never a key or key hash |
+| `AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256` | Independently selected account digest; matching it does not prove live account ownership |
+| `AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH` | Prepare only: pinned canonical JSON inside the private evidence root |
+| `AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256` | Prepare only: digest of those exact input bytes |
+| `AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256` | Verify only: independently retained digest from preparation |
+
+The input uses two-space canonical JSON with a final newline and this closed contract:
+
+- `schemaVersion:1`, `kind:WANX_EDIT_TRIAL_INPUT_V1`, and the selected `roundId`,
+  `adapterRevision`, `credentialRevision`, and `providerAccountUidSha256`.
+- `provider:dashscope-wanx`, `model:wanx2.1-imageedit`, and
+  `apiBase:https://dashscope.aliyuncs.com/api/v1`. Workspace or alternate region endpoints cannot
+  inherit this trial identity.
+- `maximumCost:{"currency":"CNY","amount":1,"scale":0}`.
+- Exactly two `operations`: one `FULL_EDIT` and one `INPAINT`, with distinct `operationId` values.
+  Each carries a `source:{path,sha256}`, a `mask` (`null` for full edit, `{path,sha256}` for inpaint),
+  a `frozenPrompt`, and exact `quotedCost`/`maximumCost` objects.
+- `frozenPrompt` carries the existing owner's `prompt`, `negativePrompt`, `resolvedPrompt`,
+  `resolvedNegativePrompt`, `templateKey`, `templateReleaseId`, `templateChecksum`, and full
+  `templateSnapshot`. Preserve the registry snapshot, including `renderingContract`, `consumer`,
+  and `variableKeys`. The existing `assertWanxHostedEditPrompt` owner re-renders the complete
+  Wanx profile and rejects any inconsistent release/checksum/text/contract or text over 800
+  Unicode code points. A default-template preview must not be relabeled as a verified ERP release.
+
+Source and mask paths are relative to the evidence root. Absolute paths, traversal, URLs, links,
+public POSIX file permissions, changed digests, malformed images, or non-1024×1024 canvases are
+rejected before output. Each image is limited to 10 MiB and fully decoded. The inpaint input is the
+existing PNG alpha-mask format, with transparent edit pixels and opaque preserved pixels; the
+paid adapter's existing conversion to white-edit/black-preserve remains a separate execution step.
+
+Quotes and maxima must share a currency and scale within each operation. Both use CNY and
+positive safe integer amounts; scales may differ between the two operations. The owner sums
+**both maxima**, using exact integer arithmetic, and rejects any total above CNY 1. Neither the
+official CNY 0.14 reference nor a low quote reduces an operation's allocated maximum. This verifies
+a proposed allocation; it is not a Provider-side spending cap or an execution reservation.
+
+Preparation creates exactly one `wanx-trial-<roundId>` directory under the evidence root. It copies
+the pinned sources and alpha mask, then writes `manifest.json` last. Concurrent or repeated
+preparation of that round is rejected, including a directory left by an interrupted write. Do not
+delete or overwrite such evidence to retry; retain it for review. This immutability is scoped to
+the selected evidence root and does not substitute for a future central execution claim.
+
+Stdout contains the manifest digest, allocation and sanitized request bindings, never raw prompts,
+image bytes, credential references or file paths. Retain the digest separately. For verification,
+remove the two prepare-only input variables and supply `AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256`.
+Verification reads only the saved bundle, checks every pinned image, re-renders the frozen prompt,
+recalculates the allocation and existing paid-wire fingerprint, and compares the complete manifest.
+It writes nothing and cannot release budget or infer zero charges from a failed task or empty bill.
+Original input images may subsequently move; the immutable copies are the verification inputs.
+
+### Per-Operation V4 Approval And Isolated Execution
+
+The existing single-submit pipeline now has an explicit isolated Wanx trial mode. It consumes the
+prepared manifest separately from a **schema v4 one-operation approval**. The manifest remains
+`PREPARED_NOT_APPROVED` and is never rewritten to grant execution.
+
+```bash
+pnpm --filter server sandbox:ai-image:wanx-trial:approval:draft
+pnpm --filter server sandbox:ai-image:wanx-trial:approval:verify
+pnpm --filter server sandbox:ai-image:wanx-trial:single
+```
+
+This mode proves sandbox transport and budget mechanics. It does not verify the ERP provenance or
+native task-to-bill association listed in `requiredBeforeSubmit`. Real pilot dispatch remains an
+operator stop until those facts and the exact per-operation approval are available. Approval
+reference strings do not replace those facts; see the [native billing boundary](ai-image-provider-sandbox-billing.md#native-wanx-task-association-and-settlement-boundary).
+
+For all three commands, retain the same private evidence root, round ID, manifest digest, account
+UID digest, credential revision and clean code revision used during preparation. Select exactly
+`FULL_EDIT` or `INPAINT` with `AI_IMAGE_SANDBOX_OPERATION`. Do not provide independent endpoint,
+model, operation ID, profile, source/mask paths, currency or cost overrides: these values come from
+the frozen manifest. The submit API's `outputDirectory` override is also forbidden in trial mode.
+
+The offline draft command additionally requires the same non-secret review metadata as ordinary
+drafting: `AI_IMAGE_SANDBOX_APPROVAL_ID`, `AI_IMAGE_SANDBOX_APPROVER_REF`,
+`AI_IMAGE_SANDBOX_PROVIDER_ACCOUNT_REF`, `AI_IMAGE_SANDBOX_PRICING_REVISION`,
+`AI_IMAGE_SANDBOX_PRE_CALL_BILLING_SNAPSHOT_REF`, and
+`AI_IMAGE_SANDBOX_BILLING_RECONCILIATION_REF`. It writes one new
+`wanx-trial-<roundId>/approval-drafts/<approvalId>.json` and refuses to overwrite it. It retains the
+three rejection sentinels described above; a generated draft cannot authorize a request.
+
+V4 retains the v3 exact-money fields and adds one closed `trialBinding`:
+
+| Binding | Purpose |
+| --- | --- |
+| `roundId` | Select the same immutable two-operation allocation |
+| `manifestSha256` | Bind the exact frozen inputs, prompts and maxima |
+| `evidenceRootSha256` | Bind the canonical private path and its filesystem identity, including replacement at the same path |
+| `providerAccountUidSha256` | Bind the independently reviewed account digest |
+| `requestFingerprint` | Retain the existing paid-wire replay identity |
+| `frozenPromptSha256` | Bind the full frozen prompt and template snapshot |
+
+After review, change only the statement and two timestamps using the existing one-request approval
+procedure, then set `AI_IMAGE_SANDBOX_APPROVAL_PATH` and `AI_IMAGE_SANDBOX_APPROVAL_SHA256`.
+Approval verification rejects keys and paid confirmation, performs no DNS or Provider calls, and
+creates no claims. Ordinary modes reject v4 approvals; trial modes reject v2/v3 approvals and mixed
+or missing trial selection. Mixed, repeated or unknown CLI flags are rejected before credentials
+are read.
+
+Only the submit command receives the exact injected `AI_IMAGE_SANDBOX_API_KEY` and the existing
+`AI_IMAGE_SANDBOX_CONFIRM=I_ACCEPT_ONE_PAID_IMAGE_REQUEST`. Neither value belongs in the approval,
+manifest, shell history, report or Git. The caller must already have separate live authorization;
+having a runnable command is not that authorization.
+
+Before the Provider POST, the runner creates the original global fingerprint/intent under
+`<evidenceRoot>/intents`, then binds `wanx-trial-<roundId>/execution/round.json` and exclusively
+claims `FULL_EDIT.claim.json` or `INPAINT.claim.json`. The round record freezes both maxima and
+the manifest; the slot name is the operation, not a replaceable approval ID. The last send check
+revalidates the code, manifest, directory identity, claims and approval validity. The in-memory
+POST guard also claims synchronously before body, DNS or approval awaits.
+
+Keep every claim after partial failure, rejection, timeout or unknown outcome. A new approval,
+operation label, checkout, copied directory or changed manifest cannot reset an already claimed
+slot. No automatic refund or retry exists in this trial. The two fixed allocations cannot exceed
+CNY 1, but this is an execution authorization ceiling, not a Provider-side hard spending cap or
+proof of the eventual bill amount.
+
+Retain the normal intent, report, Wanx async evidence and
+`<operationId>.wanx.trial-evidence.json` together. The latter binds the immutable report digest,
+trial binding and both claim digests for successful and failed dispatches. It explicitly records
+`ISOLATED_WANX_TRIAL`, `OFFLINE_CONSISTENCY_ONLY` and `billingReconciliation:REQUIRED`.
+The original report format and `actualCost:null` are preserved. This evidence cannot be described
+as normal ERP end-to-end acceptance, settled billing, complete QA-02 or formal QA-04.
+
 ## Private JSON Record
 
 Create the file outside the repository or under the private persistent sandbox evidence root. On

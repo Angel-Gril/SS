@@ -352,7 +352,7 @@ describe('AI image generation cost safety', () => {
     const input = paidInput();
     const findUnique = vi.fn(async () => persistedJob(input, {
       costReservation: {
-        id: 'reservation-1', status: 'RESERVED', estimatedCostMinor: 20, maximumCostMinor: 20,
+        id: 'reservation-1', status: 'RESERVED', currency: 'USD', estimatedCostMinor: 20, maximumCostMinor: 20,
         provider: input.provider, model: input.model, requestFingerprint: input.requestFingerprint,
         ownerUserId: input.ownerUserId, actorUserId: input.actorUserId, secretInternalField: 'hidden',
       },
@@ -364,13 +364,13 @@ describe('AI image generation cost safety', () => {
     expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
         costReservation: { select: {
-          id: true, status: true, estimatedCostMinor: true, maximumCostMinor: true,
+          id: true, status: true, currency: true, estimatedCostMinor: true, maximumCostMinor: true,
           provider: true, model: true, requestFingerprint: true,
         } },
       }),
     }));
     expect(loaded?.costReservation).toEqual({
-      id: 'reservation-1', status: 'RESERVED', estimatedCostMinor: 20, maximumCostMinor: 20,
+      id: 'reservation-1', status: 'RESERVED', currency: 'USD', estimatedCostMinor: 20, maximumCostMinor: 20,
       provider: input.provider, model: input.model, requestFingerprint: input.requestFingerprint,
     });
   });

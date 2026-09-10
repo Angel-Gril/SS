@@ -8,6 +8,7 @@ The server registry is a fail-closed operation/input guard. Text-to-image job cr
 | ---------------- | ---------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
 | `fake`           | local non-production lifecycle wildcard                                      | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `IMAGE_TRANSLATE` | zero references for text-to-image; owned reference(s) for derived operations | sync                          | local test only                             |
 | `dashscope-wanx` | preset `wanx2.1-t2i-turbo`; legacy model wildcard retained for compatibility | `TEXT_TO_IMAGE`                   | no source asset                                                           | async task + URL download     | adapter characterized, not sandbox verified |
+| `dashscope-wanx` | exact `wanx2.1-imageedit` | `FULL_EDIT`, `INPAINT` only | one owned 1024x1024 source; one matching mask only for inpaint; bounded JSON/data URLs and a complete 800-character prompt | async task + bounded polling + URL download | adapter characterized, **not sandbox verified** |
 | `openai-images`  | exact `gpt-image-1`; legacy wildcard remains text-to-image compatibility only | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, `INPAINT` | multipart; up to 16 references, with one mask only for inpaint | sync JSON (`b64_json` or URL) | adapter characterized, **not sandbox verified** |
 | `custom` | exact model configured per environment; wildcard is compatibility only | `TEXT_TO_IMAGE` | no source asset | OpenAI-compatible sync JSON (`b64_json` or URL) | adapter characterized, exact host/model not sandbox verified |
 | `dashscope-qwen-mt-image` | exact `qwen-mt-image` model                                         | `IMAGE_TRANSLATE`                 | one owned HTTPS/public source URL; `imageSegment=false`                   | async task + immediate URL download | adapter characterized, **not sandbox verified** |
@@ -15,6 +16,28 @@ The server registry is a fail-closed operation/input guard. Text-to-image job cr
 Wildcard model entries exist only to avoid breaking historical text-to-image jobs. A wildcard entry can never count as `sandbox-verified`. The normal routes and Workers reject every non-fake operation while its exact capability is below `sandbox-verified` or its verified cost is not positive; selecting `openai-images` cannot be used as an alias to send an arbitrary Base URL into the paid queue. The exact `gpt-image-1` multipart generation/edit transport is registered so its request, input and result contracts can be tested, but registration is not activation: image-to-image, full edit, masked inpaint and multi-reference execution remain dark until sandbox evidence is promoted. Future activation also requires a frozen normalized endpoint/config hash and non-secret credential revision on each job. Provider cancellation remains unsupported. The qwen-mt-image adapter is implemented as a resumable submit/poll contract with frozen positive/constraint Prompt provenance, bounded recovery, and cost reservation; paid dispatch remains blocked until Unit 0B sandbox evidence and a positive verified price upgrade its capability level.
 
 ## Required Evidence Before Enabling A Capability
+
+The exact Wanx edit model does not inherit the text-to-image wildcard or enable suite/reference generation.
+Its normal manual-edit path selects the explicit `ai-image-wanx21-edit-prompt/v1` rendering contract,
+preserves custom template text, and binds the complete resolved prompt and rendering metadata in the
+workflow snapshot. Admission and dispatch reject non-square or non-1024 canvases; there is no automatic
+resize or crop. A wrong-sized Provider result remains unreviewable and retains its accepted task identity
+for reconciliation. The hosted logical Provider name is `dashscope-wanx`; the low-level adapter name
+`dashscope-wanx21-image-edit` is not an alias for reusing historical sandbox capability evidence.
+The configured base must canonicalize to the exact API base used by the adapter (including `/api/v1`),
+and capability evidence must match that endpoint, model, operation and `base64/async` transport.
+Revision-bound Wanx manual edits now support read-only restart recovery: one task GET and, on success,
+one bounded image GET, using the original task identity and a deadline no later than 24 hours after
+the original dispatch. The v2 runtime contract binds non-secret SystemConfig record ID, revision and
+update time from the same snapshot as the credential; missing bindings, empty credentials, legacy
+Wanx v1 jobs and credential rotations fail closed. Other Provider v1 contracts are unchanged.
+Recovery reuses the foreground raw/composite/normalization/review path, preserves the original
+invocation and acceptance evidence, and fences writes by current workflow attempt and unexpired
+reconciliation lease. Cancellation retains only raw output. Existing terminal billing decisions
+remain authoritative. UNKNOWN, expired lookup records, HTTP 404 and terminal task failure are not
+proof of a free request and never authorize resubmission. Internal hosted reservations remain USD;
+a public Wanx CNY price is not a currency conversion or a settled Provider bill. Fixture recovery
+tests are not live capability promotion or paid Provider acceptance.
 
 - Exact provider, normalized endpoint digest, model, request profile, request shape, input transport, size, and verified reference-count limits.
 - Result form and maximum fetch/poll window; temporary URLs must be internalized immediately.

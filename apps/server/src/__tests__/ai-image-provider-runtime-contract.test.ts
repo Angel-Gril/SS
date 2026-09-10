@@ -15,6 +15,68 @@ describe('AI image Provider runtime contract', () => {
     costPerImageCents: 7,
   };
 
+  const credentialRevision = {
+    recordId: 'synthetic-wanx-key-record',
+    revision: 7,
+    updatedAt: '2026-09-09T10:00:00.000Z',
+  };
+  const wanx = {
+    ...config,
+    provider: 'dashscope-wanx',
+    model: 'wanx2.1-imageedit',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    credentialRevision,
+  };
+  const shape = { count: 1, width: 1024, height: 1024 };
+
+  it('freezes a non-secret credential record revision for Wanx without changing other providers', () => {
+    const contract = createAiImageProviderRuntimeContract(wanx, shape);
+    expect(contract).toMatchObject({
+      contractVersion: 'ai-image-provider-runtime/v2', credentialRevision,
+    });
+    expect(contract.credentialRevision).not.toBe(credentialRevision);
+    expect(JSON.stringify(contract)).not.toContain(config.apiKey);
+    expect(assertAiImageProviderRuntimeContract(contract, wanx, {
+      ...shape, estimatedCostCents: 7,
+    })).toEqual(contract);
+    expect(createAiImageProviderRuntimeContract({ ...config, credentialRevision }, shape))
+      .toMatchObject({ contractVersion: 'ai-image-provider-runtime/v1' });
+  });
+
+  it('fails a legacy or missing Wanx credential binding closed instead of adopting the active account', () => {
+    const { credentialRevision: _revision, ...missing } = wanx;
+    expect(() => createAiImageProviderRuntimeContract(missing, shape))
+      .toThrow(AiImageProviderRuntimeContractError);
+    const contract = createAiImageProviderRuntimeContract(wanx, shape);
+    expect(() => assertAiImageProviderRuntimeContract({
+      ...contract, contractVersion: 'ai-image-provider-runtime/v1', credentialRevision: undefined,
+    }, wanx, { ...shape, estimatedCostCents: 7 })).toThrow(AiImageProviderRuntimeContractError);
+  });
+
+  it.each([
+    { ...credentialRevision, revision: 8 },
+    { ...credentialRevision, recordId: 'recreated-key-record' },
+    { ...credentialRevision, updatedAt: '2026-09-09T10:00:01.000Z' },
+  ])('rejects an account rotation or recreated config record: %j', (changed) => {
+    const contract = createAiImageProviderRuntimeContract(wanx, shape);
+    expect(() => assertAiImageProviderRuntimeContract(contract, {
+      ...wanx, credentialRevision: changed,
+    }, { ...shape, estimatedCostCents: 7 })).toThrow(AiImageProviderRuntimeContractError);
+  });
+
+  it.each([
+    null,
+    { ...credentialRevision, revision: -1 },
+    { ...credentialRevision, revision: '7' },
+    { ...credentialRevision, updatedAt: 'not-a-date' },
+    { ...credentialRevision, recordId: '' },
+    { ...credentialRevision, apiKey: 'never-freeze-this' },
+  ])('rejects invalid or secret-bearing credential metadata: %j', (invalid) => {
+    expect(() => createAiImageProviderRuntimeContract({
+      ...wanx, credentialRevision: invalid,
+    } as never, shape)).toThrow(AiImageProviderRuntimeContractError);
+  });
+
   it('freezes the endpoint identity and exact billed request without storing credentials', () => {
     const contract = createAiImageProviderRuntimeContract(config, {
       count: 1,

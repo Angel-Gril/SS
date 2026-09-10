@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { AiImageJobError } from './ai-image-job-error.js';
 import type { AiImageProviderResult } from './ai-image-jobs.js';
+import type { AiProviderTaskLookupResult } from './ai-provider-reconciliation.js';
 import {
   downloadImage,
   isDefiniteProviderRejection,
@@ -10,6 +11,7 @@ import {
   withProviderAcceptance,
   withProviderSubmissionRejected,
   withProviderSubmissionUncertain,
+  type BeforeAiImageProviderDispatch,
   type FetchLike,
   type OpenAiImageEditProvider,
   type OpenAiImageEditProviderOptions,
@@ -28,10 +30,15 @@ import {
 export interface DashScopeWanx21ImageEditProviderOptions
   extends OpenAiImageEditProviderOptions {
   pollIntervalMs?: number;
+  beforeTaskLookup?: BeforeAiImageProviderDispatch;
+}
+
+export interface DashScopeWanx21ImageEditProvider extends OpenAiImageEditProvider {
+  poll(taskId: string): Promise<AiProviderTaskLookupResult>;
 }
 
 const PENDING_STATUSES = new Set(['PENDING', 'RUNNING']);
-const FAILED_STATUSES = new Set(['FAILED', 'CANCELED', 'CANCELLED', 'UNKNOWN']);
+const FAILED_STATUSES = new Set(['FAILED', 'CANCELED', 'CANCELLED']);
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -148,11 +155,7 @@ async function validateWanxRequest(request: OpenAiImageEditRequest, configuredMo
   return { model, source, maskBytes };
 }
 
-function assertSuccessfulWanxTask(body: any, taskId: string) {
-  const responseTaskId = normalizedProviderIdentity(body?.output?.task_id);
-  if (responseTaskId !== taskId) {
-    throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Wanx returned a mismatched task identity');
-  }
+function assertSuccessfulWanxTask(body: any) {
   const results = Array.isArray(body?.output?.results) ? body.output.results : [];
   const metrics = body?.output?.task_metrics;
   const imageCount = body?.usage?.image_count;
@@ -178,9 +181,27 @@ function normalizedCost(costPerImageCents: number | undefined) {
   return Math.max(0, Math.round(Number(costPerImageCents || 0)));
 }
 
+function normalizedWanxTaskId(value: unknown) {
+  const taskId = normalizedProviderIdentity(value);
+  if (!taskId || taskId === '.' || taskId === '..'
+    || Array.from(taskId).some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)
+    || Buffer.from(taskId, 'utf8').toString('utf8') !== taskId) {
+    throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Wanx task identity is invalid');
+  }
+  return taskId;
+}
+
+function remainingWanxTime(deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit task timed out');
+  }
+  return remaining;
+}
+
 export function createDashScopeWanx21ImageEditProvider(
   options: DashScopeWanx21ImageEditProviderOptions,
-): OpenAiImageEditProvider {
+): DashScopeWanx21ImageEditProvider {
   if (!String(options.apiKey || '').trim()) {
     throw new AiImageJobError('INVALID_PROVIDER_CONFIG', 'DashScope API key is required');
   }
@@ -192,17 +213,112 @@ export function createDashScopeWanx21ImageEditProvider(
     );
   }
   const fetcher: FetchLike = options.fetch || globalThis.fetch;
-  const timeoutMs = Math.max(1, options.timeoutMs || 180_000);
+  const requestedTimeoutMs = options.timeoutMs ?? AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollDurationMs;
+  const timeoutMs = Math.max(1, Math.min(
+    AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollDurationMs,
+    Number.isFinite(requestedTimeoutMs)
+      ? requestedTimeoutMs : AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollDurationMs,
+  ));
   const pollIntervalMs = Math.max(0, options.pollIntervalMs ?? 1_500);
   const submitEndpoint = aiImageWanx21EditSubmitEndpoint(apiBase);
   const taskEndpointBase = aiImageWanx21EditTaskEndpointBase(apiBase);
 
+  async function lookupTask(providerJobId: string, deadline: number): Promise<AiProviderTaskLookupResult> {
+    try {
+      const taskId = normalizedWanxTaskId(providerJobId);
+      let body: any;
+      try {
+        body = await requestJson(
+          'DashScope Wanx image edit',
+          fetcher,
+          options.apiKey,
+          `${taskEndpointBase}/${encodeURIComponent(taskId)}`,
+          {
+            method: 'GET',
+            credentials: 'omit',
+            headers: { Authorization: `Bearer ${options.apiKey}` },
+          },
+          remainingWanxTime(deadline),
+          undefined,
+          async () => {
+            remainingWanxTime(deadline);
+            await options.beforeTaskLookup?.();
+            remainingWanxTime(deadline);
+          },
+        );
+      } catch (error) {
+        if (error instanceof AiImageJobError
+          && error.code === 'PROVIDER_REQUEST_FAILED'
+          && (error as AiImageJobError & { providerHttpStatus?: number }).providerHttpStatus === 404) {
+          throw Object.assign(
+            new AiImageJobError('PROVIDER_TASK_UNKNOWN', 'Wanx task lookup could not establish its outcome'),
+            { providerHttpStatus: 404 },
+          );
+        }
+        throw error;
+      }
+
+      remainingWanxTime(deadline);
+      if (normalizedProviderIdentity(body?.output?.task_id) !== taskId) {
+        throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Wanx returned a mismatched task identity');
+      }
+      const status = typeof body?.output?.task_status === 'string'
+        ? body.output.task_status.trim().toUpperCase() : '';
+      if (PENDING_STATUSES.has(status)) {
+        return { status: 'PENDING', providerJobId: taskId, providerStatus: status };
+      }
+      if (FAILED_STATUSES.has(status)) {
+        return {
+          status: 'NO_OUTPUT',
+          providerJobId: taskId,
+          providerStatus: status,
+          errorCode: 'PROVIDER_TASK_FAILED',
+          errorMessage: `Wanx task produced no output (${status})`,
+          billingDisposition: 'UNKNOWN',
+        };
+      }
+      if (status === 'UNKNOWN') {
+        // Expired lookup records do not prove the accepted task failed or was free.
+        throw new AiImageJobError('PROVIDER_TASK_UNKNOWN', 'Wanx task lookup could not establish its outcome');
+      }
+      if (status !== 'SUCCEEDED') {
+        throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Wanx returned an unknown task status');
+      }
+      const resultUrl = assertSuccessfulWanxTask(body);
+      const image = await downloadImage(
+        fetcher,
+        normalizeAiImageWanx21EditResultUrl(resultUrl),
+        remainingWanxTime(deadline),
+      );
+      remainingWanxTime(deadline);
+      return {
+        status: 'SUCCEEDED',
+        providerJobId: taskId,
+        providerStatus: status,
+        image: { ...image, filename: `wanx-edit-${taskId}.png` },
+        actualCostCents: normalizedCost(options.costPerImageCents),
+      };
+    } catch (error) {
+      const taskError = error instanceof Error ? error : new Error(String(error));
+      // Recovery must retain the original acceptance time in the persisted job.
+      throw Object.assign(taskError, { providerJobId });
+    }
+  }
+
   return {
     name: 'dashscope-wanx21-image-edit',
+    async poll(taskId) {
+      return lookupTask(taskId, Date.now() + timeoutMs);
+    },
     async edit(request): Promise<AiImageProviderResult> {
-      const validated = await validateWanxRequest(request, options.model);
+      let validated: Awaited<ReturnType<typeof validateWanxRequest>>;
+      try {
+        validated = await validateWanxRequest(request, options.model);
+      } catch (error) {
+        throw withProviderSubmissionRejected(error);
+      }
       const deadline = Date.now() + timeoutMs;
-      await options.beforeProviderDispatch?.();
+      let submissionStarted = false;
       let submitted: any;
       try {
         submitted = await requestJson(
@@ -231,9 +347,23 @@ export function createDashScopeWanx21ImageEditProvider(
             }),
           },
           Math.max(1, deadline - Date.now()),
+          undefined,
+          async () => {
+            if (Date.now() >= deadline) {
+              throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit dispatch timed out');
+            }
+            await options.beforeProviderDispatch?.();
+            if (Date.now() >= deadline) {
+              throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit dispatch timed out');
+            }
+            // The transport invokes this only after URL/DNS validation, just before fetch.
+            submissionStarted = true;
+          },
         );
       } catch (error) {
-        if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
+        if (!submissionStarted || isDefiniteProviderRejection(error)) {
+          throw withProviderSubmissionRejected(error);
+        }
         throw withProviderSubmissionUncertain(error);
       }
 
@@ -270,51 +400,23 @@ export function createDashScopeWanx21ImageEditProvider(
             'Wanx submit did not return a reviewed pending task status',
           );
         }
-        let completed = submitted;
-        let polls = 0;
-        while (String(completed?.output?.task_status || '').trim().toUpperCase() !== 'SUCCEEDED') {
-          const status = String(completed?.output?.task_status || '').trim().toUpperCase();
-          if (FAILED_STATUSES.has(status)) {
-            throw new AiImageJobError('PROVIDER_TASK_FAILED', `Wanx task failed (${status})`);
+        for (let polls = 0; polls < AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollRequests; polls += 1) {
+          await delay(Math.min(pollIntervalMs, remainingWanxTime(deadline)));
+          const completed = await lookupTask(taskId, deadline);
+          if (completed.status === 'PENDING') continue;
+          if (completed.status === 'NO_OUTPUT') {
+            throw Object.assign(
+              new AiImageJobError(completed.errorCode, completed.errorMessage),
+              { billingDisposition: completed.billingDisposition },
+            );
           }
-          if (status && !PENDING_STATUSES.has(status)) {
-            throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Wanx returned an unknown task status');
-          }
-          if (
-            polls >= AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollRequests
-            || Date.now() >= deadline
-          ) {
-            throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit task timed out');
-          }
-          await delay(pollIntervalMs);
-          if (Date.now() >= deadline) {
-            throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit task timed out');
-          }
-          polls += 1;
-          completed = await requestJson(
-            'DashScope Wanx image edit',
-            fetcher,
-            options.apiKey,
-            `${taskEndpointBase}/${encodeURIComponent(taskId)}`,
-            {
-              method: 'GET',
-              headers: { Authorization: `Bearer ${options.apiKey}` },
-            },
-            Math.max(1, deadline - Date.now()),
-          );
+          return {
+            images: [completed.image],
+            providerJobId: completed.providerJobId,
+            actualCostCents: completed.actualCostCents,
+          };
         }
-
-        const resultUrl = assertSuccessfulWanxTask(completed, taskId);
-        const image = await downloadImage(
-          fetcher,
-          normalizeAiImageWanx21EditResultUrl(resultUrl),
-          Math.max(1, deadline - Date.now()),
-        );
-        return {
-          images: [{ ...image, filename: `wanx-edit-${taskId}.png` }],
-          providerJobId: taskId,
-          actualCostCents: normalizedCost(options.costPerImageCents),
-        };
+        throw new AiImageJobError('PROVIDER_TIMEOUT', 'Wanx image-edit task timed out');
       } catch (error) {
         throw withProviderAcceptance(error, taskId, providerAcceptedAt);
       }

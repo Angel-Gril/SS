@@ -48,9 +48,16 @@ import {
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
 import { isOpenAiCompatibleImageEditSizeSupported } from '../services/ai-image-providers.js';
+import {
+  isAiImageEditProviderCanvasSupported,
+  isWanxHostedEdit,
+  resolveAiImageEditProviderContract,
+} from '../services/ai-image-edit-provider-contract.js';
 import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
+import { getAiImageEditProviderRuntimeConfig } from '../services/ai-image-edit-runtime-config.js';
 import {
   assertAiImageProviderRuntimeContract,
+  type AiImageProviderCredentialRevision,
 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
@@ -281,14 +288,16 @@ const listingDraftEditMaskSchema = editMaskSchema.extend({
   draftVersion: z.number().int().min(1),
 });
 
-export function isPaidAiImageEditCanvasSupported(provider: string, width: number, height: number): boolean {
-  return provider === 'fake' || isOpenAiCompatibleImageEditSizeSupported(width, height);
+export function isPaidAiImageEditCanvasSupported(provider: string, width: number, height: number, model = ''): boolean {
+  return isAiImageEditProviderCanvasSupported(provider, model, width, height);
 }
 
-function unsupportedPaidEditCanvas(reply: any, width: number, height: number) {
+function unsupportedPaidEditCanvas(reply: any, width: number, height: number, provider = '', model = '') {
   return reply.status(422).send({
     code: 'UNSUPPORTED_PROVIDER_EDIT_DIMENSIONS',
-    msg: `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${width}x${height}. Resize or pad the source and mask before submitting; no paid quota was reserved.`,
+    msg: isWanxHostedEdit(provider, model)
+      ? `Wanx hosted edits require a 1024x1024 source and mask canvas; received ${width}x${height}. No automatic resize or crop was applied; no paid quota was reserved.`
+      : `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${width}x${height}. Resize or pad the source and mask before submitting; no paid quota was reserved.`,
   });
 }
 
@@ -322,6 +331,7 @@ interface AiImageEditRouteSettings {
   baseUrl: string;
   estimatedCostCents: number;
   globalDailyBudgetCents: number;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 type EditMaskUploadLimitCheck = { allowed: true } | { allowed: false; reason: string; statusCode?: 429 | 503 };
@@ -486,6 +496,9 @@ function sendError(reply: any, error: unknown) {
     return reply.status(status).send({ code: error.code, msg: error.message });
   }
   if (error instanceof AiPromptTemplateError) {
+    if (error.code === 'PROMPT_PROFILE_LIMIT_EXCEEDED' || error.code === 'INVALID_PROMPT_PROFILE_INPUT') {
+      return reply.status(400).send({ code: error.code, msg: error.message });
+    }
     return reply.status(503).send({
       code: 'PROMPT_TEMPLATE_UNAVAILABLE',
       msg: 'AI image prompt template is temporarily unavailable',
@@ -747,6 +760,7 @@ export function resolveAiImageEditReadiness(
   const model = provider === 'fake'
     ? 'fake-image-edit-v1'
     : settings.model || '';
+  const editContract = resolveAiImageEditProviderContract(provider, model, settings.baseUrl || '');
   const capability = (options.resolveCapability || resolveAiImageProviderCapability)(
     provider,
     model,
@@ -768,15 +782,15 @@ export function resolveAiImageEditReadiness(
       testOnly: true,
     };
   }
-  if (provider !== 'fake' && !hasExactAiMediaSandboxEvidence({
+  if (provider !== 'fake' && (!editContract || !hasExactAiMediaSandboxEvidence({
     capability,
     provider,
     model,
     baseUrl: settings.baseUrl || '',
     operation,
-    inputTransport: 'multipart',
-    resultMode: 'sync',
-  })) {
+    inputTransport: editContract.inputTransport,
+    resultMode: editContract.resultMode,
+  }))) {
     return {
       enabled: true,
       ready: false,
@@ -993,6 +1007,7 @@ function retryProviderConfigMatches(
       model: settings.model,
       baseUrl: settings.baseUrl,
       costPerImageCents: settings.estimatedCostCents,
+      credentialRevision: settings.credentialRevision,
     }, {
       count,
       width,
@@ -1124,7 +1139,9 @@ export function createAiImageRequestFingerprint(input: {
 export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteOptions = {}) {
   const repository = options.repository || new PrismaAiImageJobRepository(prisma);
   const mediaWorkflowService = options.mediaWorkflowService
-    || createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(prisma));
+    || createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(prisma), {
+      resolveCapability: options.resolveProviderCapability,
+    });
   const mediaContextService = options.mediaContextService || createAiMediaContextService(prisma);
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const authHook = options.authenticate || authenticate;
@@ -1158,17 +1175,26 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       };
     }
   });
-  const getEditSettings = options.getEditSettings || (async () => ({
-    imageToImageEnabled: await getConfig('feature_ai_media_image_to_image'),
-    fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
-    inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
-    dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
-    provider: await getConfig('ai_image_provider'),
-    model: await getConfig('ai_image_model'),
-    baseUrl: await getConfig('ai_image_base_url'),
-    estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
-    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
-  }));
+  const getEditSettings = options.getEditSettings || (async () => {
+    let runtime: Awaited<ReturnType<typeof getAiImageEditProviderRuntimeConfig>>;
+    try {
+      runtime = await getAiImageEditProviderRuntimeConfig();
+    } catch {
+      throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image edit Provider configuration could not be verified');
+    }
+    return {
+      imageToImageEnabled: await getConfig('feature_ai_media_image_to_image'),
+      fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
+      inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
+      dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
+      provider: runtime.provider,
+      model: runtime.model,
+      baseUrl: runtime.baseUrl,
+      estimatedCostCents: runtime.costPerImageCents,
+      credentialRevision: runtime.credentialRevision,
+      globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
+    };
+  });
   const getGlobalDailyBudgetCents = options.getGlobalDailyBudgetCents
     || (async () => getConfig('ai_daily_budget_cents'));
   const getEditStorageReadiness = options.getEditStorageReadiness || (async () => {
@@ -1367,78 +1393,80 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
 
   app.addHook('onRequest', authHook as any);
 
-  app.get('/capabilities', async (request) => {
-    const ids = actor(request);
-    const [
-      workflowDecision,
-      webMediaDecision,
-      translationSettings,
-      translationStorageReadiness,
-      editSettings,
-      editStorageReadiness,
-    ] = await Promise.all([
-      getMediaWorkflowDecision(ids.ownerUserId),
-      getSourceListingWebMediaDecision(ids.ownerUserId),
-      getTranslationSettings(),
-      getTranslationStorageReadiness(),
-      getEditSettings(),
-      getEditStorageReadiness(),
-    ]);
-    const workflowEnabled = workflowDecision.enabled;
-    const translation = resolveAiImageTranslationReadiness(translationSettings, {
-      workflowEnabled,
-      production,
-      storageReadiness: translationStorageReadiness,
-    });
-    const imageToImage = resolveAiImageToImageReadiness({
-      enabled: editSettings.imageToImageEnabled,
-      workflowEnabled,
-      production,
-      provider: editSettings.provider,
-      model: editSettings.model,
-      baseUrl: editSettings.baseUrl,
-      estimatedCostCents: editSettings.estimatedCostCents,
-      storageReadiness: editStorageReadiness,
-      resolveCapability: resolveProviderCapability,
-    });
-    const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, {
-      workflowEnabled,
-      production,
-      storageReadiness: editStorageReadiness,
-      resolveCapability: resolveProviderCapability,
-    });
-    const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, {
-      workflowEnabled,
-      production,
-      storageReadiness: editStorageReadiness,
-      resolveCapability: resolveProviderCapability,
-    });
-    return {
-      code: 1,
-      data: {
-        webMediaEnabled: webMediaDecision.enabled,
-        webMediaReason: webMediaDecision.reason,
-        webMediaRevision: webMediaDecision.revision,
+  app.get('/capabilities', async (request, reply) => {
+    try {
+      const ids = actor(request);
+      const [
+        workflowDecision,
+        webMediaDecision,
+        translationSettings,
+        translationStorageReadiness,
+        editSettings,
+        editStorageReadiness,
+      ] = await Promise.all([
+        getMediaWorkflowDecision(ids.ownerUserId),
+        getSourceListingWebMediaDecision(ids.ownerUserId),
+        getTranslationSettings(),
+        getTranslationStorageReadiness(),
+        getEditSettings(),
+        getEditStorageReadiness(),
+      ]);
+      const workflowEnabled = workflowDecision.enabled;
+      const translation = resolveAiImageTranslationReadiness(translationSettings, {
         workflowEnabled,
-        workflowReason: workflowDecision.reason,
-        workflowRevision: workflowDecision.revision,
-        applications: {
-          contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
-          readEnabled: true,
-          applyEnabled: workflowEnabled && webMediaDecision.enabled,
-          listingDraftApplyEnabled: !production && workflowEnabled && webMediaDecision.enabled,
-          rollbackEnabled: true,
-          defaultMode: 'append',
-          replaceOperations: ['IMAGE_TO_IMAGE'],
+        production,
+        storageReadiness: translationStorageReadiness,
+      });
+      const imageToImage = resolveAiImageToImageReadiness({
+        enabled: editSettings.imageToImageEnabled,
+        workflowEnabled,
+        production,
+        provider: editSettings.provider,
+        model: editSettings.model,
+        baseUrl: editSettings.baseUrl,
+        estimatedCostCents: editSettings.estimatedCostCents,
+        storageReadiness: editStorageReadiness,
+        resolveCapability: resolveProviderCapability,
+      });
+      const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, {
+        workflowEnabled,
+        production,
+        storageReadiness: editStorageReadiness,
+        resolveCapability: resolveProviderCapability,
+      });
+      const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, {
+        workflowEnabled,
+        production,
+        storageReadiness: editStorageReadiness,
+        resolveCapability: resolveProviderCapability,
+      });
+      return {
+        code: 1,
+        data: {
+          webMediaEnabled: webMediaDecision.enabled,
+          webMediaReason: webMediaDecision.reason,
+          webMediaRevision: webMediaDecision.revision,
+          workflowEnabled,
+          workflowReason: workflowDecision.reason,
+          workflowRevision: workflowDecision.revision,
+          applications: {
+            contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
+            readEnabled: true,
+            applyEnabled: workflowEnabled && webMediaDecision.enabled,
+            listingDraftApplyEnabled: !production && workflowEnabled && webMediaDecision.enabled,
+            rollbackEnabled: true,
+            defaultMode: 'append',
+            replaceOperations: ['IMAGE_TO_IMAGE'],
+          },
+          operations: {
+            IMAGE_TO_IMAGE: gateReadinessByWebMedia(imageToImage, webMediaDecision.enabled),
+            IMAGE_TRANSLATE: gateReadinessByWebMedia(translation, webMediaDecision.enabled),
+            FULL_EDIT: gateReadinessByWebMedia(fullEdit, webMediaDecision.enabled),
+            INPAINT: gateReadinessByWebMedia(inpaint, webMediaDecision.enabled),
+          },
         },
-        operations: {
-          IMAGE_TO_IMAGE: gateReadinessByWebMedia(imageToImage, webMediaDecision.enabled),
-          IMAGE_TRANSLATE: gateReadinessByWebMedia(translation, webMediaDecision.enabled),
-          FULL_EDIT: gateReadinessByWebMedia(fullEdit, webMediaDecision.enabled),
-          INPAINT: gateReadinessByWebMedia(inpaint, webMediaDecision.enabled),
-        },
-      },
-    };
+      };
+    } catch (error) { return sendError(reply, error); }
   });
 
   app.post('/jobs', async (request, reply) => {
@@ -1871,8 +1899,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             msg: 'Owned source image dimensions were not found',
           });
         }
-        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, dimensions.width, dimensions.height)) {
-          return unsupportedPaidEditCanvas(reply, dimensions.width, dimensions.height);
+        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, dimensions.width, dimensions.height, editSettings.model)) {
+          return unsupportedPaidEditCanvas(reply, dimensions.width, dimensions.height, editSettings.provider, editSettings.model);
         }
         let providerExecution: Record<string, unknown> = {};
         if (editSettings.provider !== 'fake') {
@@ -1881,6 +1909,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             model: editSettings.model,
             baseUrl: editSettings.baseUrl,
             costPerImageCents: editSettings.estimatedCostCents,
+            credentialRevision: editSettings.credentialRevision,
           }, { count: 1, ...dimensions });
           providerExecution = {
             provider: editSettings.provider,
@@ -1893,8 +1922,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         const templateKey = parsed.data.operation === 'FULL_EDIT'
           ? AI_MEDIA_FULL_EDIT_TEMPLATE_KEY
           : AI_MEDIA_INPAINT_TEMPLATE_KEY;
+        const editContract = resolveAiImageEditProviderContract(editSettings.provider, editSettings.model, editSettings.baseUrl || '');
         const resolved = await resolveEditPrompt({
           templateKey,
+          ...(editContract?.renderingProfile ? { renderingProfile: editContract.renderingProfile } : {}),
           variables: {
             userPrompt: parsed.data.userPrompt,
             userNegativePrompt: parsed.data.userNegativePrompt,
@@ -2214,8 +2245,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         if (String(latestJob?.provider || '') !== 'fake') {
           const width = Number(latestJob?.width || 0);
           const height = Number(latestJob?.height || 0);
-          if (!isOpenAiCompatibleImageEditSizeSupported(width, height)) {
-            return unsupportedPaidEditCanvas(reply, width, height);
+          if (!isPaidAiImageEditCanvasSupported(String(latestJob?.provider), width, height, String(latestJob?.model))) {
+            return unsupportedPaidEditCanvas(reply, width, height, String(latestJob?.provider), String(latestJob?.model));
           }
         }
         if (!retryProviderConfigMatches(latestJob, operation, editSettings)) {

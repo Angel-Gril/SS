@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
 import {
   isOfficialOpenAiImagesApiBase,
   normalizeOpenAiImagesApiBase,
@@ -6,16 +8,26 @@ import {
 
 export const AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION =
   'ai-image-provider-runtime/v1' as const;
+export const AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION =
+  'ai-image-provider-runtime/v2' as const;
+
+export interface AiImageProviderCredentialRevision {
+  recordId: string;
+  revision: number;
+  updatedAt: string;
+}
 
 export interface AiImageProviderRuntimeIdentity {
   provider: string;
   baseUrl: string;
   model: string;
   costPerImageCents: number;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 export interface AiImageProviderRuntimeContract extends Record<string, unknown> {
-  contractVersion: typeof AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION;
+  contractVersion: typeof AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
+    | typeof AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION;
   provider: string;
   model: string;
   baseUrlSha256: string;
@@ -24,6 +36,7 @@ export interface AiImageProviderRuntimeContract extends Record<string, unknown> 
   width: number;
   height: number;
   maximumCostCents: number;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 export class AiImageProviderRuntimeContractError extends Error {
@@ -121,6 +134,24 @@ function safeMaximumCost(unitCostCents: number, imageCount: number): number {
   return total;
 }
 
+export function requiresAiImageProviderCredentialRevision(provider: string, model: string): boolean {
+  return provider === 'dashscope-wanx' && model === AI_IMAGE_WANX21_EDIT_MODEL;
+}
+
+/** Config metadata only: never derive this identity from a secret or encrypted value. */
+export function parseAiImageProviderCredentialRevision(value: unknown): AiImageProviderCredentialRevision {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const timestamp = typeof input.updatedAt === 'string' ? Date.parse(input.updatedAt) : NaN;
+  if (Object.keys(input).length !== 3
+    || typeof input.recordId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(input.recordId)
+    || typeof input.revision !== 'number' || !Number.isSafeInteger(input.revision) || input.revision < 0
+    || !Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== input.updatedAt) {
+    throw new AiImageProviderRuntimeContractError('Provider credential revision is missing or invalid');
+  }
+  return { recordId: input.recordId, revision: input.revision, updatedAt: input.updatedAt as string };
+}
+
 export function createAiImageProviderRuntimeContract(
   identity: AiImageProviderRuntimeIdentity,
   request: { count: number; width: number; height: number },
@@ -131,8 +162,11 @@ export function createAiImageProviderRuntimeContract(
   const imageCount = positiveInteger(request.count, 'image count');
   const width = positiveInteger(request.width, 'image width');
   const height = positiveInteger(request.height, 'image height');
+  const credentialRevision = requiresAiImageProviderCredentialRevision(provider, model)
+    ? parseAiImageProviderCredentialRevision(identity.credentialRevision) : undefined;
   return {
-    contractVersion: AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+    contractVersion: credentialRevision
+      ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
     provider,
     model,
     baseUrlSha256: aiImageProviderEndpointSha256(provider, identity.baseUrl),
@@ -141,19 +175,25 @@ export function createAiImageProviderRuntimeContract(
     width,
     height,
     maximumCostCents: safeMaximumCost(unitCostCents, imageCount),
+    ...(credentialRevision ? { credentialRevision } : {}),
   };
 }
 
-function parseContract(value: unknown): AiImageProviderRuntimeContract {
+export function parseAiImageProviderRuntimeContract(value: unknown): AiImageProviderRuntimeContract {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new AiImageProviderRuntimeContractError('Provider runtime contract is missing');
   }
   const input = value as Record<string, unknown>;
-  if (input.contractVersion !== AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION) {
-    throw new AiImageProviderRuntimeContractError('Provider runtime contract version is invalid');
-  }
   const provider = requiredText(input.provider, 'frozen provider');
   const model = requiredText(input.model, 'frozen model');
+  const credentialBound = requiresAiImageProviderCredentialRevision(provider, model);
+  const contractVersion = credentialBound
+    ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION;
+  if (input.contractVersion !== contractVersion) {
+    throw new AiImageProviderRuntimeContractError('Provider runtime contract version is invalid');
+  }
+  const credentialRevision = credentialBound
+    ? parseAiImageProviderCredentialRevision(input.credentialRevision) : undefined;
   const baseUrlSha256 = String(input.baseUrlSha256 || '');
   if (!/^[a-f0-9]{64}$/u.test(baseUrlSha256)) {
     throw new AiImageProviderRuntimeContractError('Frozen Provider endpoint identity is invalid');
@@ -167,7 +207,7 @@ function parseContract(value: unknown): AiImageProviderRuntimeContract {
     throw new AiImageProviderRuntimeContractError('Frozen Provider cost quote is inconsistent');
   }
   return {
-    contractVersion: AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+    contractVersion,
     provider,
     model,
     baseUrlSha256,
@@ -176,6 +216,7 @@ function parseContract(value: unknown): AiImageProviderRuntimeContract {
     width,
     height,
     maximumCostCents,
+    ...(credentialRevision ? { credentialRevision } : {}),
   };
 }
 
@@ -189,12 +230,13 @@ export function assertAiImageProviderRuntimeContract(
     estimatedCostCents: number;
   },
 ): AiImageProviderRuntimeContract {
-  const frozen = parseContract(frozenValue);
+  const frozen = parseAiImageProviderRuntimeContract(frozenValue);
   const active = createAiImageProviderRuntimeContract(activeIdentity, request);
   if (frozen.provider !== active.provider
     || frozen.model !== active.model
     || frozen.baseUrlSha256 !== active.baseUrlSha256
-    || frozen.unitCostCents !== active.unitCostCents) {
+    || frozen.unitCostCents !== active.unitCostCents
+    || !isDeepStrictEqual(frozen.credentialRevision, active.credentialRevision)) {
     throw new AiImageProviderRuntimeContractError(
       'Active Provider identity does not match the frozen runtime contract',
     );

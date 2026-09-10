@@ -6,6 +6,7 @@ import { PrismaAiProviderReconciliationRepository } from '../repositories/ai-pro
 import { getStorageBackend } from '../services/image-storage.js';
 import {
   createAiProviderReconciliationService,
+  isWanxEditReconciliationOperation,
   type AiProviderReconciliationClaim,
   type AiProviderReconciliationRepository,
   type AiProviderTaskLookupResult,
@@ -19,6 +20,7 @@ import {
   resolveAiImageTranslationProvider,
   type AiImageTranslationProviderRuntimeConfig,
 } from './ai-image-translation.js';
+import { createAiImageEditRecovery, type AiImageEditRecoveryOptions } from '../services/ai-image-edit-recovery.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_LIMIT = 1;
@@ -149,6 +151,9 @@ type TickOverrides = LookupOverrides & {
   limit?: number;
   drainLimit?: number;
   now?: () => Date;
+  getEditProviderConfig?: AiImageEditRecoveryOptions['getProviderConfig'];
+  createWanxEditProvider?: AiImageEditRecoveryOptions['createProvider'];
+  loadEditInputBuffer?: AiImageEditRecoveryOptions['loadInputBuffer'];
 };
 
 export async function runAiProviderReconciliationTick(overrides: TickOverrides = {}) {
@@ -158,9 +163,17 @@ export async function runAiProviderReconciliationTick(overrides: TickOverrides =
     const storage = await getStorageBackend();
     return (storage.uploadBuffer as (...values: any[]) => Promise<any>).apply(storage, args);
   });
+  const editRecovery = createAiImageEditRecovery({
+    repository, uploadBuffer,
+    getProviderConfig: overrides.getEditProviderConfig,
+    createProvider: overrides.createWanxEditProvider,
+    loadInputBuffer: overrides.loadEditInputBuffer,
+  });
   const service = createAiProviderReconciliationService({
     repository,
-    lookupProviderTask: (claim) => lookupAiImageTranslationProviderTask(claim, overrides),
+    lookupProviderTask: (claim) => isWanxEditReconciliationOperation(claim)
+      ? editRecovery.lookup(claim) : lookupAiImageTranslationProviderTask(claim, overrides),
+    recoverEditOutput: editRecovery.recover,
     uploadBuffer,
     now: overrides.now,
   });

@@ -514,6 +514,49 @@ describe('AI image manual edit lifecycle', () => {
     expect(state.current()).toMatchObject({ status: 'CANCELLED' });
   });
 
+  it.each(['CANCELLED', 'FAILED'] as const)(
+    'forwards late accepted identity to the repository after the job is already %s',
+    async (status) => {
+      const source = await rgbaPng(2, 2, new Array(16).fill(10));
+      const job = editJob({ operation: 'FULL_EDIT', source });
+      job.provider = 'openai-images';
+      job.model = 'gpt-image-1';
+      job.estimatedCostCents = 7;
+      const state = memoryRepository(job);
+      const accepted = Object.assign(
+        new AiImageJobError('PROVIDER_ACCEPTED_PERSISTENCE_FAILED', 'Accepted task identity persistence failed'),
+        { providerJobId: 'synthetic-late-task', providerAcceptedAt: new Date() },
+      );
+      const generate = vi.fn(async () => {
+        state.current().status = status;
+        throw accepted;
+      });
+      const uploadBuffer = vi.fn();
+      const execution = runAiImageEditJob(job.id, 1, {
+        repository: state.repository,
+        provider: { name: job.provider, generate },
+        loadInputBuffer: async () => source,
+        uploadBuffer,
+      });
+
+      if (status === 'CANCELLED') await expect(execution).resolves.toBe('ignored');
+      else await expect(execution).rejects.toBe(accepted);
+
+      // This unit proves forwarding at the runner boundary; the PostgreSQL
+      // regression proves durable identity, terminal status and ledger effects.
+      expect(state.repository.markFailed).toHaveBeenCalledExactlyOnceWith(job.id, expect.objectContaining({
+        providerJobId: accepted.providerJobId,
+        providerAcceptedAt: accepted.providerAcceptedAt,
+        errorCode: accepted.code,
+      }));
+      expect(generate).toHaveBeenCalledOnce();
+      expect(state.repository.markSubmissionUncertain).not.toHaveBeenCalled();
+      expect(state.repository.recordProviderOutput).not.toHaveBeenCalled();
+      expect(state.repository.complete).not.toHaveBeenCalled();
+      expect(uploadBuffer).not.toHaveBeenCalled();
+    },
+  );
+
   it('fails before Provider dispatch when raw-output persistence is unavailable', async () => {
     const source = await rgbaPng(2, 2, new Array(16).fill(10));
     const candidate = await rgbaPng(2, 2, new Array(16).fill(210));

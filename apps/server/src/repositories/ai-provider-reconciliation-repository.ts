@@ -6,11 +6,17 @@ import {
   type AiCostSettlementKind,
 } from '../services/ai-cost-ledger.js';
 import {
+  hasWanxEditReconciliationContract,
+  isWanxEditReconciliationOperation,
   type AiProviderReconciliationClaim,
   type AiProviderReconciliationRepository,
 } from '../services/ai-provider-reconciliation.js';
 import { aiMediaPayloadHash } from '../services/ai-media-workflows.js';
 import { appendAiProviderReconciliationEvent } from '../services/ai-provider-reconciliation-events.js';
+import { PrismaAiImageJobRepository } from './ai-image-job-repository.js';
+import { persistAiImageEditRawOutput } from './ai-image-edit-output.js';
+import { AI_IMAGE_EDIT_POLICY_VERSION } from '../services/ai-image-edit-artifacts.js';
+import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
 
 const ACTIVE_RECONCILIATION_STATUSES = ['PENDING', 'RETRY_WAIT'] as const;
 const TERMINAL_COST_STATUSES = new Set(['SETTLED', 'RELEASED']);
@@ -98,6 +104,9 @@ function asClaim(job: any, leaseToken: string): AiProviderReconciliationClaim {
   return {
     jobId: job.id,
     workflowId: job.workflowId || null,
+    workflowAttempt: job.workflowAttempt ?? null,
+    attemptCount: job.attemptCount,
+    requestFingerprint: job.requestFingerprint ?? null,
     ownerUserId: job.ownerUserId,
     actorUserId: job.actorUserId || job.ownerUserId,
     operation: job.operation,
@@ -122,6 +131,16 @@ function claimFence(claim: AiProviderReconciliationClaim) {
     providerReconciliationStatus: 'RUNNING',
     providerReconciliationRevision: claim.reconciliationRevision,
     providerReconciliationLeaseTokenHash: tokenHash(claim.leaseToken),
+    ...(isWanxEditReconciliationOperation(claim) ? {
+      providerReconciliationLeaseExpiresAt: { gt: new Date() },
+      operation: claim.operation,
+      provider: claim.provider,
+      model: claim.model,
+      workflowId: claim.workflowId,
+      workflowAttempt: claim.workflowAttempt,
+      attemptCount: claim.attemptCount,
+      requestFingerprint: claim.requestFingerprint,
+    } : {}),
   };
 }
 
@@ -140,6 +159,56 @@ function ensureLeaseMutation(changed: { count: number }) {
       'Provider reconciliation lease changed before the result was committed',
     );
   }
+}
+
+async function assertClaimedEdit(tx: any, job: any, claim: AiProviderReconciliationClaim) {
+  if (!job || job.id !== claim.jobId || job.ownerUserId !== claim.ownerUserId
+    || job.actorUserId !== claim.actorUserId || job.providerJobId !== claim.providerJobId
+    || job.provider !== claim.provider || job.model !== claim.model || job.operation !== claim.operation
+    || job.workflowId !== claim.workflowId || job.workflowAttempt !== claim.workflowAttempt
+    || job.attemptCount !== claim.attemptCount || job.requestFingerprint !== claim.requestFingerprint
+    || !['FAILED', 'CANCELLED'].includes(job.status)
+    || job.providerReconciliationStatus !== 'RUNNING'
+    || job.providerReconciliationRevision !== claim.reconciliationRevision
+    || job.providerReconciliationLeaseTokenHash !== tokenHash(claim.leaseToken)
+    || !validDate(job.providerReconciliationLeaseExpiresAt)
+    || job.providerReconciliationLeaseExpiresAt.getTime() <= Date.now()) {
+    ensureLeaseMutation({ count: 0 });
+  }
+  assertCurrentAttempt(job);
+  if (!hasWanxEditReconciliationContract(job) || !job.workflowId
+    || !/^[a-f0-9]{64}$/u.test(String(job.requestFingerprint || ''))
+    || job.estimatedCostCents !== claim.estimatedCostCents
+    || job.workflow.operation !== job.operation
+    || job.workflow.status !== job.status) {
+    throw new AiProviderReconciliationRepositoryError('PROVIDER_RECONCILIATION_INVALID', 'Frozen edit recovery contract is incomplete');
+  }
+  const reservation = await tx.aiCostReservation.findUnique({
+    where: { ai_cost_reservation_job_owner: { jobId: job.id, ownerUserId: job.ownerUserId } },
+  });
+  if (!reservation || reservation.currency !== 'USD'
+    || reservation.provider !== job.provider || reservation.model !== job.model
+    || reservation.requestFingerprint !== job.requestFingerprint
+    || reservation.providerRequestId !== job.providerJobId
+    || !validDate(reservation.providerAcceptedAt)
+    || Number(reservation.estimatedCostMinor) !== job.estimatedCostCents
+    || Number(reservation.maximumCostMinor) !== job.estimatedCostCents) {
+    throw new AiProviderReconciliationRepositoryError('PROVIDER_COST_TASK_ID_MISMATCH', 'Recovered edit requires the original task-bound cost reservation');
+  }
+  const deadline = job.providerReconciliationDeadlineAt;
+  if (!validDate(job.providerDispatchedAt) || !validDate(deadline)
+    || deadline.getTime() !== claim.deadlineAt.getTime()
+    || deadline.getTime() <= Date.now()
+    || deadline.getTime() > Math.min(job.providerDispatchedAt.getTime(), reservation.providerAcceptedAt.getTime()) + 24 * 60 * 60 * 1000) {
+    throw new AiProviderReconciliationRepositoryError('PROVIDER_RECONCILIATION_DEADLINE_EXCEEDED', 'Original accepted task lookup window is unavailable or expired');
+  }
+}
+
+async function loadClaimedEdit(tx: any, claim: AiProviderReconciliationClaim) {
+  await tx.$queryRawUnsafe('SELECT "id" FROM "ai_image_jobs" WHERE "id" = $1 FOR UPDATE', claim.jobId);
+  const job = await new PrismaAiImageJobRepository(tx).getById(claim.jobId);
+  await assertClaimedEdit(tx, job, claim);
+  return job!;
 }
 
 async function settleRecoveredCost(
@@ -239,6 +308,24 @@ function sourceSnapshotId(inputs: any[]) {
 
 export class PrismaAiProviderReconciliationRepository implements AiProviderReconciliationRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  async getClaimedEditJob(claim: AiProviderReconciliationClaim) {
+    return runAiMediaSerializableTransaction(this.prisma as any, (tx: any) => loadClaimedEdit(tx, claim));
+  }
+
+  async recordRecoveredEditRaw(input: Parameters<NonNullable<AiProviderReconciliationRepository['recordRecoveredEditRaw']>>[0]) {
+    return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      const job = await loadClaimedEdit(tx, input.claim);
+      const result = await persistAiImageEditRawOutput(tx, job, input.asset);
+      await assertClaimedEdit(tx, job, input.claim);
+      if (result.created) {
+        await appendEvent(tx, job, 'PROVIDER_RECONCILIATION_RAW_PERSISTED', input.claim.reconciliationRevision, 'RUNNING', {
+          outputAssetId: result.output.id, outputSha256: input.asset.sha256,
+        });
+      }
+      return { id: String(result.output.id) };
+    });
+  }
 
   async claimDue(input: { workerId: string; now: Date; limit: number; leaseMs: number }) {
     const client = this.prisma as any;
@@ -399,6 +486,12 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
 
   async completeNoOutput(input: Parameters<AiProviderReconciliationRepository['completeNoOutput']>[0]) {
     await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      if (isWanxEditReconciliationOperation(input.claim)) {
+        await loadClaimedEdit(tx, input.claim);
+        if (input.billingDisposition !== 'UNKNOWN') {
+          throw new AiProviderReconciliationRepositoryError('PROVIDER_COST_EVIDENCE_MISMATCH', 'Wanx task status alone cannot prove a zero charge');
+        }
+      }
       const job = await tx.aiImageJob.findUnique({ where: { id: input.claim.jobId } });
       if (!job) ensureLeaseMutation({ count: 0 });
       if (input.billingDisposition === 'NO_CHARGE') {
@@ -428,7 +521,20 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
   }
 
   async completeRecovered(input: Parameters<AiProviderReconciliationRepository['completeRecovered']>[0]) {
+    return this.completeRecoveredResult(input);
+  }
+
+  async completeRecoveredEdit(input: Parameters<NonNullable<AiProviderReconciliationRepository['completeRecoveredEdit']>>[0]) {
+    return this.completeRecoveredResult(input);
+  }
+
+  private async completeRecoveredResult(input:
+    Parameters<AiProviderReconciliationRepository['completeRecovered']>[0]
+    | Parameters<NonNullable<AiProviderReconciliationRepository['completeRecoveredEdit']>>[0]
+  ) {
     await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      const edit = 'rawAssetId' in input;
+      if (edit) await loadClaimedEdit(tx, input.claim);
       const job = await tx.aiImageJob.findUnique({
         where: { id: input.claim.jobId },
         include: {
@@ -449,6 +555,9 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
         ensureLeaseMutation({ count: 0 });
       }
       assertCurrentAttempt(job);
+      if (!edit && ['FULL_EDIT', 'INPAINT'].includes(job.operation)) {
+        throw new AiProviderReconciliationRepositoryError('INVALID_EDIT_OUTPUT_GRAPH', 'Edit recovery requires the raw and final artifact path');
+      }
       const inputs = job.workflow?.inputs || [];
       const snapshotId = sourceSnapshotId(inputs);
       if (job.workflowId && !snapshotId) {
@@ -457,6 +566,24 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
           'Recovered Provider output requires one frozen source snapshot',
         );
       }
+      const cancelled = job.status === 'CANCELLED';
+      const asset = edit ? input.finalAsset : input.asset;
+      const raw = edit ? await tx.mediaAsset.findFirst({ where: {
+        id: input.rawAssetId, aiImageJobId: job.id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT',
+      } }) : null;
+      if (edit && (!raw || input.actualCostCents !== job.estimatedCostCents
+        || (!cancelled && (!asset || asset.kind !== 'AI_GENERATED'
+          || asset.ownerUserId !== job.ownerUserId || asset.jobId !== job.id
+          || asset.width !== job.width || asset.height !== job.height
+          || !['local', 'oss'].includes(asset.storageBackend) || !asset.storageKey
+          || asset.metadata?.providerOutputAssetId !== raw.id
+          || asset.metadata?.operation !== job.operation
+          || asset.metadata?.policyVersion !== AI_IMAGE_EDIT_POLICY_VERSION
+          || asset.metadata?.editSourceContractVersion !== AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION
+          || asset.metadata?.pixelOrientationNormalized !== true
+          || asset.metadata?.outputRole !== (job.operation === 'INPAINT' ? 'FINAL_COMPOSITE' : 'FINAL_CANDIDATE'))))) {
+        throw new AiProviderReconciliationRepositoryError('INVALID_EDIT_OUTPUT_GRAPH', 'Recovered edit does not bind its normalized final candidate to the original raw output');
+      }
       const costProjection = await settleRecoveredCost(
         tx,
         job,
@@ -464,23 +591,23 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
         1,
         false,
       );
-      const cancelled = job.status === 'CANCELLED';
       const outputKind = cancelled ? 'AI_PROVIDER_OUTPUT' : 'AI_GENERATED';
-      const output = await tx.mediaAsset.create({
+      const output = edit && cancelled ? raw : await tx.mediaAsset.create({
         data: {
-          ownerUserId: input.asset.ownerUserId,
-          aiImageJobId: input.asset.jobId,
+          ownerUserId: asset!.ownerUserId,
+          aiImageJobId: asset!.jobId,
           kind: outputKind,
-          url: input.asset.url,
-          storageBackend: input.asset.storageBackend,
-          storageKey: input.asset.storageKey,
-          mimeType: input.asset.mimeType,
-          sizeBytes: input.asset.sizeBytes,
-          width: input.asset.width ?? null,
-          height: input.asset.height ?? null,
-          sha256: input.asset.sha256,
+          url: asset!.url,
+          storageBackend: asset!.storageBackend,
+          storageKey: asset!.storageKey,
+          mimeType: asset!.mimeType,
+          sizeBytes: asset!.sizeBytes,
+          width: asset!.width ?? null,
+          height: asset!.height ?? null,
+          sha256: asset!.sha256,
           ...(snapshotId ? { sourceCaptureSnapshotId: snapshotId } : {}),
           metadata: {
+            ...(edit ? asset!.metadata : {}),
             providerReconciliation: {
               providerJobId: input.claim.providerJobId,
               providerStatus: bounded(input.providerStatus, 100),
@@ -488,7 +615,7 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
           },
         },
       });
-      for (const frozenInput of inputs) {
+      for (const frozenInput of edit && cancelled ? [] : inputs) {
         await tx.mediaAssetLineage.create({
           data: {
             ownerUserId: job.ownerUserId,
@@ -563,7 +690,7 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
         {
           outputAssetId: output.id,
           providerStatus: bounded(input.providerStatus, 100),
-          outputSha256: input.asset.sha256,
+          outputSha256: edit && cancelled ? raw.sha256 : asset!.sha256,
           cost: {
             reservationStatus: costProjection.reservationStatus,
             projectionSource: costProjection.preservedTerminalDecision

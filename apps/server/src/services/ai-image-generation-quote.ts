@@ -2,6 +2,7 @@ import { AiImageJobError } from './ai-image-jobs.js';
 import {
   createAiImageProviderRuntimeContract,
   type AiImageProviderRuntimeContract,
+  type AiImageProviderRuntimeIdentity,
 } from './ai-image-provider-runtime-contract.js';
 
 export interface AiImageGenerationQuote {
@@ -11,12 +12,7 @@ export interface AiImageGenerationQuote {
 }
 
 export function buildAiImageGenerationQuote(
-  provider: {
-    provider: string;
-    model: string;
-    baseUrl: string;
-    costPerImageCents: number;
-  },
+  provider: AiImageProviderRuntimeIdentity,
   request: { count: number; width: number; height: number },
 ): AiImageGenerationQuote {
   if (provider.provider === 'fake') {

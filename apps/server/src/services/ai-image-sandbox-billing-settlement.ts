@@ -1084,6 +1084,28 @@ async function loadPrivateCanonicalJson(input: {
   return { ...evidence, record };
 }
 
+// Observation readers share the same private-file boundary, but cannot obtain a writer.
+export async function readAiImageSandboxPrivateBillingEvidence(input: {
+  repositoryRoot: string;
+  evidenceRoot: string;
+  path: string;
+  sha256: string;
+}) {
+  if (typeof input.sha256 !== 'string' || !SHA256_PATTERN.test(input.sha256)) {
+    throw new AiImageSandboxBillingSettlementError('SANDBOX_BILLING_CONFIG_INVALID', 'A pinned private evidence digest is required');
+  }
+  const allowedRoot = await resolvePrivateEvidenceRoot(input.repositoryRoot, input.evidenceRoot);
+  const evidence = await loadPrivateCanonicalJson({
+    repositoryRoot: input.repositoryRoot,
+    path: input.path,
+    expectedSha256: input.sha256,
+    maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
+    kind: 'evidence',
+    allowedRoot,
+  });
+  return { record: evidence.record, sha256: evidence.sha256 };
+}
+
 async function readExactPrivateFile(
   path: string,
   expected: Buffer,
@@ -1155,6 +1177,13 @@ async function writeExclusiveAtomicFile(path: string, bytes: Buffer, allowedRoot
     await directory.handle.close();
   }
 }
+
+// Trial execution uses the same descriptor-bound private root and atomic,
+// non-overwriting writer as billing receipts; it does not acquire a settler.
+export {
+  resolvePrivateEvidenceRoot as resolveAiImageSandboxPrivateEvidenceRoot,
+  writeExclusiveAtomicFile as writeAiImageSandboxPrivateEvidenceFile,
+};
 
 export interface AiImageSandboxPrivateEvidenceBundleInput {
   repositoryRoot: string;

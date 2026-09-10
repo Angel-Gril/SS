@@ -12,6 +12,13 @@ import {
   assertAiImageSandboxMoneyPair,
   parseAiImageSandboxMoney,
 } from './ai-image-sandbox-money.js';
+import {
+  AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+  AI_IMAGE_WANX21_EDIT_MODEL,
+  AI_IMAGE_WANX21_EDIT_SUBMIT_PATH,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
+} from './ai-image-wanx-edit-profile.js';
 
 export const AI_IMAGE_SANDBOX_APPROVAL_STATEMENT =
   'I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST';
@@ -53,12 +60,30 @@ const APPROVAL_V3_KEYS = new Set([
   'quotedCost',
   'maximumCost',
 ]);
+const APPROVAL_V4_KEYS = new Set([...APPROVAL_V3_KEYS, 'trialBinding']);
+const TRIAL_BINDING_DIGEST_KEYS = [
+  'manifestSha256',
+  'evidenceRootSha256',
+  'providerAccountUidSha256',
+  'requestFingerprint',
+  'frozenPromptSha256',
+] as const;
+const TRIAL_BINDING_KEYS = new Set(['roundId', ...TRIAL_BINDING_DIGEST_KEYS]);
 
 type AiImageSandboxApprovalOperation =
   | 'TEXT_TO_IMAGE'
   | 'IMAGE_TO_IMAGE'
   | 'FULL_EDIT'
   | 'INPAINT';
+
+export interface AiImageSandboxTrialBinding {
+  roundId: string;
+  manifestSha256: string;
+  evidenceRootSha256: string;
+  providerAccountUidSha256: string;
+  requestFingerprint: string;
+  frozenPromptSha256: string;
+}
 
 interface AiImageSandboxApprovalExpectedRequestBase {
   operationId: string;
@@ -71,6 +96,7 @@ interface AiImageSandboxApprovalExpectedRequestBase {
   adapterRevision: string;
   sourceSha256: string[];
   maskSha256: string | null;
+  trialBinding?: AiImageSandboxTrialBinding;
 }
 
 type AiImageSandboxApprovalExpectedMoney =
@@ -196,11 +222,11 @@ function approvalMoneyLimit(maximumCost: AiImageSandboxMoney) {
 
 function expectedMoneyPair(
   expected: AiImageSandboxApprovalExpectedRequest,
-  schemaVersion: 2 | 3,
+  schemaVersion: 2 | 3 | 4,
   legacyCurrency: string,
 ) {
   if (expected.quotedCost && expected.maximumCost) {
-    if (schemaVersion !== 3) mismatch();
+    if (schemaVersion === 2) mismatch();
     const quotedCost = approvalMoney(expected.quotedCost, 'Expected sandbox quoted cost');
     const maximumCost = approvalMoney(expected.maximumCost, 'Expected sandbox maximum cost');
     approvalMoneyPair(quotedCost, maximumCost, {
@@ -251,6 +277,66 @@ function mismatch() {
     'SANDBOX_APPROVAL_MISMATCH',
     'Sandbox approval does not match the exact paid request',
   );
+}
+
+function checkedTrialBinding(value: unknown): AiImageSandboxTrialBinding {
+  if (
+    !isRecord(value)
+    || Object.keys(value).length !== TRIAL_BINDING_KEYS.size
+    || Object.keys(value).some((key) => !TRIAL_BINDING_KEYS.has(key))
+    || typeof value.roundId !== 'string'
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/u.test(value.roundId)
+    || TRIAL_BINDING_DIGEST_KEYS.some((key) => (
+      typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/u.test(value[key])
+    ))
+  ) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      'Sandbox trial binding must contain one exact round and five lowercase SHA-256 digests',
+    );
+  }
+  return value as unknown as AiImageSandboxTrialBinding;
+}
+
+function assertTrialApproval(
+  record: Record<string, unknown>,
+  expected: AiImageSandboxApprovalExpectedRequest,
+  schemaVersion: 2 | 3 | 4,
+) {
+  const hasExpectedBinding = expected.trialBinding !== undefined;
+  if (schemaVersion !== 4) {
+    if (hasExpectedBinding) mismatch();
+    return;
+  }
+  if (!hasExpectedBinding) mismatch();
+  const binding = checkedTrialBinding(record.trialBinding);
+  const expectedBinding = checkedTrialBinding(expected.trialBinding);
+  if (binding.roundId !== expectedBinding.roundId
+    || TRIAL_BINDING_DIGEST_KEYS.some((key) => binding[key] !== expectedBinding[key])) {
+    mismatch();
+  }
+  const requestProfile = record.operation === 'FULL_EDIT'
+    ? AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE
+    : record.operation === 'INPAINT'
+      ? AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE
+      : null;
+  if (
+    !requestProfile
+    || record.requestProfile !== requestProfile
+    || record.endpoint !== `${AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE}${AI_IMAGE_WANX21_EDIT_SUBMIT_PATH}`
+    || record.expectedHost !== 'dashscope.aliyuncs.com'
+    || record.model !== AI_IMAGE_WANX21_EDIT_MODEL
+    || !Array.isArray(record.sourceSha256)
+    || record.sourceSha256.length !== 1
+    || (record.operation === 'INPAINT'
+      ? typeof record.maskSha256 !== 'string'
+      : record.maskSha256 !== null)
+  ) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      'Sandbox trial approval requires one exact standard Beijing Wanx full-edit or inpaint request',
+    );
+  }
 }
 
 function canonicalApprovalTimestamp(value: string, field: 'timestamp' | 'expiry') {
@@ -392,13 +478,14 @@ export async function loadAiImageSandboxApproval(input: {
     );
   }
   const schemaVersion = record.schemaVersion;
-  if ((schemaVersion !== 2 && schemaVersion !== 3) || record.requestCount !== 1) {
+  if ((schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4) || record.requestCount !== 1) {
     throw new AiImageSandboxApprovalError(
       'SANDBOX_APPROVAL_SCHEMA_INVALID',
       'Sandbox approval schema or request count is invalid',
     );
   }
-  const approvalKeys = schemaVersion === 2 ? APPROVAL_V2_KEYS : APPROVAL_V3_KEYS;
+  const approvalKeys = schemaVersion === 2 ? APPROVAL_V2_KEYS
+    : schemaVersion === 3 ? APPROVAL_V3_KEYS : APPROVAL_V4_KEYS;
   const keys = Object.keys(record);
   if (keys.length !== approvalKeys.size || keys.some((key) => !approvalKeys.has(key))) {
     throw new AiImageSandboxApprovalError(
@@ -406,6 +493,7 @@ export async function loadAiImageSandboxApproval(input: {
       'Sandbox approval contains missing or unsupported fields',
     );
   }
+  assertTrialApproval(record, input.expected, schemaVersion);
 
   const approvalId = requiredString(record, 'approvalId', 80);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u.test(approvalId)) {
@@ -467,7 +555,7 @@ export async function loadAiImageSandboxApproval(input: {
     currency = quotedCost.currency;
   }
   approvalMoneyPair(quotedCost, maximumCost, {
-    requireCanonicalSharedScale: schemaVersion === 3,
+    requireCanonicalSharedScale: schemaVersion !== 2,
   });
   approvalMoneyLimit(maximumCost);
   let endpoint = '';

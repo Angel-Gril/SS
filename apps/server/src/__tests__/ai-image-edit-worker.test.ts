@@ -18,6 +18,7 @@ import {
   aiImageProviderEndpointSha256,
   createAiImageProviderRuntimeContract,
 } from '../services/ai-image-provider-runtime-contract.js';
+import { createOpenAiImageEditProvider } from '../services/ai-image-providers.js';
 
 const fakeProviderConfig = {
   provider: 'fake', baseUrl: '', apiKey: '', model: 'fake-image-edit-v1',
@@ -277,6 +278,112 @@ describe('AI image edit worker boundary', () => {
     })).resolves.toMatchObject({ enabled: false, reasonCode: 'feature_off' });
   });
 
+  it.each([
+    ['authorization', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
+    ['authorization-unavailable', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
+    ['credential', 'PROVIDER_CONFIG_CHANGED'],
+    ['endpoint', 'PROVIDER_RUNTIME_CONTRACT_MISMATCH'],
+    ['price', 'PROVIDER_RUNTIME_CONTRACT_MISMATCH'],
+    ['lease', 'EDIT_EXECUTION_LEASE_LOST'],
+    ['cancel', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
+    ['reservation', 'AI_IMAGE_COST_RESERVATION_REQUIRED'],
+    ['cancel-during-renewal', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
+    ['reservation-during-renewal', 'AI_IMAGE_COST_RESERVATION_REQUIRED'],
+    ['authorization-during-renewal', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
+    ['credential-during-renewal', 'PROVIDER_CONFIG_CHANGED'],
+  ])('blocks a late %s change at the actual adapter dispatch boundary', async (change, code) => {
+    const requestFingerprint = 'e'.repeat(64);
+    const job = {
+      id: 'job-late-dispatch', ownerUserId: 'owner-1', status: 'QUEUED', operation: 'FULL_EDIT',
+      provider: paidProviderConfig.provider, model: paidProviderConfig.model, estimatedCostCents: 7,
+      attemptCount: 0, requestedImageCount: 1, width: 1024, height: 1024, requestFingerprint,
+      providerDispatchedAt: null as Date | null,
+      operationConfig: {
+        policyVersion: 'ai-image-edit-policy/1.0',
+        providerRuntime: createAiImageProviderRuntimeContract(paidProviderConfig, {
+          count: 1, width: 1024, height: 1024,
+        }),
+      },
+      costReservation: {
+        id: 'reservation-late', status: 'RESERVED', currency: 'USD', provider: paidProviderConfig.provider,
+        model: paidProviderConfig.model, estimatedCostMinor: 7, maximumCostMinor: 7,
+        requestFingerprint,
+      },
+    };
+    let preparing = false;
+    let renewed = false;
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      id: 'synthetic-late-response',
+      data: [{ b64_json: Buffer.from('89504e470d0a1a0a', 'hex').toString('base64') }],
+    }), { headers: { 'content-type': 'application/json' } }));
+    const releaseLease = vi.fn(async () => undefined);
+    const repository = {
+      getById: vi.fn(async () => structuredClone(job)), markEnqueueFailed: vi.fn(),
+    } as any;
+    const result = processAiImageEditQueueJob(job.id, 1, {
+      repository,
+      getDispatchAuthorization: async () => {
+        if (preparing && change === 'authorization-unavailable') {
+          throw new Error('synthetic authorization read failure');
+        }
+        return preparing && (change === 'authorization' || (renewed && change === 'authorization-during-renewal'))
+          ? { enabled: false, reasonCode: 'feature_off', reason: 'Edit feature was revoked' }
+          : allowPaidDispatch();
+      },
+      getProviderConfig: async () => ({
+        ...paidProviderConfig,
+        ...(preparing && (change === 'credential' || (renewed && change === 'credential-during-renewal'))
+          ? { apiKey: 'rotated-test-sentinel' } : {}),
+        ...(preparing && change === 'endpoint' ? { baseUrl: 'https://other.example/v1' } : {}),
+        ...(preparing && change === 'price' ? { costPerImageCents: 8 } : {}),
+      }),
+      resolveProvider: (...args) => resolveAiImageEditProvider(
+        args[0], args[1], args[2], args[3], args[4], args[5], {
+          ...args[6],
+          resolveCapability: () => ({
+            provider: paidProviderConfig.provider, model: paidProviderConfig.model,
+            operations: ['FULL_EDIT'], maxReferences: 1, supportsMask: false,
+            inputTransport: 'multipart', resultMode: 'sync',
+            evidenceLevel: 'sandbox-verified', evidence: 'synthetic dispatch test evidence only',
+            sandboxEvidence: [{
+              endpointSha256: aiImageProviderEndpointSha256(
+                paidProviderConfig.provider, paidProviderConfig.baseUrl,
+              ),
+              operation: 'FULL_EDIT', inputTransport: 'multipart', resultMode: 'sync',
+            }],
+          }),
+          createOpenAiEditProvider: (options) => createOpenAiImageEditProvider({ ...options, fetch: fetcher }),
+        },
+      ),
+      // Isolate worker-to-adapter wiring here; the PostgreSQL test runs the real runner.
+      run: async (_jobId, _attempt, dependencies) => {
+        preparing = true;
+        job.status = change === 'cancel' ? 'CANCEL_REQUESTED' : 'RUNNING';
+        job.attemptCount = 1;
+        job.providerDispatchedAt = new Date();
+        if (change === 'reservation') job.costReservation.status = 'RELEASED';
+        await dependencies.provider.generate({
+          operation: 'FULL_EDIT', model: job.model, prompt: 'Edit the background',
+          negativePrompt: null, count: 1, width: 1024, height: 1024,
+          inputImages: [{ buffer: Buffer.from('89504e470d0a1a0a', 'hex'), mimeType: 'image/png' }],
+        });
+        return 'completed';
+      },
+      uploadBuffer: vi.fn(), loadInputBuffer: vi.fn(),
+      renewLease: async () => {
+        renewed = true;
+        if (preparing && change === 'cancel-during-renewal') job.status = 'CANCEL_REQUESTED';
+        if (preparing && change === 'reservation-during-renewal') job.costReservation.status = 'RELEASED';
+        return !(preparing && change === 'lease');
+      },
+      releaseLease,
+    });
+
+    await expect(result).rejects.toMatchObject({ code, providerSubmissionRejected: true });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
   it('fails a paid edit before reading Provider config when dispatch authorization is revoked', async () => {
     const repository = {
       getById: vi.fn(async () => ({
@@ -340,7 +447,7 @@ describe('AI image edit worker boundary', () => {
       getById: vi.fn(async () => ({
         ...baseJob,
         costReservation: {
-          id: 'reservation-1', status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+          id: 'reservation-1', status: 'RESERVED', currency: 'USD', provider: 'openai-images', model: 'gpt-image-1',
           estimatedCostMinor: 7, maximumCostMinor: 7, requestFingerprint,
         },
       })),
@@ -386,7 +493,7 @@ describe('AI image edit worker boundary', () => {
         requestFingerprint,
         operationConfig: { policyVersion: 'ai-image-edit-policy/1.0', providerRuntime },
         costReservation: {
-          id: 'reservation-legacy', status: 'RESERVED', provider: 'openai-images',
+          id: 'reservation-legacy', status: 'RESERVED', currency: 'USD', provider: 'openai-images',
           model: 'gpt-image-1', estimatedCostMinor: 7, maximumCostMinor: 7,
           requestFingerprint,
         },
@@ -438,7 +545,7 @@ describe('AI image edit worker boundary', () => {
         requestFingerprint,
         operationConfig: { policyVersion: 'ai-image-edit-policy/1.0', providerRuntime },
         costReservation: {
-          id: 'reservation-legacy-custom', status: 'RESERVED', provider: 'custom',
+          id: 'reservation-legacy-custom', status: 'RESERVED', currency: 'USD', provider: 'custom',
           model: 'relay-image-v2', estimatedCostMinor: 7, maximumCostMinor: 7,
           requestFingerprint,
         },
@@ -583,5 +690,16 @@ describe('AI image edit worker boundary', () => {
       attemptCount: 2, errorCode: 'EDIT_RECOVERY_REQUIRED',
     }));
     expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
+  it('does not increment the accepted Wanx invocation when a worker reclaims an interrupted task', async () => {
+    const repository = {
+      getById: vi.fn(async () => ({ id: 'wanx-job', status: 'RUNNING', operation: 'FULL_EDIT',
+        provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'accepted-task', attemptCount: 1 })),
+      markFailed: vi.fn(),
+    } as any;
+    await expect(processAiImageEditQueueJob('wanx-job', 2, { repository }))
+      .rejects.toMatchObject({ code: 'EDIT_RECOVERY_REQUIRED' });
+    expect(repository.markFailed).toHaveBeenCalledWith('wanx-job', expect.objectContaining({ attemptCount: 1 }));
   });
 });

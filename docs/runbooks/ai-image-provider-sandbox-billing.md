@@ -387,6 +387,150 @@ The capability-candidate consumer deliberately does not accept v6 receipts for p
 ones with a cash-budget `PASS`. Recording this reviewed bill alone does not close all QA-02 operations,
 change capability policy, authorize another paid request, or satisfy release gates.
 
+## Inspect Native Alibaba Bills Without Finalizing
+
+Use `sandbox:ai-image:billing:inspect-alibaba` to inspect a previously captured native Alibaba
+`QueryBill` JSON response offline. This is a separate observation contract, not an extension of
+attestation v1-v5. It cannot settle a Wanx operation, write a billing claim or receipt, promote a
+capability, approve a request, or contact Alibaba. Its output always contains
+`state: RECONCILIATION_REQUIRED`, `actualCost: null`, and `canFinalize: false`; it has no
+`billingGate` field. Exit code zero means only that the observation was read and validated, not that
+a request's billing gate passed.
+
+The [official QueryBill reference](https://help.aliyun.com/zh/user-center/developer-reference/api-bssopenapi-2017-12-14-querybill)
+reviewed on 2026-09-10 defines `RecordID` as an order/bill identifier and `RequestId` as the bill-query
+request identifier. Neither is the Wanx `task_id`. `Data.AccountID` is the queried account;
+`OwnerID` is a separate resource/delegated-payment owner, not proof of the API Key creator or a RAM
+identity. A `PayFinish` row, a single returned row, zero cash payment, or an empty response does not
+establish the charge for one image request.
+
+Keep the native monetary meanings separate:
+
+| Native field | Meaning retained by inspection |
+| --- | --- |
+| `PretaxGrossAmount` | Original amount |
+| `InvoiceDiscount` | Discount amount |
+| `PretaxAmount` | Amount due, not automatically the cash paid |
+| `PaymentAmount` | Cash payment including credit-refund offset |
+| `CashAmount` | Cash payment excluding credit-refund offset |
+| `AdjustAmount` | Credit-refund offset |
+| `DeductedByCashCoupons`, `DeductedByCoupons`, `DeductedByPrepaidCard` | Distinct deduction categories |
+| `OutstandingAmount`, `RoundDownDiscount` | Outstanding amount and rounding discount |
+
+Prepare one private canonical JSON observation, with two-space indentation and a trailing newline:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "ALIBABA_NATIVE_BILLING_OBSERVATION_V1",
+  "observedAt": "2026-09-10T02:00:00.000Z",
+  "collectorRef": "reviewed-billing-capture-01",
+  "request": {
+    "action": "QueryBill",
+    "version": "2017-12-14",
+    "billingCycle": "2026-09",
+    "productCode": "<reviewed-product-code>",
+    "productType": null,
+    "subscriptionType": "PayAsYouGo",
+    "billType": "PayAsYouGoBill",
+    "hideZeroCharge": false,
+    "pageNumber": 1,
+    "pageSize": 20,
+    "billOwnerId": null
+  },
+  "response": {
+    "httpStatus": 200,
+    "contentType": "application/json; charset=utf-8",
+    "bodySha256": "<sha256-of-exact-response-bytes>",
+    "bodyBase64": "<base64-of-exact-response-bytes>"
+  }
+}
+```
+
+The request object records the capture scope: `billType` maps to native `Type`, `hideZeroCharge`
+to `IsHideZeroCharge`, `pageNumber` to `PageNum`, and the remaining filters to their native
+PascalCase names. `null` means the optional ProductType/BillOwnerId filter was omitted, not that a
+literal null was sent. Record the real query, not a reconstructed narrower subset. V1 supports
+only CNY postpaid `PayAsYouGoBill` rows and an explicit `IsHideZeroCharge=false` query. It does not
+accept CSV, console screenshots, telemetry, `QuerySettleBill`, or `DescribeInstanceBill` bodies
+under the QueryBill label. These sources have different fields and finality rules.
+
+The raw body is the exact captured response, including normal account and bill fields; retain it
+only in a private file with mode `0600` on Linux or equivalent Windows ACLs. Never put keys,
+Authorization, Cookie, AccessKey credentials, signed query URLs, or sessions in the wrapper.
+`collectorRef` identifies the responsible capture review; it is not an Alibaba signature. Byte
+integrity and matching an independently supplied account digest do not authenticate the capture.
+No real QueryBill capture or Wanx product-code mapping is established by synthetic tests.
+
+The reader verifies the wrapper/file and response digests, UTF-8/base64, duplicate decoded JSON
+keys, closed schemas, response scope, page cardinality, date syntax and calendar validity. A raw
+body is capped at 4 MiB, a wrapper at 16 MiB, a page at 300 rows and nesting at 12 containers.
+It reads native numeric literals before JavaScript rounding and uses the existing exact-money
+contract with BigInt arithmetic; precision beyond that contract is rejected, not rounded.
+Missing optional deduction fields remain null rather than becoming zero. Dates remain native
+local strings; inspection does not invent their timezone or use them to correlate a task.
+
+Only a first page containing the entire declared result is marked `pagination.complete=true`.
+Other valid pages remain explicitly incomplete and are not extrapolated into account totals.
+Even a complete empty query remains unresolved. The inspector does not infer billing-period
+finality from age, payment status or a fixed delay, nor distribute an aggregate bill among tasks.
+
+Use a clean checkout of the exact inspected revision and an existing private evidence directory:
+
+```bash
+export NODE_ENV=sandbox
+export AI_IMAGE_SANDBOX_ADAPTER_REVISION="<full-reviewed-clean-commit>"
+export AI_IMAGE_SANDBOX_EVIDENCE_ROOT=/secure/ai-image-sandbox
+export AI_IMAGE_SANDBOX_BILLING_OBSERVATION_PATH=/secure/ai-image-sandbox/private/native-bill.json
+export AI_IMAGE_SANDBOX_BILLING_OBSERVATION_SHA256="<reviewed-file-sha256>"
+export AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256="<independently-reviewed-account-uid-sha256>"
+pnpm --filter server sandbox:ai-image:billing:inspect-alibaba
+```
+
+The account digest is a UID digest from separate account review, never an API Key digest or an
+arbitrary account-label digest. Keep all Provider/cloud secrets, paid confirmation, Operation ID,
+approval inputs and finalization inputs unset. Inspection rejects these mixed inputs, verifies
+tracked executable membership and the clean Git revision before and after reading, and emits only
+hashes, enums, bounded dates, pagination and exact observed amounts. It never emits raw account,
+bill, query-request or product identifiers, account names, raw responses or local paths.
+
+An inspection result is deliberately ineligible for the finalizer and capability-candidate reader.
+Actual request settlement still needs separately reviewed evidence linking the accepted Wanx task
+to the bill and establishing the applicable amount/finality. Do not rename this observation as a
+settlement or loosen the historical 15-minute no-request-ID correlation rule to make it pass.
+
+### Native Wanx Task Association And Settlement Boundary
+
+The official [billing and cost guide](https://help.aliyun.com/zh/model-studio/bill-query-and-cost-management)
+checked on 2026-09-10 distinguishes minute-level inference billing, usually visible 2–10 minutes
+after a call ends, from actual payment. Pay-as-you-go uses reservation followed by monthly
+settlement; a visible bill is not a cash-debit receipt.
+
+The documented instance ID format is
+`ApiKeyID;workspace ID;model;input/output type;call channel;stop-when-free-quota-exhausted flag`.
+It has no Wanx `task_id`. This is a general documented format, not proof of the actual Wanx product
+code, charge item or instance representation for the current account. Wanx submit/task IDs, each
+API request ID, a BSS query request ID and `RecordID` must remain separate identities.
+
+[QuerySettleBill](https://help.aliyun.com/zh/user-center/developer-reference/api-bssopenapi-2017-12-14-querysettlebill)
+states that current-month results are for reference rather than reconciliation, that final bills
+are available after 12:00 on the second day of the next month, and that fee/status updates may lag
+by five hours. An empty current query, `PayFinish`, a zero cash component, the catalog unit price,
+or `usage.image_count` cannot establish final per-task cost.
+
+A future native settlement contract needs an authentic account/ApiKeyID/workspace/model/region/
+charge-item mapping, complete native billing bytes and the applicable payment/finality basis.
+Assigning an aggregated billing interval to one task additionally needs complete evidence that
+the interval contains only that task. Multiple tasks in the same interval must not be divided
+into invented per-task actual costs. A round-level bill alone may support round-level review,
+not an individual settlement receipt.
+
+The current QueryBill inspector and isolated trial execution do not satisfy this association.
+Trial execution records its scope in a report-bound `wanx.trial-evidence.json` file and keeps
+`actualCost:null`; neither its execution claims nor a v4 approval is a native settlement proof.
+Do not adapt the old `UNIQUE_ACCOUNT_TIME_WINDOW` rule, whose no-request-ID/15-minute boundary
+does not describe this asynchronous, delayed native billing path.
+
 ## Run Offline
 
 Unset Provider secrets and paid confirmation first. The finalizer rejects

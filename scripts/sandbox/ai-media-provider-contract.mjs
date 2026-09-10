@@ -9,6 +9,15 @@ const matrixPath = path.join(root, 'docs/contracts/ai-media-provider-matrix.md')
 const policyDir = path.join(root, 'scripts/fixtures/ai-media-evaluation');
 const evaluationContractPath = path.join(root, 'scripts/ai-media-evaluation-contract.test.mjs');
 const reviewedPaidDerivedCapabilities = new Map([
+  ['dashscope-wanx:wanx2.1-imageedit', {
+    operations: new Set(['FULL_EDIT', 'INPAINT']),
+    inputTransport: 'base64',
+    resultMode: 'async',
+    maxReferences: 1,
+    supportsMask: true,
+    allowTextToImage: false,
+    sandboxEvidence: null,
+  }],
   ['dashscope-qwen-mt-image:qwen-mt-image', {
     operations: new Set(['IMAGE_TRANSLATE']),
     inputTransport: 'public_url',

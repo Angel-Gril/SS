@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Queue, Worker } from 'bullmq';
 import sharp from 'sharp';
 import { getConfig } from '../config/system-config-schema.js';
+import {
+  getAiImageEditProviderRuntimeConfig,
+  type AiImageEditProviderRuntimeConfig,
+} from '../services/ai-image-edit-runtime-config.js';
+export { getAiImageEditProviderRuntimeConfig, type AiImageEditProviderRuntimeConfig };
 import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { redis, redisDisabled } from '../lib/redis.js';
@@ -10,13 +15,21 @@ import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-reposit
 import { getStorageBackend } from '../services/image-storage.js';
 import { runAiImageEditJob } from '../services/ai-image-edit.js';
 import {
+  assertAiImageEditCostReservation,
+  createAiImageEditDispatchFence,
+} from '../services/ai-image-edit-dispatch.js';
+import {
   loadAiImageEditInputBuffer,
   readBoundedAiImageEditFile,
   readBoundedAiImageEditStream,
 } from '../services/ai-image-edit-input-reader.js';
 import {
   createOpenAiImageEditProvider,
+  withProviderSubmissionRejected,
+  type BeforeAiImageProviderDispatch,
 } from '../services/ai-image-providers.js';
+import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
+import { isWanxHostedEdit, resolveAiImageEditProviderContract } from '../services/ai-image-edit-provider-contract.js';
 import {
   hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
@@ -42,14 +55,6 @@ export const AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED =
 
 type FrozenInputAsset = NonNullable<AiImageJobRecord['inputAssets']>[number];
 
-export interface AiImageEditProviderRuntimeConfig {
-  provider: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  costPerImageCents: number;
-}
-
 export interface AiImageEditDispatchAuthorization {
   enabled: boolean;
   reasonCode: string;
@@ -59,6 +64,8 @@ export interface AiImageEditDispatchAuthorization {
 export interface AiImageEditProviderResolverDependencies {
   resolveCapability?: typeof resolveAiImageProviderCapability;
   createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
+  createWanxEditProvider?: typeof createDashScopeWanx21ImageEditProvider;
+  beforeProviderDispatch?: BeforeAiImageProviderDispatch;
 }
 
 type AiImageEditWorkerOverrides = {
@@ -126,17 +133,6 @@ export {
   readBoundedAiImageEditFile,
   readBoundedAiImageEditStream,
 };
-
-export async function getAiImageEditProviderRuntimeConfig(): Promise<AiImageEditProviderRuntimeConfig> {
-  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
-    getConfig('ai_image_provider'),
-    getConfig('ai_image_base_url'),
-    getConfig('ai_image_api_key'),
-    getConfig('ai_image_model'),
-    getConfig('ai_image_generation_cost_cents'),
-  ]);
-  return { provider, baseUrl, apiKey, model, costPerImageCents };
-}
 
 export async function getAiImageEditDispatchAuthorization(
   ownerUserId: string,
@@ -237,8 +233,9 @@ export function resolveAiImageEditProvider(
       },
     };
   }
+  const contract = resolveAiImageEditProviderContract(provider, model, config.baseUrl);
   if (
-    (provider !== 'openai-images' && provider !== 'custom')
+    !contract
     || provider !== config.provider
     || model !== config.model
     || !config.apiKey.trim()
@@ -256,19 +253,21 @@ export function resolveAiImageEditProvider(
     model,
     baseUrl: config.baseUrl,
     operation,
-    inputTransport: 'multipart',
-    resultMode: 'sync',
+    inputTransport: contract.inputTransport,
+    resultMode: contract.resultMode,
   })) {
     return createDisabledAiImageProvider();
   }
-  const editProvider = (
-    dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider
-  )({
-    baseUrl: config.baseUrl,
+  const createEditProvider = contract.kind === 'wanx21'
+    ? dependencies.createWanxEditProvider || createDashScopeWanx21ImageEditProvider
+    : dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider;
+  const editProvider = createEditProvider({
+    baseUrl: contract.baseUrl,
     apiKey: config.apiKey,
     model: config.model,
     costPerImageCents: config.costPerImageCents,
     onProviderJobCreated,
+    beforeProviderDispatch: dependencies.beforeProviderDispatch,
   });
   return {
     name: provider,
@@ -280,10 +279,10 @@ export function resolveAiImageEditProvider(
         || request.inputImages?.length !== 1
         || (operation === 'INPAINT' ? !request.mask : Boolean(request.mask))
       ) {
-        throw new AiImageJobError(
+        throw withProviderSubmissionRejected(new AiImageJobError(
           'INVALID_MEDIA_INPUT',
-          'OpenAI edit request does not match its frozen runtime inputs',
-        );
+          'Image edit request does not match its frozen runtime inputs',
+        ));
       }
       return editProvider.edit({
         operation,
@@ -344,6 +343,11 @@ export async function processAiImageEditQueueJob(
       });
   }, EDIT_EXECUTION_HEARTBEAT_MS);
   heartbeatTimer.unref();
+  const assertExecutionLease = () => {
+    if (leaseLost) {
+      throw new AiImageJobError('EDIT_EXECUTION_LEASE_LOST', 'AI image edit execution lease was lost');
+    }
+  };
   try {
     const job = await repository.getById(jobId);
     if (!job || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status))
@@ -371,10 +375,11 @@ export async function processAiImageEditQueueJob(
     if (job.status === 'RUNNING') {
       const interrupted = new AiImageJobError(
         'EDIT_RECOVERY_REQUIRED',
-        'An exclusively reclaimed image edit requires an explicit workflow retry',
+        'An interrupted image edit requires reconciliation before another invocation',
       );
       await repository.markFailed(job.id, {
-        attemptCount: Math.max(job.attemptCount, attemptNumber),
+        attemptCount: isWanxHostedEdit(job.provider, job.model)
+          ? job.attemptCount : Math.max(job.attemptCount, attemptNumber),
         errorCode: interrupted.code,
         errorMessage: interrupted.message,
       });
@@ -407,20 +412,11 @@ export async function processAiImageEditQueueJob(
         await failBeforeDispatch('AI_IMAGE_EDIT_DISPATCH_REVOKED', authorization.reason);
         return 'ignored' as const;
       }
-      const reservation = job.costReservation;
-      if (
-        !reservation?.id
-        || reservation.status !== 'RESERVED'
-        || reservation.provider !== job.provider
-        || reservation.model !== job.model
-        || reservation.requestFingerprint !== job.requestFingerprint
-        || Number(reservation.estimatedCostMinor) !== job.estimatedCostCents
-        || Number(reservation.maximumCostMinor) !== job.estimatedCostCents
-      ) {
-        await failBeforeDispatch(
-          'AI_IMAGE_COST_RESERVATION_REQUIRED',
-          'Paid AI image edit dispatch requires an exact RESERVED cost reservation',
-        );
+      try {
+        assertAiImageEditCostReservation(job);
+      } catch (error) {
+        if (!(error instanceof AiImageJobError)) throw error;
+        await failBeforeDispatch(error.code, error.message);
         return 'ignored' as const;
       }
     }
@@ -460,6 +456,17 @@ export async function processAiImageEditQueueJob(
           providerAcceptedAt,
         )
         : undefined;
+      const beforeProviderDispatch = paidJob
+        ? createAiImageEditDispatchFence({ job, attemptNumber, providerConfig }, {
+          loadJob: () => repository.getById(jobId),
+          loadProviderConfig: overrides.getProviderConfig || getAiImageEditProviderRuntimeConfig,
+          loadAuthorization: () => (
+            overrides.getDispatchAuthorization || getAiImageEditDispatchAuthorization
+          )(job.ownerUserId, job.operation as 'FULL_EDIT' | 'INPAINT'),
+          assertExecutionLease,
+          renewExecutionLease: () => renewLease(jobId, token),
+        })
+        : undefined;
       provider = (overrides.resolveProvider || resolveAiImageEditProvider)(
         job.provider,
         job.model,
@@ -467,6 +474,7 @@ export async function processAiImageEditQueueJob(
         providerConfig,
         onProviderJobCreated,
         nodeEnv,
+        { beforeProviderDispatch },
       );
       const storage = overrides.uploadBuffer ? null : await getStorageBackend();
       uploadBuffer = overrides.uploadBuffer || storage!.uploadBuffer.bind(storage);
@@ -484,14 +492,7 @@ export async function processAiImageEditQueueJob(
       provider,
       uploadBuffer,
       loadInputBuffer: overrides.loadInputBuffer || loadAiImageEditInputBuffer,
-      assertExecutionLease: () => {
-        if (leaseLost) {
-          throw new AiImageJobError(
-            'EDIT_EXECUTION_LEASE_LOST',
-            'AI image edit execution lease was lost',
-          );
-        }
-      },
+      assertExecutionLease,
     });
   } finally {
     clearInterval(heartbeatTimer);
