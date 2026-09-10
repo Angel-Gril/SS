@@ -67,11 +67,122 @@
 - 最终开发门禁：全仓 lint/typecheck、完整 `pnpm preflight`（含全后端测试与新增交接合同）通过；source/cloud/local 扩展 verifier 分别为 `459/464/460 passed`，全部 `0 failure / 0 warning`。双模式包仅在新建临时目录生成，未签名、未作为正式候选、未覆盖受管安装或旧发布产物。浏览器仍不覆盖真实 Chrome MV3 消息传输授权、真实 ERP ingest 客户端/存储或真实 Provider；这些证据不能被写成完整付费 QA-02、正式 QA-04 或生产放量批准。本轮没有真实 Provider/ERP/Ozon 写入或新费用，没有改线上开关、部署或官网 pointer。
 - Wanx 正常托管接线不混入此修复：历史 adapter 仅支持方图、800 字正向且拒绝 negativePrompt；现有套图为竖图，其固定正向约束已达 981 字。最后发包 fence、0 POST 输入失败分类、恢复及内部 USD/外部 CNY 也不能靠一个工厂分支解决。保留已验证 sandbox 的范围，后续需独立的完整正常传输合同，不截断约束、不假装已接通。
 
+### Wanx 接线前置与托管编辑发包收口（2026-09-09）
+
+- 接续基线为已推送的 clean `a00c78c64f1b238bb7545b14637ed95198603657`。用户继续要求完成 AI 生图/改图，本轮只推进本地实现与隔离验证；以下改动尚未提交或推送，不是新版本部署、官网切换或真实付费请求。
+- Wanx adapter 已修复最后发包检查：`requestJson` 复用现有网络层的发包前 callback，在 URL/DNS 检查之后、fetch 之前检查租约和剩余时间。非法输入、DNS 失败、发包前撤销/超时均携带明确未提交证据；fetch 开始后的连接丢失继续为未知结果，已接受后的落盘/轮询失败继续携带同一 task ID。既有方图、800 字、单源图、无独立负向字段、mask 转换及异步报文没有改变。
+- 正常托管编辑也接入同一最后检查入口。新 owner 为 `apps/server/src/services/ai-image-edit-dispatch.ts`；worker/factory 只负责传递。先续租，再核验实时开关/租户授权、精确端点/模型/报价、当前凭据、任务/attempt/workflow 身份和 RESERVED 预留，最终任务快照之后不再等待续租。续租期间的取消、预留释放、授权撤回和凭据变化有独立负例；不增加生产开关、不晋升 capability、不更换 Provider 或计价币种。
+- 修复两项真实数据库可复现的取消证据丢失：明确未发包却取消时，runner 原先丢弃 `providerSubmissionRejected`，导致额度误留在 `SUBMISSION_UNCERTAIN`；已接受但首次 ID 落盘失败并发取消时，原先丢弃已收到的 `providerJobId`。现在均交给现有 repository 的 `markFailed(details)` 先绑定证据再按取消规则结算：前者只释放一次，后者保留精确 ID 和 `RECONCILIATION_REQUIRED`，不重发、不假设零费用。
+- 测试过程：上述发包、续租竞态和取消边界均先观察到目标 RED，再实现 GREEN；已有成功/未知结果路径为表征回归。新增 `ai-image-wanx-edit-dispatch.test.ts` 与真实 PostgreSQL 的 `ai-image-edit-dispatch.postgres.integration.test.ts`，后者已进入既有 AI PostgreSQL runner。最终回放 148 migrations，`22 files / 104 passed`；5 个新数据库用例覆盖 DNS 期间取消零 POST、首次 ID 落盘失败并发取消、FULL_EDIT/INPAINT 的 raw/final 与显式审核、丢响应后的自动及显式重试拒绝。候选逐像素核验、精确 lineage、唯一预留结算与原图不变均有断言。五个本轮隔离 schema 已自动清理，独立读回复核剩余为 0。
+- 证据范围：数据库用例运行真实 worker、factory、adapter、输入 reader、runner、workflow/repository 与 PostgreSQL。仅 Provider capability 注入、DNS/fetch、配置/授权/Redis 和对象存储 I/O 为明确合成 fixture；正常 admission 的真实 registry 仍拒绝付费编辑，未写入假的晋升条目。合成预留单位为 USD，不能代替 Wanx 的 CNY 账单。这证明隔离托管链路，不是实际 Provider → ERP 或 MV3 端到端通过。
+- 最终本地验证：全仓 `pnpm lint`、`pnpm typecheck`、完整 `pnpm preflight`、server build 与 `git diff --check` 通过；preflight 的扩展 source verifier 为 `459 passed / 0 failure / 0 warning`。独立只读复核发现的续租窗口已补 RED→GREEN 并复查关闭。没有重新生成正式扩展候选、签名或 `QA04_FINAL_ACCEPTANCE`。Sliver 路由/影响分类已执行；Task Decision 校验函数位于 `runtime_decision_contract.py`，收口时补跑通过，前置机器检查遗漏不能回填为已执行，Host 自动强制执行仍为 `未验证`。
+- Wanx 正常接线仍有具体协议缺口。本轮重新读取[官方 API](https://help.aliyun.com/zh/model-studio/wanx-image-edit-api-reference)（HTTP 200）：提示词超过 800 字会被截断，HTTP 参数表没有独立 `negative_prompt` 或固定输出尺寸保证；Java 示例的 `size` 不代替 HTTP 承诺。[官方 Base URL 说明](https://help.aliyun.com/zh/model-studio/base-url)区分旧跨业务空间域名与 Workspace 专属域名，协议兼容不代表端点/审批/账单身份相同。源码复算：编辑安全前缀单独 949 字；默认 FULL_EDIT/INPAINT 正向固定开销分别 1419/1302 字，尚未加用户文本；不止套图超限。
+- 下一步先在提示词 owner 设计可逐条审查的 Wanx 专用版本化编译合同，完整保留事实、身份、文字、审核与 mask 约束并在物化前验证 800 字上限；再闭合单图输出尺寸、`base64/async` 运行身份和只读 task 恢复到正常 raw/composite/review 链路。不能靠截断、清空负向、把方图当竖图、把翻译恢复直接用于 inpaint 或新增 factory 分支宣布完成。真实调用仍需匹配 Wanx 账单归属和逐次明确费用上限；旧已消费请求不重发。本轮真实 Provider/Ozon 请求、新费用、生产写入、部署和官网切换均为 0。
+
+### Wanx 显式提示词编译合同（2026-09-09 后续本地实现）
+
+- 用户继续上述提示词任务。本节接续而不覆盖上一节的未提交发包/取消修复；当前 HEAD 仍为 `a00c78c6`，本节及上一节代码均未提交/推送。本阶段不接真实 Provider、不开通能力、不改模型配置/价格/schema、生产开关、UI、部署或官网。
+- 新增 `apps/server/src/services/ai-image-edit-prompt-contract.ts`，统一维护六条编辑安全义务的原文/中文表示、既有默认模板及显式 `ai-image-wanx21-edit-prompt/v1` 渲染合同。旧英文 policy、FULL_EDIT/INPAINT 正文及负向正文的 SHA-256 均以本次改动前的源码值锁定；模板 key、revision checksum、bootstrap 版本、发布/回滚记录不变。主代理逐条核对身份/数量/结构/固有印字及翻译例外、无新声明、仅审核候选和 mask 保留规则；没有按任意用户文本进行自动翻译或摘要。
+- `renderAiPromptRevision` 和 registry 的预览/单件/批量解析接受显式 `renderingProfile`；省略时保持旧输出与快照形状。只有精确已知默认正负模板对才使用短版，任一正文与该默认对不同，两份正文均按原文插值保留。正负要求合并成实际要发送的完整 prompt，负向字段变为空串；整体超 800 Unicode codepoints 直接拒绝，不截断、不重新发布模板。默认固定开销分别为 FULL_EDIT 402 字、INPAINT 399 字，余量由正负用户输入共同消耗；这沿用现有 Wanx adapter 的本地字符计数合同，不证明 Provider 对所有 Unicode 输入的实际行为。
+- 新快照单独携带 `renderingContract`，绑定 profile/model、六条义务 ID、源/编译后的安全规则与两份模板摘要、默认/自定义策略、计数与 inline 负向编码规则及 `contractHash`。它不复用结构化输出的 `consumer` 字段，也不把旧 template checksum 当编译身份。既有 workflow fingerprint 已覆盖该快照与最终 resolved 文本；新增回归证明删除/修改这些数据会改变请求身份。FULL_EDIT/INPAINT 默认合同摘要分别为 `133061e3924b65e02cd600a3daf70461b39f49ebcace753a9d7e0270c51a7d70`、`8f49999b311776310b70b16573c73087e1732e26bedd0d08c7e9681be2599609`。
+- 同时修复插值 owner 的原文损坏：旧 `String.replace` 会解释用户数据中的 `$&`、`$$`、前后文替换符，并在多变量模板中二次展开数据内的占位符。现在仅对可信模板做一次 callback 替换，数据保持字面值；这是明确的行为修复，不声称异常输入的旧输出字节保持不变。也补充并修复了改动中发现的缺失 revision 错误类型回归。
+- T2 先观察 20 个目标 RED，再实现 GREEN；额外缺失 revision 的 2 个负例也先 RED。最终模板/registry/consumer/Prisma-store 合同及新 `ai-image-wanx-edit-prompt.test.ts` 合计 `71 passed`。覆盖 800/801 边界、正负共用限额、多行/美元符/占位符字面值、无效 Unicode/控制字符、跨操作/未知 profile、默认字节不变、管理员自定义原文、单改负向不触发默认替换、批量快照与指纹。真实 Wanx adapter 通过 fixture HTTP 接收与冻结结果逐字相同的 prompt，只有一次 fixture POST；未调用真实 Provider。
+- 新鲜验证：全仓 typecheck、lint、完整 `pnpm preflight`、server build、`git diff --check` 通过；扩展 source verifier 仍为 `459 / 0 failure / 0 warning`。本阶段没有重跑数据库专用 runner；上一节的 `104 passed` 只作对应检查点的历史回归证据，不冒充新 profile 的正式数据库/外部验收。D2/T2 Task Decision 在本阶段首次写入前已实际校验通过，Host 自动强制执行仍 `未验证`。
+- 独立语义复核因子 Agent 限流未完成，不将部分回复或主代理自查称为独立审查通过。短版仍须在启用前补独立复核及对应 Provider 技术/质量与账单验收。本节完成的是可显式调用、受测的编译合同，尚未由正常 HTTP readiness/Provider factory 自动选择，也未解决实际输出尺寸和只读异步 task 恢复。后续依次关闭这些接线；不复用旧 Wanx 已消费请求或旧单张 T2I 证明新操作。本轮新增真实费用、Provider/Ozon 写入、生产部署及官网切换均为 0。
+
+### Wanx 正常托管入口接线（2026-09-09 本地验收）
+
+- 用户明确继续“接正常托管入口”。本节完成 FULL_EDIT/INPAINT 的本地 HTTP 准入、冻结合同、前景异步执行与审核候选链；不等于真实付费放行、自动异步恢复或发布。HEAD 仍为 `a00c78c6`，保留前两节未提交修改，本节也未提交/推送。
+- 沿用已有配置的逻辑 Provider `dashscope-wanx`，只为精确 `wanx2.1-imageedit` 增加 `adapter-characterized` 条目：单源图、FULL_EDIT/INPAINT、`base64/async`，不继承文生图 wildcard、不启用 I2I/套图。低层 adapter 名称保持 `dashscope-wanx21-image-edit`；旧 sandbox 记录不会自动重标或晋升为正常入口证据。真实 registry 仍不能通过付费门禁。
+- 新 owner `apps/server/src/services/ai-image-edit-provider-contract.ts` 统一 transport、有效 API Base、方图范围及冻结提示词校验。readiness 与工厂共用它；必须匹配精确 endpoint/model/operation/transport/resultMode 证据。拒绝会被 adapter 静默补 `/api/v1` 的裸 origin，保留空配置的既有官方默认、尾斜线和主机大小写规范化；不改全局 T2I URL 兼容规则或 SystemConfig enum。
+- HTTP 创建自动选择 Wanx 短提示词 profile，超长/不合法文本以输入错误拒绝，非 1024×1024 画布以 422 拒绝，均不创建任务或预留。成功仍沿用原接口的 202；没有自动裁切、补白或改变其他 Provider 的尺寸。工作流 service、repository 入库和 runner 执行前检查模板 checksum、非空 release ID 与 snapshot 绑定、原用户文本重渲染结果及完整 renderingContract；空串/null 两端相等也不能作为绑定通过。不重新读取当前 active 模板来改写已冻结请求。重试仍保留原快照，执行前继续校验。
+- 修复币种可见性：job repository 的闭合 reservation 投影加入已有 `currency` 字段，托管编辑发包要求 USD；CNY 或缺失币种会拒绝。没有新增数据库字段或汇率换算，没有把 CNY 0.14 当作 USD 14 cents；Provider 实际账单仍是独立证据。
+- 独立身份及语义审查已完成并在修正后复查通过，关闭上一节的限流复核缺口。短版改为“固有标签位置”和明确的“白色选区外的一切”；旧英文 policy、默认模板和 revision checksum 保持不变。未发布 v1 候选的固定开销更新为 FULL_EDIT 402 / INPAINT 404 字；policy SHA-256 为 `314ff5613418155ebe6154c60fca3484bd61739a1805c6700da36bdb92474a26`，默认 rendering contract SHA-256 分别为 `24eafb39119cf898fd722e37f4517bd678700533ecc08c771e78e21dc7d482a6`、`674b96c7bfbbb8276003b4b6611fd6ea5f97ee1053013315f23320040d9a5c18`。前节摘要保留为当时本地检查点，不作为当前编译身份或历史付费批准。
+- T2 先观察正常入口、证据模式、冻结文本/快照、币种投影及空 release ID 等目标 RED，再实现 GREEN。最终定向 6 文件 `199 passed`，完整后端随最终 preflight 通过（环境专用用例仍按独立门禁运行）。PostgreSQL runner 回放 148 migrations，`22 files / 108 passed`：新增 Wanx FULL_EDIT/INPAINT 走真实 registry 渲染、service、Prisma、工厂、adapter、runner、raw/final、像素合成与显式审核；已有 OpenAI 数据库用例也改为真实 service 准入。每次先落 task ID 再 poll，下载不转发 Authorization，成功只产生一个测试结算。错误输出尺寸保留 ID 与 `RECONCILIATION_REQUIRED`，无候选、不重发。三个本轮隔离 schema 已清理，读回复核剩余为 0。
+- 验收边界：HTTP 门禁/参数传递由定向接口测试验证；数据库链路使用真实业务 owner 和 PostgreSQL，但 Provider capability、HTTP/DNS、授权/配置/Redis 和对象存储 I/O 为明确 fixture，Prompt registry 使用其真实内存 store。合成 USD 费用不是实际账单，状态日志中的 sandbox 回执也是测试产物。没有执行真实 Provider → ERP、生产浏览器或 Ozon 验收。
+- 完整 preflight 曾发现两个遗漏的验证消费者：离线能力合同未登记新精确模型、预算测试的闭合投影缺少 currency。现已按新边界更新，并增加拒绝 TEXT_TO_IMAGE 继承、额外操作、错误传输/引用数、未审核晋升的负例，不放宽任意 Provider 白名单。最终完整 `pnpm preflight`、lint、typecheck、server build、`git diff --check` 通过；扩展 source verifier 为 `459 / 0 failure / 0 warning`。D2/T2 前置决策和后续范围调整均实际校验；Host 自动强制执行仍未验证。
+- 下一步：增加只读 task lookup 与中断后的 FULL_EDIT/INPAINT 恢复，复用原 raw/composite/review 路径，禁止重发；同时补齐能力矩阵要求的逐任务非密凭据修订绑定。真实启用前仍须匹配 Wanx 账单归属、明确费用上限和当前 prompt profile 的技术/质量证据，随后才进行实际 Provider → ERP 与正式 QA-04。本轮实际 Provider/Ozon 写入、新增真实费用、生产配置、部署、官网切换均为 0。
+
+### Wanx 凭据绑定与只读恢复（2026-09-09 本地接续）
+
+- 本节接续用户批准的“补只读异步恢复和逐任务凭据修订绑定”。唯一结果是正常托管 FULL_EDIT/INPAINT 在接受后中断时可只读恢复，继续显式审核；不包括新付费请求、能力晋升、Ozon、生产访问、部署、官网 pointer 或 Git 提交/推送。HEAD 保持 `a00c78c64f1b238bb7545b14637ed95198603657`，此前 dirty 修改均保留。
+- D2/T2 前置 Task Decision 已在 owner 写入前实际校验。owner 分工：SystemConfig/运行合同负责凭据身份，Wanx adapter 负责只读查询，`ai-image-edit-artifacts.ts` 负责冻结输入与 raw/final 合成，reconciliation service/repository 负责认领和原子结算。两个独立 lane 分别审查协议/身份和事务/产物；公共产物与 raw 持久化提取按 T1 建立原门禁基线，不重写既有提示词或 schema。Host 自动 hook 强制执行仍为 `UNVERIFIED`。
+- Wanx 精确模型使用 `ai-image-provider-runtime/v2`，绑定非密的 SystemConfig `recordId + revision + updatedAt`，同一次数据库语句读取端点、模型、单价、凭据及其元数据。`setConfig('ai_image_api_key')` 也递增 revision，防止同毫秒写入遗漏；其他键的 writer 不变。不保存或哈希密钥。创建、workflow 归一化、重试、worker 最后发包检查和恢复 GET 均消费同一冻结合同。其他 Provider v1 保持原合同；旧 Wanx v1、缺失修订或轮换不自动采用当前账户，不回填历史审批。
+- 缺失/损坏凭据修订、无法解密或空/空白 key 均失败关闭。默认 HTTP 配置读取路径的 capabilities、FULL_EDIT/INPAINT 创建和 retry 返回安全的 `503 PROVIDER_NOT_READY`，不创建、不重试、不入队，不回显密钥、密文或内部配置 ID；已观察对应 RED 后修复为 GREEN。
+- 官方公开文档于本日重新 GET 核对：[Wanx 编辑 API](https://help.aliyun.com/zh/model-studio/wanx-image-edit-api-reference)、[编辑指南](https://help.aliyun.com/zh/model-studio/wanx-image-edit)。查询为 `GET /api/v1/tasks/{task_id}`，任务与临时结果保留 24 小时，`UNKNOWN` 可表示过期或状态未知。adapter 新增单次 `poll(taskId)`，与前景循环共用解析、单图 metrics、URL 与下载安全边界；所有状态先匹配原 ID。每次恢复最多一个任务 GET 和一个图片 GET，无 POST、无重新接受回调，下载不转发 Authorization。`UNKNOWN`/404 不等于免费，FAILED/CANCELED 也只提供 `billingDisposition: UNKNOWN`。
+- 自动恢复只接受新合同完整的精确 Wanx 编辑。原派发时间限定最多 24 小时，不重置接受时间、job ID、workflowAttempt 或原调用 attemptCount；无 ID 的未知提交仍人工复核，禁止重发。认领/写入绑定 job、owner、actor、原 task、workflow attempt、fingerprint、revision、token hash 和未过期 lease。原始输出、合成与规范化共用正常编辑 owner；raw 的 DB 身份、lineage、文件名和存储幂等键也复用同一 owner。原 raw hash 冲突被拒绝，不覆盖历史对象。
+- 成功恢复仅生成一个待审核 final；局部重绘仍保留遮罩外像素，raw 不可批准。取消只保留 raw、维持 CANCELLED，无可应用候选。终态账本 SETTLED/RELEASED 及 job 投影保持不变；未知费用保留对账，不能由任务失败状态推断零费用。旧 translation-style complete 不能绕过编辑 raw/final 图。
+- 新鲜证据：已有 7 文件 / 94 项基线通过；凭据、查询协议和恢复分流均实际 RED → GREEN。最终完整后端为 `398 files passed / 5357 tests passed / 253 skipped`（环境专用测试按独立 gate 执行），HTTP/config/init 聚焦 `2 files / 21 passed`，新增只读 adapter 用例 `62 passed`。PostgreSQL 最终回放全部 148 migrations，`22 files / 126 passed`：包括两操作恢复、轮换发生在 worker/GET DNS 前或下载后、取消、存储失败重入、raw 冲突、重复/过期/伪造 claim、一次结算、既有 SETTLED/RELEASED 决定，以及错误 ID/尺寸/源图和 UNKNOWN/FAILED。
+- 最终完整 `pnpm preflight`、全仓 lint、server/Web typecheck、server build、`git diff --check` 与文档 adoption guardrail 通过；扩展 source verifier 为 `459 / 0 failure / 0 warning`。preflight 曾发现新增测试参数缺类型，已补齐后完整重跑通过。两个独立 owner 复核完成；其发现的默认 HTTP 错误分类与空凭据准入问题已按 T2 修复并复查关闭。本轮 6 个隔离 schema 均由 runner 清理，并只读复核剩余 0；未改业务 schema，未暂存、提交或推送。
+- 证据边界：service、Prisma、数据库约束、工厂、adapter、输入 reader、合成/审核和存储 key 推导为真实 owner；Provider HTTP/DNS、能力晋升证据、授权/配置/Redis、对象存储 I/O 为明确 fixture，合成 USD 账本不是实际 Wanx 账单。没有执行真实 Provider → ERP、MV3/生产浏览器或正式 QA-04。
+- 本节本地接线与隔离验证已收口。下一步真实验收仍须匹配当前 Wanx 计费账户、明确本次硬费用上限/币种及精确一次性批准，并验证当前 prompt profile 的各操作质量与实际账单，再执行正常 Provider → ERP/正式 QA-04。不得复用旧已消费请求或以 fixture 结果晋升能力。本轮实际 Provider/Ozon 请求、新增真实费用、生产配置、部署和官网切换均为 0。
+
+### 新 Wanx 凭据与付费前准备（2026-09-10）
+
+- 本节接续用户新 Key 已录入后的“继续下一步”。用户明确的本轮总费用硬上限是 **CNY 1**，并已授权只读核对账户；无需再次索取预算或在聊天中发送 Key。本节只做非收费准备，不授权修改线上配置、付费执行、能力晋升、Git 提交/推送、部署或官网切换。
+- 新凭据的账户归属已核清：受保护 DPAPI 文件中的新 Key 与北京业务空间专属域名认证相符；同一已认证控制台的登录/主账号与该 Key 记录归属一致。标准 `https://dashscope.aliyuncs.com/api/v1` 的只读模型目录认证也通过，精确模型 `wanx2.1-imageedit` 可见。该标准端点预检使用既有 clean `d0777956` checkout，只证明鉴权，不冒充当前 dirty 源码验收；旧 Key 的三笔历史账单仍未结算，不用新 Key 代为结算。Key 仅存于受保护 DPAPI 文件；私有记录只保留账号摘要和脱敏回执，不保存完整 UID、Cookie 或控制台会话，也不进入 Git。
+- 当前实际缺口不是用户未提供 Key：`ai-image-sandbox-billing-settlement.ts` 虽识别 Wanx 指纹，exact attestation v2/v3 仍强制 `NEW_API_QUOTA_AND_TOTAL_USAGE_V1`；v4 只支持 Sub2 累计零，v5 只支持 Xiaoyi 凭单。尚无经过审查的阿里云原生 CNY 账单与任务关联合同，不能把官方单价或 `usage.image_count` 填进 `actualCost`。
+- 只读账单核查：费用中心“账单详情”区分定价币种、目录总价、订阅/优惠抵扣和应付金额；“查看用量明细”明确说明原始用量仅供参考、**不作为对账依据**。本日读取的[原生实例账单 API](https://help.aliyun.com/zh/user-center/developer-reference/api-bssopenapi-2017-12-14-describeinstancebill)还说明费用数据延迟约 24 小时、部分实例信息延迟 48 小时，当前月实例汇总不是最终对账数据。未导出无关账户账单，未据此虚构逐请求已结算金额；后续须核实可关联的结算账单来源，而非放宽旧 15 分钟时间窗或把空列表判为免费。
+- 试点入口核查：官方 approval draft 从草稿阶段就要求可验证 clean revision；当前 resolver 返回 `SANDBOX_ADAPTER_WORKTREE_DIRTY`。现有 single-submit 仍用固定英文 prompt，直接调用 adapter，不走正常 ERP 的冻结模板/任务/审核链。因此旧 sandbox 成功不能验收新的 `ai-image-wanx21-edit-prompt/v1`，也不能通过旧 clean checkout、测试 capability 或手工伪造 release 绕过门禁。
+- 额度核查：现有审批和 guard 只绑定一次请求，没有跨操作的本轮总预算执行绑定。两个审批各写 CNY 1 不等于总限额 CNY 1。私有准备记录仅提出 FULL_EDIT/INPAINT 各一张、各分配 CNY 0.25 的待审分配；官方 CNY 0.14/张仍仅为参考报价，不是实际费用或 Provider 侧硬扣费限制，尚未批准执行。
+- 非收费输入准备已完成：沿用受保护的既有 1024×1024 测试杯图和同尺寸 PNG alpha mask，实际解码及摘要校验通过；mask 的 25,600 个编辑像素位于左上角背景。调用当前真实 rendering owner 得到 FULL_EDIT 458 字、INPAINT 462 字，均完整保留约束且低于 800 字；仅为源码默认模板预览，未绑定线上 template release、未生成付费审批。私有 `wanx-trial-preparation-20260910-01.json` 保存精确输入、提示词、摘要、账户核验引用与停止项，明确标为非审批，不进入 Git，也不是原生账单适配实现。
+- 新鲜验证：隔离 `.env` 和 Provider 凭据后，审批/账单/Wanx guard 为 `4 files / 178 passed / 2 skipped`；当前 prompt/hosted/media 为 `3 files / 44 passed / 1 skipped`。跳过项为既有平台限制；fixture 不能替代实际 Provider → ERP。独立只读审批审查已由主代理对源码与测试复核。此前本地开发门禁继续保留，但正式 QA-04、真实费用及当前操作质量仍未验收。
+- 下一开发入口：先闭合阿里云原生结算账单与任务关联的最小合同，再补当前冻结提示词和 CNY 1 总额绑定的受限试点入口；仍复用现有 owner，不新增旁路放行。形成受审 clean checkpoint 后再生成逐操作审批。本轮没有重新读取明文 Key、发送收费图像请求、改写旧审批/账单、修改 ERP/VPS 配置、调用 Ozon、提交/推送、部署或切换官网。
+
+### 阿里云原生账单观察入口（2026-09-10 本地实现）
+
+- 本节接续用户“继续”，只实现非收费的原生账单读取与待对账评估。D2/T2 Task Decision 已在 owner 写入前执行校验；沿用现有私有文件、精确金额、Git 修订与最终结算 owner，不新增数据库字段、结算 attestation 或能力晋升例外。Host 自动 hook 强制执行仍为 `UNVERIFIED`。
+- 新 owner `ai-image-alibaba-billing-observation.ts` 消费封闭 `ALIBABA_NATIVE_BILLING_OBSERVATION_V1`：保留 QueryBill 原始响应字节/摘要、采集人摘要、查询范围和分页，分别保存查询账号、资源归属、账单号和查询请求号的摘要。官方 `RecordID` 是账单号，不是 Wanx `task_id`；账号摘要匹配也不自动证明 Key/RAM 归属。源码不假设 Wanx 的真实 ProductCode/实例映射。
+- 金额保留原口径：应付、含信用退款抵扣的支付、不含该抵扣的现金和各项优惠分别输出。使用原始 JSON 数字文本与 BigInt，再进入既有 amount/scale 合同；过高精度、超安全整数、负数和错误币种直接拒绝，不把零现金、空结果、PayFinish 或单行账单当作免费/单请求结算。未提供的可选金额保持 null，未完整分页明确标记；不推算账期最终性。
+- 新命令 `pnpm --filter server sandbox:ai-image:billing:inspect-alibaba` 只读指定私有文件，复用有根目录约束、摘要、大小和 canonical JSON 检查的 reader。拒绝凭据、付费确认与旧结算/审批输入混用，首尾绑定同一 clean Git revision。输出始终为 `RECONCILIATION_REQUIRED`、`actualCost:null`、`canFinalize:false`，没有 `billingGate`；不写 intent、claim、settlement 或 registry。使用合同见[公开 runbook](../docs/runbooks/ai-image-provider-sandbox-billing.md#inspect-native-alibaba-bills-without-finalizing)。默认 billing finalizer 的既有结算合同不变。
+- T2 先在独立临时 clean Git checkout 对真实 CLI 观察正常原生输入、账户错配和重复金额字段的 3 项目标 RED，再实现 GREEN；首个 Windows loader 路径错误属于 harness 问题，修正后才记录行为 RED。随后摘要缺失、异常日期/隐私投影和无效 Unicode 均观察 RED 后修复。独立审查发现损坏转义 JSON 的平方耗时，512 KiB 输入在有 3 秒预算的子进程中先超时 RED，改为单调游标线性扫描后正常拒绝；复核确认该问题关闭。
+- 新鲜定向结果：原生观察/CLI 与既有账单联合 `4 files / 167 passed / 1 skipped`，能力候选合同 `45/45`；server typecheck、独立 CLI/test no-emit 类型检查、定向 ESLint、diff 与文档 adoption 检查通过。脚本测试已放回 scripts 范围，不扩大 server `rootDir`。所有账单均为合成 fixture；临时测试 checkout 和证据目录由测试清理，不是对用户分支提交。未据此声称真实 QueryBill 数据、原生单请求结算、完整 QA-02 或正式 QA-04 通过。
+- 此切片已补齐原生账单“可安全读入、保留口径并明确待关联”的入口，**尚未补齐任务→账单的可信关联**，也未伪造关联字段或放宽旧结算门禁。下一步可独立开发当前冻结提示词及本轮 CNY 1 总额绑定的受限试点入口；真正收费前仍需可关联账单来源、受审 clean checkpoint 和逐操作批准。旧 Key 的三笔账单保持原状。本轮 Provider/Ozon 请求、真实费用、生产配置、Git 提交/推送、部署和官网切换均为 0。
+
+### Wanx CNY 1 试点离线准备与核验（2026-09-10 本地实现）
+
+- 本节接续用户“继续”，完成非收费的冻结提示词与整轮额度准备入口。新增 `ai-image-wanx-trial-preparation.ts` 作为唯一准备 owner，既有 approval-draft CLI 仅增加薄分发；`sandbox:ai-image:wanx-trial:prepare` 和 `sandbox:ai-image:wanx-trial:verify` 已注册。D2/T2 Task Decision 在首次 owner 写入前实际校验通过；Host 自动 hook 强制执行仍为 `未验证`。本节没有接通收费执行，也没有用准备清单替代真实 ERP 任务或账单。
+- 冻结合同：只接受既定标准北京端点、`wanx2.1-imageedit`、一项 FULL_EDIT 和一项 INPAINT，逐项复用 `assertWanxHostedEditPrompt` 重新校验完整 release/checksum、原始正负输入、最终文本和 renderingContract。输入来自指定私有 canonical JSON，并独立绑定账号摘要、非密凭据修订、整轮 ID 和代码修订。清单明确记录 `OFFLINE_CONSISTENCY_ONLY`：本地自洽的快照不能证明线上 release/workflow 存在，不制造 workflow fingerprint 或来源证明。
+- 额度合同：整轮精确绑定 CNY 1，分别校验两项 quote/maximum 的币种、正整数和共同 scale；跨操作用 BigInt 对齐 scale 并累加 **maximum**，超过 1 元的最小精度单位也拒绝。报价、失败状态、空账单、零现金和人工增补字段均不能释放或重置分配。该结果是提议分配的核验，不是执行预留或 Provider 侧硬扣费限额；恒为 `canSubmit:false / actualCost:null`。
+- 输入与文件：源图及 PNG alpha mask 均受 10 MiB、1024×1024、完整解码、摘要、私有目录和链接边界约束。复用既有独占 bundle writer，先保存原字节图片，最后保存 manifest；同一证据根下同轮并发只允许一份结果，重复或部分目录不覆盖。verify 只读取留存副本并重算整份清单，拒绝篡改费用、执行状态、前置条件和图片。paid-wire fingerprint 保持原有合同，不加入 round/审批/模板/凭据/代码修订以制造可重放身份。
+- CLI 在读取输入前、写入前后验证同一 clean Git revision，31 个实际源码依赖的 tracked membership 已独立复核；拒绝凭据、付费确认及旧审批/账单参数混用。stdout 只输出摘要与受限投影。测试在独立临时 clean checkout 中运行真实 CLI，网络入口被测试进程显式拒绝；没有拿当前 dirty 用户分支冒充已批准候选。
+- T2 先对真实 CLI 观察“新入口缺失、整轮超额、冻结文本变化”三项行为 RED，再实现 GREEN。最终新增 owner/CLI 共 `60 passed`，覆盖精确金额、同轮双进程竞争、部分目录、改动媒体、重算外层摘要后的清单篡改、旧付费审批拒绝、凭据隔离、未跟踪/dirty helper 和中途代码漂移。审批与准备定向回归先为 `120 passed / 1 Windows 条件 skipped`，之后新增未跟踪 helper 用例随全量通过。
+- 全量门禁的真实记录：第一次隔离 `.env` 的 preflight 暴露旧 `sms.test.ts` 缺少配置数据库 fixture，以及默认并发下两个原生账单 CLI 时限失败。短信问题在独立运行中复现 13 项失败后，仅补 Prisma SystemConfig 读 fixture，保留真实配置/captcha/quota owner；短信、配置与原生账单定向 `41/41` 通过。账单解析原有 3 秒上限未修改，验证进程改用 `VITEST_MAX_WORKERS=2`。第二次完整 preflight 在后端测试处有一次 worker 意外退出、无断言失败，原因尚未定位；不能将这两次命令记录为完整 preflight 通过。
+- 随后的结构化全量后端验证使用同样的 `.env` 隔离和两个 worker，`402 files passed / 5476 tests passed / 253 environment-gated skipped`，无断言失败或 worker 错误；新准备 owner 的 45 项与真实 CLI 的 15 项均确认通过。全仓 lint、server/Web typecheck、扩展/审批/发布全部前置合同、sandbox strict typecheck、server build 通过；另行完成扩展 source verifier `459 passed / 0 failure / 0 warning`。本节不重跑数据库专用 runner，不把分项通过写成一张无错误的 preflight 或正式 QA-04 回执。单次 worker 异常继续作为验证环境待查项。
+- 两路独立源码审查已完成，主代理对当前源码、定向测试、结构化全量结果与 Git 状态复核。另发现旧 Wanx sandbox POST guard 在多个 await 之后才设置 `submitClaimed` 的并发窗口；独立纯内存探针报告两次模拟 POST，主代理静态核对了该时序。本节无收费入口，不扩大修改该 guard；后续执行接线前必须补并发负例并关闭此窗口。
+- 本地准备/核验切片已完成。下一步是可信模板/ERP 工作流来源、原生任务→结算账单关联，以及整轮/逐操作的持久执行预占与精确批准；准备文件不能直接交给旧 fixed-prompt paid CLI。旧 Key 的三笔账单保持未结算。HEAD 仍为 `a00c78c6`，保留进入本轮时的 54 个未提交文件，本轮也未暂存、提交或推送；真实 Provider/Ozon 请求、费用、生产配置、部署和官网切换均为 0。使用合同见[试点准备 runbook](../docs/runbooks/ai-image-provider-sandbox-approval.md#frozen-wanx-two-operation-trial-preparation)。
+
+### Wanx 受控执行预算与审批链（2026-09-10 本地闭环）
+
+- 用户继续要求推进并询问生图/计费测试。本节完成隔离 sandbox 的实际执行接线与本地测试，不将其称为正常 ERP 来源、真实新 Wanx 质量或原生费用验收。历史 Xiaoyi 单张与凭单对账、旧 Wanx 三操作技术/质量结果仍有效；新凭据和当前短提示词的真实联合验收仍未完成，不重发旧已消费请求。
+- 首先关闭 Wanx POST guard 的并发窗口：在请求头同步检查后、body/DNS/审批 await 之前领取一次性名额。三种编辑操作在 DNS/审批等待期间的六个并发用例，以及发包前拒绝后的两个重试用例先 RED 后 GREEN；已有未知结果保留用例继续通过。发包前拒绝保持实际 createRequests=0，但不重新开放该 guard；丢响应后保留一次请求和待对账状态。
+- 审批 owner 新增闭合 v4，保留 v2/v3：六字段 trialBinding 绑定 round、manifest、私有根身份、账户 UID 摘要、wire fingerprint 与完整冻结 prompt 摘要。合法两操作先因旧 schema RED，再通过 46 项新用例。普通入口拒绝 v4，trial 入口拒绝 v2/v3；旧 approvalEvidence/intent/report 格式保持不变。v4 非审批草稿入口复用原拒绝哨兵，30 项新用例和原准备/旧草稿联合 `106 passed / 1 platform skipped`。
+- 新 owner `ai-image-wanx-trial-execution.ts` 接入既有 single-submit，显式 `TRIAL_SUBMIT / TRIAL_VERIFY_APPROVAL` 消费原准备清单。请求文本、源图/遮罩、精确 quote/maximum 均由已复核 manifest 给出；禁止 CLI 改单号、输入、费用或输出目录。私有根摘要同时绑定 canonical path、dev/ino/birthtime，不能靠复制目录或同路径替换继承旧审批。代码与 shared/package.json 等运行依赖均受 clean Git 绑定。
+- 实际 POST 前先持久领取原全局 fingerprint/intent，再原子写入整轮预算及按 FULL_EDIT/INPAINT 固定命名的槽位。整轮文件永久绑定原 manifest 与两项 maxima，总额不超过 CNY 1；新审批、另一 checkout、重新分配已消费整轮或未知结果均不释放槽位。最后发包检查再次核验代码、目录/清单、领取记录和审批。额度只是执行授权上限，不是 Provider 侧扣费硬上限或实际费用。
+- 真实 single-submit、审批 loader、文件 claim、Wanx adapter 与图片处理组成的合成链先观察 3 项缺失入口 RED，再 GREEN。最终执行 suite 17 项通过，包含两操作、同进程和两个独立 Node 进程竞争、未知响应、新审批、根目录复制/替换、v3 降级和整轮再分配。只替换 Provider HTTP/DNS，发送边界断言预算槽位与全局 claim 已落盘；没有真实 Provider 请求。独立审查发现的混合/重复/未知 CLI flag 和 shared/package.json 跟踪缺口也分别先 RED 后关闭。
+- 成功与失败报告均追加不可覆盖的 `wanx.trial-evidence.json`，绑定原报告摘要、trialBinding 和两个 claim 摘要；标记 `ISOLATED_WANX_TRIAL / OFFLINE_CONSISTENCY_ONLY / billingReconciliation:REQUIRED`。原始 report 保持 `actualCost:null`。该分类不能替代真实 ERP 工作流、已结算账单、完整 QA-02 或正式 QA-04，也不以 v4 中的引用字符串证明这些外部事实。
+- 原生账单公开事实已重新核对：阿里官方明确推理账单按分钟汇总，通常结束后 2–10 分钟出账，但采用预占+月结，出账不等于实际扣款；实例由 ApiKeyID/业务空间/模型/计费类型/渠道等组成，没有 task_id。QuerySettleBill 当月仅供参考，最终账单次月 2 日 12 点后可查看。当前仍缺实际 Wanx 行的非密 ApiKeyID/实例/产品计费项映射、完整账单与区间唯一调用证据，不能按图片数均摊或用目录价填 actualCost。事实与后续关联边界只维护在[计费 runbook](../docs/runbooks/ai-image-provider-sandbox-billing.md#native-wanx-task-association-and-settlement-boundary)。
+- 验证入口另按 T2 修复 `preflight` 把 signal/null exit 当成功的问题：完整脚本只替换外部 spawn 的五个用例，先 2 RED 后 5/5 GREEN，并注册为首个门禁。这不是上一节 worker 意外退出的根因修复。针对旧异常，本节使用经过合成 exit=23 探针验证的临时诊断，记录 worker PID/exit code/signal 及模块生命周期，不记录参数、环境或业务数据；保留 `.env` 隔离、两个 worker 与原有解析时限。
+- 最终完整 `pnpm preflight` 退出 0，全部选定检查通过；结构化后端结果为 `405 files passed / 5578 tests passed / 253 conditionally skipped`（共 443 文件），模块完成回执 `errors:0 / reason:passed`。本轮新增 102 项 Vitest 用例全部包含在该结果内；全仓 lint、server/Web typecheck、sandbox strict typecheck、server build 通过，扩展 source verifier 为 `459 passed / 0 failure / 0 warning`。此前 worker 异常本次未复现，根因仍不作已解决声明。没有以分项拼接冒充这次完整命令回执。
+- 已完成的本地入口和测试可继续复用；剩余为受审 clean checkpoint、可信 ERP 模板/工作流来源、真实新通道质量与任务→原生账单关联、逐操作实跑批准以及正式 QA-02/QA-04。本节没有读取真实 Key、生成真实付费审批、调用 Provider/Ozon、修改线上配置、部署或官网切换，也没有 Git 暂存/提交/推送。HEAD 仍为 `a00c78c6`；进入本节的 63 项修改均保留。
+
+### 受审检查点与真实取证边界（2026-09-10）
+
+- 用户明确要求先补真实任务来源、账单映射和受审干净代码版本，再进入受控实测。本节形成本地代码检查点并核清真实取证入口；没有把未取得的 ERP/原生账单数据填成通过，也没有发送付费请求。
+- 三路独立复核覆盖托管编辑、隔离试点和原生账单观察。托管复核发现：任务已被并发流程置为 `CANCELLED` 或 `FAILED` 时，首次接收身份写入失败所携带的迟到 Provider task ID 会被 runner 异常分支丢弃。`ai-image-edit.ts` 现在将这两种情况交回既有终态感知仓储；不重新打开任务，不重发 POST，不修改仓储/账本合同。修复已独立复核。
+- T2 证据：新增两个 runner 用例先因未转发接收证据 RED；真实 Wanx adapter/worker/Prisma 链的两个新增用例也先 RED，而原 126 项通过。修复后相关五文件 `153 passed`，隔离 PostgreSQL `22 files / 128 passed`。数据库断言证明终态和 task ID 保留、无候选资产、重复执行不重发；原 `SUBMISSION_UNCERTAIN` 审计条目与新增 `RECONCILIATION_REQUIRED` 条目同时保留，金额均为 null，不能误删前者来满足单条记录预期，也没有新增 CHARGE/RELEASE。
+- 本地验证环境：仅在测试进程把已核实的 `localhost:5432` 连接定为 `127.0.0.1:5432`，没有改 `.env`。原生 Vitest 4.1.7 配置在 `--no-file-parallelism` 设置单 worker 之后仍消费 `VITEST_MAX_WORKERS`；沿用全量 suite 的值 2 曾造成共享 schema 中的额外串行化冲突，数据库 runner 改用进程级值 1 后只剩目标 RED，未放宽事务重试、测试时限或业务规则。本轮为测试启动已有本地 Docker；四个新建隔离 schema 均已清理，复查为 0 遗留，原有数据保留。
+- 最终完整 `pnpm preflight` 退出 0，结构化后端结果 `5580 passed / 255 conditionally skipped / 0 failed`，443 个模块完成且 `errors:0 / reason:passed`。新增两个 PostgreSQL 用例在普通 suite 中按既有环境门禁跳过，已在上述独立数据库 runner 实跑通过。全仓 lint、server/Web typecheck、sandbox strict typecheck、server build 通过；扩展 source verifier `459 passed / 0 failure / 0 warning`。这些仍是本地代码/数据库证据，不是 QA-02 或正式 QA-04。
+- 真实来源读取必须消费实际 release/revision/发布测试记录，以及 `PrismaAiMediaWorkflowRepository.getOwned` 和 job repository 中的冻结任务、当前 attempt、输入资产摘要。`getById` 自身不做 owner 过滤，采集层必须显式核对；公开 `publicJob/publicWorkflow` 隐藏完整快照和指纹，不能作为完整来源证明。`resolveActiveAiTemplate` 可能初始化默认模板，不可当作纯读取已有发布证据。ERP 黑白 mask 与 trial alpha mask 也不能沿用同一摘要，须绑定正常转换 owner 前后的两份字节。当前 Wanx 普通建单仍受 `sandbox-verified` 门禁且创建后立即 enqueue，不能注入测试能力或提前晋升来制造真实任务。
+- 原生账单映射仍未取得：当前私有材料保留的是账户/候选 Key ID/业务空间摘要和只读认证回执，不是实际 ApiKeyID→Wanx 实例/产品计费项→完整账单区间的映射。既有私有根、新 Key 加密文件、凭据修订与媒体目录的 Windows ACL 已只读复查，没有当前用户/SYSTEM/Administrators 之外的允许项；没有解密或输出 Key。账单最低证据继续由[计费 runbook](../docs/runbooks/ai-image-provider-sandbox-billing.md#native-wanx-task-association-and-settlement-boundary)负责，内部 USD 账本不得替代原生 CNY 结算。
+- 浏览器取证暂停：只读探测为 `CDP_STATUS=needs-setup / CHROME_RUNNING=yes`，未找到可复用调试端口；没有关闭或重启用户 Chrome。须恢复独立的百炼/费用中心/ERP 登录会话，再读取经授权选定任务与账单的原始证据。已请求用户确认独立核验窗口；不再次索取 Key/预算，不查询或重发已完成的 Xiaoyi 请求。
+- 本地提交：`c5f2bedb` 收口隔离验证门禁；`7751a722` 收口 Wanx 托管编辑、原生账单观察、CNY 1 隔离执行及迟到接收证据修复。本文件的文档提交跟随该源码检查点；后续审批仍须绑定执行时的全长 clean HEAD，不能复用旧 `a00c78c6` 或合成测试 checkout。进入本轮的 73 项改动均保留并归入对应检查点，另加本节 runner 回归；私有资料、历史 build 和浏览器 profile 未纳入 Git。没有推送、生产配置变化、Provider/Ozon 请求、真实费用、部署或官网切换。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；Wanx 三项历史编辑技术/质量证据已复核完整 | 不再查询 Xiaoyi 这笔金额或重发任何已消费请求。Wanx 账单归属、完整 QA-02 与能力晋升仍未关闭 |
+| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；新 Wanx Key 只读归属已核清；原生观察、冻结准备、v4 审批与 CNY 1 隔离执行已有受审本地源码检查点 `7751a722`，并补齐迟到接收身份回归 | 不再索取 Key/预算或查询 Xiaoyi 旧金额。恢复独立登录会话，取得可信模板/ERP 工作流来源、实际 ApiKeyID/账单区间映射与唯一调用证据，再绑定最新 clean HEAD 与逐操作批准验收。旧 Wanx 三笔账单、完整 QA-02 与能力晋升仍未关闭 |
 | Ozon 测试店与商品事实 | 归档参数/主图/私有准备包齐备；审核任务 500 源码修复及两种 rollout 的完整 PostgreSQL 隔离链路通过；线上临时配置已恢复 | 按发布门禁部署修复后重验 ERP 审核草稿。DOTH 样本有 FBS 库存，真实专用测试隔离仍未成立，本地测试不能授权 import/archive |
 | 新提交与部署证据 | `c10cdc61` 已推送且完整 offline gate 通过；旧 v1 已签署发布继续验证 | 部署流程已获本轮授权，仍须补齐 QA-02/正式 QA-04，生成目标 clean commit 的区域四件套与签名，并取得对应运行包的新 canary |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |

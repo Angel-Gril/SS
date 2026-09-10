@@ -38,6 +38,14 @@
 | 图片公网下载 | `source-public-image-download.ts` | 所有用户 URL 下载统一消费它 | bounded downloaded image | route/watermark 裸 fetch | repair |
 | 上传配额 | `upload-limiter.ts` | Redis 原子配额 owner | allowed/denied result | 单进程 Map | repair |
 | 第三方接入 | 现有 provider/client/adapter | 同左 | provider contract + error mapping | 页面直调和日志字符串 | keep |
+| 托管编辑发包边界 | `apps/server/src/services/ai-image-edit-dispatch.ts` | 同左 | 最后发包 callback；实时授权、冻结任务与预留绑定 | route、提示词、页面或 Provider 响应 | keep |
+| 托管编辑 Provider 合同 | `apps/server/src/services/ai-image-edit-provider-contract.ts` | 同左 | 传输/规范端点/尺寸/冻结 prompt；readiness、service、repository、worker 共用 | HTTP handler 自定义 transport、UI 或证据标签别名 | keep |
+| 托管编辑凭据身份 | `system-config-schema.ts`、`ai-image-edit-runtime-config.ts`、`ai-image-provider-runtime-contract.ts` | 同左 | 一次快照读取；Wanx v2 非密 recordId/revision/updatedAt；创建/重试/发包/查询共用 | 前端、日志、密钥摘要或当前配置自动覆盖旧任务 | keep |
+| 编辑产物与只读恢复 | `ai-image-edit-artifacts.ts`、`ai-image-edit-recovery.ts`、reconciliation service/repository；raw 持久化由 `repositories/ai-image-edit-output.ts` 负责 | 同左 | 原 ID 的 GET；冻结输入→raw→合成/规范化→待审核；lease/CAS 和唯一账本终态 | 恢复 worker 重发 POST、直接生成可应用图片或重置原 attempt | keep |
+| 编辑提示词规则与协议渲染 | `apps/server/src/services/ai-image-edit-prompt-contract.ts`；通用插值由 `ai-prompt-templates.ts` 负责 | 同左 | 显式 rendering profile 与独立快照摘要；registry 保持发布 owner | Provider adapter 截断/替换文本、UI 或临时脚本 | keep |
+| 阿里云原生账单观察 | `apps/server/src/services/ai-image-alibaba-billing-observation.ts`；私有文件边界复用 `ai-image-sandbox-billing-settlement.ts` | 同左 | QueryBill 观察→待对账评估；精确金额口径、账号/账单身份分离；无结算 writer | 用量、页面现金数、报价或账单号冒充单请求费用/任务 ID | keep |
+| Wanx 试点离线准备 | `apps/server/src/services/ai-image-wanx-trial-preparation.ts`；复用冻结 prompt、精确金额和私有 bundle owner | 同左 | CNY 1 两操作分配、输入副本与不可覆盖清单；verify 重算；固定不可收费和来源待核实 | CLI 自行定价、准备清单变批准、提议分配冒充执行预占、快照自洽冒充真实任务来源 | keep |
+| Wanx 隔离执行与预算 | `ai-image-wanx-trial-execution.ts`、`ai-image-sandbox-approval.ts`、原 sandbox claim/private writer；single-submit 仅装配 | 同左 | v4 绑定物理私有根和冻结清单；全局 fingerprint、整轮与固定操作槽位在 POST 前持久领取；report-bound 范围证据 | 改单号/审批/目录重发、未知结果返还额度、隔离结果冒充 ERP 或原生计费验收 | keep |
 | 部署/配置 | env templates、deploy scripts、SystemConfig | 各自保持启动/业务配置职责 | env/deploy contract | 页面常量和历史计划 | repair |
 | REL-04 候选证据 | `packages/shared/src/rel04-release-evidence.ts` | 同左 | canary v2、完整 VPS verifier v1；CLI 与 API 共用候选绑定校验 | 日志文本、页面和手写运行回执 | keep |
 
@@ -57,7 +65,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 登录 | Web `/login` | auth UI -> `/api/auth/login` -> human challenge -> User/Redis session | cookie JWT + live authVersion | Web 会话建立 | production Redis disabled 风险待修 |
 | 来源采集到上架 | Extension/Web | page evidence -> source capture -> listing draft -> publish intent/attempt -> Ozon adapter | shared capture schema、draft revision、rollout/receipt | 可恢复发布流程 | 真实 Ozon 试点未授权 |
-| AI 图片 | Web/Extension | prompt/plan -> job -> Provider adapter -> asset -> review/apply | quota/cost/reservation/reconciliation | 暗态/受控结果 | 真实 Provider 质量未验证 |
+| AI 图片 | Web/Extension | prompt/plan -> credential-bound job -> dispatch fence -> Provider adapter -> raw/final -> review/apply；中断后原 ID GET -> 同一产物 owner | quota/cost/reservation/reconciliation | 暗态/受控结果 | Wanx 凭据绑定与只读恢复已接线；真实 Provider → ERP、账单/质量与正式 QA-04 仍待验收；最新证据见 `current-state-audit.md` |
 | 图片处理 | Web | image route -> downloader/watermark/resize -> storage | URL/bytes/pixels/quota | 生成预览/上传结果 | 部分裸 fetch 待统一 |
 
 ## 局部架构真源投影
