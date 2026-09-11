@@ -222,6 +222,18 @@
 - 源码及 runbook 已提交为 `279904a4bddfa0f4152da6e667f4c5e1d2b71373`；内部 owner 文档随后独立提交。提交前明确核对九个源码/测试/配置/runbook 路径，staged diff 和密钥模式检查通过，私有资料、临时日志、构建及环境文件未纳入 Git。后续执行绑定当时最新的全长 clean HEAD，并按实际采集类型保留原始证据；本入口要求真实 HTTP capture，不能把既有 SQL 读取结果改名作为 HTTP 响应。原有已规范化来源文件的编译路径继续可用。
 - 输出固定为 `IMPORTED_NOT_AUTHENTICATED / OFFLINE_CONSISTENCY_ONLY / REQUIRES_CAPTURE_REVIEW / canSubmit:false / actualCost:null`。摘要及采集人/时间元数据只证明文件交接一致性，不证明实际登录、模板当前仍活动、ERP 工作流来源、Provider 质量或账单关联。真实采集、付费、Provider/Ozon 请求、生产变更、部署与推送均未执行；操作格式由[来源导入 runbook](../docs/runbooks/ai-image-provider-sandbox-approval.md#import-captured-source-responses-offline)维护。
 
+### 真实只读复验与首笔校准准备（2026-09-12）
+
+- 用户明确要求继续测试、采集和验收。本轮复用已有独立核验 Chrome，只操作 ERP、百炼用量与费用中心的选定页面，并验证上次私有清单摘要仍为 `8d448358a38e5737b902c28ea2a587336ac286187e2afa850265cf7161fc8dc1`。这是 T3 真实只读与现有命令验收，不再用新增本地套件数量代替真实 Provider 进度。
+- ERP `/api/user/me` 返回 200，当前会话仍为超级管理员、非子账号；个人 `/api/ai-images/workflows?limit=100` 返回 200、0 条。该结果不代表全平台或其他账号没有任务。两项新模板来源 URL 均返回 Fastify `Route ... not found` 的 404，线上尚无这些路由；没有调用会初始化模板的列表入口，没有部署新代码。
+- 百炼对既有新 Key 的北京区 `Online / Vision` 查询，覆盖 2026-09-11 整日及 2026-09-12 00:00 至约 01:02。两次统计和明细查询均成功并达到 `asyncTaskStatus:Complete`，明细 `totalCount:0`；请求中的 Key/业务空间摘要与前次记录一致。异步查询 ID 保持为用量查询身份，不作为 Provider 图像 task ID。
+- 费用中心对 2026-09 的 `ListConsumeSummary / consumeDetailBillV2MonthSummary / MONTHLY / BILLING_ITEM` 重新执行 COUNT_ONLY 与 DATA_ONLY，均为 200，分别为 `TotalCount:0` 与空数据。随后刷新并只读核对 `GetConfig.data.AccountId`、`LoadHumanInfo.data.Data.Pk`，两者摘要均匹配既有已审费用账户；身份响应只保存必要摘要，没有保存会话/认证字段。这些仍是控制台明细观察，不是 QueryBill、实际单次费用或结算回执，`actualCost:null / canFinalize:false`。
+- 已记录并独立复核一项顺序冲突：准备 owner 的 `requiredBeforeSubmit` 包含 `TRUSTED_TASK_TO_SETTLED_BILL_LINK`，审批 runbook 也将其列为真实发包停止项；但首笔请求自己的实际计费样本与结算关联只能在请求后产生。本轮没有删除或放宽该字段、结算标准或正常 ERP 门禁。提出的最小裁决是独立批准首笔单请求隔离校准，先取得首个 Provider task/原生计费样本，再按原标准核验关联；正常 ERP、完整 QA-02 与正式 QA-04 继续待验收。当前仍等待该范围裁决及精确一次性批准。
+- 来源准备复用已有经认证 SQL 发布取证，保留原始文件及 `4b5b30c9d5967a2fcaa0d48021c2b96912253dfcfd11df338b347d8f6c1232b4` 摘要，通过当前来源 owner 校验并记录到规范化来源的转换关系，未伪装为 HTTP capture。源图为已有 1024×1024 白杯测试图，SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`；alpha mask 摘要为 `f5a5d6945d37b0616f9606d1832f48dcf47710b37fda494bd5ce115bfb14fe3b`。二者实际字节与旧记录一致，正常 preparation owner 的图片/遮罩/提示词与金额校验通过；这不是 ERP workflow/job 来源证明。
+- 建立真正的 detached Git worktree，冻结受审源码 `a8be87bf08d278bf85f7cbb83a361c451afecd62`，按锁文件离线安装依赖，下载数为 0；前后 Git 均 clean。该执行 checkout 独立于随后仅记录证据的主工作区文档提交，不是合成 fixture checkout。使用该冻结源码的正式 CLI 完成 compile→prepare→verify→FULL_EDIT approval-draft，全部在禁止网络、无 Provider Key 的进程中通过。轮次 `wanx-calibration-20260912-01` 的输入摘要为 `93e56e86d204063726e2b63ad98afc909189551588891d7376e9daf3ed30ab22`，准备清单摘要为 `89dad33761a677a06f0409e19552fd6ad19360a8ca435a9e11352840a84568ca`；全图编辑草稿摘要为 `6946f1a9ffc895bd73170f59a1a5b1ce460c2b543ae42bee5c5d146c9a0af31d`。真实 approval verifier 对未批准草稿按预期返回 `SANDBOX_APPROVAL_SCHEMA_INVALID`，未创建 intents 或 execution claim。
+- 首笔建议仅 FULL_EDIT 一张：把杯子后方灰背景改为均匀浅蓝灰，保持杯子、把手、数量和阴影；参考报价 CNY 0.14，单操作授权上限 CNY 0.25，仍沿用整轮 CNY 1。第二个 INPAINT 槽位只有准备输入，没有批准或领取。上述上限是本地执行授权预算，不是已验证的 Provider 端硬消费限制；正式批准还须覆盖新凭据使用、指定图片/提示词发送、同 task 查询/结果下载、账单只读核对及失败/未知结果不重发。所有产物仍为未批准、未对账状态。
+- 本轮私有清单绑定 38 个文件，摘要为 `0096d914473a3463ac9ad35be91f389c6659bdaa5abc14793b6367833c56392a`；新目录关闭 ACL 继承且仅当前 Windows 用户可访问，JSON 读回、逐文件摘要及凭据模式扫描通过。真实图像请求、费用、ERP 任务创建、Provider Key 解密、Ozon 写入、生产配置、推送、部署和官网切换均为 0。当前完成的是实际只读复验和可审阅的首笔隔离测试包，账单验收仍未通过。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
