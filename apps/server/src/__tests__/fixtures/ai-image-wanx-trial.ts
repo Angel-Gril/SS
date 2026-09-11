@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import Fastify from 'fastify';
@@ -120,4 +120,26 @@ export async function makeWanxTrialInputDraft(evidenceRoot: string, adapterRevis
     request: { ...originalInput, kind: 'WANX_EDIT_TRIAL_INPUT_DRAFT_V1', operations },
     originalInput, templateSources,
   };
+}
+
+export async function makeWanxTemplateSourceCaptures(
+  evidenceRoot: string, adapterRevision: string, roundId: string,
+  erpOrigin = 'https://erp-source.fixture.invalid',
+) {
+  const draft = await makeWanxTrialInputDraft(evidenceRoot, adapterRevision, roundId);
+  const captures = [];
+  for (const operation of draft.request.operations) {
+    const templateKey = operation.operation === 'FULL_EDIT' ? 'full-image-edit.base' : 'inpaint.base';
+    const bytes = await readFile(join(evidenceRoot, `${operation.operation.toLowerCase()}-response.json`));
+    captures.push({
+      templateKey, capturedAt: new Date().toISOString(), collectorRef: 'synthetic-source-collector',
+      request: { method: 'GET', url: `${erpOrigin}/api/admin/ai-prompt-templates/${templateKey}/source` },
+      response: { httpStatus: 200, contentType: 'application/json; charset=utf-8',
+        bodySha256: trialDigest(bytes), bodyBase64: bytes.toString('base64') },
+    });
+  }
+  return { draft, erpOrigin, request: {
+    schemaVersion: 1, kind: 'WANX_EDIT_TEMPLATE_SOURCE_CAPTURES_V1',
+    roundId, adapterRevision, captures,
+  } };
 }

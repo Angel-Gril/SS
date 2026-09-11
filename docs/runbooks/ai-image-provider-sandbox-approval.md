@@ -203,9 +203,9 @@ publication/PASS chain or a release changed during the read is rejected. A rollb
 to its earlier publication of the same revision. The response omits internal actor identities.
 
 Retain each authorized HTTP capture privately, including the origin, time, response bytes and
-their SHA-256. The HTTP response uses the standard `{code,msg,data}` envelope. Extract `data`
-only after HTTP 200 and `code:1`; serialize it as two-space JSON with a final newline and no
-BOM. For example, the conversion in capture tooling is:
+their SHA-256. The HTTP response uses the standard `{code,msg,data}` envelope. Use the offline
+source importer below to validate the captures and produce the compiler references. Its data
+conversion uses two-space JSON with a final newline and no BOM:
 
 ```js
 const envelope = JSON.parse(responseBody);
@@ -244,6 +244,60 @@ Compilation remains `COMPILED_NOT_APPROVED`, `canSubmit:false`, `actualCost:null
 `sourceVerification:OFFLINE_CONSISTENCY_ONLY` and `sourceAuthentication:REQUIRES_CAPTURE_REVIEW`.
 It creates no ERP task, execution claim or billing evidence, and preserves all later submission
 requirements. Existing output directories are rejected, including incomplete prior bundles.
+
+### Import Captured Source Responses Offline
+
+Run `pnpm --filter server sandbox:ai-image:wanx-trial:sources:import` with the same sandbox,
+clean code revision, private root and trial identity settings as preparation. Additionally set
+`AI_IMAGE_SANDBOX_ERP_ORIGIN` to the independently selected canonical HTTPS origin, such as
+`https://ss-erp.com`, without a trailing slash, credentials, path, query or fragment. This is
+an offline origin comparison; the command does not resolve DNS, fetch a URL or authenticate a
+session. Never place cookies, Authorization headers or Provider keys in its input or environment.
+
+Select the private capture record with `AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH` and its exact
+`AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256`. The record uses the private reader's canonical JSON format:
+
+- `schemaVersion:1`, `kind:WANX_EDIT_TEMPLATE_SOURCE_CAPTURES_V1`, and the same `roundId` and
+  `adapterRevision` as the selected trial.
+- Exactly two `captures`, one each for `full-image-edit.base` and `inpaint.base`.
+- Each capture has `templateKey`, canonical UTC `capturedAt`, an ASCII non-secret `collectorRef`
+  of 1–128 identifier characters, and the following closed request/response records.
+- `request:{method:"GET",url:"<origin>/api/admin/ai-prompt-templates/<templateKey>/source"}`.
+  The exact selected origin and template key must agree with that capture's response data.
+- `response:{httpStatus:200,contentType:"application/json; charset=utf-8",bodySha256,bodyBase64}`.
+  `bodyBase64` must encode the original HTTP response bytes and `bodySha256` must hash those bytes,
+  before any JSON parsing or formatting. Keep request/response headers out of this record.
+
+The importer requires the actual success envelope `{code:1,msg:"ok",data}` and validates `data`
+through the existing published-source owner. Each raw body is limited to 256 KiB. JSON whitespace,
+CRLF and escaped Unicode are accepted; duplicate decoded keys, excessive depth, invalid UTF-8/BOM
+and noncanonical base64 are rejected. Numeric codes, versions and sequences must be non-negative
+safe integers written as plain decimal integer tokens; fractional or exponent tokens are rejected
+before they can round into accepted identities. Capture times must not
+precede the active publication and cannot be more than five minutes in the future. These checks
+do not prove the capture's authenticity or that its publication is still active at import time.
+
+After both captures pass, the importer creates `wanx-sources-<roundId>` using the existing private
+bundle writer. It retains the original wrapper as `captures.json`, exact HTTP bodies as
+`full-edit-response.json` and `inpaint-response.json`, and normalized data as
+`full-edit-template.json` and `inpaint-template.json`. It writes `manifest.json` last, binding the
+capture digest, selected origin digest, capture times, collector/request digests and each response
+to its exported source. Existing or incomplete output directories are rejected without overwriting.
+
+Stdout returns `manifestSha256` and `sources[]`, including each operation's ready-to-use
+`templateSource:{path,sha256}`. Those paths are relative to the private evidence root, never absolute
+private paths. Copy the complete reference into the corresponding raw-prompt draft operation:
+
+```js
+operation.templateSource = imported.sources.find((source) => source.operation === operation.operation).templateSource;
+```
+
+Remove `AI_IMAGE_SANDBOX_ERP_ORIGIN` before running `input:compile`, `prepare`, `verify` or
+`approval:draft`; these four offline modes reject import-only settings. Point the input path/digest at the raw-prompt draft for compilation,
+then continue the existing prepare/verify flow. The importer creates no prompts, media, ERP jobs,
+claims, approvals or billing evidence. Its state is `IMPORTED_NOT_AUTHENTICATED`, with
+`sourceVerification:OFFLINE_CONSISTENCY_ONLY`, `sourceAuthentication:REQUIRES_CAPTURE_REVIEW`,
+`canSubmit:false` and `actualCost:null`. Authenticated capture review remains separate.
 
 ## Frozen Wanx Two-Operation Trial Preparation
 

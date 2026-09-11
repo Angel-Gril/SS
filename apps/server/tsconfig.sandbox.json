@@ -13,6 +13,7 @@
     "scripts/ai-image-wanx-trial-prepare.ts",
     "scripts/ai-image-wanx-trial-prepare.test.ts",
     "scripts/ai-image-wanx-trial-input.test.ts",
+    "scripts/ai-image-wanx-trial-source-import.test.ts",
     "scripts/ai-image-wanx-trial-approval-draft.test.ts",
     "scripts/ai-image-wanx-trial-execution.test.ts",
     "scripts/ai-image-provider-single-submit.ts",

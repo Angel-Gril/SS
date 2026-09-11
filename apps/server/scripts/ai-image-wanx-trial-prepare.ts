@@ -39,6 +39,7 @@ const TRACKED_PATHS = [
   'apps/server/src/services/ai-image-wanx-edit-profile.ts',
   'apps/server/src/services/ai-image-wanx-trial-preparation.ts',
   'apps/server/src/services/ai-image-wanx-trial-input.ts',
+  'apps/server/src/services/ai-image-wanx-template-source-import.ts',
   'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'apps/server/src/services/ai-media-planning-contract.ts',
   'apps/server/src/services/ai-prompt-consumer-contracts.ts',
@@ -121,24 +122,26 @@ function approvalDraftSettings(environment: NodeJS.ProcessEnv) {
   };
 }
 
-export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'approval-draft' | 'compile-input', options: {
+export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'approval-draft' | 'compile-input' | 'import-sources', options: {
   environment?: NodeJS.ProcessEnv;
   repositoryRoot?: string;
   resolveRevision?: typeof resolveAiImageSandboxRepositoryRevision;
 } = {}) {
   const environment = options.environment || process.env;
-  if (environment.NODE_ENV !== 'sandbox' || !['prepare', 'verify', 'approval-draft', 'compile-input'].includes(mode)) {
+  if (environment.NODE_ENV !== 'sandbox' || !['prepare', 'verify', 'approval-draft', 'compile-input', 'import-sources'].includes(mode)) {
     invalid('WANX_TRIAL_CONFIG_INVALID', 'The offline trial command requires sandbox mode');
   }
   for (const [name, value] of Object.entries(environment)) {
     if (!String(value || '').trim()) continue;
     if (UNSAFE_ENVIRONMENT_NAMES.has(name.toUpperCase())) invalid('WANX_TRIAL_UNSAFE_ENV', 'Offline trial preparation must not receive credentials or paid confirmation');
     if (MIXED_ENVIRONMENT_NAMES.has(name.toUpperCase())
-      || ((mode === 'approval-draft' || mode === 'compile-input') && DRAFT_OVERRIDE_ENVIRONMENT_NAMES.has(name.toUpperCase()))) {
+      || ((mode === 'approval-draft' || mode === 'compile-input' || mode === 'import-sources') && DRAFT_OVERRIDE_ENVIRONMENT_NAMES.has(name.toUpperCase()))
+      || (mode !== 'import-sources' && name.toUpperCase() === 'AI_IMAGE_SANDBOX_ERP_ORIGIN')
+      || (mode === 'import-sources' && name.toUpperCase() === 'AI_IMAGE_SANDBOX_OPERATION')) {
       invalid('WANX_TRIAL_CONFIG_INVALID', 'Trial preparation cannot be combined with approval, submission or request overrides');
     }
   }
-  const incompatible = mode === 'prepare' || mode === 'compile-input' ? ['AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256']
+  const incompatible = mode === 'prepare' || mode === 'compile-input' || mode === 'import-sources' ? ['AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256']
     : ['AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH', 'AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256'];
   if (incompatible.some((name) => String(environment[name] || '').trim())) invalid('WANX_TRIAL_CONFIG_INVALID', 'Prepare and verify inputs must not be mixed');
   const draftSettings = mode === 'approval-draft' ? approvalDraftSettings(environment) : null;
@@ -167,6 +170,18 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
     }
   };
   await assertRevision();
+  if (mode === 'import-sources') {
+    const { importAiImageWanxTemplateSources } = await import('../src/services/ai-image-wanx-template-source-import.js');
+    const result = await importAiImageWanxTemplateSources({
+      repositoryRoot, evidenceRoot, assertRevision,
+      expected: { ...expected, erpOrigin: required(environment, 'AI_IMAGE_SANDBOX_ERP_ORIGIN') },
+      requestPath: required(environment, 'AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH'),
+      requestSha256: requiredDigest(environment, 'AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256'),
+    });
+    const summary = { event: 'AI_IMAGE_WANX_TEMPLATE_SOURCES_IMPORTED', ...result };
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return summary;
+  }
   if (mode === 'compile-input') {
     const { compileAiImageWanxTrialInput } = await import('../src/services/ai-image-wanx-trial-input.js');
     const result = await compileAiImageWanxTrialInput({

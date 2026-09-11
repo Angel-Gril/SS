@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runAiImageWanxTrialCommand } from './ai-image-wanx-trial-prepare.js';
 import { sanitizeAiImageSandboxGitEnvironment } from '../src/services/ai-image-sandbox-code-revision.js';
-import { makeWanxTrialInput, makeWanxTrialInputDraft, trialAccountDigest, trialCredentialRevision, trialDigest, trialJson } from '../src/__tests__/fixtures/ai-image-wanx-trial.js';
+import { makeWanxTrialInput, makeWanxTrialInputDraft, makeWanxTemplateSourceCaptures, trialAccountDigest, trialCredentialRevision, trialDigest, trialJson } from '../src/__tests__/fixtures/ai-image-wanx-trial.js';
 
 const execFileAsync = promisify(execFile);
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -131,6 +131,47 @@ async function prepare(value: Awaited<ReturnType<typeof fixture>>, extra: NodeJS
 }
 
 describe('offline Wanx trial preparation CLI', () => {
+  it('imports pinned HTTP captures before compiling, preparing and verifying through real CLI processes', async () => {
+    const value = await fixture();
+    const captures = await makeWanxTemplateSourceCaptures(value.evidenceRoot, revision, value.request.roundId);
+    const capturePath = join(value.evidenceRoot, 'source-captures.json');
+    const captureBytes = trialJson(captures.request);
+    await writeFile(capturePath, captureBytes, { mode: 0o600 });
+    const imported = await command('--import-wanx-template-sources', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_ERP_ORIGIN: captures.erpOrigin,
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: capturePath, AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: trialDigest(captureBytes),
+    });
+    expect(imported.exitCode).toBe(0);
+    expect(imported.stderr).toBe('');
+    const importSummary = JSON.parse(imported.stdout);
+    expect(importSummary).toMatchObject({ canSubmit: false, sourceAuthentication: 'REQUIRES_CAPTURE_REVIEW' });
+    for (const operation of captures.draft.request.operations) {
+      operation.templateSource = importSummary.sources.find((item: any) => item.operation === operation.operation).templateSource;
+    }
+    const draftPath = join(value.evidenceRoot, 'imported-input.json');
+    const draftBytes = trialJson(captures.draft.request);
+    await writeFile(draftPath, draftBytes, { mode: 0o600 });
+    const compiled = await command('--compile-wanx-trial-input', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: draftPath, AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: trialDigest(draftBytes),
+    });
+    expect(compiled.exitCode).toBe(0);
+    expect(compiled.stderr).toBe('');
+    const compileSummary = JSON.parse(compiled.stdout);
+    const prepared = await command('--prepare-wanx-trial', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: join(value.evidenceRoot, `wanx-input-${value.request.roundId}`, 'input.json'),
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: compileSummary.inputSha256,
+    });
+    expect(prepared.exitCode).toBe(0);
+    expect(prepared.stderr).toBe('');
+    const verified = await command('--verify-wanx-trial', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256: JSON.parse(prepared.stdout).manifestSha256,
+    });
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stderr).toBe('');
+    expect(JSON.parse(verified.stdout)).toMatchObject({ canSubmit: false, actualCost: null,
+      sourceVerification: 'OFFLINE_CONSISTENCY_ONLY' });
+  }, 60_000);
+
   it('compiles captured HTTP source data then prepares and verifies through real offline CLI processes', async () => {
     const value = await fixture();
     const draft = await makeWanxTrialInputDraft(value.evidenceRoot, revision, value.request.roundId);
@@ -172,7 +213,7 @@ describe('offline Wanx trial preparation CLI', () => {
     expect(await readdir(value.evidenceRoot)).not.toContain('execution');
   }, 45_000);
 
-  it.each(['ai-image-wanx-trial-input.ts', 'ai-prompt-template-source.ts'])(
+  it.each(['ai-image-wanx-trial-input.ts', 'ai-prompt-template-source.ts', 'ai-image-wanx-template-source-import.ts'])(
     'pins the new compiler dependency %s before reading source files', async (name) => {
       const value = await fixture();
       const draft = await makeWanxTrialInputDraft(value.evidenceRoot, revision, value.request.roundId);
