@@ -51,7 +51,7 @@ const operationSchema = z.object({
   }).strict(),
   quotedCost: z.unknown(), maximumCost: z.unknown(),
 }).strict();
-const inputSchema = z.object({
+export const aiImageWanxTrialInputSchema = z.object({
   schemaVersion: z.literal(1), kind: z.literal('WANX_EDIT_TRIAL_INPUT_V1'),
   roundId: idSchema.max(64), adapterRevision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u),
   provider: z.literal('dashscope-wanx'), model: z.literal(AI_IMAGE_WANX21_EDIT_MODEL),
@@ -83,8 +83,8 @@ function invalid(code: string, message: string): never {
   throw new AiImageWanxTrialError(code, message);
 }
 
-function parseRequest(value: unknown, expected: AiImageWanxTrialExpected) {
-  const parsed = inputSchema.safeParse(value);
+export function parseAiImageWanxTrialRequest(value: unknown, expected: AiImageWanxTrialExpected) {
+  const parsed = aiImageWanxTrialInputSchema.safeParse(value);
   if (!parsed.success) invalid('WANX_TRIAL_INPUT_INVALID', 'Trial input must use the closed two-operation contract');
   const request = parsed.data;
   if (request.roundId !== expected.roundId || request.adapterRevision !== expected.adapterRevision
@@ -177,7 +177,7 @@ export async function buildAiImageWanxTrialPreparation(input: {
   expected: AiImageWanxTrialExpected;
 }) {
   if (!shaSchema.safeParse(input.sourceInputSha256).success) invalid('WANX_TRIAL_INPUT_INVALID', 'A pinned source input digest is required');
-  const { request, allocatedMaximumCost } = parseRequest(input.request, input.expected);
+  const { request, allocatedMaximumCost } = parseAiImageWanxTrialRequest(input.request, input.expected);
   const mediaRoot = resolve(input.mediaRoot);
   const files: Array<{ name: string; bytes: Buffer }> = [];
   const bindings = [];

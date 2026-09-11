@@ -2,9 +2,13 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
+import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
+import { adminAiPromptTemplateRoutes } from '../../routes/admin-ai-prompt-templates.js';
 import { InMemoryAiPromptTemplateStore } from '../../services/ai-prompt-templates.js';
 import { AiPromptTemplateRegistryService } from '../../services/ai-prompt-template-registry.js';
 import { AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE } from '../../services/ai-image-edit-prompt-contract.js';
+import type { AiPromptPublishedSource } from '../../services/ai-prompt-template-source.js';
 
 export const trialDigest = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 export const trialJson = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -67,5 +71,53 @@ export async function makeWanxTrialInput(evidenceRoot: string, adapterRevision: 
     credentialRevision: trialCredentialRevision,
     maximumCost: { currency: 'CNY', amount: 1, scale: 0 },
     operations,
+  };
+}
+
+export async function makeWanxTrialInputDraft(evidenceRoot: string, adapterRevision: string, roundId = 'fixture-source-round-001') {
+  const originalInput = await makeWanxTrialInput(evidenceRoot, adapterRevision, roundId);
+  const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), {
+    getLegacyPrompt: async () => 'Unused synthetic legacy prompt',
+  });
+  const operations = [];
+  const templateSources = [];
+  const app = Fastify();
+  await app.register(cookie);
+  await app.register(adminAiPromptTemplateRoutes, {
+    service: registry,
+    authenticate: async (request) => {
+      (request as any).user = { actorUserId: 'synthetic-admin', isSuperAdmin: true };
+    },
+    requireSuperAdmin: async (request, reply) => {
+      if (!(request as any).user?.isSuperAdmin) return reply.status(403).send({ code: 0 });
+    },
+  });
+  try {
+    for (const operation of originalInput.operations) {
+      const { frozenPrompt, ...base } = operation;
+      await registry.resolveTemplate({ templateKey: frozenPrompt.templateKey, variables: {
+        userPrompt: frozenPrompt.prompt, userNegativePrompt: frozenPrompt.negativePrompt,
+      } });
+      const response = await app.inject({ method: 'GET', url: `/${frozenPrompt.templateKey}/source` });
+      const envelope = response.json<{ code: number; data: AiPromptPublishedSource }>();
+      if (response.statusCode !== 200 || envelope.code !== 1) throw new Error('Synthetic source export failed');
+      // Match the runbook capture conversion: retain the envelope separately and pin its data export.
+      await writeFile(join(evidenceRoot, `${operation.operation.toLowerCase()}-response.json`), response.body, { mode: 0o600 });
+      const source = envelope.data;
+      const name = `${operation.operation.toLowerCase()}-template.json`;
+      const bytes = trialJson(source);
+      await writeFile(join(evidenceRoot, name), bytes, { mode: 0o600 });
+      operations.push({
+        ...base, prompt: frozenPrompt.prompt, negativePrompt: frozenPrompt.negativePrompt,
+        templateSource: { path: name, sha256: trialDigest(bytes) },
+      });
+      templateSources.push(source);
+    }
+  } finally {
+    await app.close();
+  }
+  return {
+    request: { ...originalInput, kind: 'WANX_EDIT_TRIAL_INPUT_DRAFT_V1', operations },
+    originalInput, templateSources,
   };
 }

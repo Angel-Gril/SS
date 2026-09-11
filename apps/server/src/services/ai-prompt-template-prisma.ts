@@ -268,6 +268,19 @@ export class PrismaAiPromptTemplateStore implements AiPromptTemplateStore {
     return rows.map(release);
   }
 
+  async findPublishedRelease(input: { templateKey: string; revisionId: string; beforeSequence: number }) {
+    const row = await this.prisma.aiPromptRelease.findFirst({
+      where: {
+        templateKey: input.templateKey,
+        revisionId: input.revisionId,
+        action: 'PUBLISH',
+        sequence: { lt: input.beforeSequence },
+      },
+      orderBy: { sequence: 'desc' },
+    });
+    return row ? release(row) : null;
+  }
+
   async getActiveRelease(templateKey: string) {
     const row = await this.prisma.aiPromptRelease.findFirst({
       where: { templateKey },

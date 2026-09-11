@@ -235,6 +235,11 @@ export interface AiPromptTemplateStore {
   }): Promise<AiPromptRelease>;
   listReleases(templateKey: string): Promise<AiPromptRelease[]>;
   getActiveRelease(templateKey: string): Promise<AiPromptRelease | null>;
+  findPublishedRelease(input: {
+    templateKey: string;
+    revisionId: string;
+    beforeSequence: number;
+  }): Promise<AiPromptRelease | null>;
 }
 
 export class AiPromptTemplateError extends Error {
@@ -365,6 +370,27 @@ export function checksumAiPromptRevision(input: AiPromptRevisionContent): string
       ...(consumer ? { consumer } : {}),
     }))
     .digest('hex');
+}
+
+export function createAiPromptTemplateSnapshot(input: {
+  revision: AiPromptRevisionContent & { id: string; checksum: string };
+  release: Pick<AiPromptRelease, 'id' | 'sequence'>;
+  renderingContract?: ReturnType<typeof renderAiPromptRevision>['renderingContract'];
+}) {
+  const { revision, release, renderingContract } = input;
+  const variableSchema = getAiPromptVariableSchema(revision.templateKey);
+  return {
+    templateKey: revision.templateKey, releaseId: release.id, revisionId: revision.id,
+    sequence: release.sequence, checksum: revision.checksum,
+    promptTemplate: revision.promptTemplate, negativePromptTemplate: revision.negativePromptTemplate,
+    outputMode: variableSchema.outputMode, variableSchemaVersion: 1,
+    ...(renderingContract ? { renderingContract } : {}),
+    consumer: getAiPromptConsumerContract(revision.templateKey),
+    variableKeys: {
+      prompt: variableSchema.prompt.map((variable) => variable.inputKey),
+      negativePrompt: variableSchema.negativePrompt.map((variable) => variable.inputKey),
+    },
+  };
 }
 
 function clone<T>(value: T): T {
@@ -499,6 +525,12 @@ export class InMemoryAiPromptTemplateStore implements AiPromptTemplateStore {
 
   async getActiveRelease(templateKey: string) {
     const release = this.releases.get(templateKey)?.at(-1);
+    return release ? clone(release) : null;
+  }
+
+  async findPublishedRelease(input: { templateKey: string; revisionId: string; beforeSequence: number }) {
+    const release = [...(this.releases.get(input.templateKey) || [])].reverse().find((item) =>
+      item.action === 'PUBLISH' && item.revisionId === input.revisionId && item.sequence < input.beforeSequence);
     return release ? clone(release) : null;
   }
 }

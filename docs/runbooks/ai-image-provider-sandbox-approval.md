@@ -193,6 +193,58 @@ and one trailing newline. Set `AI_IMAGE_SANDBOX_APPROVAL_PATH` and its newly com
 `AI_IMAGE_SANDBOX_APPROVAL_SHA256` only after that review. Never treat the draft event or its
 pre-review digest as paid-request authority.
 
+## Published Template Source And Offline Input Compilation
+
+The source endpoint is available in API versions containing this change. An authorized
+superadmin can read `GET /api/admin/ai-prompt-templates/full-image-edit.base/source` and
+`GET /api/admin/ai-prompt-templates/inpaint.base/source`. Unlike the template list endpoint,
+these reads do not initialize missing templates. A missing release returns 404; an incomplete
+publication/PASS chain or a release changed during the read is rejected. A rollback is linked
+to its earlier publication of the same revision. The response omits internal actor identities.
+
+Retain each authorized HTTP capture privately, including the origin, time, response bytes and
+their SHA-256. The HTTP response uses the standard `{code,msg,data}` envelope. Extract `data`
+only after HTTP 200 and `code:1`; serialize it as two-space JSON with a final newline and no
+BOM. For example, the conversion in capture tooling is:
+
+```js
+const envelope = JSON.parse(responseBody);
+if (statusCode !== 200 || envelope.code !== 1) throw new Error('Source export failed');
+const sourceBytes = Buffer.from(`${JSON.stringify(envelope.data, null, 2)}\n`, 'utf8');
+const sourceSha256 = createHash('sha256').update(sourceBytes).digest('hex');
+```
+
+Store the resulting bare source object as a separate private file. Preserve both digests and
+their transformation relationship in the private capture record. The compiler pins the source
+file digest, not the HTTP envelope digest. It accepts LF, CRLF or mixed line endings supported by
+the private JSON reader and preserves the exact source bytes in its output bundle. Pretty-printing
+does not authenticate a source; approved capture evidence remains necessary.
+
+Use `pnpm --filter server sandbox:ai-image:wanx-trial:input:compile` with the same sandbox,
+private-root, clean-revision, account and credential-reference settings as preparation below.
+`AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH` and `AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256` select the raw
+draft input. Keep `AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256`, credentials, paid confirmation
+and legacy request overrides absent. The command does not load `.env` or access the network.
+
+The draft retains the trial v1 root fields, amounts, operation IDs and media bindings described
+below, with `kind:WANX_EDIT_TRIAL_INPUT_DRAFT_V1`. In each of its two operations, replace
+`frozenPrompt` with `prompt`, nullable `negativePrompt`, and `templateSource:{path,sha256}`.
+The source path is relative to the private evidence root. Use the full-edit source for
+`FULL_EDIT` and the inpaint source for `INPAINT`. Do not supply resolved text, snapshots or
+approval fields; the compiler derives the frozen prompt using the existing Wanx rendering owner.
+
+Compilation validates both source chains, media, the 800-code-point limit and the CNY 1 combined
+maximum before creating `wanx-input-<roundId>`. The immutable bundle contains
+`full-edit-template.json`, `inpaint-template.json`, `input.json` and `manifest.json`.
+Stdout includes `inputSha256` and `compilationManifestSha256` with sanitized source bindings.
+Retain those digests separately. For preparation, point the two input settings at that bundle's
+`input.json` and `inputSha256`; then use the preparation manifest digest for verification.
+
+Compilation remains `COMPILED_NOT_APPROVED`, `canSubmit:false`, `actualCost:null`,
+`sourceVerification:OFFLINE_CONSISTENCY_ONLY` and `sourceAuthentication:REQUIRES_CAPTURE_REVIEW`.
+It creates no ERP task, execution claim or billing evidence, and preserves all later submission
+requirements. Existing output directories are rejected, including incomplete prior bundles.
+
 ## Frozen Wanx Two-Operation Trial Preparation
 
 Use the following **offline preparation and verification** commands for the scoped CNY 1 trial:

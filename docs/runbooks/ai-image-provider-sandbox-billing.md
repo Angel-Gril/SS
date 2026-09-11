@@ -518,6 +518,19 @@ are available after 12:00 on the second day of the next month, and that fee/stat
 by five hours. An empty current query, `PayFinish`, a zero cash component, the catalog unit price,
 or `usage.image_count` cannot establish final per-task cost.
 
+Keep the source-specific finality rules separate. On 2026-09-11, the authenticated
+[monthly overview](https://billing-cost.console.aliyun.com/finance/month-bill/account) displayed
+the second-day/noon and five-hour rules above, while the
+[bill-detail page](https://billing-cost.console.aliyun.com/finance/expense-report/expense-detail-by-instance)
+displayed final details after 12:00 on the **third** day of the next month, 24-hour fee-data delay,
+and 48-hour delay for instance metadata. The observed detail page used
+`BssOpenAPI-V3 / ListConsumeSummary` with `consumeDetailBillV2MonthSummary`, including separate
+`COUNT_ONLY` and `DATA_ONLY` requests. These console responses are not `QueryBill` bodies and are
+not accepted by the existing native-bill inspector. Preserve their actual method, query scope,
+response bytes, and finality notice in private evidence; do not relabel them or infer an actual
+cost from an empty result. A console usage-query `asyncTaskId` is also separate from a Wanx image
+generation `task_id`.
+
 A future native settlement contract needs an authentic account/ApiKeyID/workspace/model/region/
 charge-item mapping, complete native billing bytes and the applicable payment/finality basis.
 Assigning an aggregated billing interval to one task additionally needs complete evidence that

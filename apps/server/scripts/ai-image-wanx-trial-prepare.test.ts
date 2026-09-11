@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runAiImageWanxTrialCommand } from './ai-image-wanx-trial-prepare.js';
 import { sanitizeAiImageSandboxGitEnvironment } from '../src/services/ai-image-sandbox-code-revision.js';
-import { makeWanxTrialInput, trialAccountDigest, trialCredentialRevision, trialDigest, trialJson } from '../src/__tests__/fixtures/ai-image-wanx-trial.js';
+import { makeWanxTrialInput, makeWanxTrialInputDraft, trialAccountDigest, trialCredentialRevision, trialDigest, trialJson } from '../src/__tests__/fixtures/ai-image-wanx-trial.js';
 
 const execFileAsync = promisify(execFile);
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -131,6 +131,69 @@ async function prepare(value: Awaited<ReturnType<typeof fixture>>, extra: NodeJS
 }
 
 describe('offline Wanx trial preparation CLI', () => {
+  it('compiles captured HTTP source data then prepares and verifies through real offline CLI processes', async () => {
+    const value = await fixture();
+    const draft = await makeWanxTrialInputDraft(value.evidenceRoot, revision, value.request.roundId);
+    for (const operation of draft.request.operations) {
+      const envelope = JSON.parse(await readFile(join(value.evidenceRoot, `${operation.operation.toLowerCase()}-response.json`), 'utf8'));
+      expect(envelope.code).toBe(1);
+      const exported = await readFile(join(value.evidenceRoot, operation.templateSource.path));
+      expect(exported).toEqual(trialJson(envelope.data));
+      expect(trialDigest(exported)).toBe(operation.templateSource.sha256);
+    }
+    const inputPath = join(value.evidenceRoot, 'raw-input.json');
+    const bytes = trialJson(draft.request);
+    await writeFile(inputPath, bytes, { mode: 0o600 });
+    const result = await command('--compile-wanx-trial-input', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: inputPath, AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: trialDigest(bytes),
+    });
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    const compiled = JSON.parse(result.stdout);
+    expect(compiled).toMatchObject({ event: 'AI_IMAGE_WANX_TRIAL_INPUT_COMPILED', canSubmit: false,
+      actualCost: null, sourceAuthentication: 'REQUIRES_CAPTURE_REVIEW' });
+    for (const privateValue of [value.evidenceRoot, draft.request.operations[0]!.prompt,
+      draft.templateSources[0]!.activeRelease.id, 'synthetic-env-poison']) expect(result.stdout).not.toContain(privateValue);
+    const compiledPath = join(value.evidenceRoot, `wanx-input-${value.request.roundId}`, 'input.json');
+    expect(trialDigest(await readFile(compiledPath))).toBe(compiled.inputSha256);
+    const prepared = await command('--prepare-wanx-trial', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: compiledPath, AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: compiled.inputSha256,
+    });
+    expect(prepared.stderr).toBe('');
+    expect(prepared.exitCode).toBe(0);
+    const manifest = JSON.parse(prepared.stdout);
+    const verified = await command('--verify-wanx-trial', value.evidenceRoot, value.request.roundId, {
+      AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256: manifest.manifestSha256,
+    });
+    expect(verified.stderr).toBe('');
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ canSubmit: false, actualCost: null,
+      sourceVerification: 'OFFLINE_CONSISTENCY_ONLY', manifestSha256: manifest.manifestSha256 });
+    expect(await readdir(value.evidenceRoot)).not.toContain('execution');
+  }, 45_000);
+
+  it.each(['ai-image-wanx-trial-input.ts', 'ai-prompt-template-source.ts'])(
+    'pins the new compiler dependency %s before reading source files', async (name) => {
+      const value = await fixture();
+      const draft = await makeWanxTrialInputDraft(value.evidenceRoot, revision, value.request.roundId);
+      const inputPath = join(value.evidenceRoot, 'raw-input.json');
+      const bytes = trialJson(draft.request);
+      await writeFile(inputPath, bytes, { mode: 0o600 });
+      const helper = join(repositoryRoot, 'apps/server/src/services', name);
+      const original = await readFile(helper);
+      try {
+        await writeFile(helper, Buffer.concat([original, Buffer.from('\n// synthetic dependency drift\n')]));
+        const result = await command('--compile-wanx-trial-input', value.evidenceRoot, value.request.roundId, {
+          AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH: inputPath, AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256: trialDigest(bytes),
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('SANDBOX_ADAPTER_FILE_DIRTY');
+        expect(result.stdout).toBe('');
+        expect(await readdir(value.evidenceRoot)).not.toContain(`wanx-input-${value.request.roundId}`);
+      } finally { await writeFile(helper, original); }
+    }, 45_000,
+  );
+
   it('prepares a frozen two-operation round and verifies it without credentials, network, approval or settlement', async () => {
     const value = await fixture();
     const result = await prepare(value);

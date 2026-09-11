@@ -35,6 +35,54 @@ describe('Prisma AI prompt template store', () => {
     expect(schema).toContain('revisionChecksum');
   });
 
+  it('reads one historical publish for the exact template and revision before the active sequence', async () => {
+    const createdAt = new Date('2026-09-11T08:00:00.000Z');
+    const row = { ...release(), sequence: 3, createdAt };
+    const findFirst = vi.fn(async () => row);
+    const findMany = vi.fn();
+    const upsert = vi.fn();
+    const store = new PrismaAiPromptTemplateStore({
+      aiPromptRelease: { findFirst, findMany },
+      aiPromptTemplate: { upsert },
+    });
+
+    await expect(store.findPublishedRelease({
+      templateKey: row.templateKey,
+      revisionId: row.revisionId,
+      beforeSequence: 5,
+    })).resolves.toEqual({ ...row, createdAt: createdAt.toISOString() });
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        templateKey: row.templateKey,
+        revisionId: row.revisionId,
+        action: 'PUBLISH',
+        sequence: { lt: 5 },
+      },
+      orderBy: { sequence: 'desc' },
+    });
+    expect(findMany).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('returns no historical publish without initializing a missing template', async () => {
+    const findFirst = vi.fn(async () => null);
+    const upsert = vi.fn();
+    const create = vi.fn();
+    const store = new PrismaAiPromptTemplateStore({
+      aiPromptRelease: { findFirst, create },
+      aiPromptTemplate: { upsert },
+    });
+
+    await expect(store.findPublishedRelease({
+      templateKey: 'inpaint.base',
+      revisionId: 'missing-revision',
+      beforeSequence: 1,
+    })).resolves.toBeNull();
+    expect(findFirst).toHaveBeenCalledOnce();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('appends the next release under a serializable CAS transaction', async () => {
     const create = vi.fn(async ({ data }) => ({ ...data, createdAt: new Date(data.createdAt) }));
     const updateMany = vi.fn(async () => ({ count: 1 }));

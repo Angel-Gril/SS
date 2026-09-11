@@ -9,6 +9,7 @@ function promptTemplateService() {
   };
 
   return {
+    readExistingPublishedSource: vi.fn(async (): Promise<unknown> => undefined),
     listTemplates: vi.fn(async (): Promise<any> => ({
       items: [{ key: 'text-to-image.base', activeRevisionId: 'revision-1', ...secretFields }],
     })),

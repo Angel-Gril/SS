@@ -1103,7 +1103,7 @@ export async function readAiImageSandboxPrivateBillingEvidence(input: {
     kind: 'evidence',
     allowedRoot,
   });
-  return { record: evidence.record, sha256: evidence.sha256 };
+  return { record: evidence.record, sha256: evidence.sha256, bytes: evidence.bytes };
 }
 
 async function readExactPrivateFile(

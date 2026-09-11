@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { authenticate as defaultAuthenticate, requireSuperAdmin as defaultRequireSuperAdmin } from '../lib/auth.js';
+import { parseAiPromptPublishedSource } from '../services/ai-prompt-template-source.js';
 
 const keySchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9._-]+$/);
 const identifierSchema = z.string().trim().min(1).max(300);
@@ -29,6 +30,7 @@ type Hook = (request: FastifyRequest, reply: FastifyReply) => unknown;
 
 export interface AdminAiPromptTemplateService {
   listTemplates(): Promise<unknown>;
+  readExistingPublishedSource(templateKey: string): Promise<unknown>;
   createRevision(input: {
     actorUserId: string;
     key: string;
@@ -296,6 +298,17 @@ export async function adminAiPromptTemplateRoutes(
     () => options.service.listTemplates(),
     mapTemplateListDto,
   ));
+
+  app.get('/:key/source', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const params = keyParamsSchema.safeParse(request.params);
+    const query = z.object({}).strict().safeParse(request.query);
+    if (!params.success || !query.success) return invalidRequest(reply);
+    return operation(reply,
+      () => options.service.readExistingPublishedSource(params.data.key),
+      parseAiPromptPublishedSource,
+    );
+  });
 
   app.post('/:key/revisions', async (request, reply) => {
     const params = keyParamsSchema.safeParse(request.params);

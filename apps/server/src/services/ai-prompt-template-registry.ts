@@ -1,6 +1,7 @@
 import { getConfig } from '../config/system-config-schema.js';
 import { prisma } from '../lib/prisma.js';
 import { PrismaAiPromptTemplateStore } from './ai-prompt-template-prisma.js';
+import { readExistingAiPromptTemplateSource } from './ai-prompt-template-source.js';
 import {
   AI_MEDIA_CURATION_TEMPLATE_KEY,
   AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
@@ -19,6 +20,7 @@ import {
   AiPromptTemplateError,
   AiPromptTemplateService,
   checksumAiPromptRevision,
+  createAiPromptTemplateSnapshot,
   getAiPromptVariableSchema,
   renderAiPromptRevision,
   validateAiPromptRenderingProfile,
@@ -430,6 +432,10 @@ export class AiPromptTemplateRegistryService {
     this.domain = new AiPromptTemplateService(store);
   }
 
+  readExistingPublishedSource(templateKey: string) {
+    return readExistingAiPromptTemplateSource(this.store, templateKey);
+  }
+
   async listTemplates() {
     await Promise.all(Object.keys(BUILTIN_TEMPLATE_DEFINITIONS).map((key) => this.ensureTemplate(key)));
     const templates = await this.store.listTemplates();
@@ -690,7 +696,6 @@ export class AiPromptTemplateRegistryService {
     }
     const activeRevision = await this.domain.getRevision(activeRelease.revisionId);
     this.assertRevisionConsumerCompatible(activeRevision);
-    const variableSchema = getAiPromptVariableSchema(input.templateKey);
     const resolvedItems = items.map((item) => {
       const normalizedVariables = promptVariables(
         input.templateKey,
@@ -713,23 +718,10 @@ export class AiPromptTemplateRegistryService {
         sequence: activeRelease.sequence,
       },
       checksum: activeRevision.checksum,
-      snapshot: {
-        templateKey: input.templateKey,
-        releaseId: activeRelease.id,
-        revisionId: activeRevision.id,
-        sequence: activeRelease.sequence,
-        checksum: activeRevision.checksum,
-        promptTemplate: activeRevision.promptTemplate,
-        negativePromptTemplate: activeRevision.negativePromptTemplate,
-        outputMode: variableSchema.outputMode,
-        variableSchemaVersion: 1,
-        ...(resolvedItems[0]!.renderingContract ? { renderingContract: resolvedItems[0]!.renderingContract } : {}),
-        consumer: getAiPromptConsumerContract(input.templateKey),
-        variableKeys: {
-          prompt: variableSchema.prompt.map((variable) => variable.inputKey),
-          negativePrompt: variableSchema.negativePrompt.map((variable) => variable.inputKey),
-        },
-      },
+      snapshot: createAiPromptTemplateSnapshot({
+        revision: activeRevision, release: activeRelease,
+        renderingContract: resolvedItems[0]!.renderingContract,
+      }),
       items: resolvedItems,
     };
   }
