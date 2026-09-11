@@ -45,7 +45,7 @@
 | 编辑提示词规则与协议渲染 | `apps/server/src/services/ai-image-edit-prompt-contract.ts`；通用插值由 `ai-prompt-templates.ts` 负责 | 同左 | 显式 rendering profile 与独立快照摘要；registry 保持发布 owner | Provider adapter 截断/替换文本、UI 或临时脚本 | keep |
 | 编辑模板只读来源 | `ai-prompt-template-source.ts`；Prisma store 负责有界发布查询，registry/route 委托 | 同左 | 既有发布/回滚/PASS 链校验、封闭导出与活动 release 重读；不初始化模板 | API envelope、文件摘要或发布 PASS 冒充真实任务、Provider 质量与采集认证 | keep |
 | 阿里云原生账单观察 | `apps/server/src/services/ai-image-alibaba-billing-observation.ts`；私有文件边界复用 `ai-image-sandbox-billing-settlement.ts` | 同左 | QueryBill 观察→待对账评估；精确金额口径、账号/账单身份分离；无结算 writer | 用量、页面现金数、报价或账单号冒充单请求费用/任务 ID | keep |
-| Wanx 试点离线准备 | `ai-image-wanx-trial-preparation.ts`；来源输入编译由 `ai-image-wanx-trial-input.ts` 负责；复用冻结 prompt、精确金额和私有 bundle owner | 同左 | 来源原始字节/摘要绑定；CNY 1 两操作分配、输入副本与不可覆盖清单；verify 重算；固定不可收费和来源待核实 | CLI 自行定价、准备清单变批准、提议分配冒充执行预占、快照自洽冒充真实任务来源 | keep |
+| Wanx 试点离线准备 | `ai-image-wanx-trial-preparation.ts`；HTTP 来源导入由 `ai-image-wanx-template-source-import.ts`、输入编译由 `ai-image-wanx-trial-input.ts` 负责；复用冻结 prompt、精确金额和私有 bundle owner | 同左 | 原始 HTTP/capture 字节与 data 导出引用绑定；CNY 1 两操作分配、输入副本与不可覆盖清单；verify 重算；固定不可收费和来源待核实 | CLI 自行定价、导入记录冒充采集认证、准备清单变批准、提议分配冒充执行预占、快照自洽冒充真实任务来源 | keep |
 | Wanx 隔离执行与预算 | `ai-image-wanx-trial-execution.ts`、`ai-image-sandbox-approval.ts`、原 sandbox claim/private writer；single-submit 仅装配 | 同左 | v4 绑定物理私有根和冻结清单；全局 fingerprint、整轮与固定操作槽位在 POST 前持久领取；report-bound 范围证据 | 改单号/审批/目录重发、未知结果返还额度、隔离结果冒充 ERP 或原生计费验收 | keep |
 | 部署/配置 | env templates、deploy scripts、SystemConfig | 各自保持启动/业务配置职责 | env/deploy contract | 页面常量和历史计划 | repair |
 | REL-04 候选证据 | `packages/shared/src/rel04-release-evidence.ts` | 同左 | canary v2、完整 VPS verifier v1；CLI 与 API 共用候选绑定校验 | 日志文本、页面和手写运行回执 | keep |

@@ -212,6 +212,16 @@
 - 阶段源码提交：`eb8ee6c60d29012167549a0b74bdc1b5baf9dca1` 固定 Windows 默认 Vitest 并发上限；`8925dbca5e5655ebb408164a08170c127ef3b6f2` 收口模板来源与离线编译、对应测试及 runbook。内部 owner 文档随后的独立提交记录本节。只暂存逐项核对的路径，staged diff 与密钥模式检查通过，忽略的构建、环境、浏览器和私有证据未进入提交。
 - 下一步复用已取得的真实模板/账户证据，按 runbook 核实采集认证和固定输入，再分别关闭真实 ERP 任务来源、原生账单关联与逐操作批准。执行必须绑定当时最新的全长 clean HEAD，不能把上述源码提交号当作后续文档提交后的 HEAD。原本的 CNY 1 总额与旧账单状态保持不变；本轮真实 Provider/Ozon 请求、真实费用、生产变更、推送、部署和官网切换均为 0，未新增 QA-02、正式 QA-04 或能力晋升结论。
 
+### HTTP 模板来源离线导入（2026-09-12）
+
+- 用户继续开发，本轮从 clean `45967b424886793b2479aa88e32148e98f5bf7d0` 接续。结果是把已有 runbook 的 HTTP envelope→data 提取步骤接入正式离线命令，使导入结果直接提供后续编译所需的相对文件引用与摘要。唯一业务 owner 为 `ai-image-wanx-template-source-import.ts`；CLI 只装配，来源发布链校验、私有文件和 bundle 写入继续复用原 owner。没有调整 schema、角色、正常建单、编译输入 v1、审批 v4 或收费指纹。
+- T2 先用真实 Fastify 路由生成的合成来源响应和真实 CLI 子进程写出两个正向用例，两者分别因不识别模式/参数而 RED；实现后 GREEN。另以返回码与 sequence 的小数精度舍入输入复现两个错误接收 RED，再通过原始 JSON 数字 token 校验关闭。52 项导入测试覆盖 decoded key 重复、深度、UTF-8/BOM/base64、响应大小、逐条 origin/key/source 绑定、采集时间、原始 wrapper/HTTP 字节、直接消费者引用、错误配置、代码漂移及已有目录不覆盖；受影响六文件组合 `192 passed`。
+- 新入口为 `sandbox:ai-image:wanx-trial:sources:import`，复用现有 sandbox、clean revision、私有根和 round 身份配置，并独立绑定 `AI_IMAGE_SANDBOX_ERP_ORIGIN`。导入模式读取两份已采集响应，不发起 HTTP/DNS 或认证请求。每份响应上限 256 KiB，必须是对应来源 URL 的 HTTP 200 与 `{code:1,msg:'ok',data}`；全部校验完成后才保存原 captures、两份 HTTP bytes、两份规范化来源及最后写入的转换清单。后续 CLI 测试直接消费返回的 `templateSource:{path,sha256}` 走完 compile→prepare→verify，没有手工重建引用或请求收费。
+- 两条独立复核分别覆盖源码安全/字节边界及 CLI/测试/文档合同，均已完成且未发现高置信功能缺陷，主 Agent 已复核结论。第二条首次因模型限流失败，随后重试完成；runbook 据复核收窄了拒绝导入专用设置的四个离线模式表述，没有修改 single-submit 或付费协议。
+- 2026-09-12 最终完整 `pnpm preflight` 退出 0：server `408 passed files / 5684 passed tests / 258 conditionally skipped tests`，扩展 source verifier `459 passed / 0 failure / 0 warning`；server/Web 与 sandbox 类型检查随命令通过。独立 sandbox 类型检查、shared 类型检查和全仓 lint 也通过。八个源码/测试/配置文件在组合与完整验证期间 SHA-256 一致。本轮验证入口显式设置 `DOTENV_CONFIG_PATH=NUL`；未新增数据库、构建、浏览器或外部运行验收结论。
+- 源码及 runbook 已提交为 `279904a4bddfa0f4152da6e667f4c5e1d2b71373`；内部 owner 文档随后独立提交。提交前明确核对九个源码/测试/配置/runbook 路径，staged diff 和密钥模式检查通过，私有资料、临时日志、构建及环境文件未纳入 Git。后续执行绑定当时最新的全长 clean HEAD，并按实际采集类型保留原始证据；本入口要求真实 HTTP capture，不能把既有 SQL 读取结果改名作为 HTTP 响应。原有已规范化来源文件的编译路径继续可用。
+- 输出固定为 `IMPORTED_NOT_AUTHENTICATED / OFFLINE_CONSISTENCY_ONLY / REQUIRES_CAPTURE_REVIEW / canSubmit:false / actualCost:null`。摘要及采集人/时间元数据只证明文件交接一致性，不证明实际登录、模板当前仍活动、ERP 工作流来源、Provider 质量或账单关联。真实采集、付费、Provider/Ozon 请求、生产变更、部署与推送均未执行；操作格式由[来源导入 runbook](../docs/runbooks/ai-image-provider-sandbox-approval.md#import-captured-source-responses-offline)维护。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
