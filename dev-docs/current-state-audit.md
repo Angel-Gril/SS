@@ -299,6 +299,17 @@
 - 受影响回归：Web 编辑合同及 6 项新增用例、Web AI media 行为合同、扩展 mask 合同通过；服务端 compositor 的 5 项既有测试通过，验证进程隔离 `.env`。Web typecheck、lint 和生产构建均退出 0，77 个静态页面完成；Next 既有 flat-config 插件检测提示保持为工具链限制。两条独立核对分别覆盖 Provider 转换与本次选区/容量改动，没有剩余阻止本地提交的发现；未重跑无关全量后端或声称正式 QA-04。
 - 本节本地修复与验证完成。两次真实 FULL_EDIT 的质量结论、费率/免费抵扣证据及最终结算待验收状态继续保留；后续应使用明确选区验证区域改色，真实 INPAINT 仍须新的具体输入和一次性批准，不能沿用旧 FULL_EDIT 授权。本轮未产生新的 Provider 请求/费用、读取凭据、写入 ERP/Ozon、推送或部署，原 `a8be87bf` 执行 checkout 与已消费 claim 保留。
 
+### INPAINT 左上背景区域校准准备（2026-09-12）
+
+- 用户继续要求推进。本节完成第一次新 Key INPAINT 的离线合成演练和可审阅输入包，尚未批准或发包。复用同一 1024×1024 白杯源图和原 alpha mask；实际透明编辑区为 `x=32..191 / y=32..191`，即左上角 **160×160、25,600 像素（2.44%）** 的空背景，未覆盖杯体、把手或阴影。其余 **1,022,976 像素**为保留区。这次拟校准局部区域改色，不把结果扩大为整片背景改色验收。
+- 继续使用真正的 clean detached `a8be87bf08d278bf85f7cbb83a361c451afecd62` 执行 checkout；主仓库 `3a99d5c3` 的后续变更不涉及 server/shared/依赖锁，因此没有为本次 CLI 重建另一份执行代码。来源仍消费先前已认证的 SQL 发布取证与原规范化模板，不冒充新的 HTTP 来源或 ERP workflow/job。源图 SHA-256 为 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`，原 alpha mask 为 `f5a5d6945d37b0616f9606d1832f48dcf47710b37fda494bd5ce115bfb14fe3b`；既有 Wanx 转换 owner 输出的黑白 mask 为 `ebd90e94ba683f52f52f8199e312cd43b024380986151520df0d3c715abcfe02`，同时通过 ERP mask validator。
+- 本地合成直接调用该冻结代码的 `composeAiImageInpaint`。全图纯色 `#D9E5EB` 模拟输入在保留区原本改变 1,022,976 像素；上次失败 FULL_EDIT 原图在保留区改变 1,022,930 像素。两组经过合成后，保留区 RGBA 变化均为 **0**，选区内 25,600 像素均来自对应候选。蓝色合成预览和历史失败图重放明确标为离线派生物，没有新增 Provider 结果，也没有将历史 FULL_EDIT 质量改判通过。模拟图有明显矩形硬边，只用于说明目标色和区域，未证明“自然衔接”。
+- 正式 CLI 在无 Provider Key、禁止网络环境中完成 compile→prepare→verify→INPAINT approval-draft，均为 `canSubmit:false`。新 round 为 `wanx-inpaint-region-20260912-03`，完整冻结提示词 491 字，要求仅将该选区改为浅蓝灰 `#D9E5EB`。清单 SHA-256 为 `0b9dbfdda70d43e3e247247099cf8834619619cc2e8bb136ce770a85c4b67eeb`，未批准草稿 SHA-256 为 `74a3d16b9c3c08a03994b2e544ba63b9067b2fbb36c079a4accbdfbd2711b4e9`，审阅包 SHA-256 为 `16c8bff736bfac4bf3c54121da9e468952f7ae416d125e56c1a77e607a91dac9`。真实 approval verifier 对该未批准草稿按预期返回 `SANDBOX_APPROVAL_SCHEMA_INVALID`；新 round 没有 execution 目录或 claim。清单中的 FULL_EDIT 仅为准备合同的另一项，没有获得新授权。
+- 拟申请仅 **1 次 INPAINT**，沿用已核验 Key、标准北京端点和 Wanx 2.1；报价 **CNY 0.14**、单次授权上限 **CNY 0.25**。前两笔各 CNY 0.25 的占位保留，包含本次提案后保守累计 **CNY 0.75 / 整轮 CNY 1**；临时免费不释放旧授权占位。这一跨 round 总额来自独立列出的原审批/报告/claim 摘要核对，执行器当前只约束本 round，不能宣称代码自动累计所有历史 round。尚未消费第三次授权或产生费用。
+- 执行后必须区分原始图与派生图：冻结 single-submit 只保存 Provider 原始 `image.buffer`，不会生成 ERP `FINAL_COMPOSITE`。原始图及 report/trial evidence 必须保持不变；另行调用既有合成 owner 时保存独立结果和来源/遮罩/候选摘要。分别观察原始选区颜色、固定内框 `x=64,y=64,96×96`、边界过渡与选区外变化，并核对合成保留区逐像素不变；不能用派生合成替 Provider 原生保持能力背书。技术成功、质量、原生费用/最终结算继续分别验收；失败或未知结果不重发。
+- 主 Agent 已实际查看选区叠图、模拟预览和历史重放，独立 Agent 复核了区域、操作范围、跨 round 金额和模拟图边界。新增证据索引绑定 24 个文件，SHA-256 为 `c6719ac3eb6da5e5e3296adba3ec49a92e2d198cae7f580514854c7a55efab37`；前序 159 个文件逐一匹配，原回执/claim 均保留。24 项新文件摘要及 ACL、37 个本地链接、25 个锚点、新增文档凭据模式检查和 `git diff --check` 均通过。所有图片、审批草稿及完整提示词继续只留在仓库外私有目录。
+- 本节为现有 owner 的离线调用/一致性验证与 T0 真源回写，没有修改产品源码、解密 Key、创建真实 Provider/ERP/Ozon 任务、推送或部署。根据 `AGENTS.md` 的真实 Provider/密钥边界，下一步仅等待这次新 INPAINT 的精确一次性批准；前两次已消费的 FULL_EDIT 授权不能用于本操作。正常 ERP、改色质量、最终结算及完整 QA-02/QA-04 仍未通过。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
