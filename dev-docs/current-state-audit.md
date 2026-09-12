@@ -288,6 +288,17 @@
 - 本次 `ListConsumeDetails` 与此前 `ListConsumeSummary` 均保留真实 API 身份，未包装成 QueryBill 或送入不兼容的结算入口；继续遵守[原生计费最终性与任务关联边界](../docs/runbooks/ai-image-provider-sandbox-billing.md#native-wanx-task-association-and-settlement-boundary)。观察记录 SHA-256 为 `ab064b2608e485057686aac757298b43f916293ecfa757491496fe3fa80826e5`；增量取证清单绑定 19 个新文件，SHA-256 为 `1e8d0a27030470603a4266ee4eea85ee70abf6a1eee48726d78df3e004ca4ee0`，并验证前一清单的 138 个文件均未改变。实际明细、用户截图和原始公开资料只留在仓库外私有目录。
 - 本节为 T3 真实只读取证、现有两笔验收，加 T0 真源表更新；临时采集器仅补充页面实际使用的明细只读 API，语法及真实响应采集通过。35 个本地链接、23 个锚点、增量文件摘要、私有 ACL、新增文档凭据模式检查和 `git diff --check` 均通过，未修改产品源码或冻结执行 checkout。新增 Provider 创建/重试、凭据解密、ERP/Ozon 写入、推送和部署均为 0；已消费 claim 保留，改图质量、正式结算及完整 QA-02/QA-04 仍不能晋升为通过。
 
+### Web 局部重绘选区保留修复（2026-09-12）
+
+- 用户要求继续开发。本节沿两次 FULL_EDIT 质量失败后的编辑区域路径调查，确认正常 INPAINT 最终结果由 `ai-image-edit-artifacts.ts` 委托 `composeAiImageInpaint`，黑色遮罩区域复制原图像素；ERP 黑白遮罩→alpha→Wanx 黑白区域的方向正确。Wanx 对羽化权重会以 128 为界二值化，不能声明原生保留灰度权重；FULL_EDIT 本来不携带遮罩，也不经过这条转换。本节没有认定模型忽略改色要求的唯一原因，没有改动 v1 提示词、Provider 操作或旧冻结请求。
+- **独立复现并修复 Web 选区丢失。** `apps/web/src/lib/ai-image-mask.ts` 的 `commitAiImageMaskStroke` 原先用同一 `AI_IMAGE_MASK_HISTORY_LIMIT=100` 截断实际 `strokes` 和撤销历史；第 101 笔加入后，第一笔从预览和导出中消失，撤销又会恢复。实际选区现在完整保留，只有 undo/redo 快照限制为 100；清空后撤销也恢复完整选区。这是局部重绘编辑器的确定性缺陷，不是前两次无遮罩 FULL_EDIT 的根因修复。
+- 资源上限继续由 mask history owner 负责：采用与现有扩展一致的最多 512 笔、当前选区 65,536 个总点，保留单笔 4,096 点上限。新增 `getAiImageMaskBudget` 同时供提交验证和 React 薄适配读取；提交超限时返回原 history，不能裁切旧选区或清空 redo。活动 pointer 根据剩余点数限制新增点；达到上限显示明确提示并停止新增绘制，已有局部遮罩仍可导出，撤销或清空可恢复容量。服务端遮罩语义、来源/权限、Provider、账本和 API 合同未变。
+- T2：先运行原 Web 编辑合同建立通过基线；五项新增行为用例在旧实现上全部 RED，覆盖超过撤销历史的选区保留、清空恢复、笔画容量、总点容量和单笔超限。修复后全部 GREEN；独立审查建议的剩余 3 点时拒绝 4 点、精确填满及 undo/redo 恢复预算又补一项通过，最终新增 **6 passed / 0 failed**，均在现有 preflight 已登记的 `web-ai-media-edit-workbench.test.mjs` 中。没有新增源码字符串断言冒充这些行为测试。
+- T3：独立浏览器 lane 使用 Git `a7cc701b` 冻结基线与当前实际 React 组件，Chrome 152、React 18.3.1、1024 方图和桌面鼠标输入。基线第 100 笔的左上导出像素为 `[255,255,255,255]`，第 101 笔变为 `[0,0,0,255]`；修复版第 101、512 笔均保留白色选区，第 513 笔被拒绝前后 PNG SHA-256 完全一致。提示、`aria-describedby`、禁止光标和撤销后恢复绘制均通过；主 Agent 已读回全部文件摘要、当前源码绑定、截图，并独立解码 PNG 复核关键像素。
+- 浏览器证据索引绑定 22 个文件，SHA-256 为 `0d26d21fe0d893e58b96d5d13ba6fe71d740b279bf2eb94a418bcafcfd1a467e`，仅保存在仓库外私有目录。该证据来自使用局部布局 CSS 的真实组件 harness，不是完整已登录 ERP 页面；触控、浏览器灌满 64K 点数未在该路径实跑，总点数边界由上述 owner 自动化覆盖。独立 localhost helper 与测试 context 均已关闭，用户浏览器继续运行。
+- 受影响回归：Web 编辑合同及 6 项新增用例、Web AI media 行为合同、扩展 mask 合同通过；服务端 compositor 的 5 项既有测试通过，验证进程隔离 `.env`。Web typecheck、lint 和生产构建均退出 0，77 个静态页面完成；Next 既有 flat-config 插件检测提示保持为工具链限制。两条独立核对分别覆盖 Provider 转换与本次选区/容量改动，没有剩余阻止本地提交的发现；未重跑无关全量后端或声称正式 QA-04。
+- 本节本地修复与验证完成。两次真实 FULL_EDIT 的质量结论、费率/免费抵扣证据及最终结算待验收状态继续保留；后续应使用明确选区验证区域改色，真实 INPAINT 仍须新的具体输入和一次性批准，不能沿用旧 FULL_EDIT 授权。本轮未产生新的 Provider 请求/费用、读取凭据、写入 ERP/Ozon、推送或部署，原 `a8be87bf` 执行 checkout 与已消费 claim 保留。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |

@@ -19,6 +19,8 @@ export interface AiImageMaskHistory {
 
 export const AI_IMAGE_MASK_HISTORY_LIMIT = 100;
 export const AI_IMAGE_MASK_STROKE_POINT_LIMIT = 4096;
+export const AI_IMAGE_MASK_STROKE_LIMIT = 512;
+export const AI_IMAGE_MASK_TOTAL_POINT_LIMIT = 64 * 1024;
 export const AI_IMAGE_MASK_MAX_PIXELS = 12_000_000;
 export const AI_IMAGE_MASK_MAX_EDGE = 16_384;
 export const AI_IMAGE_MASK_MAX_ASPECT_RATIO = 20;
@@ -49,6 +51,16 @@ function normalizedSize(size: number) {
 
 export function createAiImageMaskHistory(): AiImageMaskHistory {
   return { strokes: [], undo: [], redo: [] };
+}
+
+export function getAiImageMaskBudget(history: AiImageMaskHistory) {
+  const pointCount = history.strokes.reduce((total, stroke) => total + stroke.points.length, 0);
+  const remainingPoints = Math.max(0, AI_IMAGE_MASK_TOTAL_POINT_LIMIT - pointCount);
+  return {
+    pointCount,
+    remainingPoints,
+    canBeginStroke: history.strokes.length < AI_IMAGE_MASK_STROKE_LIMIT && remainingPoints > 0,
+  };
 }
 
 export function isAiImageMaskDimensionsSupported(width: number, height: number): boolean {
@@ -93,10 +105,16 @@ export function commitAiImageMaskStroke(
   history: AiImageMaskHistory,
   stroke: AiImageMaskStroke,
 ): AiImageMaskHistory {
-  if (!stroke.points.length) return history;
+  const budget = getAiImageMaskBudget(history);
+  if (
+    !stroke.points.length
+    || !budget.canBeginStroke
+    || stroke.points.length > AI_IMAGE_MASK_STROKE_POINT_LIMIT
+    || stroke.points.length > budget.remainingPoints
+  ) return history;
   const strokes = [...history.strokes, stroke];
   return {
-    strokes: strokes.slice(-AI_IMAGE_MASK_HISTORY_LIMIT),
+    strokes,
     undo: [...history.undo, history.strokes].slice(-AI_IMAGE_MASK_HISTORY_LIMIT),
     redo: [],
   };

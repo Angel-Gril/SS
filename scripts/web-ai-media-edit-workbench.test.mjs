@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { test } from 'node:test';
 import {
   buildAiImageEditWorkflowRequest,
   describeAiMediaReadiness,
@@ -7,11 +8,14 @@ import {
 } from '../apps/web/src/lib/ai-media-workflow.ts';
 import {
   appendAiImageMaskPoint,
+  AI_IMAGE_MASK_HISTORY_LIMIT,
+  AI_IMAGE_MASK_STROKE_POINT_LIMIT,
   clearAiImageMaskHistory,
   commitAiImageMaskStroke,
   createAiImageMaskHistory,
   createAiImageMaskStroke,
   confirmAiImageMaskDraftDiscard,
+  getAiImageMaskBudget,
   hasAiImageMaskPaint,
   isAiImageMaskDimensionsSupported,
   redoAiImageMaskHistory,
@@ -149,6 +153,117 @@ history = clearAiImageMaskHistory(history);
 assert.equal(history.strokes.length, 0);
 history = undoAiImageMaskHistory(history);
 assert.equal(history.strokes.length, 1, 'clear must be undoable');
+
+function paintedHistory(count) {
+  let result = createAiImageMaskHistory();
+  for (let index = 0; index < count; index += 1) {
+    result = commitAiImageMaskStroke(result, createAiImageMaskStroke('paint', 0.05, {
+      x: index === 0 ? 0.1 : 0.9,
+      y: index === 0 ? 0.1 : 0.9,
+    }));
+  }
+  return result;
+}
+
+test('mask selection survives more strokes than the undo history can retain', () => {
+  const count = AI_IMAGE_MASK_HISTORY_LIMIT + 7;
+  const original = paintedHistory(count);
+  assert.equal(original.strokes.length, count, 'history pruning must not remove selected regions');
+  assert.deepEqual(original.strokes[0].points[0], { x: 0.1, y: 0.1 });
+  assert.equal(original.undo.length, AI_IMAGE_MASK_HISTORY_LIMIT);
+  let current = original;
+  for (let index = 0; index < AI_IMAGE_MASK_HISTORY_LIMIT; index += 1) {
+    current = undoAiImageMaskHistory(current);
+  }
+  assert.equal(current.strokes.length, 7);
+  assert.equal(current.strokes[0], original.strokes[0]);
+  assert.equal(undoAiImageMaskHistory(current), current);
+  for (let index = 0; index < AI_IMAGE_MASK_HISTORY_LIMIT; index += 1) {
+    current = redoAiImageMaskHistory(current);
+  }
+  assert.deepEqual(current.strokes, original.strokes);
+});
+
+test('clear, undo and a new edit preserve older selection beyond the undo limit', () => {
+  const original = paintedHistory(AI_IMAGE_MASK_HISTORY_LIMIT + 1);
+  const cleared = clearAiImageMaskHistory(original);
+  assert.equal(cleared.strokes.length, 0);
+  const restored = undoAiImageMaskHistory(cleared);
+  assert.equal(restored.strokes.length, AI_IMAGE_MASK_HISTORY_LIMIT + 1);
+  assert.deepEqual(restored.strokes[0].points[0], { x: 0.1, y: 0.1 });
+  assert.equal(redoAiImageMaskHistory(restored).strokes.length, 0);
+  const edited = commitAiImageMaskStroke(restored, createAiImageMaskStroke('erase', 0.05, { x: 0.9, y: 0.9 }));
+  assert.equal(edited.strokes.length, original.strokes.length + 1);
+  assert.equal(edited.strokes[0], original.strokes[0]);
+  assert.equal(edited.redo.length, 0);
+});
+
+test('stroke capacity rejects a new stroke without changing the existing mask or its history', () => {
+  const original = paintedHistory(512);
+  assert.equal(original.strokes.length, 512);
+  const extra = createAiImageMaskStroke('paint', 0.05, { x: 0.5, y: 0.5 });
+  assert.ok(commitAiImageMaskStroke(original, extra) === original, 'a full mask must reject extra strokes atomically');
+  const undone = undoAiImageMaskHistory(original);
+  assert.equal(undone.strokes.length, 511);
+  const edited = commitAiImageMaskStroke(undone, extra);
+  assert.equal(edited.strokes.length, 512);
+  assert.equal(edited.strokes[0], original.strokes[0]);
+  assert.equal(edited.strokes.at(-1), extra);
+  assert.equal(edited.redo.length, 0);
+});
+
+test('total point capacity rejects an edit atomically and becomes available after undo', () => {
+  const fullStroke = {
+    ...createAiImageMaskStroke('paint', 0.05, { x: 0.1, y: 0.5 }),
+    points: Array.from({ length: AI_IMAGE_MASK_STROKE_POINT_LIMIT }, (_, index) => ({
+      x: index % 2 ? 0.9 : 0.1,
+      y: 0.5,
+    })),
+  };
+  let original = createAiImageMaskHistory();
+  for (let index = 0; index < 16; index += 1) original = commitAiImageMaskStroke(original, fullStroke);
+  assert.equal(original.strokes.reduce((sum, item) => sum + item.points.length, 0), 64 * 1024);
+  const extra = createAiImageMaskStroke('paint', 0.05, { x: 0.5, y: 0.5 });
+  assert.ok(commitAiImageMaskStroke(original, extra) === original, 'point capacity must preserve the current selection and history');
+  const edited = commitAiImageMaskStroke(undoAiImageMaskHistory(original), extra);
+  assert.equal(edited.strokes.length, 16);
+  assert.equal(edited.strokes.at(-1), extra);
+});
+
+test('an oversized individual stroke cannot enter history or consume redo state', () => {
+  const original = undoAiImageMaskHistory(paintedHistory(1));
+  const oversized = {
+    ...createAiImageMaskStroke('paint', 0.05, { x: 0.1, y: 0.5 }),
+    points: Array.from({ length: AI_IMAGE_MASK_STROKE_POINT_LIMIT + 1 }, (_, index) => ({
+      x: index % 2 ? 0.9 : 0.1,
+      y: 0.5,
+    })),
+  };
+  assert.ok(commitAiImageMaskStroke(original, oversized) === original, 'oversized strokes must leave history unchanged');
+  assert.equal(original.redo.length, 1);
+});
+
+test('a partly available point budget rejects overflow and restores exact capacity through undo and redo', () => {
+  const strokeWithPoints = (count) => ({
+    ...createAiImageMaskStroke('paint', 0.05, { x: 0.1, y: 0.5 }),
+    points: Array.from({ length: count }, (_, index) => ({ x: index % 2 ? 0.9 : 0.1, y: 0.5 })),
+  });
+  let original = createAiImageMaskHistory();
+  for (let index = 0; index < 15; index += 1) {
+    original = commitAiImageMaskStroke(original, strokeWithPoints(AI_IMAGE_MASK_STROKE_POINT_LIMIT));
+  }
+  original = commitAiImageMaskStroke(original, strokeWithPoints(AI_IMAGE_MASK_STROKE_POINT_LIMIT - 3));
+  assert.equal(getAiImageMaskBudget(original).remainingPoints, 3);
+  assert.equal(getAiImageMaskBudget(original).canBeginStroke, true);
+  assert.ok(commitAiImageMaskStroke(original, strokeWithPoints(4)) === original, 'partial capacity must reject overflow without truncation');
+  const full = commitAiImageMaskStroke(original, strokeWithPoints(3));
+  assert.equal(getAiImageMaskBudget(full).remainingPoints, 0);
+  assert.equal(getAiImageMaskBudget(full).canBeginStroke, false);
+  const undone = undoAiImageMaskHistory(full);
+  assert.equal(getAiImageMaskBudget(undone).remainingPoints, 3);
+  assert.equal(getAiImageMaskBudget(undone).canBeginStroke, true);
+  assert.equal(getAiImageMaskBudget(redoAiImageMaskHistory(undone)).remainingPoints, 0);
+});
 
 const panel = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-panel.tsx', 'utf8');
 const sourcePage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/source/page.tsx', 'utf8');

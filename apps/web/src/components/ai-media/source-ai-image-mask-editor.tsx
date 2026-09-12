@@ -18,6 +18,7 @@ import {
   commitAiImageMaskStroke,
   createAiImageMaskHistory,
   createAiImageMaskStroke,
+  getAiImageMaskBudget,
   isAiImageMaskDimensionsSupported,
   redoAiImageMaskHistory,
   undoAiImageMaskHistory,
@@ -180,6 +181,7 @@ export const SourceAiImageMaskEditor = forwardRef<
 }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStrokeRef = useRef<AiImageMaskStroke | null>(null);
+  const activeStrokePointLimitRef = useRef(AI_IMAGE_MASK_STROKE_POINT_LIMIT);
   const activePointerIdRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
   const historyRef = useRef<AiImageMaskHistory>(createAiImageMaskHistory());
@@ -188,6 +190,7 @@ export const SourceAiImageMaskEditor = forwardRef<
   const [brushPercent, setBrushPercent] = useState(5);
   const [imageState, setImageState] = useState<'loading' | 'ready' | 'mismatch' | 'error'>('loading');
   const dimensionsValid = isAiImageMaskDimensionsSupported(sourceWidth, sourceHeight);
+  const maskBudget = getAiImageMaskBudget(history);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -292,8 +295,11 @@ export const SourceAiImageMaskEditor = forwardRef<
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const budget = getAiImageMaskBudget(historyRef.current);
     if (
       disabled
+      || !dimensionsValid
+      || !budget.canBeginStroke
       || imageState !== 'ready'
       || !event.isPrimary
       || event.button !== 0
@@ -302,6 +308,7 @@ export const SourceAiImageMaskEditor = forwardRef<
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     activePointerIdRef.current = event.pointerId;
+    activeStrokePointLimitRef.current = Math.min(AI_IMAGE_MASK_STROKE_POINT_LIMIT, budget.remainingPoints);
     activeStrokeRef.current = createAiImageMaskStroke(mode, brushPercent / 100, pointFromPointer(event));
     scheduleDraw();
   }
@@ -318,7 +325,7 @@ export const SourceAiImageMaskEditor = forwardRef<
     const next = pointFromPointer(event);
     const previous = stroke.points[stroke.points.length - 1];
     if (!previous || Math.hypot(next.x - previous.x, next.y - previous.y) >= 0.001) {
-      if (stroke.points.length < AI_IMAGE_MASK_STROKE_POINT_LIMIT) stroke.points.push(next);
+      if (stroke.points.length < activeStrokePointLimitRef.current) stroke.points.push(next);
       scheduleDraw();
     }
   }
@@ -403,10 +410,11 @@ export const SourceAiImageMaskEditor = forwardRef<
           />
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 h-full w-full cursor-crosshair focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            className={`absolute inset-0 h-full w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${editorDisabled || !maskBudget.canBeginStroke ? 'cursor-not-allowed' : 'cursor-crosshair'}`}
             style={{ touchAction: 'none' }}
             tabIndex={0}
             aria-label="局部重绘遮罩画布"
+            aria-describedby={!maskBudget.canBeginStroke ? `ai-mask-budget-${resetKey}` : undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={(event) => finishPointer(event, true)}
@@ -422,6 +430,7 @@ export const SourceAiImageMaskEditor = forwardRef<
         </div>
       </div>
 
+      {!maskBudget.canBeginStroke ? <p id={`ai-mask-budget-${resetKey}`} role="status" className="text-xs text-muted-foreground">遮罩已达到绘制上限，已有选区已保留。可撤销或清空后继续绘制。</p> : null}
       {!dimensionsValid ? <p className="text-xs text-destructive">源图尺寸无效，超过 1200 万像素、16384 像素单边或 20:1 长宽比限制。</p> : null}
       {dimensionsValid && imageState === 'loading' ? <p className="text-xs text-muted-foreground">正在校验源图尺寸…</p> : null}
       {imageState === 'mismatch' ? <p className="text-xs text-destructive">源图显示尺寸与冻结像素尺寸不一致，请重新保存源图后再编辑。</p> : null}
