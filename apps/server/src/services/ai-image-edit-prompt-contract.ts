@@ -7,7 +7,9 @@ import {
 export const AI_MEDIA_FULL_EDIT_TEMPLATE_KEY = 'full-image-edit.base';
 export const AI_MEDIA_INPAINT_TEMPLATE_KEY = 'inpaint.base';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE = 'ai-image-wanx21-edit-prompt/v1';
-export type AiPromptRenderingProfile = typeof AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE;
+export const AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE = 'ai-image-wanx21-edit-prompt/scoped-print-preview-v2';
+export type AiPromptRenderingProfile = typeof AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE
+  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE;
 
 // One policy owner, with clause-aligned renderings. The legacy text is byte-stable.
 const EDIT_POLICY_CLAUSES = [
@@ -45,6 +47,10 @@ const EDIT_POLICY_CLAUSES = [
 
 export const AI_MEDIA_EDIT_SAFETY_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.legacy).join(' ');
 const WANX_EDIT_SAFETY_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.wanx).join('\n');
+// An explicit offline comparison. Existing dispatch and trial guards still require v1.
+const WANX_SCOPED_PRINT_PREVIEW_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.id === 'intrinsic_print'
+  ? '涉及文字或标志的移除或替换时，只可处理外部促销叠加层。商品、品牌、标签和包装上的固有印字属于身份，必须保留，除非另有明确授权的图片翻译流程针对该文字。'
+  : clause.wanx).join('\n');
 
 export const DEFAULT_FULL_IMAGE_EDIT_TEMPLATE = [
   'Edit the supplied immutable source image while preserving the product and SKU identity.',
@@ -96,7 +102,7 @@ export class AiImageEditPromptContractError extends Error {
 
 export function assertAiImageEditPromptProfile(templateKey: string, profile: unknown): void {
   if (profile === undefined) return;
-  if (profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE
+  if ((profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE)
     || (templateKey !== AI_MEDIA_FULL_EDIT_TEMPLATE_KEY && templateKey !== AI_MEDIA_INPAINT_TEMPLATE_KEY)) {
     throw new AiImageEditPromptContractError(
       'UNSUPPORTED_PROMPT_RENDER_PROFILE',
@@ -122,6 +128,8 @@ export function resolveAiImageEditPromptRendering(revision: {
     ? (fullEdit ? WANX_FULL_EDIT_TEMPLATE : WANX_INPAINT_TEMPLATE)
     : revision.promptTemplate;
   const negativePromptTemplate = reviewedDefault ? WANX_CONSTRAINTS_TEMPLATE : revision.negativePromptTemplate;
+  const previewOnly = profile === AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE;
+  const safetyPolicy = previewOnly ? WANX_SCOPED_PRINT_PREVIEW_POLICY : WANX_EDIT_SAFETY_POLICY;
   const specification = {
     profile,
     model: AI_IMAGE_WANX21_EDIT_MODEL,
@@ -129,7 +137,7 @@ export function resolveAiImageEditPromptRendering(revision: {
     strategy: reviewedDefault ? 'reviewed-default' as const : 'verbatim-custom' as const,
     policyClauseIds: EDIT_POLICY_CLAUSES.map((clause) => clause.id),
     sourcePolicySha256: digest(AI_MEDIA_EDIT_SAFETY_POLICY),
-    policySha256: digest(WANX_EDIT_SAFETY_POLICY),
+    policySha256: digest(safetyPolicy),
     sourcePromptTemplateSha256: digest(revision.promptTemplate),
     sourceNegativePromptTemplateSha256: digest(revision.negativePromptTemplate),
     promptTemplateSha256: digest(promptTemplate),
@@ -138,11 +146,12 @@ export function resolveAiImageEditPromptRendering(revision: {
     characterCounting: 'unicode-code-points' as const,
     negativePromptMode: 'inline' as const,
     negativePromptSeparator: NEGATIVE_PROMPT_SEPARATOR,
+    ...(previewOnly ? { executionScope: 'OFFLINE_PREVIEW_ONLY' as const } : {}),
   };
   return {
     promptTemplate,
     negativePromptTemplate,
-    safetyPolicy: WANX_EDIT_SAFETY_POLICY,
+    safetyPolicy,
     contract: { ...specification, contractHash: digest(JSON.stringify(specification)) },
   };
 }
