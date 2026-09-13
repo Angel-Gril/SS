@@ -2,6 +2,7 @@
 
 ## 当前阶段与事实
 
+- 当前子阶段：**本地交付与第四次输入准备已完成；等待新的一次精确实测批准**。源码检查点 `18ec006d`，冻结输入和私有证据摘要只维护在[当前状态审计](../current-state-audit.md#生图实验与累计计费本地收口2026-09-13)。
 - 开始基线：`ae65fd15`，主工作区 clean；继续沿用 Next/Fastify/Prisma/Redis/MV3。
 - 同一新 Wanx Key 已获三次精确批准并执行 2 次 FULL_EDIT、1 次 INPAINT，均未重试；三条原生免费额度明细和分日用量已对齐，当前应付零，正式结算尚未完成。
 - 三个原始改色样本质量未通过。`scoped-print-preview-v2` 只供离线查看，不能进入现有 hosted/trial 发包。
@@ -31,8 +32,9 @@
 - 跨 round 预算：13 项初始 RED；补齐只读观察、并发进程、故障留锁及篡改等 21 项。独立复核发现同前缀普通文件误当目录，再以 3 RED 修复并增加 6 项兼容/拒绝回归；最终 campaign 27 项与 execution 20 项组合 47/47 通过，复核确认问题关闭。
 - ListConsumeDetails：50 项初始 RED；内嵌 JSON 空白、凭据键拒绝另有 RED→GREEN。最终新 59 项及旧 QueryBill 48 项通过，T1 提取保持旧合同；CLI 已新增实际子进程正反例，并纳入 sandbox strict typecheck。
 - 真实私有账单与历史预算已在工作树只读回放，结果及私有摘要统一记录于[当前状态审计](../current-state-audit.md#生图实验与累计计费本地收口2026-09-13)。这一步不产生结算，也不消费第四次槽位。
-- 当前源码已冻结；完整 preflight 通过，包含后端 5808 passed / 258 条条件性 skipped、扩展 459 pass / 0 failure / 0 warning；全仓 lint、sandbox strict typecheck、定向 CLI lint 和 server build 通过。20 个受改源码/配置/测试文件在整轮门禁前后 SHA-256 一致。该结果是本地门禁，不能代替独立 PostgreSQL/Provider/正式 QA-04 验收。clean 提交和该提交上的真实账单 CLI 回放完成后，准备具体的一次性实验审批包。
+- 当前源码已冻结；完整 preflight 通过，包含后端 5808 passed / 258 条条件性 skipped、扩展 459 pass / 0 failure / 0 warning；全仓 lint、sandbox strict typecheck、定向 CLI lint 和 server build 通过。20 个受改源码/配置/测试文件在整轮门禁前后 SHA-256 一致。该结果是本地门禁，不能代替独立 PostgreSQL/Provider/正式 QA-04 验收；独立 clean 检出上的后续回放与新输入准备见下条。
 - 提交前 staged diff 检查发现新原生 JSON helper 的文件尾多余空行，按 T0 清理并复核 diff；门禁后没有其他源码调整。
+- 源码已提交为 `18ec006d`，真正独立 clean 检出及离线锁定依赖已就绪；该提交上的正式账单 CLI、预算只读回放、新输入 compile→prepare→verify→approval-draft 均已完成。未批准草稿被收费前核验拒绝，原审批/claim/report 未改，未创建新执行预占。详细结果以当前状态审计为准，不复制第二份账单或输入清单。
 - 本阶段尚未产生新的 Provider/ERP/Ozon 写入，没有新费用、推送或部署。
 
 ## 剩余外部验收

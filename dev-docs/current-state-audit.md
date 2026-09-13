@@ -335,18 +335,35 @@
 
 ### 生图实验与累计计费本地收口（2026-09-13）
 
-- 用户要求继续完成生图与计费开发，从 clean `ae65fd15` 接续，范围与 T2/T1 门禁记录于[阶段文件](stages/ai-image-billing-closure-2026-09.md)。本节不覆盖前三次真实调用证据；未发送第四次请求，三次旧批准不能重用。
+- 用户要求继续完成生图与计费开发，从 clean `ae65fd15` 接续，源码已提交为 `18ec006d24912719c052e64a83aa9134aec205d9`，范围与 T2/T1 门禁记录于[阶段文件](stages/ai-image-billing-closure-2026-09.md)。本节不覆盖前三次真实调用证据；未发送第四次请求，三次旧批准不能重用。
 - 实验 profile `ai-image-wanx21-edit-prompt/scoped-print-experimental-v2` 复用已评估的 scoped-print 文本，快照明确绑定 `ISOLATED_WANX_TRIAL`。raw draft 可按操作显式选择，默认 v1，编译后移除选择字段；trial guard 只接受 v1/实验版并完整重渲染。普通 hosted 建单、执行及恢复仍固定 v1，preview 继续拒绝发包。v4 现有 manifest/frozenPrompt 摘要覆盖全部 profile/scope，无需新增审批字段或改变发包指纹。18 项新增用例中 14 项先 RED、4 项原拒绝基线通过；实现后连原 prompt/preview/preparation 为 114 项通过。另补了实验 INPAINT 的模拟 single-submit 正例及 v1 两类摘要零 POST 拒绝。已实际执行 `ae65fd15` 中的原 renderer，与当前 v1/preview 两模板的完整对象逐项相等，并固定了旧 preview 两条合同摘要。
 - `ai-image-wanx-trial-campaign.ts` 对同一物理私有根、已核对账户固定累计 CNY 1，跨 round/credential revision 累计已领取操作的最大授权金额；未领取的伴随槽位不算已执行。历史 claim→round→manifest 由原准备 verifier 重核，持锁先追加预算证据再创建操作 claim，最后发包再核验全历史。免费、失败、未知及进程退出不自动释放；追加记录中断会保留锁，不能靠超时抢占或换目录恢复额度。原 round/operation/report/trial-evidence 字节合同不变。真实只读观察已得到 3 条旧 claim、预占上限 CNY 0.75、剩余 CNY 0.25；核验前后现有 245 个文件逐字节一致，未初始化 campaign 或消费第四槽。该工作树观察 SHA-256 为 `fbb65532d4a0518180e436c28f4f8dc35f2dc55520a196266b017e1c009d4e2e`，最终代码回放另记。
 - 原生 `ListConsumeDetails` 已有独立观察 owner 与 `sandbox:ai-image:billing:inspect-alibaba-console` CLI；Count/Data 查询参数、原始 bytes 和 Nbid 摘要保真，不改名为 QueryBill。购买/归属账户分别核验，Key/workspace/model/region/账单身份只输出摘要，应付金额、免费抵扣和图片数保持原生口径；只支持已观察到的首页合同，完整性独立标记。原生精确 JSON/金额 helper 按 T1 从旧 QueryBill 提取；新 owner 59 项、旧 owner 48 项通过，追加内嵌 JSON 空白和凭据键用例均有 RED→GREEN。CLI 两个模式共用环境与首尾 Git 检查，禁止混入结算或收费输入；`actualCost:null`、`cashPaidAmount:null`、`canFinalize:false` 保持。
 - 真实现有 Count/Data 字节已在工作树回放：完整 3 行分别为使用 1 张、免费抵扣 1 张、计费 0 张、当前应付 CNY 0，账户/Key/业务空间/模型/地区与既有核对一致。新私有 wrapper SHA-256 为 `16b975eebb268e1a80a24451bbbf8bb1fd640a2055006c0f7b0e6a087fe3b4e1`，原 capture 为 `dcfc7d2e44502fa14bb8dff632038aa2c49c7853e20e64c2b1d37ad81f93638a`，两份原始 body 摘要保持 `d5ad7dfa892f4972af60fa5f2cafeb899f0867b36566c588f16b66cbb076352b`、`3c69cf25ddd090ec784209ab7f3c0c7557559a11d91333df45cc683ebf12875f`。这些证据不等于采集认证、单任务最终结算或真实非零扣费验收。
-- 当前定向证据已回收。独立审查发现同前缀普通证据文件被预算扫描误当目录，以 3 RED 修复并补齐旧文件/目录数量/链接/已登记历史替换的 6 项回归；最终 campaign 27 项与 execution 20 项组合 47/47 通过，复核确认问题关闭。最终完整 preflight 退出 0：后端 5808 passed / 258 条条件性 skipped，扩展 459 pass / 0 failure / 0 warning；全仓 lint、sandbox strict typecheck、定向 CLI lint 和 server build 通过。20 个受改源码/配置/测试文件在门禁前后 SHA-256 一致，preflight 日志摘要为 `a657b14ee4d5938e4b4f9fb716e50822da25135f2ad0ed91e684c632e1c6a29f`。条件性数据库套件没有在本轮独立运行，不把本地门禁写成 Provider 或正式 QA-04 验收。正式 clean CLI 回放及代码/输入冻结完成后再提出具体第四笔批准；此时未推送、部署或新增真实请求。
+- 当前定向证据已回收。独立审查发现同前缀普通证据文件被预算扫描误当目录，以 3 RED 修复并补齐旧文件/目录数量/链接/已登记历史替换的 6 项回归；最终 campaign 27 项与 execution 20 项组合 47/47 通过，复核确认问题关闭。最终完整 preflight 退出 0：后端 5808 passed / 258 条条件性 skipped，扩展 459 pass / 0 failure / 0 warning；全仓 lint、sandbox strict typecheck、定向 CLI lint 和 server build 通过。20 个受改源码/配置/测试文件在门禁前后 SHA-256 一致，preflight 日志摘要为 `a657b14ee4d5938e4b4f9fb716e50822da25135f2ad0ed91e684c632e1c6a29f`。条件性数据库套件没有在本轮独立运行，不把本地门禁写成 Provider 或正式 QA-04 验收；提交前仅按 T0 清理 helper 尾部空行。
+- **冻结代码的正式只读回放已完成。** 真正 detached worktree 为 `C:/Users/550W/AppData/Local/SS-ERP/private/wanx-code-18ec006d-20260913`，HEAD 为上述完整提交，首尾 clean；锁定依赖全部离线安装（无下载、忽略安装脚本），`shared` 指向该检出自身。正式 `--inspect-alibaba-console` 使用现有 wrapper 的原始三条明细，两个代码检查均通过，结果仍为逐条免费抵扣一张、当前应付零。正式账单观察 SHA-256 为 `1467238752f9a4171de4000cbb6e3122509923aec248905f566911c25fc29aa2`，同提交只读预算观察为 `d6d0b3ba743a00777bfa230777bdbee27e23af8dd7964472a8821808a7905eab`，保留 CNY 0.75/剩余 0.25。既有 manifest、round/operation claim、report、trial-evidence 和账单 wrapper 字节未变，网络请求和新预占均为 0。旧 `wanx-code-a8be87bf-20260912` 检出保持原样、clean。
+
+#### 第四次实验的冻结输入（尚未批准）
+
+| 项目 | 冻结值与边界 |
+| --- | --- |
+| 代码与操作 | `18ec006d24912719c052e64a83aa9134aec205d9`；`wanx-scoped-print-inpaint-20260913-04-inpaint`；只提议 1 次 INPAINT |
+| Provider 与素材 | 同一已核验 Key、Wanx 2.1、1024×1024 白杯源图及原 alpha mask；左上 `(32,32)` 的 `160×160` 背景选区，目标主色 `#D9E5EB` |
+| 唯一试验变量 | 显式 `scoped-print-experimental-v2`：仅澄清文字/标志移除规则范围；原用户要求、负向要求、源图、遮罩、端点、模型及请求参数不变；完整 prompt 503 个 Unicode code point |
+| 金额 | 报价 CNY 0.14、单次上限 CNY 0.25；当前历史上限 CNY 0.75，若批准并领取此槽，保守累计正好 CNY 1；免费额度不返还预算 |
+| 清单摘要 | `9a0ff21e8d9e35ae3059c40e187a936d704e1017309c77621ebf73ade6e5969d` |
+| raw / compiled 输入摘要 | `92cc4d375d5aec0bbc81a1664cc64b08a6bd4376ce9e072e04fba7d240398c61` / `0db42389ae679ec438116edab4f012c6fa24b454824f0ae6fa3329ea68763065` |
+| 未批准草稿摘要 | `0c5bb5e48efe7853f7c9e04f9964962d38dcd76e33a2b8bdce247a28baabc2dd`；仍含原拒绝 statement/时间哨兵 |
+| 私有复核记录 | `scoped-print-experiment-20260913-04.review.json`，SHA-256 `055e84cf3701d9d898bf0887b3e95208daaf6032c065f93f98f661beab20eef4`，位于既有 `verification-20260912-b453cc9c` 根 |
+| 实际准备结果 | compile→prepare→verify→approval-draft 正式命令均通过，网络由离线 blocker 禁止；草稿实际经 `--verify-wanx-trial-approval` 以 `SANDBOX_APPROVAL_SCHEMA_INVALID` 拒绝，原草稿未改、零 claim/POST |
+
+该输入沿用现有模板来源，保持 `OFFLINE_CONSISTENCY_ONLY`，不证明正常 ERP 工作流。伴随 FULL_EDIT 槽未批准；本次也未领取 INPAINT 槽。后续只允许在新的一次精确批准后使用以上独立检出、原 evidenceRoot 和清单执行；失败/未知不重发，查询与下载只限同一任务。真实图像应先独立审核 raw，再检查局部合成后的 1,022,976 个保留像素；质量根因、正常 ERP 链、非零扣费与最终结算仍待验收。此阶段未推送、部署或新增真实请求。
 
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；新 Wanx 三笔技术成功，三条明细各抵扣一张、当前应付零，分日用量均已对齐。三个原始图质量样本仍失败；局部合成像素保护已验证，提示词范围澄清已形成仅离线候选 | 保留三笔 task、占位和图片，不重发；先评估候选的视觉指令适配及受控可执行合同，继续只读核验最终结算。非零扣费分支未测试，第四次生成未授权。正常 ERP 任务来源、旧 Wanx 三笔账单、完整 QA-02 与能力晋升仍未关闭；无需重新索取 Key/整轮预算或查询 Xiaoyi 旧金额 |
+| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；新 Wanx 三笔技术成功，原生明细与分日用量已对齐，当前应付零。三个质量样本仍失败；`18ec006d` 已完成受控实验、跨 round 预算与 ListConsumeDetails 观察入口，第四次具体输入已冻结 | 保留三笔 task、占位和图片，不重发；第四次 INPAINT 等待绑定上述清单的新批准，累计上限将由 CNY 0.75 达到 1。正常 ERP 任务来源、非零扣费、单任务最终结算、旧 Wanx 账单和完整 QA-02/能力晋升仍未关闭；无需另建 Key 或重新索取整轮预算 |
 | Ozon 测试店与商品事实 | 归档参数/主图/私有准备包齐备；审核任务 500 源码修复及两种 rollout 的完整 PostgreSQL 隔离链路通过；线上临时配置已恢复 | 按发布门禁部署修复后重验 ERP 审核草稿。DOTH 样本有 FBS 库存，真实专用测试隔离仍未成立，本地测试不能授权 import/archive |
 | 新提交与部署证据 | `c10cdc61` 已推送且完整 offline gate 通过；旧 v1 已签署发布继续验证 | 部署流程已获本轮授权，仍须补齐 QA-02/正式 QA-04，生成目标 clean commit 的区域四件套与签名，并取得对应运行包的新 canary |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |
