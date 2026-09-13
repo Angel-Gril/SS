@@ -18,13 +18,16 @@ import {
   verifyAiImageWanxTrial,
   type AiImageWanxTrialExpected,
 } from './ai-image-wanx-trial-preparation.js';
+import { reserveAiImageWanxTrialCampaignOperation } from './ai-image-wanx-trial-campaign.js';
 
 // Additional dependencies reached only by the explicit trial execution mode.
 export const AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS = [
   'packages/shared/package.json',
   'apps/server/src/services/ai-image-wanx-trial-execution.ts',
+  'apps/server/src/services/ai-image-wanx-trial-campaign.ts',
   'apps/server/src/services/ai-image-wanx-trial-preparation.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
+  'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-edit-prompt-contract.ts',
   'apps/server/src/services/ai-image-edit-provider-contract.ts',
   'apps/server/src/services/ai-image-jobs.ts',
@@ -139,17 +142,6 @@ export async function claimAiImageWanxTrialOperation(input: {
   const roundPath = resolve(directory, 'round.json');
   const roundBytes = jsonBytes(roundRecord);
   const roundSha256 = digest(roundBytes);
-  // The shared writer links a fully synced file atomically. Another operation
-  // can observe either no round or the complete immutable round, never a prefix.
-  try {
-    await writeAiImageSandboxPrivateEvidenceFile(roundPath, roundBytes, execution.evidenceRoot);
-  } catch (error: any) {
-    if (error?.code !== 'EEXIST') throw error;
-    await readAiImageSandboxPrivateBillingEvidence({
-      repositoryRoot: execution.repositoryRoot, evidenceRoot: execution.evidenceRoot,
-      path: roundPath, sha256: roundSha256,
-    });
-  }
   const claim = {
     schemaVersion: 1, kind: 'WANX_EDIT_TRIAL_OPERATION_CLAIM_V1', state: 'CLAIMED_FAIL_CLOSED',
     roundSha256, operation: execution.selected.operation, operationId: execution.selected.operationId,
@@ -161,12 +153,40 @@ export async function claimAiImageWanxTrialOperation(input: {
   const claimPath = resolve(directory, `${execution.selected.operation}.claim.json`);
   const claimBytes = jsonBytes(claim);
   const claimSha256 = digest(claimBytes);
+  // Preserve the existing immutable-round conflict check without claiming a
+  // campaign budget or rewriting an older round when its manifest changed.
   try {
-    await writeAiImageSandboxPrivateEvidenceFile(claimPath, claimBytes, execution.evidenceRoot);
-  } catch (error: any) {
-    if (error?.code === 'EEXIST') invalid('WANX_TRIAL_OPERATION_ALREADY_CLAIMED', 'The trial operation is already claimed; inspect its outcome instead of resubmitting');
-    throw error;
-  }
+    await lstat(roundPath);
+    await readAiImageSandboxPrivateBillingEvidence({
+      repositoryRoot: execution.repositoryRoot, evidenceRoot: execution.evidenceRoot,
+      path: roundPath, sha256: roundSha256,
+    });
+  } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+  const campaign = await reserveAiImageWanxTrialCampaignOperation({
+    repositoryRoot: execution.repositoryRoot, evidenceRoot: execution.evidenceRoot,
+    trialBinding: execution.trialBinding, operation: execution.selected.operation,
+    operationId: execution.selected.operationId, approvalId: approval.approvalId,
+    approvalSha256: approval.approvalSha256, roundSha256, claimSha256,
+    now: input.now, assertCurrent: execution.assertCurrent,
+  }, async () => {
+    // Persist the original records unchanged, after the cumulative reservation
+    // and while the campaign lock still excludes concurrent claim writers.
+    try {
+      await writeAiImageSandboxPrivateEvidenceFile(roundPath, roundBytes, execution.evidenceRoot);
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') throw error;
+      await readAiImageSandboxPrivateBillingEvidence({
+        repositoryRoot: execution.repositoryRoot, evidenceRoot: execution.evidenceRoot,
+        path: roundPath, sha256: roundSha256,
+      });
+    }
+    try {
+      await writeAiImageSandboxPrivateEvidenceFile(claimPath, claimBytes, execution.evidenceRoot);
+    } catch (error: any) {
+      if (error?.code === 'EEXIST') invalid('WANX_TRIAL_OPERATION_ALREADY_CLAIMED', 'The trial operation is already claimed; inspect its outcome instead of resubmitting');
+      throw error;
+    }
+  });
   const assertCurrent = async () => {
     await execution.assertCurrent();
     for (const [path, sha256] of [[roundPath, roundSha256], [claimPath, claimSha256]]) {
@@ -174,10 +194,11 @@ export async function claimAiImageWanxTrialOperation(input: {
         repositoryRoot: execution.repositoryRoot, evidenceRoot: execution.evidenceRoot, path: path!, sha256: sha256!,
       });
     }
+    await campaign.assertCurrent();
     assertAiImageSandboxApprovalCurrent(approval, input.now());
   };
   await assertCurrent();
-  return { roundSha256, claimSha256, assertCurrent };
+  return { roundSha256, claimSha256, campaign: campaign.campaign, assertCurrent };
 }
 
 export async function writeAiImageWanxTrialExecutionEvidence(input: {

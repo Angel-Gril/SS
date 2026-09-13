@@ -499,6 +499,50 @@ Actual request settlement still needs separately reviewed evidence linking the a
 to the bill and establishing the applicable amount/finality. Do not rename this observation as a
 settlement or loosen the historical 15-minute no-request-ID correlation rule to make it pass.
 
+### Inspect Native Console Consume Details
+
+Use `pnpm --filter server sandbox:ai-image:billing:inspect-alibaba-console` with the same
+offline environment, pinned file digest, independently reviewed account digest and clean
+revision as the QueryBill command above. This separate mode accepts the observed
+`BssOpenAPI-V3 / ListConsumeDetails` detail response. It does not accept QueryBill,
+ListConsumeSummary or a screenshot under a different source label.
+
+The private wrapper uses `schemaVersion:1`,
+`kind:ALIBABA_CONSOLE_BILLING_OBSERVATION_V1`, `observedAt`, `collectorRef` and exactly two
+`captures`. Each capture retains `capturedAt`, `request` and `response`. The response fields
+are `httpStatus:200`, JSON `contentType`, `bodySha256` and the exact original `bodyBase64`.
+The request fields are `path:/data/api.json`, `method:POST`, `product:BssOpenAPI-V3`,
+`action:ListConsumeDetails` and the native `params` object:
+
+| Scope | Required native parameters |
+| --- | --- |
+| Both captures | `Nbid:{sha256}`, `BillingCycle`, `BillingMonth`, `TableType:consumeDetailBillV2`, `Granularity:HOURLY`, `JumpPageSize`, `QueryMode` |
+| Count capture | `QueryMode:COUNT_ONLY`; no data-page parameters |
+| Data capture | `QueryMode:DATA_ONLY`, `MaxResults`, `current:1`, `currentPage:1`, `primaryKeys:[]`, `Console:true` |
+
+Preserve the captured parameter values. Only the native Nbid is replaced with its SHA-256;
+that navigation/query scope is not the billing account UID. The two requests must have the
+same cycle, month and shared scope. This version admits only the observed first-page
+request contract. It retains the returned NextBatchToken and PrimaryKeys as separate hashes,
+checks Count/Data cardinality, and marks a partial page incomplete. It does not invent or
+execute a later-page query. Separate Count/Data responses are not an atomic account snapshot.
+
+The reader independently checks `ResourcePurchaseAccountId` and `ResourceOwnerAccountId`
+against the reviewed UID digest. It preserves native bill/detail/instance identities and the
+AssistExtend ApiKeyID, workspace, model, region and charge-item mapping as hashes. These are
+not Wanx task IDs and do not prove task association or capture authentication. The wrapper
+and response bounds, duplicate-key and exact-money rules above also apply; embedded native
+JSON is checked separately. Known credential keys are rejected without confusing API key IDs
+or pagination tokens with secrets.
+
+The sanitized result is `ALIBABA_CONSOLE_BILLING_ASSESSMENT_V1`. It retains native dates,
+`QuantityBeforeDeduction`, `ResourcePlanDeductQuantity`, `BillingQuantity`, and exact observed
+amounts including `RequireAmount`. A free-quota label and zero payable remain observations;
+`cashPaidAmount` and `actualCost` are always null, `canFinalize` is always false, and the state
+remains `RECONCILIATION_REQUIRED`. Neither a synthetic nonzero fixture nor successful parsing
+is proof of a real debit. The inspector writes no settlement, changes no original report,
+contacts no Provider and grants no capability promotion.
+
 ### Native Wanx Task Association And Settlement Boundary
 
 The official [billing and cost guide](https://help.aliyun.com/zh/model-studio/bill-query-and-cost-management)
@@ -538,7 +582,7 @@ the interval contains only that task. Multiple tasks in the same interval must n
 into invented per-task actual costs. A round-level bill alone may support round-level review,
 not an individual settlement receipt.
 
-The current QueryBill inspector and isolated trial execution do not satisfy this association.
+The QueryBill and ListConsumeDetails inspectors and isolated trial execution do not satisfy this association.
 Trial execution records its scope in a report-bound `wanx.trial-evidence.json` file and keeps
 `actualCost:null`; neither its execution claims nor a v4 approval is a native settlement proof.
 Do not adapt the old `UNIQUE_ACCOUNT_TIME_WINDOW` rule, whose no-request-ID/15-minute boundary

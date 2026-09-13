@@ -3,7 +3,10 @@ import { AiImageJobError } from './ai-image-job-error.js';
 import { canonicalAiImageProviderBaseUrl } from './ai-image-provider-runtime-contract.js';
 import { isOpenAiCompatibleImageEditSizeSupported } from './ai-image-providers.js';
 import { checksumAiPromptRevision, renderAiPromptRevision } from './ai-prompt-templates.js';
-import { AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, type AiPromptRenderingProfile } from './ai-image-edit-prompt-contract.js';
+import {
+  AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+  type AiPromptRenderingProfile,
+} from './ai-image-edit-prompt-contract.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE, normalizeAiImageWanx21EditApiBase } from './ai-image-wanx-edit-profile.js';
 
 export function isWanxHostedEdit(provider: string | undefined, model: string | undefined): boolean {
@@ -43,7 +46,7 @@ export function isAiImageEditProviderCanvasSupported(provider: string, model: st
   return (provider === 'openai-images' || provider === 'custom') && isOpenAiCompatibleImageEditSizeSupported(width, height);
 }
 
-export function assertWanxHostedEditPrompt(input: {
+interface WanxEditPromptInput {
   provider?: string;
   model?: string;
   operation?: string;
@@ -57,7 +60,27 @@ export function assertWanxHostedEditPrompt(input: {
   templateReleaseId?: string | null;
   templateChecksum?: string | null;
   templateSnapshot?: Record<string, unknown> | null;
-}): void {
+}
+
+export function assertWanxHostedEditPrompt(input: WanxEditPromptInput): void {
+  // Normal task creation, execution and recovery remain pinned to the hosted v1 contract.
+  assertWanxEditPromptRendering(input, AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE);
+}
+
+export function assertWanxTrialEditPrompt(input: WanxEditPromptInput): void {
+  const rendering = input.templateSnapshot?.renderingContract;
+  const profile = rendering && typeof rendering === 'object' && !Array.isArray(rendering)
+    ? (rendering as Record<string, unknown>).profile : undefined;
+  if (!isWanxHostedEdit(input.provider, input.model)
+    || (profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE)) {
+    throw new AiImageJobError('FROZEN_PROMPT_MISMATCH', 'Wanx trial requires an explicitly supported frozen prompt profile');
+  }
+  // A recognized label only selects the renderer; the complete snapshot and text
+  // must still equal its independent output. Preview labels never authorize a trial.
+  assertWanxEditPromptRendering(input, profile);
+}
+
+function assertWanxEditPromptRendering(input: WanxEditPromptInput, profile: AiPromptRenderingProfile): void {
   if (!isWanxHostedEdit(input.provider, input.model)) return;
   if (!isAiImageEditProviderCanvasSupported(input.provider!, input.model!, input.width, input.height)) {
     throw new AiImageJobError('UNSUPPORTED_PROVIDER_EDIT_DIMENSIONS', 'Wanx hosted editing requires an unchanged 1024x1024 source and output canvas');
@@ -81,7 +104,7 @@ export function assertWanxHostedEditPrompt(input: {
     const revision = { templateKey, promptTemplate: snapshot.promptTemplate, negativePromptTemplate: snapshot.negativePromptTemplate };
     const rendered = renderAiPromptRevision(revision, {
       userPrompt: input.prompt.trim(), userNegativePrompt: (input.negativePrompt ?? '').trim(),
-    }, AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE);
+    }, profile);
     if (checksumAiPromptRevision(revision) !== input.templateChecksum
       || rendered.resolvedPrompt !== input.resolvedPrompt || rendered.resolvedNegativePrompt !== input.resolvedNegativePrompt
       || !isDeepStrictEqual(rendered.renderingContract, snapshot.renderingContract)) {

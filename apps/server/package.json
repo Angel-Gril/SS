@@ -36,6 +36,7 @@
     "sandbox:ai-image:approval:verify": "tsx scripts/ai-image-provider-single-submit.ts --verify-approval",
     "sandbox:ai-image:billing:finalize": "tsx scripts/ai-image-provider-billing-finalize.ts",
     "sandbox:ai-image:billing:inspect-alibaba": "tsx scripts/ai-image-provider-billing-finalize.ts --inspect-alibaba",
+    "sandbox:ai-image:billing:inspect-alibaba-console": "tsx scripts/ai-image-provider-billing-finalize.ts --inspect-alibaba-console",
     "sandbox:ai-image:readonly:preflight": "tsx scripts/ai-image-provider-readonly-preflight.ts",
     "sandbox:ai-image:single": "tsx scripts/ai-image-provider-single-submit.ts",
     "sandbox:ai-image-translation:single": "tsx scripts/ai-image-translation-single-submit.ts"

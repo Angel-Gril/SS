@@ -20,6 +20,7 @@
     "scripts/ai-image-provider-single-submit.test.ts",
     "scripts/ai-image-provider-billing-finalize.ts",
     "scripts/ai-image-provider-billing-finalize.test.ts",
+    "scripts/ai-image-provider-billing-inspect.test.ts",
     "scripts/ai-image-provider-readonly-preflight.ts",
     "scripts/ai-image-provider-readonly-preflight.test.ts",
     "scripts/ai-image-translation-single-submit.ts",

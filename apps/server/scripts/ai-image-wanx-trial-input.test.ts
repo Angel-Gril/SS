@@ -51,6 +51,42 @@ async function compile(value: Awaited<ReturnType<typeof fixture>>, extra = {}, r
 }
 
 describe('Wanx trial input compilation', () => {
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('compiles the explicit %s experiment and freezes its profile without enabling submission', async (selected) => {
+    const value = await fixture();
+    const profile = 'ai-image-wanx21-edit-prompt/scoped-print-experimental-v2';
+    Object.assign(value.request.operations.find((operation) => operation.operation === selected)!, { renderingProfile: profile });
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const outcome = await compile(value);
+    expect(outcome.error).toBeNull();
+    expect(outcome.result).toMatchObject({ canSubmit: false, actualCost: null });
+    const inputBytes = await readFile(join(value.evidenceRoot, `wanx-input-${value.request.roundId}`, 'input.json'));
+    const input = JSON.parse(inputBytes.toString());
+    for (const operation of input.operations) {
+      expect(operation).not.toHaveProperty('renderingProfile');
+      expect(operation.frozenPrompt.templateSnapshot.renderingContract.profile)
+        .toBe(operation.operation === selected ? profile : 'ai-image-wanx21-edit-prompt/v1');
+    }
+    const generated = await buildAiImageWanxTrialPreparation({
+      request: input, sourceInputSha256: trialDigest(inputBytes), mediaRoot: value.evidenceRoot,
+      expected: { adapterRevision: revision, roundId: input.roundId,
+        providerAccountUidSha256: trialAccountDigest, credentialRevision: trialCredentialRevision },
+    });
+    const operation = generated.manifest.request.operations.find((item) => item.operation === selected)!;
+    const binding = generated.manifest.bindings.find((item) => item.operation === selected)!;
+    expect(binding.frozenPromptSha256).toBe(trialDigest(trialJson(operation.frozenPrompt)));
+    expect(generated.manifest).toMatchObject({ canSubmit: false, actualCost: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['ai-image-wanx21-edit-prompt/scoped-print-preview-v2', 'unreviewed-profile', '', null])('rejects draft profile %j before creating compiled outputs', async (renderingProfile) => {
+    const value = await fixture();
+    Object.assign(value.request.operations[0]!, { renderingProfile });
+    const outcome = await compile(value);
+    expect(outcome.error).toMatchObject({ code: 'WANX_TRIAL_INPUT_INVALID' });
+    expect(outcome.stdout).toBe('');
+    expect(await readdir(value.evidenceRoot)).toEqual(outcome.before);
+  });
+
   it.each(['CRLF', 'mixed'] as const)('preserves pinned %s source bytes through compilation', async (lineEndings) => {
     const value = await fixture();
     const sources = [];

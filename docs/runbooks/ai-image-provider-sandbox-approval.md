@@ -233,6 +233,15 @@ The source path is relative to the private evidence root. Use the full-edit sour
 `FULL_EDIT` and the inpaint source for `INPAINT`. Do not supply resolved text, snapshots or
 approval fields; the compiler derives the frozen prompt using the existing Wanx rendering owner.
 
+An operation may explicitly select `renderingProfile`. Omit it, or select
+`ai-image-wanx21-edit-prompt/v1`, to retain the original rendering. The separately named
+`ai-image-wanx21-edit-prompt/scoped-print-experimental-v2` uses the scoped-print candidate text
+with `executionScope:ISOLATED_WANX_TRIAL`. The compiler removes the draft selection field and
+binds the complete rendering contract inside `frozenPrompt.templateSnapshot`. The
+`scoped-print-preview-v2` profile remains offline-only and is rejected by trial compilation and
+execution. A new experiment still requires its own frozen manifest and exact one-use approval;
+ordinary hosted task creation, execution and recovery remain pinned to v1.
+
 Compilation validates both source chains, media, the 800-code-point limit and the CNY 1 combined
 maximum before creating `wanx-input-<roundId>`. The immutable bundle contains
 `full-edit-template.json`, `inpaint-template.json`, `input.json` and `manifest.json`.
@@ -346,8 +355,9 @@ The input uses two-space canonical JSON with a final newline and this closed con
 - `frozenPrompt` carries the existing owner's `prompt`, `negativePrompt`, `resolvedPrompt`,
   `resolvedNegativePrompt`, `templateKey`, `templateReleaseId`, `templateChecksum`, and full
   `templateSnapshot`. Preserve the registry snapshot, including `renderingContract`, `consumer`,
-  and `variableKeys`. The existing `assertWanxHostedEditPrompt` owner re-renders the complete
-  Wanx profile and rejects any inconsistent release/checksum/text/contract or text over 800
+  and `variableKeys`. The trial-specific `assertWanxTrialEditPrompt` guard selects only v1 or
+  the explicitly supported experimental profile, re-renders the complete contract, and rejects
+  any inconsistent release/checksum/text/scope or text over 800
   Unicode code points. A default-template preview must not be relabeled as a verified ERP release.
 
 Source and mask paths are relative to the evidence root. Absolute paths, traversal, URLs, links,
@@ -431,17 +441,36 @@ manifest, shell history, report or Git. The caller must already have separate li
 having a runnable command is not that authorization.
 
 Before the Provider POST, the runner creates the original global fingerprint/intent under
-`<evidenceRoot>/intents`, then binds `wanx-trial-<roundId>/execution/round.json` and exclusively
-claims `FULL_EDIT.claim.json` or `INPAINT.claim.json`. The round record freezes both maxima and
+`<evidenceRoot>/intents`, reserves the campaign maximum under an exclusive filesystem lock,
+then binds `wanx-trial-<roundId>/execution/round.json` and exclusively claims
+`FULL_EDIT.claim.json` or `INPAINT.claim.json`. The round record freezes both maxima and
 the manifest; the slot name is the operation, not a replaceable approval ID. The last send check
 revalidates the code, manifest, directory identity, claims and approval validity. The in-memory
 POST guard also claims synchronously before body, DNS or approval awaits.
 
-Keep every claim after partial failure, rejection, timeout or unknown outcome. A new approval,
-operation label, checkout, copied directory or changed manifest cannot reset an already claimed
-slot. No automatic refund or retry exists in this trial. The two fixed allocations cannot exceed
-CNY 1, but this is an execution authorization ceiling, not a Provider-side hard spending cap or
-proof of the eventual bill amount.
+All rounds in the same physical evidence root share the fixed CNY 1 campaign ceiling and the
+independently reviewed account UID digest. A new round or credential revision cannot reset it.
+The campaign owner validates each historical operation claim against its original round and
+fully verified manifest, then reserves that operation's maximum. An unclaimed companion slot
+does not count as an executed allocation. New requests are checked with exact integer arithmetic
+under the same lock, before their operation claims exist. The final send check revalidates the
+entire root, account, historical claims, reservation chain and cumulative maximum.
+
+The additional evidence consists of `wanx-campaign.scope.json`, the transient
+`wanx-campaign.lock.json`, and append-only `wanx-campaign/r<sequence>-<sha256>.json` records.
+The scope also binds the campaign directory's physical identity. Existing round, operation,
+report and trial-evidence formats remain unchanged. A new reservation is durable before the
+operation claim; partial failure or process exit retains both the reservation and lock.
+Concurrent lock contention fails closed. There is no timeout-based lock takeover. Retain
+interrupted evidence for review rather than deleting the lock, moving to a fresh evidence root,
+or retrying the paid request.
+
+Keep every claim after rejection, timeout, unknown outcome or a free-quota bill. No automatic
+refund or retry exists. The ceiling limits authorized execution; it is not a Provider-side hard
+spending cap or proof of the eventual bill amount. For an offline budget observation, the
+`inspectAiImageWanxTrialCampaign` service returns the same checked ceiling, allocation and
+remaining maximum without creating any file or lock. Its `observationOnly:true/canSubmit:false`
+result is a point-in-time view; a later submission must still acquire the lock and recalculate.
 
 Retain the normal intent, report, Wanx async evidence and
 `<operationId>.wanx.trial-evidence.json` together. The latter binds the immutable report digest,

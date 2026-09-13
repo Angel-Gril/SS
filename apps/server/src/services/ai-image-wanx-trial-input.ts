@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { parseAiPromptPublishedSource } from './ai-prompt-template-source.js';
 import { createAiPromptTemplateSnapshot, renderAiPromptRevision } from './ai-prompt-templates.js';
-import { AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE } from './ai-image-edit-prompt-contract.js';
+import {
+  AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+} from './ai-image-edit-prompt-contract.js';
 import {
   aiImageWanxTrialInputSchema, parseAiImageWanxTrialRequest, buildAiImageWanxTrialPreparation,
   AiImageWanxTrialError, type AiImageWanxTrialExpected,
@@ -22,6 +24,9 @@ const draftSchema = aiImageWanxTrialInputSchema.extend({
     prompt: baseOperation.shape.frozenPrompt.shape.prompt,
     negativePrompt: baseOperation.shape.frozenPrompt.shape.negativePrompt,
     templateSource: baseOperation.shape.source,
+    renderingProfile: z.enum([
+      AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+    ]).optional(),
   })).length(2),
 });
 
@@ -61,11 +66,11 @@ export function buildAiImageWanxTrialInput(input: {
     const negativePrompt = operation.negativePrompt == null ? null : operation.negativePrompt.trim();
     const rendered = renderAiPromptRevision(source.revision, {
       userPrompt: prompt, userNegativePrompt: negativePrompt || '',
-    }, AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE);
+    }, operation.renderingProfile ?? AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE);
     const snapshot = createAiPromptTemplateSnapshot({
       revision: source.revision, release: source.activeRelease, renderingContract: rendered.renderingContract,
     });
-    const { templateSource, prompt: _prompt, negativePrompt: _negativePrompt, ...base } = operation;
+    const { templateSource, prompt: _prompt, negativePrompt: _negativePrompt, renderingProfile: _renderingProfile, ...base } = operation;
     sourceBindings.push({
       operation: operation.operation, templateKey, sourceSha256: templateSource.sha256,
       releaseIdSha256: digest(source.activeRelease.id), revisionIdSha256: digest(source.revision.id),

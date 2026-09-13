@@ -142,6 +142,19 @@ export async function runAiImageProviderBillingFinalize(
 export async function runAiImageProviderBillingInspect(
   options: Omit<AiImageProviderBillingFinalizeOptions, 'finalizeBilling'> = {},
 ) {
+  return runNativeBillingInspection('query-bill', options);
+}
+
+export async function runAiImageProviderConsoleBillingInspect(
+  options: Omit<AiImageProviderBillingFinalizeOptions, 'finalizeBilling'> = {},
+) {
+  return runNativeBillingInspection('console-details', options);
+}
+
+async function runNativeBillingInspection(
+  source: 'query-bill' | 'console-details',
+  options: Omit<AiImageProviderBillingFinalizeOptions, 'finalizeBilling'>,
+) {
   const environment = options.environment || process.env;
   assertOfflineEnvironment(environment);
   const unsafeNames = new Set([
@@ -162,15 +175,23 @@ export async function runAiImageProviderBillingInspect(
     throw Object.assign(new Error('Inspection requires a full Git revision'), { code: 'SANDBOX_BILLING_CONFIG_INVALID' });
   }
   const resolveRevision = options.resolveRevision || resolveAiImageSandboxRepositoryRevision;
-  const trackedPaths = [...BILLING_FINALIZER_TRACKED_PATHS, 'apps/server/src/services/ai-image-alibaba-billing-observation.ts'];
+  const trackedPaths = [
+    ...BILLING_FINALIZER_TRACKED_PATHS,
+    'apps/server/src/services/ai-image-alibaba-native-json.ts',
+    source === 'query-bill'
+      ? 'apps/server/src/services/ai-image-alibaba-billing-observation.ts'
+      : 'apps/server/src/services/ai-image-alibaba-console-billing-observation.ts',
+  ];
   const assertRevision = async () => {
     if (await resolveRevision(repositoryRoot, undefined, trackedPaths, options.requireGitCheckout) !== revision) {
       throw Object.assign(new Error('Inspection source revision changed'), { code: 'SANDBOX_ADAPTER_REVISION_MISMATCH' });
     }
   };
   await assertRevision();
-  const { inspectAiImageAlibabaBillingObservation } = await import('../src/services/ai-image-alibaba-billing-observation.js');
-  const assessment = await inspectAiImageAlibabaBillingObservation({
+  const inspect = source === 'query-bill'
+    ? (await import('../src/services/ai-image-alibaba-billing-observation.js')).inspectAiImageAlibabaBillingObservation
+    : (await import('../src/services/ai-image-alibaba-console-billing-observation.js')).inspectAiImageAlibabaConsoleBillingObservation;
+  const assessment = await inspect({
     repositoryRoot,
     evidenceRoot: options.evidenceRoot || requiredEnvironment('AI_IMAGE_SANDBOX_EVIDENCE_ROOT', environment),
     observationPath: requiredEnvironment('AI_IMAGE_SANDBOX_BILLING_OBSERVATION_PATH', environment),
@@ -191,6 +212,7 @@ if (isDirectRun) {
   const args = process.argv.slice(2);
   const run = args.length === 0 ? runAiImageProviderBillingFinalize
     : args.length === 1 && args[0] === '--inspect-alibaba' ? runAiImageProviderBillingInspect
+      : args.length === 1 && args[0] === '--inspect-alibaba-console' ? runAiImageProviderConsoleBillingInspect
       : async () => { throw Object.assign(new Error('Unsupported billing command argument'), { code: 'SANDBOX_BILLING_CONFIG_INVALID' }); };
   run({ requireGitCheckout: true }).catch((error) => {
     process.stderr.write(`${JSON.stringify({
@@ -198,7 +220,7 @@ if (isDirectRun) {
       event: 'SANDBOX_BILLING_COMMAND_FAILED',
       failureCode: safeFailureCode(error),
     })}\n`);
-    process.stderr.write(args.length === 1 && args[0] === '--inspect-alibaba'
+    process.stderr.write(args.length === 1 && (args[0] === '--inspect-alibaba' || args[0] === '--inspect-alibaba-console')
       ? 'Native Alibaba billing inspection failed.\n'
       : 'AI image sandbox billing finalization failed.\n');
     process.exitCode = 1;

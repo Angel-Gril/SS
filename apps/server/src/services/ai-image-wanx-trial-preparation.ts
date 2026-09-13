@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { assertWanxHostedEditPrompt } from './ai-image-edit-provider-contract.js';
+import { assertWanxTrialEditPrompt } from './ai-image-edit-provider-contract.js';
 import {
   AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE, AI_IMAGE_WANX21_EDIT_MODEL,
   AI_IMAGE_WANX21_EDIT_PROFILE, AI_IMAGE_WANX21_EDIT_TRANSPORT,
@@ -100,7 +100,7 @@ export function parseAiImageWanxTrialRequest(value: unknown, expected: AiImageWa
     if ((operation.operation === 'INPAINT') !== (operation.mask !== null)) {
       invalid('WANX_TRIAL_INPUT_INVALID', 'Only the inpaint operation must bind an alpha mask');
     }
-    assertWanxHostedEditPrompt({
+    assertWanxTrialEditPrompt({
       provider: request.provider, model: request.model, operation: operation.operation,
       width: AI_IMAGE_WANX21_EDIT_PROFILE.width, height: AI_IMAGE_WANX21_EDIT_PROFILE.height,
       ...operation.frozenPrompt,

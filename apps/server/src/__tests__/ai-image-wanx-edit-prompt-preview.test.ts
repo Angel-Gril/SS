@@ -28,7 +28,10 @@ function frozen(resolved: Awaited<ReturnType<AiPromptTemplateRegistryService['re
 }
 
 describe('offline Wanx scoped-print prompt preview', () => {
-  it.each(['full-image-edit.base', 'inpaint.base'])('changes only the print-rule scope for %s and preserves v1 and its source release', async (templateKey) => {
+  it.each([
+    ['full-image-edit.base', '39bc78148bdeb5cfac0510c974313dd5f40a95a89403d2a1c0bdf07287f9a5c6'],
+    ['inpaint.base', 'f438d4aaeaf6bda1617d4f03cf307b72d16e88d7d450e8c6fd4480faef350421'],
+  ])('changes only the print-rule scope for %s and preserves v1 and its source release', async (templateKey, contractHash) => {
     const target = registry();
     const legacy = await target.resolveTemplate({ templateKey, variables });
     const baseline = await target.resolveTemplate({ templateKey, variables, renderingProfile: V1 });
@@ -45,6 +48,7 @@ describe('offline Wanx scoped-print prompt preview', () => {
       policyClauseIds: baseline.snapshot.renderingContract?.policyClauseIds,
       sourcePolicySha256: baseline.snapshot.renderingContract?.sourcePolicySha256,
       maximumPromptCharacters: 800, characterCounting: 'unicode-code-points', negativePromptMode: 'inline',
+      contractHash,
     });
     expect(preview.snapshot.renderingContract?.policySha256).not.toBe(baseline.snapshot.renderingContract?.policySha256);
     expect(preview.snapshot.renderingContract?.contractHash).not.toBe(baseline.snapshot.renderingContract?.contractHash);

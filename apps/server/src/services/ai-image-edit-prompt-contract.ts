@@ -8,8 +8,10 @@ export const AI_MEDIA_FULL_EDIT_TEMPLATE_KEY = 'full-image-edit.base';
 export const AI_MEDIA_INPAINT_TEMPLATE_KEY = 'inpaint.base';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE = 'ai-image-wanx21-edit-prompt/v1';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE = 'ai-image-wanx21-edit-prompt/scoped-print-preview-v2';
+export const AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE = 'ai-image-wanx21-edit-prompt/scoped-print-experimental-v2';
 export type AiPromptRenderingProfile = typeof AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE
-  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE;
+  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE
+  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE;
 
 // One policy owner, with clause-aligned renderings. The legacy text is byte-stable.
 const EDIT_POLICY_CLAUSES = [
@@ -47,8 +49,8 @@ const EDIT_POLICY_CLAUSES = [
 
 export const AI_MEDIA_EDIT_SAFETY_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.legacy).join(' ');
 const WANX_EDIT_SAFETY_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.wanx).join('\n');
-// An explicit offline comparison. Existing dispatch and trial guards still require v1.
-const WANX_SCOPED_PRINT_PREVIEW_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.id === 'intrinsic_print'
+// The preview and isolated experiment share this text, but bind distinct execution scopes.
+const WANX_SCOPED_PRINT_POLICY = EDIT_POLICY_CLAUSES.map((clause) => clause.id === 'intrinsic_print'
   ? '涉及文字或标志的移除或替换时，只可处理外部促销叠加层。商品、品牌、标签和包装上的固有印字属于身份，必须保留，除非另有明确授权的图片翻译流程针对该文字。'
   : clause.wanx).join('\n');
 
@@ -102,7 +104,8 @@ export class AiImageEditPromptContractError extends Error {
 
 export function assertAiImageEditPromptProfile(templateKey: string, profile: unknown): void {
   if (profile === undefined) return;
-  if ((profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE)
+  if ((profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE
+    && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE)
     || (templateKey !== AI_MEDIA_FULL_EDIT_TEMPLATE_KEY && templateKey !== AI_MEDIA_INPAINT_TEMPLATE_KEY)) {
     throw new AiImageEditPromptContractError(
       'UNSUPPORTED_PROMPT_RENDER_PROFILE',
@@ -129,7 +132,8 @@ export function resolveAiImageEditPromptRendering(revision: {
     : revision.promptTemplate;
   const negativePromptTemplate = reviewedDefault ? WANX_CONSTRAINTS_TEMPLATE : revision.negativePromptTemplate;
   const previewOnly = profile === AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE;
-  const safetyPolicy = previewOnly ? WANX_SCOPED_PRINT_PREVIEW_POLICY : WANX_EDIT_SAFETY_POLICY;
+  const isolatedExperiment = profile === AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE;
+  const safetyPolicy = previewOnly || isolatedExperiment ? WANX_SCOPED_PRINT_POLICY : WANX_EDIT_SAFETY_POLICY;
   const specification = {
     profile,
     model: AI_IMAGE_WANX21_EDIT_MODEL,
@@ -147,6 +151,7 @@ export function resolveAiImageEditPromptRendering(revision: {
     negativePromptMode: 'inline' as const,
     negativePromptSeparator: NEGATIVE_PROMPT_SEPARATOR,
     ...(previewOnly ? { executionScope: 'OFFLINE_PREVIEW_ONLY' as const } : {}),
+    ...(isolatedExperiment ? { executionScope: 'ISOLATED_WANX_TRIAL' as const } : {}),
   };
   return {
     promptTemplate,

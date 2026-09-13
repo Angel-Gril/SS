@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runAiImageProviderSingleSubmit, sanitizeAiImageSandboxGitEnvironment, type AiImageProviderSingleSubmitOptions } from './ai-image-provider-single-submit.js';
 import { buildAiImageWanxTrialPreparation, prepareAiImageWanxTrial } from '../src/services/ai-image-wanx-trial-preparation.js';
+import { createAiPromptTemplateSnapshot, renderAiPromptRevision } from '../src/services/ai-prompt-templates.js';
 import { makeWanxTrialInput, trialAccountDigest, trialCredentialRevision, trialDigest, trialJson } from '../src/__tests__/fixtures/ai-image-wanx-trial.js';
 
 vi.mock('node:dns/promises', () => ({ lookup: vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]) }));
@@ -95,10 +96,27 @@ afterAll(async () => {
   await rm(target, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(experimentalInpaint = false) {
   const evidenceRoot = join(temporaryRoot, `private-${++sequence}`);
   await mkdir(evidenceRoot, { mode: 0o700 });
   const request = await makeWanxTrialInput(evidenceRoot, revision, `execution-round-${sequence}`);
+  const v1 = experimentalInpaint ? await buildAiImageWanxTrialPreparation({
+    request, sourceInputSha256: trialDigest(trialJson(request)), mediaRoot: evidenceRoot,
+    expected: { roundId: request.roundId, adapterRevision: revision, providerAccountUidSha256: trialAccountDigest, credentialRevision: trialCredentialRevision },
+  }) : null;
+  if (experimentalInpaint) {
+    const frozen = request.operations.find(operation => operation.operation === 'INPAINT')!.frozenPrompt;
+    const snapshot = frozen.templateSnapshot;
+    const content = { templateKey: frozen.templateKey, promptTemplate: snapshot.promptTemplate, negativePromptTemplate: snapshot.negativePromptTemplate };
+    const rendered = renderAiPromptRevision(content, { userPrompt: frozen.prompt, userNegativePrompt: frozen.negativePrompt },
+      'ai-image-wanx21-edit-prompt/scoped-print-experimental-v2');
+    frozen.resolvedPrompt = rendered.resolvedPrompt;
+    frozen.resolvedNegativePrompt = rendered.resolvedNegativePrompt;
+    frozen.templateSnapshot = createAiPromptTemplateSnapshot({
+      revision: { ...content, id: snapshot.revisionId, checksum: snapshot.checksum },
+      release: { id: snapshot.releaseId, sequence: snapshot.sequence }, renderingContract: rendered.renderingContract,
+    });
+  }
   const requestBytes = trialJson(request);
   const requestPath = join(evidenceRoot, 'input.json');
   await writeFile(requestPath, requestBytes, { mode: 0o600 });
@@ -183,10 +201,38 @@ async function fixture() {
     resolveDns: async () => [{ address: '8.8.8.8' }], fetch: fetcher(operation, loseResponse), requireGitCheckout: true,
     ...options,
   });
-  return { evidenceRoot, directory, request, prepared, calls, environments, run };
+  return { evidenceRoot, directory, request, prepared, v1, calls, environments, run };
 }
 
 describe('Wanx trial execution through the real single-submit pipeline', () => {
+  it('submits the explicit experimental INPAINT through frozen preparation, v4 approval and the real sandbox runner', async () => {
+    const value = await fixture(true);
+    const selected = value.prepared.manifest.request.operations.find(operation => operation.operation === 'INPAINT')!;
+    expect(selected.frozenPrompt.templateSnapshot.renderingContract?.profile).toBe('ai-image-wanx21-edit-prompt/scoped-print-experimental-v2');
+    const report = await value.run('INPAINT');
+    expect(report).toMatchObject({ actualCost: null, operation: 'INPAINT', state: 'SUCCEEDED' });
+    expect(value.calls).toHaveLength(1);
+    expect((value.calls[0]!.body.input as { prompt: string }).prompt).toBe(selected.frozenPrompt.resolvedPrompt);
+    expect(JSON.parse(await readFile(join(value.directory, 'execution/INPAINT.claim.json'), 'utf8')))
+      .toMatchObject({ operation: 'INPAINT', state: 'CLAIMED_FAIL_CLOSED', maximumCost: selected.maximumCost });
+    expect((await readdir(join(value.evidenceRoot, 'wanx-campaign'))).filter(name => name.endsWith('.json'))).toHaveLength(1);
+  }, 60_000);
+
+  it.each(['frozenPromptSha256', 'manifestSha256'] as const)('refuses experimental INPAINT with the v1 %s before any POST', async field => {
+    const value = await fixture(true);
+    const environment = value.environments.get('INPAINT')!;
+    const path = environment.AI_IMAGE_SANDBOX_APPROVAL_PATH!;
+    const approval = JSON.parse(await readFile(path, 'utf8'));
+    approval.trialBinding[field] = field === 'manifestSha256' ? value.v1!.manifestSha256
+      : value.v1!.manifest.bindings.find(binding => binding.operation === 'INPAINT')!.frozenPromptSha256;
+    const bytes = trialJson(approval);
+    await writeFile(path, bytes, { mode: 0o600 });
+    environment.AI_IMAGE_SANDBOX_APPROVAL_SHA256 = trialDigest(bytes);
+    await expect(value.run('INPAINT')).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_MISMATCH' });
+    expect(value.calls).toHaveLength(0);
+    expect(await readdir(value.evidenceRoot)).not.toContain('wanx-campaign');
+  }, 60_000);
+
   it.each([
     ['--verify-approval', '--submit-wanx-trial'],
     ['--submit-wanx-trial', '--submit-wanx-trial'],
