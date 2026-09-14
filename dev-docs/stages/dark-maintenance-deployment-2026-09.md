@@ -93,3 +93,10 @@
 - remaining_risk: 原生备份执行的子进程边界和网络边界在本地使用受控 fixture；真实 Linux 备份绑定、新签名候选、完整新提交 offline 回执及双区域维护验收尚待执行。Provider 质量、正式账单、QA-02/正式 QA-04 未完成。
 - next_substage: MAINT-02，从新 clean commit 生成原生完整离线证据、区域候选及签名；已获用户批准的整体范围继续有效。
 - git_checkpoint: 62d140953179d7124f15d5211ae1426c0800919f；工作区仅剩本次阶段回写，不含私有回执或凭据。
+
+## MAINT-02 执行记录
+
+- `21004dc0` 已建立独立 clean worktree，锁定依赖全部离线安装，Prisma Client 使用原 schema 生成。首次完整离线回放在扩展 Ozon runtime 合同停止，未生成原生 PASS；日志 SHA-256 为 `489a27889dc518bcf0537e2305d39b9ccb0860f1d3861afc6440afa65570accb`。
+- T1 根因：独立 Windows checkout 的三份扩展源文件为 CRLF，原测试使用双 LF 文本分隔符截取函数；与主工作区规范化后的源码摘要逐一相同。测试读取端统一行尾后，直接对原 CRLF checkout 和主工作区分别运行，18 项均通过，未修改扩展运行代码。
+- 附加运行时 fixture 核对发现物流规则测试缺少浏览器原生 `AbortController`/timer globals，3 个场景在运行前失败。补齐 VM globals 后 23 项通过；其他受查 runtime 文件通过。两项修复仅影响测试 fixture，保持原业务断言和限制。
+- 维护候选需消费包含上述测试修复的新 clean commit 的完整原生回执；初次失败记录保留。新区域候选、签名、目标备份恢复和实际部署仍未执行。

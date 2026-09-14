@@ -108,6 +108,7 @@ function scopedReleaseBundle(assignment, selectedServiceKeys) {
 function loadRuntime(options, globals = {}) {
   const context = {
     Date, JSON, Number, Object, Array, String, Boolean, Set, Map, Promise, URL, atob,
+    AbortController, setTimeout, clearTimeout,
   };
   context.globalThis = context;
   for (const [path, source] of sources) {

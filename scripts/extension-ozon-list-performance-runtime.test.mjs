@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const background = readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
-const overlay = readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
-const serviceWorker = readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+const background = readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8').replace(/\r\n/g, '\n');
+const overlay = readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8').replace(/\r\n/g, '\n');
+const serviceWorker = readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8').replace(/\r\n/g, '\n');
 
 function sliceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
