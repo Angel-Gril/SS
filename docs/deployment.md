@@ -309,6 +309,8 @@ domain-separated payload；因此这是单一密码学信任域中的三类证�
 
 部分 Linux Node 22 构建未包含 TypeScript stripping，直接运行上述 CLI 会报 `ERR_UNKNOWN_FILE_EXTENSION`，显式启用 stripping 仍可能报 `ERR_NO_TYPESCRIPT`。此时在维护工具进程上使用当前部署已锁定安装的 loader：`node --import /opt/ss-erp/current/apps/server/node_modules/tsx/dist/loader.mjs scripts/dark-maintenance-deployment.mjs --backup-binding`。完整 VPS 验证生成共享 TypeScript 合同回执时，可为该次命令设置 `NODE_OPTIONS=--import=/opt/ss-erp/current/apps/server/node_modules/tsx/dist/loader.mjs`。先实际验证 loader 能加载目标合同；该参数属于操作进程，不写入应用 env 或 systemd 服务配置。
 
+生成完整 VPS 回执时，从已核对提交的实际发布目录调用 `verify-vps-deploy.sh`，例如 `/opt/ss-erp/releases/<full-target-commit>/scripts/verify-vps-deploy.sh`；`DEPLOY_DIR` 仍保留 `/opt/ss-erp/current`，用于监视运行指针。经 `current` 符号链接启动的脚本可能因 Node 入口路径与实际模块 URL 不同而没有进入回执写出函数。必须读回非空原生回执、核对类型/目标/摘要，不能只凭 shell exit 0 或控制台零失败进入维护验收。
+
 维护基线与验收的环境输入：
 
 | 变量 | 内容 |

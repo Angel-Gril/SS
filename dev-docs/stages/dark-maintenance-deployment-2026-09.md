@@ -58,7 +58,7 @@
 
 只访问批准区域的签名 origin；先验证冻结证据再读取凭据或发起请求；GET 白名单、15 秒超时、响应大小限制、拒绝重定向、脱敏摘要与不可覆盖的私有输出。备份绑定必须由原 verifier 对同一数据库/UUID/目标 commit 验证并保持默认 120 分钟时效。
 
-任何错误候选/签名、失效备份、非暗态、官网身份改变、维护类型进入正式消费者、无法恢复原版本或新的迁移/停机/费用后果均停止相关操作。尚未验证：双区域新部署和部署后的真实只读 source；Provider 质量、账单最终性、QA-02/正式 QA-04 仍未完成。
+任何错误候选/签名、失效备份、非暗态、官网身份改变、维护类型进入正式消费者、无法恢复原版本或新的迁移/停机/费用后果均停止相关操作。本维护范围已完成双区域部署与真实只读 source 验收；Provider 质量、账单最终性、QA-02/正式 QA-04 和正式 REL-04 仍未完成。
 
 ## 阶段控制
 
@@ -76,23 +76,23 @@
 - effect_class: controlled
 - operational_mode: planned
 - scope_authorization: confirmed: 用户引用完整维护提案后明确“批准 继续”，覆盖所列维护实现、候选及原部署范围。
-- authorization_substage: MAINT-03
+- authorization_substage: MAINT-04
 - product_decision: confirmed: 允许全暗态维护先于完整 QA-02/正式 QA-04，保持官网和功能关闭。
-- active_substage: MAINT-03
-- result_status: in_progress
-- truth_writeback: pending
+- active_substage: MAINT-04
+- result_status: completed
+- truth_writeback: complete
 - migration_state: not_applicable
 - evidence_refs: [dev-docs/current-state-audit.md, scripts/qa04-offline-gate.mjs, scripts/dark-maintenance-deployment.mjs]
 
 ## 实施回写
 
-- actual_result: MAINT-01 实现与 MAINT-02 冻结验证、区域候选和签名完成；COM 原生备份/临时恢复、备份绑定及部署前只读基线已通过，进入 MAINT-03。
+- actual_result: MAINT-01 至 MAINT-04 完成；COM/CN 均运行冻结提交 63b98b2c，签名、目标备份恢复、完整原生 VPS、各 46 个 GET 维护验收、临时凭据清理及最终运行/官网身份读回均通过，证据索引与真源已回写。
 - changed_owners: qa04-offline-gate、dark-maintenance-deployment、对应测试与 package/preflight 入口；公开部署步骤和架构索引同步。
 - plan_deviation: 使用现有原生备份 verifier，不复制备份规则；source 复用真实 parser，保持已批准的明确缺失来源分支。未改原部署/签名/权限/schema 实现。早期实现审查因限流失败的记录保留；冻结提交与接受输入上的最终独立源码审查已完整回收，主 Agent 已对当前 owner、测试与 Git 复核。
-- fresh_evidence: maintenance 51/51、QA04 producer 24/24；REL04 23/23；官网 API/模板来源 49 passed/3 条 Windows 条件 skipped；原生备份/VPS/官网/能力合同组合 73 passed/6 条平台 skipped；server 类型、受改 JS/TS ESLint 与 diff 通过。新行为均先观察目标 RED，保留原门禁基线。
-- remaining_risk: COM/CN 新部署、完整 VPS 和维护 source 验收尚待执行；CN 目标备份恢复在 COM 验收通过后进行。Provider 质量、正式账单、QA-02/正式 QA-04 未完成。
-- next_substage: MAINT-03，按已批准的原部署入口先 COM、再 CN；保持功能关闭及旧官网身份，失败按原发布目录恢复。
-- git_checkpoint: 63b98b2c4481f80aa74208186e14552d5070a16e 已推送；状态回写与冻结候选隔离，私有回执和凭据不入 Git。
+- fresh_evidence: maintenance 51/51、QA04 producer 24/24；REL04 23/23；官网 API/模板来源 49 passed/3 条 Windows 条件 skipped；原生备份/VPS/官网/能力合同组合 73 passed/6 条平台 skipped。目标提交完整 offline 九项通过（后端 5822 passed / 258 条条件 skipped），最终独立源码审查通过；两地完整 VPS 均 0 failure / 1 warning，两个 source 均 AVAILABLE，各 46 个 GET 维护验收通过。新行为保留 RED→GREEN；收口文档按 T0 读回、链接、隐私和 diff 校验。
+- remaining_risk: Provider 图片质量、正式账单、正常 ERP 完整业务链、QA-02/正式 QA-04 与正式 REL-04 未完成；四次 Wanx 的 CNY 1 占位不恢复。两地远端备份仍按既有决定未配置，Redis 副本/集群及专用告警未新增。
+- next_substage: 无，本维护阶段已收口；后续回到生图与计费阶段的离线质量诊断及原账单观察，正式账单最终性不早于 2026-10-03 12:00（北京时间）复查。
+- git_checkpoint: 运行源码 63b98b2c4481f80aa74208186e14552d5070a16e 已推送；阶段状态和操作说明独立提交，不改变冻结候选身份，私有回执和凭据不入 Git。
 
 ## MAINT-02 执行记录
 
@@ -109,6 +109,24 @@
 - 新鲜环境核对：COM env 的存储兜底为 `ozon-cdn`，使用现有 `cloud-bootstrap` 校验；CN 为 OSS，使用 `cloud-r2` 校验。两地原配置均保留，未把后台 OSS 配置与 env 兜底混为一体；现有环境 warning 保留。
 - 工具副本由精确 Git blob 导出，上传摘要核对通过。Windows tar 解包后的 group/world 写位已在独立 root 工具目录收紧，再通过原可信 keyring 检查；没有修改当前服务目录。
 - COM 已完成目标提交备份及 144 张 public 表的临时恢复，恢复库已删除并只读确认。原生认证摘要 `eb666d929a9c3ab6759d00be2e59dc1a530f72743e60a20f8c1c21b0d4e9eda8`；维护绑定实际调用原 `verify-deploy-backup.sh`，保留 120 分钟期限。
-- VPS 的 Node `22.22.1` 构建缺少 TypeScript 运行支持：默认加载返回 `ERR_UNKNOWN_FILE_EXTENSION`，显式 strip-types 返回 `ERR_NO_TYPESCRIPT`。已用当前部署内锁定安装的 `tsx` loader 实际加载同一 shared 合同成功；仅维护工具进程使用该 loader，生产服务配置不变。首次绑定失败日志保留，后续原生绑定成功且未重做已通过的备份恢复。
-- COM 部署前维护 GET 基线已通过；短时超级管理员会话已撤销。本阶段下一步为既有 `deploy.sh`、完整 VPS 回执及部署后维护 GET 验收。
+- COM VPS 的 Node `22.22.1` 构建缺少 TypeScript 运行支持：默认加载返回 `ERR_UNKNOWN_FILE_EXTENSION`，显式 strip-types 返回 `ERR_NO_TYPESCRIPT`。已用当前部署内锁定安装的 `tsx` loader 实际加载同一 shared 合同成功；仅维护工具进程使用该 loader，生产服务配置不变。首次绑定失败日志保留，后续原生绑定成功且未重做已通过的备份恢复。
+- COM 部署前维护 GET 基线已通过，保存原官网 `1.0.316` 的完整身份；短时超级管理员会话已撤销。
 - 阶段文档的 `controlled` execute gate 明确要求独立动作门禁，不能把阶段范围当作部署授权。此次沿用会话中已明确批准的维护目标及副作用，单独验证实际 COM 目标、恢复和健康/停止控制的 effect 记录，并通过维护范围的 release-readiness 校验；没有把阶段文本或结构校验当作新用户授权。
+- COM 原 `deploy.sh` 于 2026-09-14 16:04 UTC 成功切换到 `63b98b2c`；区域包在构建前后均完整复验，源码已封存，migration 无待执行项，后置数据库/暗态 gate、systemd 切换和健康检查通过。原回滚目录保留。
+- 首次完整 VPS 检查为 0 failure / 1 warning，但因从 `current` 逻辑路径启动，回执导出器入口比较未匹配，未生成文件；该运行不作为完整维护回执。只读无参数诊断确认逻辑路径 exit 0 且未进入口，实际发布路径正确进入参数拒绝分支。随后从同一提交的实际发布目录重跑完整 verifier，仍让 `DEPLOY_DIR` 监视 `current`，并增加非空回执检查；不手写或拼接 PASS。
+- COM 第二次完整 VPS 取得原生回执，0 failure / 1 warning，唯一 warning 为远端备份未配置；回执 SHA-256 `3ed80889734c2a5e8357d8c3cc3c11030c9847b9fe724f843db5defede91467a`。维护验收 SHA-256 `46fe28896d264766b1eaf01bb3de8c3b9353a20db7a65906ed343bf5445c090a`：46 个请求均为 GET，两个 source 均为 `AVAILABLE`，匿名拒绝，暗态与原官网 commit/version/approval/cloud-local 摘要全部保持。
+- COM 验收前，本地操作封装漏带 package 命令已有的 `tsx` loader，随后一次网络失败以及 Windows trace loader URI 格式错误均保留失败记录。未证实该次网络失败的底层根因；最终使用原 CLI/loader 与仅记录路径、状态、耗时的旁路跟踪完整通过，未调整 15 秒限制或来源/权限规则。所有五次临时会话均已确认失效，明文 token 与临时会话引用已清理，临时恢复库数量为零。
+- CN 备份配置使用 Shell 转义，已按原 runbook 的 shell source 语义加载，不用 Node dotenv 解析替代；首次拒绝发生在备份写出前。随后目标备份、143 张 public 表临时恢复及原生绑定通过，恢复库删除已确认。CN 部署前 42 个 GET 基线通过，官网保持 `1.0.311`，临时管理员会话已撤销；COM 完整通过后才开始 CN 原部署流程。
+- CN 原 `deploy.sh` 于 2026-09-14 16:48 UTC 完成；migration 无待执行项，后置数据库/实际存储/暗态 gate、systemd 和健康检查均通过。完整 VPS 验证含四个 `.cn` HTTPS host，结果 0 failure / 1 warning；原生回执 SHA-256 `82a553f184550d971edf6fa343cbd0aacac3a3520e6850d4ca52041f673de365`。维护验收 SHA-256 `57012c17e26c1aaf727759529d3e4fda0b3514db8fa16d8b991a84fad72f0249`，46 个 GET、两个 source AVAILABLE、匿名拒绝、旧官网完整身份和暗态保持。
+
+## MAINT-04 最终收口（北京时间 2026-09-15）
+
+| 区域 | 运行提交 | 官网扩展版本 | 模板来源 | 完整 VPS | 临时会话/恢复库 |
+| --- | --- | --- | --- | --- | --- |
+| COM | `63b98b2c` | `1.0.316`，原身份不变 | 两个均 AVAILABLE，匿名拒绝 | 0 failure / 1 warning | 0 / 0 |
+| CN | `63b98b2c` | `1.0.311`，原身份不变 | 两个均 AVAILABLE，匿名拒绝 | 0 failure / 1 warning | 0 / 0 |
+
+- 最终只读盘点确认两地 API/Worker/Web 均 active，MainPID 的工作目录分别匹配原 systemd owner 的目标 `apps/server` / `apps/web`，公网 `/ready` 为同一目标提交且 DB/Redis 正常。原回滚发布目录仍在；官网 commit/version/approval/cloud-local 摘要再次与基线逐项一致。
+- COM 五次、CN 两次临时会话均已确认失效；明文 token 和临时会话引用已清理，两地临时恢复数据库均为零。原始失败/成功日志、签名、备份认证和正式消费者隔离证据保留在私有目录。
+- 通过原生 parser 复核 offline、签名、备份、baseline、VPS 和维护验收的身份/时间/字节绑定后生成只供索引使用的 `MAINTENANCE_COMPLETION_EVIDENCE_INDEX`，SHA-256 为 `6a4eb02e551b2bc45adea88d03aee6bd20cd9acc207f1deeed733e0dbeb5481d`；索引不替代任何原生门禁回执。
+- 本轮实际执行了构建、签名、备份/临时恢复、维护停服重启和部署；没有发送 Provider 生成或 Ozon 写入，没有初始化/发布模板、创建工作流、接收图片、切换官网 pointer 或升级受管扩展。AI/Media/BYOK/Ozon 保持原暗态，维护通过不晋升正式 QA、账单或图片能力。
