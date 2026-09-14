@@ -392,6 +392,7 @@
 - **根因与 owner。** `ai-image-sandbox-code-revision.ts` 对每个依赖分别启动 `ls-files`、`rev-parse`、`hash-object`。实际试点的 35 个路径条目（34 个唯一文件）一次核验启动 108 个 Git 子进程，测得 3.71 秒；发送前的多次实时复核累积开销。原失败用例单独重跑也需 54.269 秒，接近 60 秒上限。沿用该唯一 owner，将一次核验中的路径去重并批量查询；所有调用时点、逐文件 Git 过滤/摘要、完整 tracked 状态、首尾 HEAD 与子进程环境隔离继续执行，不缓存跨核验结果，不调整超时或并发配置。
 - **D1 / T2 证据。** 新的真实 Git 临时仓库用例先以 `114 > 6` 稳定 RED，其余 9 项安全基线通过；实现后 10 项全部 GREEN，双操作原用例降为 7.169 秒。覆盖 CRLF 与二进制过滤、`assume-unchanged` / `skip-worktree` 隐藏修改、未跟踪文件/目录路径、依赖外 staged 修改、核验期间 HEAD 漂移及不完整对象输出。全部 fixture 使用合成内容与当前测试创建的临时仓库。
 - **消费者回归。** 审批、准备/导入/编译、计费观察/结算、只读预检和真实 single-submit owner 的 11 文件组合为 `442 passed / 5 skipped`；5 项为既有 Windows 不适用的 POSIX/Linux 路径。server 与 sandbox 类型检查、受改源码/测试 ESLint 和 diff 检查通过。定向日志 SHA-256 为 `8dc44ebe699ee488789e8cb96aee921ac5fa7b269550eadf8024cb5f3d5bed0c`。独立并行审查受工具限流影响未产出结论，不记录为独立审查通过。
+- **完整门禁消费者同步。** 修复检查点 `249fe8ca` 的完整离线回放通过全仓 lint/typecheck 后，因旧静态合同强制要求单文件 `--path=` 字面写法而中止，日志 SHA-256 为 `a0a8dd07e9d521fd65f3999ed33712616c4a1f6519f64ffc37a37d7738cc1caa`。逐文件过滤已由真实 Git 正反例保护；静态消费者改为禁止 `--no-filters`，不约束单文件或批量的等价写法。本次同步按 T1 使用该已有失败门禁，生产核验代码和预算合同没有继续修改。
 - **剩余门禁。** 完整 QA-04 offline rehearsal 必须在本次修复的新 clean commit 上重新执行；本节定向通过不替代完整回执。未修改发布类别、账单最终性、Provider 预算/审批、生产开关或部署规则；没有新增真实 Provider/Ozon 请求、费用或生产变更。原全暗态维护部署提案仍需按既有真源裁决发布范围，不能把 offline rehearsal 伪装成正式 QA-04。
 
 ### 剩余五项的执行入口

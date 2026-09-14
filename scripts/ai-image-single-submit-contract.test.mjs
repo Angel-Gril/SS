@@ -164,7 +164,9 @@ assert.match(codeRevision, /runGit\(\['rev-parse', '--verify', 'HEAD'\]\)/u);
 assert.match(codeRevision, /--porcelain=v1/u);
 assert.match(codeRevision, /ls-files', '--error-unmatch/u);
 assert.match(codeRevision, /'hash-object'/u);
-assert.match(codeRevision, /`--path=\$\{path\}`/u);
+// Real Git CRLF/binary coverage lives in ai-image-sandbox-code-revision.test.ts.
+// Batched file operands apply per-path filters without the single-file --path option.
+assert.doesNotMatch(codeRevision, /--no-filters/u);
 assert.match(codeRevision, /`\$\{revision\}:\$\{path\}`/u);
 assert.match(codeRevision, /verifiedRevision\s*!==\s*revision/u);
 assert.match(codeRevision, /SANDBOX_ADAPTER_GIT_REQUIRED/u);
