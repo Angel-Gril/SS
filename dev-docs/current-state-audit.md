@@ -375,6 +375,8 @@
 
 ### 离线质量诊断与合成验收参考（2026-09-14）
 
+- **后续只读账单更新（2026-09-14 13:16）。** 指定 Key 的今日用量已回显 1 次；最新 `ListConsumeDetails` 仍为完整 4 条，第四条消费时间窗 12:30–12:31、使用 1 张、免费抵扣 1 张、当前应付 CNY 0，账户/Key/业务空间/模型/地区匹配。账单中心提示最终账单次月 3 日出具、详情延迟约 24 小时，因此仅关闭“用量未回显”，正式结算仍未关闭；`actualCost:null`、`canFinalize:false` 保持。最新 billing observation SHA-256 `383500afd2582ebb7f6a391e79d09e408a9b57ccaee0208aeb9ba41dac05833d`，usage observation `cf1058ebca8b9b3c19d3f3410b0982bec6be7469fbae81ada72df72ca9ba8cb0`，最终性通知 `a2463cb2943160de8bea45a9e2be21e63a5639c1fb5fa30b3b2e4c8f1f4867c7`。
+
 - 使用冻结源码、原 manifest 和私有素材，以 synthetic fetch 重放四次 adapter 请求。完整 prompt 分别为 458/480/491/503 个 Unicode code point，均与执行报告摘要一致；源图和两次 INPAINT 的二值遮罩也逐字节一致。四次 wire 参数均只有 `{ n: 1 }`，没有指定或记录 `seed`，所以第四次少出现类文字只能作为该样本现象，不能归因于实验 profile。
 - 阿里云官方 API 参考（2026-09-14 读取，SHA-256 `33f30ee880769b2df5b91c997bfd1ff469dd0c5b5a95672e2bfd6bccff57e7d0`）确认 `description_edit_with_mask`、白色编辑/黑色保留、512–4096 同尺寸和 800 字限制均符合当前实现；`strength` 只适用于 `description_edit` 与风格化，不能添加到本次 INPAINT。没有发现 prompt 截断、变量注入、函数选择或遮罩方向错误；前置安全政策较长、v1 文字规则有范围歧义，但不足以证明是质量根因。诊断记录 SHA-256 `e7c44c1ac1062b1d827c7eef965f2fe0184c07509156997acc890daaa461201f`，真实 Provider 请求和新 claim 均为 0。
 - 使用同一源图和原 mask 生成明确标注为 synthetic 的硬边目标色块与选区内 16 像素渐变参考。两者中心 96×96 区域均精确达到 `#D9E5EB`、遮罩外变化均为零；硬边参考边界差异 57.17，内部渐变边界差异为零。第四次真实图中心 RGB RMSE 40.63、目标像素不匹配 9,216、遮罩外变化 8,491。该参考只用于验收解释，不是 Provider 输出、提示词修复或能力证据；记录 SHA-256 `c8b3f90da20cbacad656c156a215171e8da1ddb16be60b1e5b8b0fb8f2a5a445`。
