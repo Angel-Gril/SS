@@ -375,6 +375,10 @@
 
 ### 离线质量诊断与合成验收参考（2026-09-14）
 
+- **外部只读验收收口（2026-09-14 13:28）。** 阿里云账户身份和业务空间重新核对通过；第四次任务使用同一 Provider task ID 执行一次 GET 查询，返回 `SUCCEEDED`、一张图、任务时间 `12:30:37–12:30:49`，没有触发 POST 或下载。指定 Key 的今日用量统计已回显 1 次/1 张；`ListConsumeDetails` 完整 4 条，四条均使用一张、免费抵扣一张、计费零张、当前应付 CNY 0。原生账单没有 task ID 字段，只能形成时间和身份相关性，不能形成任务→账单的可信原生关联；账单中心提示最终账单次月 3 日 12 点出具、详情延迟约 24 小时，`actualCost:null`、`canFinalize:false` 保持。外部只读报告 SHA-256 `b64ad97917394d80fc38f59782e03ca6e3cd74d322037d3443605a4d67da0ce9`，私有文件仍位于原 evidenceRoot。
+- **线上 ERP 阻断。** `https://app.ss-erp.com` 的只读身份为管理员；`/api/ai-images/capabilities` 返回 `workflowEnabled=false`、`webMediaEnabled=false`、四种操作均未就绪，工作流列表为空，两个模板 source 路由均返回 404。因没有可用的线上工作流和模板来源，正常 ERP 端到端候选接收/应用本轮不能执行，也没有发送 ERP 写入。完整 QA-02/QA-04、能力晋升和部署仍未关闭。
+- **后续边界。** 最早可在 2026-10-03 12:00（北京时间）后重新检查最终账单；日期本身不授权结算。新 Provider 请求需要新的整轮预算和逐次批准；正常 ERP 验收需要先由运维/产品明确开启隔离工作流、提供模板来源和测试商品事实，再走现有审核与应用门禁。
+
 - **后续只读账单更新（2026-09-14 13:16）。** 指定 Key 的今日用量已回显 1 次；最新 `ListConsumeDetails` 仍为完整 4 条，第四条消费时间窗 12:30–12:31、使用 1 张、免费抵扣 1 张、当前应付 CNY 0，账户/Key/业务空间/模型/地区匹配。账单中心提示最终账单次月 3 日出具、详情延迟约 24 小时，因此仅关闭“用量未回显”，正式结算仍未关闭；`actualCost:null`、`canFinalize:false` 保持。最新 billing observation SHA-256 `383500afd2582ebb7f6a391e79d09e408a9b57ccaee0208aeb9ba41dac05833d`，usage observation `cf1058ebca8b9b3c19d3f3410b0982bec6be7469fbae81ada72df72ca9ba8cb0`，最终性通知 `a2463cb2943160de8bea45a9e2be21e63a5639c1fb5fa30b3b2e4c8f1f4867c7`。
 
 - 使用冻结源码、原 manifest 和私有素材，以 synthetic fetch 重放四次 adapter 请求。完整 prompt 分别为 458/480/491/503 个 Unicode code point，均与执行报告摘要一致；源图和两次 INPAINT 的二值遮罩也逐字节一致。四次 wire 参数均只有 `{ n: 1 }`，没有指定或记录 `seed`，所以第四次少出现类文字只能作为该样本现象，不能归因于实验 profile。
