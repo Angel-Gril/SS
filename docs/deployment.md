@@ -289,12 +289,40 @@ approval 与 distribution receipt 使用同一 active Ed25519 `keyId`/trusted ke
 domain-separated payload；因此这是单一密码学信任域中的三类证据，不得描述为密码学职责分离。若要
 由不同密码学主体签署，必须先引入独立 key role/keyring、轮换和验证策略，再修改发布声明。
 
-三个 systemd 部署脚本不再生成或递增扩展版本。正式候选必须先在完整 `QA-02`/`QA-04`
+三个 systemd 部署脚本不再生成或递增扩展版本。用于正式发布的候选必须先在完整 `QA-02`/`QA-04`
 对应的 clean commit 上按独立 origin 区域各执行一次 `pnpm package:extension`。同一发布的区域候选必须
 使用相同 target commit 和扩展版本，但 `.com` 与 `.cn` 的 cloud 包、evidence、签名及官网回执必须
 分别绑定各自的 Web/Admin/API origin；不得把一个区域的四件套部署到另一区域。完成外部签名并验证
 签名证明后，把与目标机区域一致的 canonical 四件套预置到该目标机；暗部署/canary 通过后，才能
 签署 website approval、原子激活官网 publication pointer、生成官网分发回执并执行同路径安装升级验收。
+
+**全暗态维护部署使用独立验收范围。** 经操作员明确批准后，可在 QA-02 未完成时使用目标 clean commit 的完整原生 offline 回执、区域候选/签名、原备份恢复门禁与完整 VPS 验证，先部署管理员只读接口修复。该范围由 `scripts/dark-maintenance-deployment.mjs` 执行，不调用正式 REL-04 的设备配对流程。AI/BYOK/Ozon 保持关闭，官网 publication pointer 和受管扩展保持原样。维护回执不能作为正式 QA04、REL-04、官网分发或 Provider 能力证据。
+
+维护操作顺序：
+
+1. 在最终 clean checkout 执行 `pnpm qa:04:offline --output <绝对私有路径>/offline.json`。只有九步及首尾 Git 检查全部成功才生成 `SS_ERP_QA04_OFFLINE_REHEARSAL`；保留完整日志并核对摘要。旧日志或手写回执不能替代该入口。
+2. 按既有流程生成同 commit、同 version、各自 origin 的 COM/CN 四件套及签名。备份与恢复使用目标提交的受控工具副本和原入口；不要为取得工具而先切换运行目录。
+3. 在目标 VPS 运行 `node scripts/dark-maintenance-deployment.mjs --backup-binding`，通过 `MAINTENANCE_DEPLOY_ENV_FILE` 指定既有部署 env，设置 `MAINTENANCE_TARGET_COMMIT`、`MAINTENANCE_REGION` 和独立的 `MAINTENANCE_OUTPUT_FILE`。它实际执行 `verify-deploy-backup.sh`，固定 120 分钟时效，绑定同一数据库/UUID/目标 commit 及验证前后不变的原生 attestation。
+4. 在持有验证 checkout 的操作端运行 `pnpm maintenance:baseline`。它先验证下表中的文件，再读取超级管理员短时会话文件；只用 GET 保存原部署、原官网完整身份、实际能力和暗态状态。保存基线及其 SHA-256 后，通过既有 `deploy.sh` 部署，备份、migration、冻结源码、健康和回滚 gate 继续执行。
+5. 对新部署执行完整 `verify-vps-deploy.sh`，设置 `VERIFY_EVIDENCE_OUTPUT` / `VERIFY_EVIDENCE_REGION` 取得真实 VPS 回执；再执行 `pnpm maintenance:verify`。它要求新运行 commit、签名/VPS 时间、原官网 commit/version/approval/cloud-local 摘要、同一超级管理员和暗态前后一致，并检查两个 source 路由。明确的 `ACTIVE_RELEASE_NOT_FOUND` 只记为 `SOURCE_UNAVAILABLE`，通用 404、匿名可读或非法模板摘要均失败。
+6. COM 维护验收通过后再进行 CN；维护前后可能需要重新签发同一账号的短时会话，并分别撤销。停止/重启服务、备份/临时恢复及 migration 检查属于部署副作用，不能用探针的零业务写入声明代替。任一错误按原发布目录回滚，不自动回滚数据库、不删除历史证据。
+
+维护基线与验收的环境输入：
+
+| 变量 | 内容 |
+| --- | --- |
+| `MAINTENANCE_TARGET_COMMIT` / `MAINTENANCE_REGION` / `MAINTENANCE_API_ORIGIN` | 精确目标提交、COM/CN 与签名候选 API origin |
+| `MAINTENANCE_DATABASE_ID` | 该区域已核对的部署数据库标识 |
+| `MAINTENANCE_RELEASE_BUILD_ROOT` / `MAINTENANCE_RELEASE_SIGNATURE_FILE` / `MAINTENANCE_RELEASE_SIGNATURE_SHA256` | 区域四件套目录、签名文件及批准摘要 |
+| `MAINTENANCE_OFFLINE_FILE` / `MAINTENANCE_OFFLINE_SHA256` | 同目标提交的原生完整离线回执 |
+| `MAINTENANCE_BACKUP_FILE` / `MAINTENANCE_BACKUP_SHA256` | 上一步产生的原生备份验证绑定；不是数据库备份正文 |
+| `MAINTENANCE_SUPER_ADMIN_TOKEN_FILE` | checkout 外真实目录中的私有短时会话文件；不接受命令行或直接环境明文 token |
+| `MAINTENANCE_OUTPUT_FILE` | checkout 外尚不存在的私有输出文件，禁止覆盖 |
+| `MAINTENANCE_BASELINE_FILE` / `MAINTENANCE_BASELINE_SHA256` | 验收阶段额外需要的原基线及摘要 |
+| `MAINTENANCE_VPS_FILE` / `MAINTENANCE_VPS_SHA256` | 验收阶段额外需要的新完整 VPS 回执及摘要 |
+
+原始模板响应、会话、备份和回执保留在受保护目录；不放入 Git。只读来源保持既有超级管理员权限，不通过模板列表初始化模板，也不自动创建工作流或接收图片。
+
 `init-server.sh` 会创建 root-owned
 `/var/lib/ss-erp-extension-releases`；每个 commit 使用一个 root-owned、不可被 group/world 写入、
 构建用户只读的子目录，并通过进程环境传入：

@@ -183,6 +183,11 @@ const steps = [
     args: ['--test', 'scripts/rel04-dark-canary.test.mjs'],
   },
   {
+    name: 'dark maintenance deployment evidence contract',
+    command: 'node',
+    args: ['--import', './apps/server/node_modules/tsx/dist/loader.mjs', '--test', 'scripts/dark-maintenance-deployment.test.mjs'],
+  },
+  {
     name: 'full VPS verification evidence contract',
     command: 'node',
     args: ['--test', 'scripts/vps-verification-evidence.test.mjs'],

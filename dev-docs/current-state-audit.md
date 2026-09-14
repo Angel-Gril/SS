@@ -396,6 +396,10 @@
 - **完整离线复验已通过。** 最终代码检查点 `55b426fb9124e5372fb09f6257a62ea6f5147eff` 在 Windows / Node `24.15.0` 上完成首尾相同 clean HEAD 的九项 `pnpm qa:04:offline`，exit 0、耗时 936.320 秒。全量后端 `5818 passed / 258 条条件 skipped`，server/Web 构建通过；PostgreSQL 权限 7 项、AI Media 23 文件 131 项及历史数据升级回放通过。source/cloud/local 扩展分别为 `459/464/460 passed`，均 `0 failure / 0 warning`。本轮三个临时 schema 已逐一查询确认不存在，既有历史 schema 未清理。完整日志 SHA-256 为 `436f2fe057e8b0da9c61c309fc48e7a4f42be4bb90f63277634338f98ce9296b`，原字节日志/执行结果已复制核验到受保护的 `qa04-55b426fb-20260914` 证据目录；这是 offline rehearsal，`formalQa04Completed:false`。
 - **剩余外部门禁。** 未修改发布类别、账单最终性、Provider 预算/审批、生产开关或部署规则；没有新增真实 Provider/Ozon 请求、费用或生产变更。基于上述已验证检查点的全暗态维护部署提案已在同一私有证据目录准备好，明确只恢复管理员只读接口、保持功能和官网指针关闭/不变，并保留签名、备份恢复和回滚要求；尚未批准新的维护验收范围，不能把 offline rehearsal 伪装成正式 QA-04。后续纯证据回写不改变上述源码，实际候选仍须绑定届时批准并验证的精确 clean commit。
 
+### 全暗态维护范围已批准（2026-09-14）
+
+用户已引用完整维护提案并明确“批准 继续”。此前“尚无维护豁免/提案待批准”保留为当时记录；本次允许新增独立维护验收类别，以新 clean commit 的完整离线回执、签名、备份恢复和完整 VPS 验证支持 COM/CN 维护部署。仅恢复既有超级管理员 source 只读路径；AI/BYOK/Ozon、官网 pointer 和受管扩展保持原状态。维护证据不能进入正式 QA04/REL04/官网/能力消费者。实施顺序、owner、测试与副作用边界由[维护阶段](stages/dark-maintenance-deployment-2026-09.md)唯一维护，新实现和实际部署尚未完成。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |

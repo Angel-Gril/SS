@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
+import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -80,6 +82,55 @@ export function qa04OfflineManifest() {
   };
 }
 
+export function parseQa04OfflineEvidence(value, expectedGitCommit, observedAt) {
+  const keys = ['schemaVersion', 'kind', 'gitCommit', 'startedAt', 'completedAt',
+    'status', 'command', 'completesFormalTask', 'externalAccess', 'steps'];
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(keys.sort())
+    || value.schemaVersion !== 1 || value.kind !== 'SS_ERP_QA04_OFFLINE_REHEARSAL'
+    || !/^[a-f0-9]{40}$/u.test(expectedGitCommit) || value.gitCommit !== expectedGitCommit
+    || value.status !== 'PASS' || value.command !== 'pnpm qa:04:offline'
+    || value.completesFormalTask !== false || value.externalAccess !== 'NO_PROVIDER_OR_VPS'
+    || JSON.stringify(value.steps) !== JSON.stringify(QA04_OFFLINE_STEPS.map(step => step.id))) {
+    throw new Error('Invalid native QA-04 offline evidence');
+  }
+  for (const timestamp of [value.startedAt, value.completedAt, observedAt]) {
+    if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))
+      || new Date(timestamp).toISOString() !== timestamp) {
+      throw new Error('Invalid offline evidence timestamp');
+    }
+  }
+  const age = Date.parse(observedAt) - Date.parse(value.completedAt);
+  if (Date.parse(value.startedAt) > Date.parse(value.completedAt)
+    || age < 0 || age > 24 * 60 * 60 * 1000) {
+    throw new Error('Offline evidence is stale or its timestamps are out of order');
+  }
+  return value;
+}
+
+function assertEvidenceOutputPath(outputPath, repositoryRoot) {
+  if (typeof outputPath !== 'string' || !path.isAbsolute(outputPath)) {
+    throw new Error('Offline evidence requires an absolute private output path');
+  }
+  const absolute = path.resolve(outputPath);
+  const relative = path.relative(path.resolve(repositoryRoot), absolute);
+  const parent = path.dirname(absolute);
+  const canonicalParent = realpathSync(parent);
+  const sameParent = process.platform === 'win32'
+    ? canonicalParent.toLowerCase() === parent.toLowerCase() : canonicalParent === parent;
+  if ((!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))
+    || !sameParent || lstatSync(parent).isSymbolicLink() || !lstatSync(parent).isDirectory()) {
+    throw new Error('Offline evidence output must be new and outside the repository in a real directory');
+  }
+  try {
+    lstatSync(absolute);
+    throw new Error('Offline evidence output already exists');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  return absolute;
+}
+
 function runGitProvenanceCommand(runner, repositoryRoot, args, label) {
   let result;
   try {
@@ -155,9 +206,21 @@ export function runQa04OfflineGate({
   platform = process.platform,
   comSpec = process.env.ComSpec || 'cmd.exe',
   repositoryRoot = REPOSITORY_ROOT,
+  evidenceOutputPath,
+  now = () => new Date(),
 } = {}) {
   stdout.write('QA-04 offline rehearsal\n');
   stdout.write('Formal QA-04 completion still requires complete QA-02 evidence.\n');
+  let startedAt;
+  if (evidenceOutputPath !== undefined) {
+    try {
+      assertEvidenceOutputPath(evidenceOutputPath, repositoryRoot);
+      startedAt = now().toISOString();
+    } catch {
+      stderr.write('[qa04-offline] Offline evidence output rejected\n');
+      return 1;
+    }
+  }
   let initialProvenance;
   try {
     initialProvenance = readQa04GitProvenance({
@@ -217,6 +280,22 @@ export function runQa04OfflineGate({
     return 1;
   }
 
+  if (evidenceOutputPath !== undefined) {
+    try {
+      const completedAt = now().toISOString();
+      const evidence = parseQa04OfflineEvidence({
+        schemaVersion: 1, kind: 'SS_ERP_QA04_OFFLINE_REHEARSAL',
+        gitCommit: finalProvenance.gitCommit, startedAt, completedAt, status: 'PASS',
+        command: 'pnpm qa:04:offline', completesFormalTask: false,
+        externalAccess: 'NO_PROVIDER_OR_VPS', steps: QA04_OFFLINE_STEPS.map(step => step.id),
+      }, initialProvenance.gitCommit, completedAt);
+      const output = assertEvidenceOutputPath(evidenceOutputPath, repositoryRoot);
+      writeNewArtifactDurably(output, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+    } catch {
+      stderr.write('[qa04-offline] Offline evidence could not be recorded\n');
+      return 1;
+    }
+  }
   stdout.write('\n[qa04-offline] all offline rehearsal checks passed\n');
   return 0;
 }
@@ -227,8 +306,12 @@ export function qa04OfflineMain(args = process.argv.slice(2)) {
     return 0;
   }
 
+  if (args.length === 2 && args[0] === '--output' && !args[1].startsWith('--')) {
+    return runQa04OfflineGate({ evidenceOutputPath: args[1] });
+  }
+
   if (args.length > 0) {
-    process.stderr.write('Usage: node scripts/qa04-offline-gate.mjs [--list]\n');
+    process.stderr.write('Usage: node scripts/qa04-offline-gate.mjs [--list | --output PRIVATE_FILE]\n');
     return 2;
   }
 

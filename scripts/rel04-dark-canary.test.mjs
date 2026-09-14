@@ -781,6 +781,14 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   assert.equal(parsed.adminToken, adminToken);
   assert.equal(parsed.releaseBinding.candidate.version, '1.2.3');
   assert.equal(parsed.releaseBinding.vpsVerificationSha256, environment.REL04_VPS_VERIFICATION_SHA256);
+  for (const kind of ['SS_ERP_QA04_OFFLINE_REHEARSAL', 'SS_ERP_DARK_MAINTENANCE_BASELINE',
+    'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE', 'SS_ERP_DARK_MAINTENANCE_BACKUP']) {
+    const bytes = Buffer.from(`${JSON.stringify({ ...acceptance, kind }, null, 2)}\n`);
+    writeFileSync(acceptanceFile, bytes);
+    assert.throws(() => parse({ ...environment, REL04_PUBLISH_RECONCILIATION_REGRESSION_SHA256: sha256(bytes) }),
+      /QA04_ACCEPTANCE_INVALID/u);
+  }
+  writeFileSync(acceptanceFile, acceptanceBytes);
   for (const key of [
     'REL04_REGION', 'REL04_VERSION', 'REL04_RELEASE_EVIDENCE_SHA256',
     'REL04_RELEASE_SIGNATURE_SHA256', 'REL04_VPS_VERIFICATION_FILE', 'REL04_VPS_VERIFICATION_SHA256',

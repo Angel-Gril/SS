@@ -598,6 +598,27 @@ describe('extensionDownloadRoutes', () => {
     await app.close();
   });
 
+  it.each(['SS_ERP_DARK_MAINTENANCE_BASELINE', 'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE',
+    'SS_ERP_DARK_MAINTENANCE_BACKUP', 'SS_ERP_QA04_OFFLINE_REHEARSAL'])(
+    'rejects %s even inside a correctly signed website approval', async kind => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const value = await fixture();
+      const published = await publishedFixture({ ...value, canaryVersion: 2,
+        mutateDarkCanary(canary) { canary.kind = kind; } });
+      await expect(loadPublishedExtensionRelease({
+        publicationRoot: published.publicationRoot, keyringPath: published.keyringPath,
+        expectedDistributionOrigin: 'https://api.example.com', expectedRegion: 'COM', trustedOwnerUid: null,
+      })).rejects.toThrow(/dark canary/u);
+      const app = await appFor(value.buildRoot, {
+        publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+      });
+      try {
+        expect((await app.inject({ method: 'GET', url: '/latest' })).statusCode).toBe(404);
+        expect((await app.inject({ method: 'GET', url: '/download/cloud' })).statusCode).toBe(404);
+      } finally { await app.close(); }
+    },
+  );
+
   it.each([
     ['version', '9.9.9'], ['region', 'CN'], ['gitCommit', 'e'.repeat(40)],
     ['releaseEvidenceSha256', 'e'.repeat(64)], ['releaseSignatureSha256', 'e'.repeat(64)],

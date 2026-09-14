@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import * as qa04Gate from './qa04-offline-gate.mjs';
 import {
   QA04_OFFLINE_STEPS,
   qa04OfflineManifest,
@@ -343,3 +344,134 @@ assert.equal(invalidResult.status, 2);
 assert.match(invalidResult.stderr, /Usage:/u);
 
 console.log('PASS QA-04 offline gate contract');
+
+const evidenceStart = '2030-01-01T00:00:00.000Z';
+const evidenceEnd = '2030-01-01T00:01:00.000Z';
+function offlineEvidence() {
+  return {
+    schemaVersion: 1, kind: 'SS_ERP_QA04_OFFLINE_REHEARSAL', gitCommit: currentCommit,
+    startedAt: evidenceStart, completedAt: evidenceEnd, status: 'PASS',
+    command: 'pnpm qa:04:offline', completesFormalTask: false,
+    externalAccess: 'NO_PROVIDER_OR_VPS', steps: expectedSteps.map(([id]) => id),
+  };
+}
+
+function withEvidenceFixture(callback) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-qa04-evidence-'));
+  try {
+    const repository = path.join(root, 'checkout');
+    mkdirSync(repository);
+    callback({ root, repository, output: path.join(root, 'offline.json') });
+  } finally {
+    assert.equal(path.dirname(path.resolve(root)).toLowerCase(), path.resolve(os.tmpdir()).toLowerCase());
+    assert.ok(path.basename(root).startsWith('ss-erp-qa04-evidence-'));
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('writes native non-final offline evidence only after all steps and final clean provenance', () => {
+  withEvidenceFixture(({ repository, output }) => {
+    const git = gitRunnerSequence({ repositoryRoot: repository });
+    const times = [evidenceStart, evidenceEnd];
+    let calls = 0;
+    const status = runQa04OfflineGate({
+      repositoryRoot: repository, platform: 'linux', gitRunner: git.runner,
+      stdout: memoryWriter(), stderr: memoryWriter(), evidenceOutputPath: output,
+      now: () => new Date(times.shift()),
+      runner() {
+        calls += 1;
+        assert.equal(existsSync(output), false);
+        return { status: 0 };
+      },
+    });
+    assert.equal(status, 0);
+    assert.equal(calls, expectedSteps.length);
+    assert.equal(git.calls.length, 6);
+    assert.equal(existsSync(output), true, 'a successful gate must produce the requested native receipt');
+    assert.equal(readFileSync(output, 'utf8'), `${JSON.stringify(offlineEvidence(), null, 2)}\n`);
+    if (process.platform !== 'win32') assert.equal(statSync(output).mode & 0o777, 0o600);
+  });
+});
+
+for (const scenario of ['step-failure', 'dirty-start', 'dirty-end', 'head-drift']) {
+  test(`does not produce offline PASS evidence for ${scenario}`, () => {
+    withEvidenceFixture(({ repository, output }) => {
+      const git = gitRunnerSequence({ repositoryRoot: repository,
+        firstStatus: scenario === 'dirty-start' ? '?? untracked.txt\n' : '',
+        secondStatus: scenario === 'dirty-end' ? ' M tracked.txt\n' : '',
+        secondCommit: scenario === 'head-drift' ? 'b'.repeat(40) : currentCommit });
+      const status = runQa04OfflineGate({
+        repositoryRoot: repository, gitRunner: git.runner,
+        stdout: memoryWriter(), stderr: memoryWriter(), evidenceOutputPath: output,
+        now: () => new Date(evidenceStart),
+        runner() { return { status: scenario === 'step-failure' ? 17 : 0 }; },
+      });
+      assert.notEqual(status, 0);
+      assert.equal(existsSync(output), false);
+    });
+  });
+}
+
+for (const scenario of ['existing', 'inside-checkout', 'relative', 'missing-parent']) {
+  test(`rejects ${scenario} offline output before running a gate`, () => {
+    withEvidenceFixture(({ repository, root, output }) => {
+      let target = output;
+      if (scenario === 'existing') writeFileSync(output, 'previous evidence\n');
+      if (scenario === 'inside-checkout') target = path.join(repository, 'offline.json');
+      if (scenario === 'relative') target = 'offline.json';
+      if (scenario === 'missing-parent') target = path.join(root, 'missing', 'offline.json');
+      let executed = 0;
+      assert.equal(runQa04OfflineGate({
+        repositoryRoot: repository, gitRunner: gitRunnerSequence({ repositoryRoot: repository }).runner,
+        stdout: memoryWriter(), stderr: memoryWriter(), evidenceOutputPath: target,
+        runner() { executed += 1; return { status: 0 }; },
+      }), 1);
+      assert.equal(executed, 0);
+      if (scenario === 'existing') assert.equal(readFileSync(output, 'utf8'), 'previous evidence\n');
+    });
+  });
+}
+
+test('validates a complete native offline receipt independently of formal QA04', () => {
+  assert.equal(typeof qa04Gate.parseQa04OfflineEvidence, 'function');
+  assert.deepEqual(qa04Gate.parseQa04OfflineEvidence(offlineEvidence(), currentCommit, evidenceEnd), offlineEvidence());
+});
+
+test('rejects a dangling output link before executing any offline step', () => {
+  withEvidenceFixture(({ repository, root, output }) => {
+    symlinkSync(path.join(root, 'missing-link-target'), output, 'junction');
+    let executed = 0;
+    assert.equal(runQa04OfflineGate({
+      repositoryRoot: repository, gitRunner: gitRunnerSequence({ repositoryRoot: repository }).runner,
+      stdout: memoryWriter(), stderr: memoryWriter(), evidenceOutputPath: output,
+      now: () => new Date(evidenceStart), runner() { executed += 1; return { status: 0 }; },
+    }), 1);
+    assert.equal(executed, 0);
+  });
+});
+
+for (const [name, mutate] of [
+  ['formal kind', value => { value.kind = 'QA04_FINAL_ACCEPTANCE'; }],
+  ['formal promotion', value => { value.completesFormalTask = true; }],
+  ['wrong commit', value => { value.gitCommit = 'b'.repeat(40); }],
+  ['missing gate', value => { value.steps.pop(); }],
+  ['extra gate', value => { value.steps.push('deploy'); }],
+  ['reordered gates', value => { value.steps.reverse(); }],
+  ['unknown field', value => { value.qa02Prerequisite = 'COMPLETE'; }],
+  ['future completion', value => { value.completedAt = '2030-01-01T00:02:00.000Z'; }],
+  ['reverse chronology', value => { value.startedAt = '2030-01-01T00:02:00.000Z'; }],
+  ['noncanonical date', value => { value.startedAt = '2030-01-01'; }],
+  ['external access', value => { value.externalAccess = 'PROVIDER_ALLOWED'; }],
+]) {
+  test(`rejects offline evidence with ${name}`, () => {
+    assert.equal(typeof qa04Gate.parseQa04OfflineEvidence, 'function');
+    const evidence = offlineEvidence();
+    mutate(evidence);
+    assert.throws(() => qa04Gate.parseQa04OfflineEvidence(evidence, currentCommit, evidenceEnd));
+  });
+}
+
+test('rejects stale offline receipts', () => {
+  assert.equal(typeof qa04Gate.parseQa04OfflineEvidence, 'function');
+  assert.throws(() => qa04Gate.parseQa04OfflineEvidence(offlineEvidence(), currentCommit, '2030-01-02T00:01:00.001Z'));
+});

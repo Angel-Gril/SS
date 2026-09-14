@@ -23,6 +23,15 @@ const WANX_PROFILES = {
   INPAINT: 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1',
 };
 
+for (const kind of ['SS_ERP_QA04_OFFLINE_REHEARSAL', 'SS_ERP_DARK_MAINTENANCE_BASELINE',
+  'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE', 'SS_ERP_DARK_MAINTENANCE_BACKUP']) {
+  test(`maintenance evidence ${kind} cannot promote a Provider capability`, () => {
+    withBundle({ mutateReport(reports) { reports[0].kind = kind; } }, ({ manifestPath }) => {
+      assert.throws(() => reviewAiImageCapabilityCandidate(manifestPath), /REPORT_SCHEMA_INVALID/u);
+    });
+  });
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }

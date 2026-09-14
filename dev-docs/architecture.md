@@ -49,6 +49,7 @@
 | Wanx 隔离执行与预算 | `ai-image-wanx-trial-execution.ts`、`ai-image-wanx-trial-campaign.ts`、`ai-image-sandbox-approval.ts`、原 sandbox claim/private writer；single-submit 仅装配 | 同左 | v4 绑定物理根/冻结清单；同根同账户跨 round 固定 CNY 1，先累计预占再写操作槽位；持久历史核验和最后发包复查；旧 report-bound 证据不变 | 改 round/凭据/审批/目录重置累计、失败/免费返还、抢占遗留锁、隔离结果冒充 ERP 或结算 | keep |
 | 部署/配置 | env templates、deploy scripts、SystemConfig | 各自保持启动/业务配置职责 | env/deploy contract | 页面常量和历史计划 | repair |
 | REL-04 候选证据 | `packages/shared/src/rel04-release-evidence.ts` | 同左 | canary v2、完整 VPS verifier v1；CLI 与 API 共用候选绑定校验 | 日志文本、页面和手写运行回执 | keep |
+| 全暗态维护验收 | `scripts/dark-maintenance-deployment.mjs`；原生离线回执由 `scripts/qa04-offline-gate.mjs` 产生 | 同左 | 独立维护 kind；原备份 verifier、签名、完整 VPS 与前后官网身份绑定；GET-only source 验收 | 手写 PASS、正式 QA04/REL04/官网或 Provider 能力消费者 | keep |
 
 ## 数据、合同与安全边界
 
