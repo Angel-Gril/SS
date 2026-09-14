@@ -66,20 +66,30 @@
 - stage_id: dark-maintenance-deployment-2026-09
 - primary_route: 开发执行
 - operation: implement
-- delivery_kind: implementation
+- delivery_kind: behavior_verification
 - task_depth: D2
 - materialization_trigger: ["cross_owner_drift"]
 - risk_lanes: ["identity_permission", "privacy_secret_data", "resource_reliability", "supply_chain_config"]
 - evidence_mode: test
-- test_level: T2
+- test_level: T1
 - route_evidence_kind: null
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: confirmed: 用户引用完整维护提案后明确“批准 继续”，覆盖所列维护实现、候选及原部署范围。
-- authorization_substage: MAINT-01
+- authorization_substage: MAINT-02
 - product_decision: confirmed: 允许全暗态维护先于完整 QA-02/正式 QA-04，保持官网和功能关闭。
-- active_substage: MAINT-01
+- active_substage: MAINT-02
 - result_status: in_progress
 - truth_writeback: pending
 - migration_state: not_applicable
 - evidence_refs: [dev-docs/current-state-audit.md, scripts/qa04-offline-gate.mjs, scripts/rel04-dark-canary.mjs]
+
+## 实施回写
+
+- actual_result: MAINT-01 已完成原生离线回执、独立备份绑定、部署前基线、部署后 GET 验收和正式消费者拒绝边界。
+- changed_owners: qa04-offline-gate、dark-maintenance-deployment、对应测试与 package/preflight 入口；公开部署步骤和架构索引同步。
+- plan_deviation: 使用现有原生备份 verifier，不复制备份规则；source 复用真实 parser，保持已批准的明确缺失来源分支。未改原部署/签名/权限/schema 实现。设计独立审查已回收；实现独立审查因模型限流未产出结论，由主 Agent 复核源代码并补齐发现的拒绝路径，不声称独立实现审查通过。
+- fresh_evidence: maintenance 51/51、QA04 producer 24/24；REL04 23/23；官网 API/模板来源 49 passed/3 条 Windows 条件 skipped；原生备份/VPS/官网/能力合同组合 73 passed/6 条平台 skipped；server 类型、受改 JS/TS ESLint 与 diff 通过。新行为均先观察目标 RED，保留原门禁基线。
+- remaining_risk: 原生备份执行的子进程边界和网络边界在本地使用受控 fixture；真实 Linux 备份绑定、新签名候选、完整新提交 offline 回执及双区域维护验收尚待执行。Provider 质量、正式账单、QA-02/正式 QA-04 未完成。
+- next_substage: MAINT-02，从新 clean commit 生成原生完整离线证据、区域候选及签名；已获用户批准的整体范围继续有效。
+- git_checkpoint: 62d140953179d7124f15d5211ae1426c0800919f；工作区仅剩本次阶段回写，不含私有回执或凭据。
