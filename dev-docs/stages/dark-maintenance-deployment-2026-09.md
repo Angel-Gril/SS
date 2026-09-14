@@ -17,7 +17,7 @@
 | 来源与权限 | `ai-prompt-template-source.ts`、既有 source route 和 `requireSuperAdmin` | 只读两个 source；禁止模板列表的隐式初始化 |
 | 正式发布拒绝边界 | REL04 parser、官网 CLI/API、能力候选 verifier | 仅补充维护证据拒绝用例；不接受新维护类型 |
 
-当前 Git 基线 `4e6bd781` 已推送且 clean；源码 `55b426fb` 完整 offline gate 已通过。历史 QA04 和付费状态见 `../current-state-audit.md`，验收底线见 `../acceptance.md`，公开运维入口见 `../../docs/deployment.md`。新候选必须绑定新实现的精确 clean commit。
+维护源码 `63b98b2c4481f80aa74208186e14552d5070a16e` 已推送；独立 LF checkout 的完整原生 offline gate、最终独立源码审查、两区域 `1.0.327` 候选及签名验证已通过。历史 QA04 和付费状态见 `../current-state-audit.md`，验收底线见 `../acceptance.md`，公开运维入口见 `../../docs/deployment.md`。维护操作继续绑定该冻结提交，后续状态文档提交不替换候选身份。
 
 ## 调研决策
 
@@ -58,7 +58,7 @@
 
 只访问批准区域的签名 origin；先验证冻结证据再读取凭据或发起请求；GET 白名单、15 秒超时、响应大小限制、拒绝重定向、脱敏摘要与不可覆盖的私有输出。备份绑定必须由原 verifier 对同一数据库/UUID/目标 commit 验证并保持默认 120 分钟时效。
 
-任何错误候选/签名、失效备份、非暗态、官网身份改变、维护类型进入正式消费者、无法恢复原版本或新的迁移/停机/费用后果均停止相关操作。尚未验证：新门禁实现、签名候选、双区域新部署、真实只读 source；Provider 质量、账单最终性、QA-02/正式 QA-04 仍未完成。
+任何错误候选/签名、失效备份、非暗态、官网身份改变、维护类型进入正式消费者、无法恢复原版本或新的迁移/停机/费用后果均停止相关操作。尚未验证：双区域新部署和部署后的真实只读 source；Provider 质量、账单最终性、QA-02/正式 QA-04 仍未完成。
 
 ## 阶段控制
 
@@ -71,32 +71,44 @@
 - materialization_trigger: ["cross_owner_drift"]
 - risk_lanes: ["identity_permission", "privacy_secret_data", "resource_reliability", "supply_chain_config"]
 - evidence_mode: test
-- test_level: T1
+- test_level: T3
 - route_evidence_kind: null
-- effect_class: local_reversible
+- effect_class: controlled
 - operational_mode: planned
 - scope_authorization: confirmed: 用户引用完整维护提案后明确“批准 继续”，覆盖所列维护实现、候选及原部署范围。
-- authorization_substage: MAINT-02
+- authorization_substage: MAINT-03
 - product_decision: confirmed: 允许全暗态维护先于完整 QA-02/正式 QA-04，保持官网和功能关闭。
-- active_substage: MAINT-02
+- active_substage: MAINT-03
 - result_status: in_progress
 - truth_writeback: pending
 - migration_state: not_applicable
-- evidence_refs: [dev-docs/current-state-audit.md, scripts/qa04-offline-gate.mjs, scripts/rel04-dark-canary.mjs]
+- evidence_refs: [dev-docs/current-state-audit.md, scripts/qa04-offline-gate.mjs, scripts/dark-maintenance-deployment.mjs]
 
 ## 实施回写
 
-- actual_result: MAINT-01 已完成原生离线回执、独立备份绑定、部署前基线、部署后 GET 验收和正式消费者拒绝边界。
+- actual_result: MAINT-01 实现与 MAINT-02 冻结验证、区域候选和签名完成；COM 原生备份/临时恢复、备份绑定及部署前只读基线已通过，进入 MAINT-03。
 - changed_owners: qa04-offline-gate、dark-maintenance-deployment、对应测试与 package/preflight 入口；公开部署步骤和架构索引同步。
-- plan_deviation: 使用现有原生备份 verifier，不复制备份规则；source 复用真实 parser，保持已批准的明确缺失来源分支。未改原部署/签名/权限/schema 实现。设计独立审查已回收；实现独立审查因模型限流未产出结论，由主 Agent 复核源代码并补齐发现的拒绝路径，不声称独立实现审查通过。
+- plan_deviation: 使用现有原生备份 verifier，不复制备份规则；source 复用真实 parser，保持已批准的明确缺失来源分支。未改原部署/签名/权限/schema 实现。早期实现审查因限流失败的记录保留；冻结提交与接受输入上的最终独立源码审查已完整回收，主 Agent 已对当前 owner、测试与 Git 复核。
 - fresh_evidence: maintenance 51/51、QA04 producer 24/24；REL04 23/23；官网 API/模板来源 49 passed/3 条 Windows 条件 skipped；原生备份/VPS/官网/能力合同组合 73 passed/6 条平台 skipped；server 类型、受改 JS/TS ESLint 与 diff 通过。新行为均先观察目标 RED，保留原门禁基线。
-- remaining_risk: 原生备份执行的子进程边界和网络边界在本地使用受控 fixture；真实 Linux 备份绑定、新签名候选、完整新提交 offline 回执及双区域维护验收尚待执行。Provider 质量、正式账单、QA-02/正式 QA-04 未完成。
-- next_substage: MAINT-02，从新 clean commit 生成原生完整离线证据、区域候选及签名；已获用户批准的整体范围继续有效。
-- git_checkpoint: 62d140953179d7124f15d5211ae1426c0800919f；工作区仅剩本次阶段回写，不含私有回执或凭据。
+- remaining_risk: COM/CN 新部署、完整 VPS 和维护 source 验收尚待执行；CN 目标备份恢复在 COM 验收通过后进行。Provider 质量、正式账单、QA-02/正式 QA-04 未完成。
+- next_substage: MAINT-03，按已批准的原部署入口先 COM、再 CN；保持功能关闭及旧官网身份，失败按原发布目录恢复。
+- git_checkpoint: 63b98b2c4481f80aa74208186e14552d5070a16e 已推送；状态回写与冻结候选隔离，私有回执和凭据不入 Git。
 
 ## MAINT-02 执行记录
 
 - `21004dc0` 已建立独立 clean worktree，锁定依赖全部离线安装，Prisma Client 使用原 schema 生成。首次完整离线回放在扩展 Ozon runtime 合同停止，未生成原生 PASS；日志 SHA-256 为 `489a27889dc518bcf0537e2305d39b9ccb0860f1d3861afc6440afa65570accb`。
 - T1 根因：独立 Windows checkout 的三份扩展源文件为 CRLF，原测试使用双 LF 文本分隔符截取函数；与主工作区规范化后的源码摘要逐一相同。测试读取端统一行尾后，直接对原 CRLF checkout 和主工作区分别运行，18 项均通过，未修改扩展运行代码。
 - 附加运行时 fixture 核对发现物流规则测试缺少浏览器原生 `AbortController`/timer globals，3 个场景在运行前失败。补齐 VM globals 后 23 项通过；其他受查 runtime 文件通过。两项修复仅影响测试 fixture，保持原业务断言和限制。
-- 维护候选需消费包含上述测试修复的新 clean commit 的完整原生回执；初次失败记录保留。新区域候选、签名、目标备份恢复和实际部署仍未执行。
+- Windows 全局 `core.autocrlf=true` 与根进程中的本地 API env 曾分别触发旧文本合同和云包 HTTPS 检查。最终使用新建 LF checkout，并把本地数据库/Redis 配置与 server dotenv 限定在对应进程；失败日志完整保留，不作为通过证据。
+- `63b98b2c` 的九项完整 offline rehearsal 于 2026-09-14 15:12 UTC 通过：后端 5822 passed / 258 条条件 skipped，PostgreSQL scope 7 项、AI Media 集成 131 项及升级回放、Server/Web 构建与 cloud/local 扩展全部通过。本次四个隔离测试 schema 均已删除；未清理其他历史测试 schema。原生回执 SHA-256 `9a5d70e97aced49d17205995280756ff6194f6d1e75838357e81b0bdfbfaf524`，完整日志 SHA-256 `35a228ad1b7985a91fdfa81ccdf560d70bb89d09c6ef08f7bb24a0377e28c2f9`。
+- 最终独立源码审查绑定同一提交与接受输入 SHA-256 `f535948dd174710e5794ba30e6320c174fc6fc03fccb0f1badf98699817add76`，结论无阻塞；形式化候选记录和独立协调上下文通过校验。该结构校验不表示宿主 Hook 已自动强制执行。
+- COM/CN `1.0.327` 均从冻结 Git blob 打包并通过完整归档、四件套暂存与签名验证；使用现有 `ss-erp-extension-release-2026-09-05-01`，未轮换密钥。COM evidence/signature SHA-256 为 `69afa640263e6f4361b442f5d3e157235fe17879e1748e055148ba3b099020de` / `c83bfe718b809bc2f550496b51c6fe3c0fdda806e1a28994a441cdd37b12d453`；CN 为 `1145d7cd213f106e0a868a671d8fe373e37c6f005cc6b1424e7e59996a3ce35e` / `a39fa8257fca722635f9193a20812c3a4cfc2fdae3fb9dce2d01c08ae0d8e76d`。
+
+## MAINT-03 执行记录
+
+- 新鲜环境核对：COM env 的存储兜底为 `ozon-cdn`，使用现有 `cloud-bootstrap` 校验；CN 为 OSS，使用 `cloud-r2` 校验。两地原配置均保留，未把后台 OSS 配置与 env 兜底混为一体；现有环境 warning 保留。
+- 工具副本由精确 Git blob 导出，上传摘要核对通过。Windows tar 解包后的 group/world 写位已在独立 root 工具目录收紧，再通过原可信 keyring 检查；没有修改当前服务目录。
+- COM 已完成目标提交备份及 144 张 public 表的临时恢复，恢复库已删除并只读确认。原生认证摘要 `eb666d929a9c3ab6759d00be2e59dc1a530f72743e60a20f8c1c21b0d4e9eda8`；维护绑定实际调用原 `verify-deploy-backup.sh`，保留 120 分钟期限。
+- VPS 的 Node `22.22.1` 构建缺少 TypeScript 运行支持：默认加载返回 `ERR_UNKNOWN_FILE_EXTENSION`，显式 strip-types 返回 `ERR_NO_TYPESCRIPT`。已用当前部署内锁定安装的 `tsx` loader 实际加载同一 shared 合同成功；仅维护工具进程使用该 loader，生产服务配置不变。首次绑定失败日志保留，后续原生绑定成功且未重做已通过的备份恢复。
+- COM 部署前维护 GET 基线已通过；短时超级管理员会话已撤销。本阶段下一步为既有 `deploy.sh`、完整 VPS 回执及部署后维护 GET 验收。
+- 阶段文档的 `controlled` execute gate 明确要求独立动作门禁，不能把阶段范围当作部署授权。此次沿用会话中已明确批准的维护目标及副作用，单独验证实际 COM 目标、恢复和健康/停止控制的 effect 记录，并通过维护范围的 release-readiness 校验；没有把阶段文本或结构校验当作新用户授权。

@@ -307,6 +307,8 @@ domain-separated payload；因此这是单一密码学信任域中的三类证�
 5. 对新部署执行完整 `verify-vps-deploy.sh`，设置 `VERIFY_EVIDENCE_OUTPUT` / `VERIFY_EVIDENCE_REGION` 取得真实 VPS 回执；再执行 `pnpm maintenance:verify`。它要求新运行 commit、签名/VPS 时间、原官网 commit/version/approval/cloud-local 摘要、同一超级管理员和暗态前后一致，并检查两个 source 路由。明确的 `ACTIVE_RELEASE_NOT_FOUND` 只记为 `SOURCE_UNAVAILABLE`，通用 404、匿名可读或非法模板摘要均失败。
 6. COM 维护验收通过后再进行 CN；维护前后可能需要重新签发同一账号的短时会话，并分别撤销。停止/重启服务、备份/临时恢复及 migration 检查属于部署副作用，不能用探针的零业务写入声明代替。任一错误按原发布目录回滚，不自动回滚数据库、不删除历史证据。
 
+部分 Linux Node 22 构建未包含 TypeScript stripping，直接运行上述 CLI 会报 `ERR_UNKNOWN_FILE_EXTENSION`，显式启用 stripping 仍可能报 `ERR_NO_TYPESCRIPT`。此时在维护工具进程上使用当前部署已锁定安装的 loader：`node --import /opt/ss-erp/current/apps/server/node_modules/tsx/dist/loader.mjs scripts/dark-maintenance-deployment.mjs --backup-binding`。完整 VPS 验证生成共享 TypeScript 合同回执时，可为该次命令设置 `NODE_OPTIONS=--import=/opt/ss-erp/current/apps/server/node_modules/tsx/dist/loader.mjs`。先实际验证 loader 能加载目标合同；该参数属于操作进程，不写入应用 env 或 systemd 服务配置。
+
 维护基线与验收的环境输入：
 
 | 变量 | 内容 |
