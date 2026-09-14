@@ -386,6 +386,14 @@
 - 使用同一源图和原 mask 生成明确标注为 synthetic 的硬边目标色块与选区内 16 像素渐变参考。两者中心 96×96 区域均精确达到 `#D9E5EB`、遮罩外变化均为零；硬边参考边界差异 57.17，内部渐变边界差异为零。第四次真实图中心 RGB RMSE 40.63、目标像素不匹配 9,216、遮罩外变化 8,491。该参考只用于验收解释，不是 Provider 输出、提示词修复或能力证据；记录 SHA-256 `c8b3f90da20cbacad656c156a215171e8da1ddb16be60b1e5b8b0fb8f2a5a445`。
 - 当前不修改生产 prompt、Provider 参数或 normal hosted 路径。新增真实生成必须先取得新的整轮预算和逐次批准；在此之前只做源码/合同诊断、质量阈值定义和账单只读核对。
 
+### 接续门禁失败与源码核验提速（2026-09-14）
+
+- **接续时发现的真实终态。** 原终端已将分支推送到 `5bcbabffbb64394aa84151f21fa03ec35c927c86`，但随后完整 QA-04 offline rehearsal 于 14:18 以 exit 1 结束：`ai-image-wanx-trial-execution.test.ts` 的双操作持久占位测试超过 60 秒，其余后端为 `5807 passed / 258 skipped`。原日志 SHA-256 为 `1e131aeefd9805c6766ff40a1c67ef2b8caee88de87dbdb50437b45b2b8fff69`；该运行不能记录为完整门禁通过，剩余数据库与扩展步骤也没有执行。
+- **根因与 owner。** `ai-image-sandbox-code-revision.ts` 对每个依赖分别启动 `ls-files`、`rev-parse`、`hash-object`。实际试点的 35 个路径条目（34 个唯一文件）一次核验启动 108 个 Git 子进程，测得 3.71 秒；发送前的多次实时复核累积开销。原失败用例单独重跑也需 54.269 秒，接近 60 秒上限。沿用该唯一 owner，将一次核验中的路径去重并批量查询；所有调用时点、逐文件 Git 过滤/摘要、完整 tracked 状态、首尾 HEAD 与子进程环境隔离继续执行，不缓存跨核验结果，不调整超时或并发配置。
+- **D1 / T2 证据。** 新的真实 Git 临时仓库用例先以 `114 > 6` 稳定 RED，其余 9 项安全基线通过；实现后 10 项全部 GREEN，双操作原用例降为 7.169 秒。覆盖 CRLF 与二进制过滤、`assume-unchanged` / `skip-worktree` 隐藏修改、未跟踪文件/目录路径、依赖外 staged 修改、核验期间 HEAD 漂移及不完整对象输出。全部 fixture 使用合成内容与当前测试创建的临时仓库。
+- **消费者回归。** 审批、准备/导入/编译、计费观察/结算、只读预检和真实 single-submit owner 的 11 文件组合为 `442 passed / 5 skipped`；5 项为既有 Windows 不适用的 POSIX/Linux 路径。server 与 sandbox 类型检查、受改源码/测试 ESLint 和 diff 检查通过。定向日志 SHA-256 为 `8dc44ebe699ee488789e8cb96aee921ac5fa7b269550eadf8024cb5f3d5bed0c`。独立并行审查受工具限流影响未产出结论，不记录为独立审查通过。
+- **剩余门禁。** 完整 QA-04 offline rehearsal 必须在本次修复的新 clean commit 上重新执行；本节定向通过不替代完整回执。未修改发布类别、账单最终性、Provider 预算/审批、生产开关或部署规则；没有新增真实 Provider/Ozon 请求、费用或生产变更。原全暗态维护部署提案仍需按既有真源裁决发布范围，不能把 offline rehearsal 伪装成正式 QA-04。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |

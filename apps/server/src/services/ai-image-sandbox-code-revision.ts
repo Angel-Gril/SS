@@ -73,44 +73,49 @@ async function assertGitPathsTracked(
   revision: string,
   requiredTrackedPaths: string[],
 ) {
-  for (const path of requiredTrackedPaths) {
+  const paths = [...new Set(requiredTrackedPaths)];
+  for (const path of paths) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/u.test(path) || path.includes('..')) {
       throw Object.assign(new Error('The sandbox tracked-path requirement is invalid'), {
         code: 'SANDBOX_ADAPTER_TRACKED_PATH_INVALID',
       });
     }
-    let tracked = '';
-    try {
-      tracked = (await runGit(['ls-files', '--error-unmatch', '--', path])).trim();
-    } catch {
-      throw Object.assign(new Error('The sandbox executable is not tracked by the bound revision'), {
-        code: 'SANDBOX_ADAPTER_FILE_UNTRACKED',
-      });
-    }
-    if (!tracked.split(/\r?\n/gu).includes(path)) {
-      throw Object.assign(new Error('The sandbox executable is not tracked by the bound revision'), {
-        code: 'SANDBOX_ADAPTER_FILE_UNTRACKED',
-      });
-    }
-    const committedObject = (await runGit([
-      'rev-parse',
-      `${revision}:${path}`,
-    ])).trim().toLowerCase();
-    const worktreeObject = (await runGit([
-      'hash-object',
-      `--path=${path}`,
-      '--',
-      path,
-    ])).trim().toLowerCase();
-    if (
+  }
+  if (!paths.length) return;
+
+  let tracked: Set<string>;
+  try {
+    tracked = new Set((await runGit(['ls-files', '--error-unmatch', '--', ...paths]))
+      .trim().split(/\r?\n/u));
+  } catch {
+    throw Object.assign(new Error('The sandbox executable is not tracked by the bound revision'), {
+      code: 'SANDBOX_ADAPTER_FILE_UNTRACKED',
+    });
+  }
+  if (paths.some(path => !tracked.has(path))) {
+    throw Object.assign(new Error('The sandbox executable is not tracked by the bound revision'), {
+      code: 'SANDBOX_ADAPTER_FILE_UNTRACKED',
+    });
+  }
+
+  const committedObjects = (await runGit(['rev-parse', ...paths.map(path => `${revision}:${path}`)]))
+    .trim().toLowerCase().split(/\r?\n/u);
+  // File operands retain each path's Git filters, including CRLF normalization.
+  // Batch within this verification only; later dispatch checks must reread the files.
+  const worktreeObjects = (await runGit(['hash-object', '--', ...paths]))
+    .trim().toLowerCase().split(/\r?\n/u);
+  if (
+    committedObjects.length !== paths.length
+    || worktreeObjects.length !== paths.length
+    || committedObjects.some((committedObject, index) => (
       !AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(committedObject)
-      || !AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(worktreeObject)
-      || committedObject !== worktreeObject
-    ) {
-      throw Object.assign(new Error('The sandbox executable differs from the bound revision'), {
-        code: 'SANDBOX_ADAPTER_FILE_DIRTY',
-      });
-    }
+      || !AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(worktreeObjects[index]!)
+      || committedObject !== worktreeObjects[index]
+    ))
+  ) {
+    throw Object.assign(new Error('The sandbox executable differs from the bound revision'), {
+      code: 'SANDBOX_ADAPTER_FILE_DIRTY',
+    });
   }
 }
 
