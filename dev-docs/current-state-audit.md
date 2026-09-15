@@ -412,6 +412,16 @@
 - 使用已缓存 `node:22.19.0-bookworm-slim`，在禁用网络、只读源码的本地 Linux 容器运行 4 个原生场景；旧 owner 为 3 passed / 1 目标 RED，修复后 4/4 通过。日志 SHA-256 为 `f9ce08be48ead1f9f0016f21c26d5fc23f78ec9d465776e4592112e5ebaf3a48` / `26e40186b704c61d0df38ed9c44c7437744a53d4674773068951d3202392455a`。此为本地运行证据，不是生产 VPS 回执；临时容器和测试目录内的链接/输出均按测试生命周期清理。
 - 本次修改从已推送 `509278b7` 接续，线上仍为已验收的 `63b98b2c`；旧版生产工具继续使用实际发布路径的已验证调用方式。本轮没有重新部署、访问生产凭据、发送 Provider/Ozon 请求或新增费用；图片质量、最终账单及正式 QA 状态保持。
 
+### 生图与计费接续、HTTP 来源复验及重测授权（2026-09-15）
+
+- **当前结论。** 生图和计费尚未全部解决。四次 Wanx 隔离请求技术成功、质量全部拒绝；四条原生临时明细均使用一张、免费抵扣一张、当前应付零。原生任务归属、正式账单、正常 ERP 全链与正式 QA 仍未完成。`18ec006d` 是第四次实测所用历史冻结点，接续主线为已推送的 `fd4007f0`；线上仍为 `63b98b2c`。
+- **管理员 HTTP 来源已复验。** 使用既有超级管理员完成 7 个 GET，两个模板 source 均为 200；前后 `/ready` 同为 `63b98b2c`，工作流与 Web Media 关闭，临时 session 已撤销。原始响应、来源导入和编译均留在既有私有证据根。两模板 normalized SHA 与原冻结模板一致；在独立 clean 检出上的离线 import→compile 通过，网络被禁用。导入保留 `IMPORTED_NOT_AUTHENTICATED` / `REQUIRES_CAPTURE_REVIEW`，编译保留 `COMPILED_NOT_APPROVED` / `canSubmit:false`，不把捕获审查或离线编译当作正常 ERP 工作流验收。
+- **来源证据摘要。** 原始捕获索引 SHA-256 为 `5c18155ac9ffb80f08003d6372bdd2588adaa712704fe7f6616123581eb5ef29`，导入 manifest 为 `fbb26396c295daab12960a049232121f7fa8369c6b15368a22713d3f5c5967cd`，编译 input 为 `da49b6e28bc82176c7c6e0376c5108b3e8bf9388a6d67a60381ad37529a5b6ff`。原四笔 campaign 仍占位 CNY 1、剩余零，核验前后旧文件摘要不变。
+- **计费入口修复，D1 / T2。** `ai-image-provider-billing-finalize.ts` 改用 `import.meta.main`，修复经目录链接调用时 exit 0 却未运行的入口判断。先观察 5 项目标 RED，再确认新增 6 项 GREEN；两份 CLI 测试 37/37，包含 QueryBill、ListConsumeDetails、finalize 输入拒绝、非法/混合参数、导入无副作用及原件保留。计费观察、结算、来源导入/编译的 7 文件组合为 321 passed / 1 条既有条件 skipped；定向 ESLint、sandbox strict typecheck 与 diff 通过。该修复不改变账单 schema、结算或权限；新 clean 提交上的真实四条原生明细回放仍待补记。
+- **计费口径已核清。** 普通 ERP 的 `actualCostCents` 按冻结配置进入 `AiCostSettlement` 与预算敞口；该链不读取阿里原生账单，也不代表用户余额扣款。隔离试点独立保持 `actualCost:null`，原生观察器固定 `canFinalize:false`。原生明细没有 Wanx task ID，单凭时间窗、当前零应付或内部 `SETTLED` 均不能宣布正式结算；不得套用旧 Relay 的 15 分钟关联规则。最早在 2026-10-03 12:00（北京时间）后复查正式明细，日期到达也不证明最终性。
+- **新增预算已批准。** 用户明确批准重测提案中的新增最多 CNY 0.50，保留原 CNY 1，占位累计上限最多 CNY 1.50；每次最多 CNY 0.25，先一次 INPAINT，质量通过才允许一次 FULL_EDIT，失败或未知不重发。批准提案 SHA-256 为 `2d8e91e18e22e2fd1b6f9aa21f843a34c64250b9de350097efcaa32c6eccb1ad`。两个视觉输入、源图、mask、模型及参数已独立复核；原准备 input/manifest 摘要分别为 `6dd79a7a34f76eae12804e2de116767ee5dcce1330dfcb129855672f7a213b07` / `148437b302d6ff125b76daa74f307d20d5105c82166970e9a257a3cdd3ea6d1f`。这些准备材料不包含新预算机制，执行前须在同一物理根追加不可变授权、通过 T2/回归并冻结新代码，重新编译同一视觉输入后分别绑定一次性审批。
+- **范围与下一步。** 本次授权只覆盖上述至多两张隔离样本，不开启 AI/Media/BYOK/Ozon，不创建或应用 ERP 工作流，不修改官网。先完成预算 owner 与薄 CLI、离线真实账单回放和新冻结执行修订，再只读复核账户/价格/历史调用后执行 INPAINT 及质量复核。本节记录时没有新增 Provider 请求或费用；后续实际结果另行追加。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |

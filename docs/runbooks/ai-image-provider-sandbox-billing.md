@@ -389,6 +389,13 @@ change capability policy, authorize another paid request, or satisfy release gat
 
 ## Inspect Native Alibaba Bills Without Finalizing
 
+Keep the normal ERP cost ledger separate from native Provider billing. The hosted pipeline's
+`actualCostCents` is calculated from its frozen pricing configuration and recorded by
+`ai-cost-ledger.ts` in `AiCostSettlement` for ERP budget accounting. That path does not read an
+Alibaba bill or debit a user's balance. Its `SETTLED` state is not proof of an Alibaba cash debit
+or final bill. Isolated Wanx trials retain `actualCost:null`; only a separately supported,
+reviewed native association and finality contract could close their external billing evidence.
+
 Use `sandbox:ai-image:billing:inspect-alibaba` to inspect a previously captured native Alibaba
 `QueryBill` JSON response offline. This is a separate observation contract, not an extension of
 attestation v1-v5. It cannot settle a Wanx operation, write a billing claim or receipt, promote a

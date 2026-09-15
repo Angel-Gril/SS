@@ -204,11 +204,7 @@ async function runNativeBillingInspection(
   return assessment;
 }
 
-const isDirectRun = process.argv[1]
-  ? resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-  : false;
-
-if (isDirectRun) {
+if (import.meta.main) {
   const args = process.argv.slice(2);
   const run = args.length === 0 ? runAiImageProviderBillingFinalize
     : args.length === 1 && args[0] === '--inspect-alibaba' ? runAiImageProviderBillingInspect

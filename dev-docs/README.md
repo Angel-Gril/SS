@@ -31,6 +31,7 @@
 
 ## 当前状态
 
+- 生图/计费接续（2026-09-15）：真实管理员 HTTP 模板来源已重新捕获并完成离线导入/编译，计费 CLI 链接入口修复及 321 项受影响回归通过。四张质量、原生任务归属和正式账单仍未通过；用户已批准新增最多 CNY 0.50，按 INPAINT 先行、质量通过才 FULL_EDIT 的顺序实施。当前授权、实现/执行边界及证据只维护在[接续记录](current-state-audit.md#生图与计费接续http-来源复验及重测授权2026-09-15)。
 - 当前运行检查点为 `63b98b2c`：COM/CN 全暗态维护部署、完整 VPS 与管理员模板 source 只读验收已通过；官网扩展保持 `1.0.316` / `1.0.311`，受管扩展未升级。源码的完整 offline gate 通过，正式 QA、图片质量、账单最终性和正常 ERP 业务链仍待关闭。结果与下一步见[当前状态审计](current-state-audit.md)，维护证据只维护在[维护阶段](stages/dark-maintenance-deployment-2026-09.md)。
 - 最新本地修复（2026-09-15）：VPS 回执导出器已修复符号链接入口静默成功的问题，Windows native/tsx 与 Linux 最低 Node 版本的真实子进程验证通过；尚未重新部署。T2 证据和具体范围见[回执入口修复](current-state-audit.md#vps-回执链接入口修复2026-09-15)。
 - 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。

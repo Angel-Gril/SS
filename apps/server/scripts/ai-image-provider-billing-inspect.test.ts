@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,6 +23,7 @@ const sourceRoot = resolve(serverRoot, '../..');
 const entry = 'apps/server/scripts/ai-image-provider-billing-finalize.ts';
 let temporaryRoot = '';
 let repositoryRoot = '';
+let linkedRepositoryRoot = '';
 let evidenceRoot = '';
 let revision = '';
 let sequence = 0;
@@ -61,6 +62,9 @@ beforeAll(async () => {
   await git(['add', '--', 'package.json', ...copied]);
   await git(['-c', 'user.name=Billing Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'test: bind synthetic CLI source']);
   revision = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const linkedRoot = join(temporaryRoot, 'linked-checkout');
+  await symlink(repositoryRoot, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  linkedRepositoryRoot = linkedRoot;
 }, 20_000);
 
 afterAll(async () => {
@@ -68,10 +72,16 @@ afterAll(async () => {
   const target = resolve(temporaryRoot);
   assert.equal(dirname(target).toLowerCase(), resolve(tmpdir()).toLowerCase());
   assert(basename(target).startsWith('ai-native-billing-cli-'));
+  if (linkedRepositoryRoot) {
+    assert.equal(dirname(resolve(linkedRepositoryRoot)), target);
+    assert.equal((await lstat(linkedRepositoryRoot)).isSymbolicLink(), true);
+    await unlink(linkedRepositoryRoot);
+  }
   await rm(target, { recursive: true, force: true });
 });
 
-async function inspect(observation: unknown, environment: NodeJS.ProcessEnv = {}, timeout = 15_000, argument: string | string[] = '--inspect-alibaba') {
+async function inspect(observation: unknown, environment: NodeJS.ProcessEnv = {}, timeout = 15_000,
+  argument: string | string[] = '--inspect-alibaba', invocationRoot = repositoryRoot) {
   const path = join(evidenceRoot, `observation-${++sequence}.json`);
   const bytes = Buffer.from(`${JSON.stringify(observation, null, 2)}\n`);
   await writeFile(path, bytes, { mode: 0o600 });
@@ -82,7 +92,7 @@ async function inspect(observation: unknown, environment: NodeJS.ProcessEnv = {}
   try {
     ({ stdout, stderr } = await execFileAsync(process.execPath, [
       '--import', pathToFileURL(join(serverRoot, 'node_modules/tsx/dist/loader.mjs')).href,
-      join(repositoryRoot, entry), ...(typeof argument === 'string' ? [argument] : argument),
+      join(invocationRoot, entry), ...(typeof argument === 'string' ? [argument] : argument),
     ], {
       cwd: repositoryRoot, windowsHide: true, timeout,
       env: {
@@ -106,6 +116,56 @@ async function inspect(observation: unknown, environment: NodeJS.ProcessEnv = {}
 }
 
 describe('offline native Alibaba billing inspection CLI', () => {
+  it.each([
+    ['QueryBill', '--inspect-alibaba', alibabaObservation, alibabaQueryAccountId, 'ALIBABA_NATIVE_BILLING_ASSESSMENT_V1'],
+    ['console details', '--inspect-alibaba-console', alibabaConsoleObservation, alibabaConsoleAccountId, 'ALIBABA_CONSOLE_BILLING_ASSESSMENT_V1'],
+  ] as const)('executes %s through a linked checkout without changing evidence', async (_name, argument, observation, accountId, kind) => {
+    const result = await inspect(observation(), {
+      AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256: billingDigest(accountId),
+    }, 15_000, argument, linkedRepositoryRoot);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain(kind);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      kind, state: 'RECONCILIATION_REQUIRED', actualCost: null, canFinalize: false,
+      inspectionAdapterRevision: revision,
+    });
+  });
+
+  it('validates finalize inputs through a linked checkout instead of silently succeeding', async () => {
+    const result = await inspect(alibabaObservation(), {}, 15_000, [], linkedRepositoryRoot);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('SANDBOX_BILLING_CONFIG_INVALID');
+    expect(result.stderr).toContain('AI image sandbox billing finalization failed.');
+  });
+
+  it.each([
+    ['unknown', ['--unknown']],
+    ['mixed', ['--inspect-alibaba', '--inspect-alibaba-console']],
+  ])('rejects %s modes through a linked checkout', async (_name, args) => {
+    const result = await inspect(alibabaObservation(), {}, 15_000, args, linkedRepositoryRoot);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('SANDBOX_BILLING_CONFIG_INVALID');
+  });
+
+  it('imports the billing module through a linked checkout without running any command', async () => {
+    const before = (await readdir(evidenceRoot)).sort();
+    const moduleUrl = pathToFileURL(join(linkedRepositoryRoot, entry)).href;
+    const expression = `const module = await import(${JSON.stringify(moduleUrl)}); if (typeof module.runAiImageProviderBillingFinalize !== 'function') process.exitCode = 2;`;
+    const result = await execFileAsync(process.execPath, [
+      '--import', pathToFileURL(join(serverRoot, 'node_modules/tsx/dist/loader.mjs')).href,
+      '--input-type=module', '-e', expression,
+    ], {
+      cwd: repositoryRoot, windowsHide: true, timeout: 15_000,
+      env: { ...sanitizeAiImageSandboxGitEnvironment(), NODE_ENV: 'sandbox', DOTENV_CONFIG_PATH: 'NUL' },
+    });
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+    expect((await readdir(evidenceRoot)).sort()).toEqual(before);
+  });
+
   it('reads original Count/Data console evidence as free-quota observation without writing a settlement', async () => {
     const result = await inspect(alibabaConsoleObservation(), {
       AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256: billingDigest(alibabaConsoleAccountId),
