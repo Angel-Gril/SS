@@ -165,6 +165,16 @@ function draftEnvironment(value: Awaited<ReturnType<typeof fixture>>, operation 
 }
 
 describe('Wanx trial v4 non-approval draft', () => {
+  it('rejects an unbound reassignment pin instead of silently writing a draft', async () => {
+    const value = await fixture();
+    const result = await command('--draft-wanx-trial-approval', {
+      ...draftEnvironment(value, 'INPAINT'), AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256: 'e'.repeat(64),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(await readdir(value.directory)).not.toContain('approval-drafts');
+  }, 60_000);
+
   it.each([
     'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
     'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',

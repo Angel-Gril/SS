@@ -27,6 +27,7 @@ export const AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-wanx-trial-execution.ts',
   'apps/server/src/services/ai-image-wanx-trial-campaign.ts',
   'apps/server/src/services/ai-image-wanx-campaign-authorization.ts',
+  'apps/server/src/services/ai-image-wanx-campaign-reassignment.ts',
   'apps/server/src/services/ai-image-wanx-trial-preparation.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'apps/server/src/services/ai-image-sandbox-money.ts',
@@ -76,6 +77,7 @@ export async function loadAiImageWanxTrialExecution(input: {
   expected: AiImageWanxTrialExpected;
   operation: string;
   campaignAuthorizationSha256?: string;
+  campaignReassignmentSha256?: string;
   inpaintQualityApproval?: WanxCampaignArtifact;
   assertRevision: () => Promise<void>;
 }) {
@@ -111,14 +113,16 @@ export async function loadAiImageWanxTrialExecution(input: {
       repositoryRoot: input.repositoryRoot, evidenceRoot: root.path,
       providerAccountUidSha256: input.expected.providerAccountUidSha256, evidenceRootSha256: root.sha256,
       roundId: input.expected.roundId, manifestSha256: input.manifestSha256, operation: selected.operation,
-      campaignAuthorizationSha256: input.campaignAuthorizationSha256, inpaintQualityApproval: input.inpaintQualityApproval,
+      campaignAuthorizationSha256: input.campaignAuthorizationSha256, campaignReassignmentSha256: input.campaignReassignmentSha256,
+      inpaintQualityApproval: input.inpaintQualityApproval,
     });
   };
   await assertCurrent();
   return {
     repositoryRoot: input.repositoryRoot, evidenceRoot: root.path, directory,
     manifest: verified.manifest, selected, binding, trialBinding, assertCurrent, assertSourceCurrent,
-    campaignAuthorizationSha256: input.campaignAuthorizationSha256, inpaintQualityApproval: input.inpaintQualityApproval,
+    campaignAuthorizationSha256: input.campaignAuthorizationSha256, campaignReassignmentSha256: input.campaignReassignmentSha256,
+    inpaintQualityApproval: input.inpaintQualityApproval,
     sourcePath: resolve(directory, selected.source.path),
     maskPath: selected.mask ? resolve(directory, selected.mask.path) : null,
   };
@@ -182,7 +186,8 @@ export async function claimAiImageWanxTrialOperation(input: {
     operationId: execution.selected.operationId, approvalId: approval.approvalId,
     approvalSha256: approval.approvalSha256, roundSha256, claimSha256,
     approvalApprovedAt: approval.approvedAt,
-    campaignAuthorizationSha256: execution.campaignAuthorizationSha256, inpaintQualityApproval: execution.inpaintQualityApproval,
+    campaignAuthorizationSha256: execution.campaignAuthorizationSha256, campaignReassignmentSha256: execution.campaignReassignmentSha256,
+    inpaintQualityApproval: execution.inpaintQualityApproval,
     now: input.now, assertCurrent: execution.assertSourceCurrent,
   }, async () => {
     // Persist the original records unchanged, after the cumulative reservation

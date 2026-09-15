@@ -18,6 +18,7 @@
     "scripts/ai-image-wanx-trial-approval-draft.test.ts",
     "scripts/ai-image-wanx-trial-execution.test.ts",
     "scripts/ai-image-wanx-campaign-execution.test.ts",
+    "scripts/ai-image-wanx-campaign-reassignment.test.ts",
     "scripts/ai-image-provider-single-submit.ts",
     "scripts/ai-image-provider-single-submit.test.ts",
     "scripts/ai-image-provider-billing-finalize.ts",

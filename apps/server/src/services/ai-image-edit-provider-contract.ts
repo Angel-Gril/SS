@@ -5,6 +5,7 @@ import { isOpenAiCompatibleImageEditSizeSupported } from './ai-image-providers.j
 import { checksumAiPromptRevision, renderAiPromptRevision } from './ai-prompt-templates.js';
 import {
   AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+  AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE,
   type AiPromptRenderingProfile,
 } from './ai-image-edit-prompt-contract.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE, normalizeAiImageWanx21EditApiBase } from './ai-image-wanx-edit-profile.js';
@@ -72,7 +73,8 @@ export function assertWanxTrialEditPrompt(input: WanxEditPromptInput): void {
   const profile = rendering && typeof rendering === 'object' && !Array.isArray(rendering)
     ? (rendering as Record<string, unknown>).profile : undefined;
   if (!isWanxHostedEdit(input.provider, input.model)
-    || (profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE)) {
+    || (profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE
+      && profile !== AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE)) {
     throw new AiImageJobError('FROZEN_PROMPT_MISMATCH', 'Wanx trial requires an explicitly supported frozen prompt profile');
   }
   // A recognized label only selects the renderer; the complete snapshot and text

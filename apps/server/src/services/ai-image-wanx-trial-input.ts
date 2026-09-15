@@ -5,6 +5,7 @@ import { parseAiPromptPublishedSource } from './ai-prompt-template-source.js';
 import { createAiPromptTemplateSnapshot, renderAiPromptRevision } from './ai-prompt-templates.js';
 import {
   AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+  AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE,
 } from './ai-image-edit-prompt-contract.js';
 import {
   aiImageWanxTrialInputSchema, parseAiImageWanxTrialRequest, buildAiImageWanxTrialPreparation,
@@ -26,6 +27,7 @@ const draftSchema = aiImageWanxTrialInputSchema.extend({
     templateSource: baseOperation.shape.source,
     renderingProfile: z.enum([
       AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE, AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE,
+      AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE,
     ]).optional(),
   })).length(2),
 });

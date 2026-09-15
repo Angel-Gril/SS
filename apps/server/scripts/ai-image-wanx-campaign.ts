@@ -6,12 +6,13 @@ import {
 } from '../src/services/ai-image-sandbox-code-revision.js';
 import {
   authorizeAiImageWanxTrialCampaign,
+  authorizeAiImageWanxTrialReassignment,
   inspectAiImageWanxTrialCampaignHistory,
 } from '../src/services/ai-image-wanx-trial-campaign.js';
 import { AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS } from '../src/services/ai-image-wanx-trial-execution.js';
 import { AI_IMAGE_WANX_TRIAL_PREPARATION_TRACKED_PATHS } from './ai-image-wanx-trial-prepare.js';
 
-type CampaignMode = 'inspect' | 'authorize';
+type CampaignMode = 'inspect' | 'authorize' | 'reassign';
 const COMMON_NAMES = [
   'AI_IMAGE_SANDBOX_ADAPTER_REVISION', 'AI_IMAGE_SANDBOX_EVIDENCE_ROOT',
   'AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256',
@@ -52,8 +53,9 @@ export async function runAiImageWanxCampaignCommand(mode: CampaignMode, options:
   repositoryRoot?: string;
 } = {}) {
   const environment = options.environment || process.env;
-  if (environment.NODE_ENV !== 'sandbox' || !['inspect', 'authorize'].includes(mode)) invalid();
-  const allowed = new Set([...COMMON_NAMES, ...(mode === 'authorize' ? AUTHORIZATION_NAMES : [])]);
+  if (environment.NODE_ENV !== 'sandbox' || !['inspect', 'authorize', 'reassign'].includes(mode)) invalid();
+  const allowed = new Set([...COMMON_NAMES, ...(mode !== 'inspect' ? AUTHORIZATION_NAMES : []),
+    ...(mode === 'reassign' ? ['AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256'] : [])]);
   for (const [name, value] of Object.entries(environment)) {
     if (!String(value || '').trim()) continue;
     const normalized = name.toUpperCase();
@@ -80,7 +82,7 @@ export async function runAiImageWanxCampaignCommand(mode: CampaignMode, options:
   };
   // Parse all mutating inputs before the first owner read. The owner validates their
   // schema, pinned bytes, current history and exact operation bindings under its lock.
-  const authorization = mode === 'authorize' ? {
+  const authorization = mode !== 'inspect' ? {
     expected: {
       adapterRevision, providerAccountUidSha256: scope.providerAccountUidSha256,
       roundId: required('AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', environment),
@@ -96,6 +98,8 @@ export async function runAiImageWanxCampaignCommand(mode: CampaignMode, options:
       sha256: sha256('AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256', environment),
     },
   } : null;
+  const originalAuthorizationSha256 = mode === 'reassign'
+    ? sha256('AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256', environment) : null;
   await assertRevision();
   const observation = await inspectAiImageWanxTrialCampaignHistory(scope);
   if (!authorization) {
@@ -103,6 +107,16 @@ export async function runAiImageWanxCampaignCommand(mode: CampaignMode, options:
     const result = { ...observation, inspectionAdapterRevision: adapterRevision };
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return result;
+  }
+  if (originalAuthorizationSha256) {
+    const result = await authorizeAiImageWanxTrialReassignment({
+      ...scope, ...authorization, originalAuthorizationSha256, history: observation.history, assertRevision,
+    });
+    await assertRevision();
+    const summary = { event: 'AI_IMAGE_WANX_CAMPAIGN_REASSIGNED', reassignmentSha256: result.reassignmentSha256,
+      replayed: result.replayed, canSubmit: result.canSubmit };
+    process.stdout.write(JSON.stringify(summary, null, 2) + '\n');
+    return summary;
   }
   const result = await authorizeAiImageWanxTrialCampaign({
     ...scope, ...authorization, history: observation.history, assertRevision,

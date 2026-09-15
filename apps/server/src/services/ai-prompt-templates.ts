@@ -6,6 +6,7 @@ import {
   AiImageEditPromptContractError,
   assertAiImageEditPromptProfile,
   finalizeAiImageEditPromptRendering,
+  assembleAiImageEditPromptSegments,
   resolveAiImageEditPromptRendering,
   type AiPromptRenderingProfile,
 } from './ai-image-edit-prompt-contract.js';
@@ -347,7 +348,12 @@ export function renderAiPromptRevision(
     rendering?.negativePromptTemplate ?? revision.negativePromptTemplate, schema.negativePrompt, variables,
   );
   const rendered = {
-    resolvedPrompt: `${rendering?.safetyPolicy ?? schema.safetyPolicy}\n\n${renderedPrompt}`,
+    resolvedPrompt: rendering ? assembleAiImageEditPromptSegments({
+      renderedPrompt,
+      ...(rendering.operatorDirectionTemplate ? {
+        operatorDirection: replaceTokens(rendering.operatorDirectionTemplate, schema.prompt, variables),
+      } : {}),
+    }, rendering) : `${schema.safetyPolicy}\n\n${renderedPrompt}`,
     resolvedNegativePrompt,
     outputMode: schema.outputMode,
   };

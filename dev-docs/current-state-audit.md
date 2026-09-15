@@ -448,6 +448,15 @@
 - **13:07 只读费用追踪。** 同一已审核 Key/账户仍为五条原生明细，每条使用一张、免费抵扣一张、当前应付 CNY 0；`ca86a41b` 上原生 CLI 离线评估通过，wrapper/评估 SHA-256 分别为 `9193ecddd900c41a444fc687ddec601438d4936e8bcf34317b90db559ecd8763` / `c6fdbe286410fe3ea4bdf1e277b7f9d306e867e7f7b55f8031c0ca7d188958e2`。指定 Key 当日用量仍未回显，采集 SHA-256 为 `31c8b0e0de003dd33c010622131792ea0911a70ad04e74129efa7a8fbb72096d`。保留原生 task 归属和最终性边界，不能据此结算。
 - **线上与代码核对。** COM/CN 的公开 `/ready` GET 均返回 ready、数据库/Redis 为 ok，部署提交均为 `63b98b2c`；此健康检查不替代完整 VPS 或正式发布验收。主/独立 Agent 核对 workflow、成本预留、执行/恢复、候选审核、接收及草稿应用 owner，确认主链已有实现；Wanx 能力仍为 `adapter-characterized`，完整真实业务验收仍待完成。未开启功能、改写生产配置、部署、生成新图片或执行 ERP/Ozon 写入。
 
+### 按序完善：方向前置候选与额度重指定（2026-09-15）
+
+- **当前阶段。** 用户要求按六类清单依次完善，先推进生图质量。本轮从 clean `8f88c974` 接续；没有新的真实生成或额度重指定批准，原五笔 CNY 1.25 占位、CNY 0.25 条件余额及质量拒绝保持。完成代码不等于质量通过，后续真实样本必须使用新的明确范围批准。
+- **方向前置实现，T2。** 新增仅限已审默认 INPAINT 的 `direction-first-preview-v3` / `direction-first-experimental-v3`。从独立模板结构化插值操作方向，再组装完整 v2 policy、原模板余项与 negative；没有在渲染后的用户数据上做搜索替换。六条 policy 和所有原句保留，custom/FULL_EDIT 拒绝新 profile，preview 仍不可执行，experimental 仅在 trial 完整快照重渲染后接受；普通 hosted 创建/执行/恢复仍为 v1。新 contractHash 绑定分段顺序及方向模板摘要。
+- **第一项验证。** 先通过原 40 项基线，再观察新 23 项中 17 项目标 RED、6 项基线通过；实现后新旧 63 项 GREEN，扩大至模板 registry/消费者/输入 CLI 的 8 文件 135 项通过。旧默认/v1/v2 文本和合同摘要保持，字面 `$`/模板标记/多行/Unicode、800/801 字边界及篡改拒绝均覆盖。使用第五次真实冻结输入做离线预览，方向开始位置由 350 移到 6，总字符仍为 564，各行及 policy 摘要完全保留；预览 SHA-256 为 `b7bad42372bb8a1ca89a5a44a7ffb385ea41ef07ae104beb65bd8fc02de39e6e`，新提示词摘要为 `1c69cc5c84a9f2d9824abcc36288dc01126b437c8dc261fb673d50f72381d012`。该未冻结预览固定 `canSubmit:false`，尚无效果证据。
+- **未消费额度重指定实现，T2。** 为拟议的单张比较新增受控 owner：只可在完整五笔/1.25 历史下，凭新明确批准撤销旧未消费 FULL_EDIT，并把该 0.25 指定给一个新 INPAINT，总上限保持 1.50。唯一记录位于旧 round 的 `execution/FULL_EDIT.reassigned.json`，原 scope/grant/五笔/报告不改；旧 14b reader 因未知目录条目拒绝，新第六笔为绑定原授权与重指定摘要的 v3 reservation。拒绝旧操作痕迹、未完成写入、旧批准摘要复用、重复执行和未绑定 pin；故障留锁、最终发包重读保持。该机制本轮仅在合成临时根验证，未写入真实账本。
+- **组合门禁与独立复核。** 重指定 owner 20 项目标 RED→GREEN，旧 human/consent 摘要复用另有 2 RED→GREEN；真实 14b reader 先读同一五笔成功，再因 marker 拒绝。旧源码快照摘要为 `5eb14a9c633ebb77721710f3d8fc25f9acce1c63f2a5945f747d66d63794260a`。CLI 的 6 项新负例先 RED 后 GREEN；新真实子进程串联 reassign、v4 draft/verify、合成网络 single-submit，正好一次 POST、总占位1.50、原件不变且无密钥泄漏。主 Agent 的 15 文件组合 `310 passed / 0 skipped`，sandbox strict typecheck、定向 ESLint、diff 及两条独立源码复核通过。完整冻结门禁和最终具体提案仍待物化，不据此声明可上线。
+- **用量延迟已关闭。** 14:07 的指定 Key/业务空间当日统计显示调用 1 次、成功 1 次、图片 1 张，模型为 `wanx2.1-imageedit`；Count/list 两份原始响应与请求范围均已复核，和第五次单次调用及其免费抵扣数量一致。采集摘要为 `ce58dbc1e0a25e14727ef776c446a773d99dadd99d371a125b49e1a55286b6ae`，对齐记录为 `8ca80a00ba399978f4d32164c5e2247c383cb4c7a81251bdc7afd9997eab2d0c`。原生 task→bill 归属和最终账单仍未关闭，`actualCost:null / canFinalize:false` 保持。
+
 <a id="剩余五项的执行入口"></a>
 
 ### 剩余工作的执行入口
@@ -455,7 +464,7 @@
 | 范围 | 当前分类与已有结果 | 还缺什么 / 下一步 |
 | --- | --- | --- |
 | 生图质量 | **待定位和修复**；五次技术成功但质量全部拒绝，五次冻结请求均已离线核对 | 解决灰色面板、类文字、目标色及商品保持问题，并取得真实质量证据。当前仅继续无费用诊断；CNY 1.25 占位保留，剩余条件 0.25 不可执行或重分配 |
-| 正式计费对账 | **保护机制和临时免费抵扣已核对，正式证据未齐**；Xiaoyi 已有[凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，审批币种差异保留 | 原生 task→bill 关联、最终账单、旧 Wanx 凭据历史对账及非零实扣分支尚未关闭；当日用量继续只读跟进。本轮正式明细最早 2026-10-03 12:00 后复查，日期本身不构成最终性 |
+| 正式计费对账 | **保护机制、临时免费抵扣和第五次当日用量已核对，正式证据未齐**；Xiaoyi 已有[凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，审批币种差异保留 | 原生 task→bill 关联、最终账单、旧 Wanx 凭据历史对账及非零实扣分支尚未关闭。本轮正式明细最早 2026-10-03 12:00 后复查，日期本身不构成最终性 |
 | 正常 ERP 生图全链 | **已有实现，缺真实验收**；`ai-media-workflows.ts`、执行/恢复及 `ai-media-listing-draft-application-mutations.ts` 有对应 owner/消费者，本地与 PostgreSQL 门禁已通过 | 在真实授权范围内完成创建工作流、确认额度、执行、候选审核/接收和绑定草稿；模板 source 200、隔离试点和模拟测试不能代替这条验收 |
 | Ozon 草稿与商品写入 | **草稿故障已修复并部署，工具已有，外部前置仍缺**；审核任务 500 与幂等锁修复、两种 rollout 的隔离 PostgreSQL 链已通过 | 按原隔离边界重验线上 ERP 审核草稿。DOTH 有 FBS 库存，专用测试隔离尚未成立；真实 import/archive 需先补齐该前置及对应事实/回执 |
 | 正式 QA、发布与官网 | **门禁已有，正式验收未关闭**；双区全暗态维护已验收，源码完整 offline 已通过 | QA-02 的质量、计费和真实业务链未齐，正式 QA-04、REL-04、官网切换及受管升级因此仍未完成。官网保留 COM `1.0.316` / CN `1.0.311`；既有发布授权保留，维护回执不能替代正式门禁 |

@@ -132,6 +132,27 @@ async function prepare(value: Awaited<ReturnType<typeof fixture>>, extra: NodeJS
 
 describe('offline Wanx trial preparation CLI', () => {
   describe('campaign budget commands', () => {
+    it('rejects a reassignment pin in preparation mode', async () => {
+      const value = await fixture();
+      const result = await prepare(value, { AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256: 'e'.repeat(64) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('WANX_TRIAL_CONFIG_INVALID');
+    });
+
+    it.each(['AI_IMAGE_SANDBOX_API_KEY', 'AI_IMAGE_SANDBOX_CONFIRM'])('rejects %s in reassignment mode', async name => {
+      const value = await fixture();
+      const before = (await readdir(value.evidenceRoot)).sort();
+      const result = await command('--reassign-wanx-campaign', value.evidenceRoot, value.request.roundId, {
+        [name]: 'synthetic-reassignment-secret-sentinel',
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('WANX_TRIAL_UNSAFE_ENV');
+      expect(result.stderr).not.toContain('synthetic-reassignment-secret-sentinel');
+      expect((await readdir(value.evidenceRoot)).sort()).toEqual(before);
+    });
+
     it.each([
       ['--assume-unchanged', '--no-assume-unchanged', 'apps/server/src/services/ai-image-sandbox-media.ts'],
       ['--skip-worktree', '--no-skip-worktree', 'packages/shared/src/ai-image-workbench-contract.ts'],

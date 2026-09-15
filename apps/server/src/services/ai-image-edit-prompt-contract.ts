@@ -9,9 +9,13 @@ export const AI_MEDIA_INPAINT_TEMPLATE_KEY = 'inpaint.base';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE = 'ai-image-wanx21-edit-prompt/v1';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE = 'ai-image-wanx21-edit-prompt/scoped-print-preview-v2';
 export const AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE = 'ai-image-wanx21-edit-prompt/scoped-print-experimental-v2';
+export const AI_IMAGE_WANX21_DIRECTION_FIRST_PREVIEW_PROFILE = 'ai-image-wanx21-edit-prompt/direction-first-preview-v3';
+export const AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE = 'ai-image-wanx21-edit-prompt/direction-first-experimental-v3';
 export type AiPromptRenderingProfile = typeof AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE
   | typeof AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE
-  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE;
+  | typeof AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE
+  | typeof AI_IMAGE_WANX21_DIRECTION_FIRST_PREVIEW_PROFILE
+  | typeof AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE;
 
 // One policy owner, with clause-aligned renderings. The legacy text is byte-stable.
 const EDIT_POLICY_CLAUSES = [
@@ -82,11 +86,14 @@ const WANX_FULL_EDIT_TEMPLATE = [
   '{{user_prompt}}',
   '仅返回一张未应用的待审核候选图。',
 ].join('\n');
+const WANX_INPAINT_INSTRUCTIONS = '仅编辑服务端验证遮罩中的白色选区；保留商品，逐像素保留选区外的一切，在边界匹配周围光照、透视、纹理和阴影并无缝过渡。';
+const WANX_INPAINT_REVIEW_INSTRUCTIONS = '仅返回一张未应用的待审核候选图。';
+const WANX_OPERATOR_DIRECTION_TEMPLATE = ['操作要求：', '{{user_prompt}}'].join('\n');
 const WANX_INPAINT_TEMPLATE = [
-  '仅编辑服务端验证遮罩中的白色选区；保留商品，逐像素保留选区外的一切，在边界匹配周围光照、透视、纹理和阴影并无缝过渡。',
+  WANX_INPAINT_INSTRUCTIONS,
   '操作要求：',
   '{{user_prompt}}',
-  '仅返回一张未应用的待审核候选图。',
+  WANX_INPAINT_REVIEW_INSTRUCTIONS,
 ].join('\n');
 const WANX_CONSTRAINTS_TEMPLATE = [
   '避免水印、难以辨认的文字、虚构声明、无关物体及商品畸变。',
@@ -104,6 +111,13 @@ export class AiImageEditPromptContractError extends Error {
 
 export function assertAiImageEditPromptProfile(templateKey: string, profile: unknown): void {
   if (profile === undefined) return;
+  if (isDirectionFirstProfile(profile)) {
+    if (templateKey !== AI_MEDIA_INPAINT_TEMPLATE_KEY) {
+      throw new AiImageEditPromptContractError('UNSUPPORTED_PROMPT_RENDER_PROFILE',
+        'Direction-first rendering is scoped to the reviewed INPAINT template');
+    }
+    return;
+  }
   if ((profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE
     && profile !== AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE)
     || (templateKey !== AI_MEDIA_FULL_EDIT_TEMPLATE_KEY && templateKey !== AI_MEDIA_INPAINT_TEMPLATE_KEY)) {
@@ -116,6 +130,11 @@ export function assertAiImageEditPromptProfile(templateKey: string, profile: unk
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 
+function isDirectionFirstProfile(profile: unknown) {
+  return profile === AI_IMAGE_WANX21_DIRECTION_FIRST_PREVIEW_PROFILE
+    || profile === AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE;
+}
+
 export function resolveAiImageEditPromptRendering(revision: {
   templateKey: string;
   promptTemplate: string;
@@ -127,12 +146,21 @@ export function resolveAiImageEditPromptRendering(revision: {
   const legacyDefault = fullEdit ? DEFAULT_FULL_IMAGE_EDIT_TEMPLATE : DEFAULT_INPAINT_TEMPLATE;
   const reviewedDefault = revision.promptTemplate === legacyDefault
     && revision.negativePromptTemplate === DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE;
-  const promptTemplate = reviewedDefault
+  const directionFirst = isDirectionFirstProfile(profile);
+  if (directionFirst && !reviewedDefault) {
+    throw new AiImageEditPromptContractError('UNSUPPORTED_PROMPT_TEMPLATE_FOR_PROFILE',
+      'Direction-first rendering requires the exact reviewed default template and constraints');
+  }
+  const promptTemplate = directionFirst
+    ? [WANX_INPAINT_INSTRUCTIONS, WANX_INPAINT_REVIEW_INSTRUCTIONS].join('\n')
+    : reviewedDefault
     ? (fullEdit ? WANX_FULL_EDIT_TEMPLATE : WANX_INPAINT_TEMPLATE)
     : revision.promptTemplate;
   const negativePromptTemplate = reviewedDefault ? WANX_CONSTRAINTS_TEMPLATE : revision.negativePromptTemplate;
-  const previewOnly = profile === AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE;
-  const isolatedExperiment = profile === AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE;
+  const previewOnly = profile === AI_IMAGE_WANX21_EDIT_PROMPT_PREVIEW_PROFILE
+    || profile === AI_IMAGE_WANX21_DIRECTION_FIRST_PREVIEW_PROFILE;
+  const isolatedExperiment = profile === AI_IMAGE_WANX21_EDIT_PROMPT_EXPERIMENTAL_PROFILE
+    || profile === AI_IMAGE_WANX21_DIRECTION_FIRST_EXPERIMENTAL_PROFILE;
   const safetyPolicy = previewOnly || isolatedExperiment ? WANX_SCOPED_PRINT_POLICY : WANX_EDIT_SAFETY_POLICY;
   const specification = {
     profile,
@@ -150,6 +178,10 @@ export function resolveAiImageEditPromptRendering(revision: {
     characterCounting: 'unicode-code-points' as const,
     negativePromptMode: 'inline' as const,
     negativePromptSeparator: NEGATIVE_PROMPT_SEPARATOR,
+    ...(directionFirst ? {
+      segmentOrder: ['operator-direction', 'safety-policy', 'template-instructions', 'negative-constraints'] as const,
+      operatorDirectionTemplateSha256: digest(WANX_OPERATOR_DIRECTION_TEMPLATE),
+    } : {}),
     ...(previewOnly ? { executionScope: 'OFFLINE_PREVIEW_ONLY' as const } : {}),
     ...(isolatedExperiment ? { executionScope: 'ISOLATED_WANX_TRIAL' as const } : {}),
   };
@@ -157,11 +189,26 @@ export function resolveAiImageEditPromptRendering(revision: {
     promptTemplate,
     negativePromptTemplate,
     safetyPolicy,
+    ...(directionFirst ? { operatorDirectionTemplate: WANX_OPERATOR_DIRECTION_TEMPLATE } : {}),
     contract: { ...specification, contractHash: digest(JSON.stringify(specification)) },
   };
 }
 
 export type AiImageEditPromptRendering = NonNullable<ReturnType<typeof resolveAiImageEditPromptRendering>>;
+
+/** Assemble known template segments; operator data is never searched or rewritten. */
+export function assembleAiImageEditPromptSegments(input: {
+  renderedPrompt: string;
+  operatorDirection?: string;
+}, rendering: AiImageEditPromptRendering) {
+  if (rendering.operatorDirectionTemplate) {
+    if (typeof input.operatorDirection !== 'string') {
+      throw new AiImageEditPromptContractError('INVALID_PROMPT_PROFILE_INPUT', 'A complete direction segment is required');
+    }
+    return input.operatorDirection + '\n\n' + rendering.safetyPolicy + '\n' + input.renderedPrompt;
+  }
+  return rendering.safetyPolicy + '\n\n' + input.renderedPrompt;
+}
 
 export function finalizeAiImageEditPromptRendering(rendered: {
   resolvedPrompt: string;

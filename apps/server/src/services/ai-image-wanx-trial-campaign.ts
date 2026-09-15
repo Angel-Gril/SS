@@ -21,6 +21,10 @@ import {
   wanxInpaintQualitySchema, validateWanxCampaignConsentTime, validateWanxCampaignProposal,
   type WanxCampaignArtifact, type WanxCampaignHistory,
 } from './ai-image-wanx-campaign-authorization.js';
+import {
+  WANX_REASSIGNMENT_FILE, wanxReassignmentConsentSchema, wanxReassignmentRecordSchema,
+  validateWanxReassignment, validateWanxReassignmentPriorReport, type WanxReassignmentConsent,
+} from './ai-image-wanx-campaign-reassignment.js';
 
 const DIRECTORY = 'wanx-campaign';
 const SCOPE_FILE = 'wanx-campaign.scope.json';
@@ -59,6 +63,9 @@ const originalReservationSchema = z.object({
 }).strict();
 const reservationSchema = z.union([originalReservationSchema, originalReservationSchema.extend({
   schemaVersion: z.literal(2), kind: z.literal('WANX_TRIAL_CAMPAIGN_RESERVATION_V2'), campaignAuthorizationSha256: sha,
+}).strict(), originalReservationSchema.extend({
+  schemaVersion: z.literal(3), kind: z.literal('WANX_TRIAL_CAMPAIGN_RESERVATION_V3'),
+  campaignAuthorizationSha256: sha, campaignReassignmentSha256: sha,
 }).strict()]);
 type Reservation = { record: z.infer<typeof reservationSchema> & { maximumCost: AiImageSandboxMoney }; sha256: string };
 
@@ -241,7 +248,7 @@ async function verifiedRound(scope: RootScope, roundId: string, manifestSha256: 
   return { manifest, roundRecord };
 }
 
-async function historicalClaims(scope: RootScope) {
+async function historicalClaims(scope: RootScope, reassignmentPath?: string) {
   const allocations = new Map<string, Allocation>();
   const directories: string[] = [];
   for (const name of await names(scope.path, MAX_ROOT_ENTRIES)) {
@@ -264,7 +271,8 @@ async function historicalClaims(scope: RootScope) {
     if (!await exists(execution)) continue;
     await directoryIdentity(execution, 'wanx-campaign-private-directory/v1');
     const entries = await names(execution, 3);
-    if (!entries.includes('round.json') || entries.some(name => !['round.json', 'FULL_EDIT.claim.json', 'INPAINT.claim.json'].includes(name))) invalid();
+    if (!entries.includes('round.json') || entries.some(name => !['round.json', 'FULL_EDIT.claim.json', 'INPAINT.claim.json'].includes(name)
+      && !(name === WANX_REASSIGNMENT_FILE && reassignmentPath === resolve(execution, name)))) invalid();
     const storedRound = await readRecord(scope, resolve(execution, 'round.json'), MAX_RECORD_BYTES);
     if (storedRound.record.evidenceRootSha256 !== scope.evidenceRootSha256) invalid('WANX_TRIAL_CAMPAIGN_SCOPE_MISMATCH');
     const manifestSha256 = sha.parse(storedRound.record.manifestSha256);
@@ -357,7 +365,7 @@ async function artifact(scope: RootScope, input: WanxCampaignArtifact) {
   return { ...stored, ref: { path: relative(scope.path, path).split(sep).join('/'), sha256: stored.sha256 } };
 }
 
-async function readAuthorization(scope: RootScope, scopeSha256: string | null, entries: Reservation[], historical: Map<string, Allocation>) {
+async function readAuthorization(scope: RootScope, scopeSha256: string | null, entries: Reservation[], historical: Map<string, Allocation>, hasReassignment = false) {
   const path = resolve(scope.path, WANX_ADDITIONAL_AUTHORIZATION_FILE);
   if (!await exists(path)) {
     if (entries.some(entry => entry.record.schemaVersion !== 1)) invalid('WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED');
@@ -382,7 +390,9 @@ async function readAuthorization(scope: RootScope, scopeSha256: string | null, e
   validateWanxCampaignProposal(proposal.record, original.manifest, candidate.manifest, consent.execution.manifestSha256, consent);
   const previousApprovals = new Set<string>();
   for (const entry of prefix) { previousApprovals.add(entry.record.approvalId); previousApprovals.add(entry.record.approvalSha256); }
-  for (const [index, entry] of entries.slice(4).entries()) {
+  // An explicit reassignment preserves the original fifth INPAINT reservation.
+  // Its only possible sixth entry is validated separately against the new record.
+  for (const [index, entry] of entries.slice(4, hasReassignment ? 5 : undefined).entries()) {
     const expectedOperation = index === 0 ? 'INPAINT' : index === 1 ? 'FULL_EDIT' : null;
     const operation = consent.execution.operations.find(operation => operation.operation === expectedOperation);
     if (!operation || entry.record.schemaVersion !== 2 || entry.record.campaignAuthorizationSha256 !== stored.sha256
@@ -396,12 +406,92 @@ async function readAuthorization(scope: RootScope, scopeSha256: string | null, e
   return { record, sha256: stored.sha256, manifest: candidate.manifest };
 }
 
+async function discoverReassignment(scope: RootScope) {
+  const authorizationPath = resolve(scope.path, WANX_ADDITIONAL_AUTHORIZATION_FILE);
+  if (!await exists(authorizationPath)) return null;
+  const original = wanxCampaignAuthorizationSchema.parse((await readRecord(scope, authorizationPath, MAX_RECORD_BYTES)).record);
+  const path = resolve(scope.path, `wanx-trial-${original.consent.execution.roundId}`, 'execution', WANX_REASSIGNMENT_FILE);
+  if (!await exists(path)) return null;
+  const stored = await readRecord(scope, path, MAX_RECORD_BYTES);
+  return { path, sha256: stored.sha256, record: wanxReassignmentRecordSchema.parse(stored.record) };
+}
+
+async function assertNoOperationAttempt(scope: RootScope, operation: { roundId: string; operationId: string; requestFingerprint: string; operation: 'FULL_EDIT' | 'INPAINT' }) {
+  if (await exists(resolve(scope.path, `wanx-trial-${operation.roundId}`, 'execution', `${operation.operation}.claim.json`))) {
+    invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_OPERATION_USED');
+  }
+  // Include incomplete reports, recovery files and launcher/stdout remnants. An
+  // unreadable or partial attempt is not evidence that an allowance is unused.
+  const references = [operation.operationId, operation.requestFingerprint].map(value => value.toLowerCase());
+  for (const path of [scope.path, resolve(scope.path, 'intents'), resolve(scope.path, 'intents', '.fingerprints')]) {
+    if (!await exists(path)) continue;
+    await directoryIdentity(path, 'wanx-campaign-private-directory/v1');
+    for (const name of await names(path, MAX_ROOT_ENTRIES)) {
+      if (references.some(reference => name.toLowerCase().includes(reference))) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_OPERATION_USED');
+    }
+  }
+  await assertRoot(scope);
+}
+
+async function validateReassignmentInputs(scope: RootScope, input: {
+  authorization: NonNullable<Awaited<ReturnType<typeof readAuthorization>>>;
+  consent: WanxReassignmentConsent; proposal: Awaited<ReturnType<typeof artifact>>;
+  history: WanxCampaignHistory; historical: Map<string, Allocation>;
+}) {
+  const { authorization, consent } = input;
+  const candidate = await verifiedRound(scope, consent.execution.roundId, consent.execution.manifestSha256);
+  validateWanxReassignment({ proposal: input.proposal.record, proposalSha256: input.proposal.sha256, consent,
+    authorization: authorization.record, authorizationSha256: authorization.sha256, original: authorization.manifest,
+    candidate: candidate.manifest, candidateSha256: consent.execution.manifestSha256, history: input.history, now: new Date() });
+  await assertNoOperationAttempt(scope, consent.revokedOperation);
+  const previous = authorization.manifest.bindings.find(binding => binding.operation === 'INPAINT')!;
+  const allocation = input.historical.get(previous.requestFingerprint);
+  if (!allocation) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_PRIOR_OUTCOME_INVALID');
+  const report = (await readRecord(scope, resolve(scope.path, `${previous.operationId}.report.json`), MAX_MANIFEST_BYTES,
+    consent.priorInpaintReportSha256)).record;
+  validateWanxReassignmentPriorReport({ report, original: authorization.manifest, consent, allocation });
+  return candidate.manifest;
+}
+
+async function readReassignment(scope: RootScope, scopeSha256: string | null, entries: Reservation[], historical: Map<string, Allocation>,
+  authorization: Awaited<ReturnType<typeof readAuthorization>>, discovered: Awaited<ReturnType<typeof discoverReassignment>>) {
+  if (!discovered) {
+    if (entries.some(entry => entry.record.schemaVersion === 3)) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_REQUIRED');
+    return null;
+  }
+  if (!authorization || !scopeSha256 || entries.length < 5 || entries.length > 6 || historical.size !== entries.length) {
+    invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_HISTORY_MISMATCH');
+  }
+  const prefix = entries.slice(0, 5);
+  if (!isDeepStrictEqual(total(prefix.map(entry => entry.record)).allocatedMaximumCost, { currency: 'CNY', amount: 125, scale: 2 })) {
+    invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_HISTORY_MISMATCH');
+  }
+  const history = historyBinding(scope, scopeSha256, prefix, prefix.map(entry => historical.get(entry.record.requestFingerprint)!));
+  const { consent } = discovered.record;
+  const proposal = await artifact(scope, discovered.record.proposal);
+  const approval = await artifact(scope, discovered.record.approval);
+  if (!isDeepStrictEqual(approval.record, consent)) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_INVALID');
+  const manifest = await validateReassignmentInputs(scope, { authorization, consent, proposal, history, historical });
+  const next = entries[5];
+  if (next && (next.record.schemaVersion !== 3 || next.record.campaignAuthorizationSha256 !== authorization.sha256
+    || next.record.campaignReassignmentSha256 !== discovered.sha256 || next.record.source !== 'RESERVATION'
+    || next.record.operation !== 'INPAINT' || next.record.operationId !== consent.execution.operationId
+    || next.record.roundId !== consent.execution.roundId || next.record.manifestSha256 !== consent.execution.manifestSha256
+    || next.record.requestFingerprint !== consent.execution.requestFingerprint
+    || !isDeepStrictEqual(next.record.maximumCost, { currency: 'CNY', amount: 25, scale: 2 })
+    || prefix.some(entry => entry.record.approvalId === next.record.approvalId || entry.record.approvalSha256 === next.record.approvalSha256))) {
+    invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_INVALID');
+  }
+  return { ...discovered, manifest };
+}
+
 async function snapshot(scope: RootScope, options: { lockSha256?: string } = {}) {
   await assertRoot(scope);
   if (options.lockSha256) await readRecord(scope, resolve(scope.path, LOCK_FILE), MAX_RECORD_BYTES, options.lockSha256);
   else if (await exists(resolve(scope.path, LOCK_FILE))) invalid('WANX_TRIAL_CAMPAIGN_LOCKED');
   const storedScope = await campaignScope(scope);
-  const historical = await historicalClaims(scope);
+  const discoveredReassignment = await discoverReassignment(scope);
+  const historical = await historicalClaims(scope, discoveredReassignment?.path);
   const entries = await reservations(scope, storedScope?.sha256 || null);
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -410,11 +500,12 @@ async function snapshot(scope: RootScope, options: { lockSha256?: string } = {})
       || !isDeepStrictEqual(allocationPart(entry.record), allocationPart(allocation))) invalid();
     seen.add(entry.record.requestFingerprint);
   }
-  const authorization = await readAuthorization(scope, storedScope?.sha256 || null, entries, historical);
+  const authorization = await readAuthorization(scope, storedScope?.sha256 || null, entries, historical, Boolean(discoveredReassignment));
+  const reassignment = await readReassignment(scope, storedScope?.sha256 || null, entries, historical, authorization, discoveredReassignment);
   const totals = total(historical.values(), authorization ? 150_000_000n : 100_000_000n);
   if (totals.overLimit) invalid('WANX_TRIAL_CAMPAIGN_LIMIT_EXCEEDED');
   await assertRoot(scope);
-  return { storedScope, historical, entries, authorization, ...totals };
+  return { storedScope, historical, entries, authorization, reassignment, ...totals };
 }
 
 function summary(scope: RootScope, state: Awaited<ReturnType<typeof snapshot>>) {
@@ -425,7 +516,10 @@ function summary(scope: RootScope, state: Awaited<ReturnType<typeof snapshot>>) 
     evidenceRootSha256: scope.evidenceRootSha256, providerAccountUidSha256: scope.providerAccountUidSha256,
     campaignScopeSha256: state.storedScope?.sha256 || null,
     ...(state.authorization ? { authorizationSha256: state.authorization.sha256,
-      authorizedRoundId: state.authorization.record.consent.execution.roundId, originalMaximumCost: { ...CEILING } } : {}) };
+      authorizedRoundId: state.authorization.record.consent.execution.roundId, originalMaximumCost: { ...CEILING } } : {}),
+    ...(state.reassignment ? { reassignmentSha256: state.reassignment.sha256,
+      revokedOperationId: state.reassignment.record.consent.revokedOperation.operationId,
+      reassignedOperationId: state.reassignment.record.consent.execution.operationId } : {}) };
 }
 
 /** Read-only point-in-time observation. A later claim must reacquire the lock and recalculate. */
@@ -505,17 +599,91 @@ export async function authorizeAiImageWanxTrialCampaign(input: ScopeInput & {
   }
 }
 
+export async function authorizeAiImageWanxTrialReassignment(input: ScopeInput & {
+  expected: AiImageWanxTrialExpected; manifestSha256: string; originalAuthorizationSha256: string;
+  proposal: WanxCampaignArtifact; approval: WanxCampaignArtifact; history: WanxCampaignHistory;
+  assertRevision: () => Promise<void>; now?: () => Date;
+}) {
+  let lock: { scope: RootScope; sha256: string } | null = null;
+  let release = true;
+  try {
+    await input.assertRevision();
+    const scope = await rootScope(input);
+    const original = await readRecord(scope, resolve(scope.path, WANX_ADDITIONAL_AUTHORIZATION_FILE), MAX_RECORD_BYTES,
+      sha.parse(input.originalAuthorizationSha256));
+    const originalRecord = wanxCampaignAuthorizationSchema.parse(original.record);
+    const reassignmentPath = resolve(scope.path, `wanx-trial-${originalRecord.consent.execution.roundId}`, 'execution', WANX_REASSIGNMENT_FILE);
+    if (await exists(reassignmentPath)) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_EXISTS');
+    const lockBytes = jsonBytes({ schemaVersion: 1, kind: 'WANX_TRIAL_CAMPAIGN_LOCK_V1', owner: randomUUID(),
+      createdAt: (input.now?.() || new Date()).toISOString(), evidenceRootSha256: scope.evidenceRootSha256 });
+    try { await writeAiImageSandboxPrivateEvidenceFile(resolve(scope.path, LOCK_FILE), lockBytes, scope.path); }
+    catch (error: any) { if (error?.code === 'EEXIST') invalid('WANX_TRIAL_CAMPAIGN_LOCKED'); throw error; }
+    lock = { scope, sha256: digest(lockBytes) };
+    const state = await snapshot(scope, { lockSha256: lock.sha256 });
+    if (!state.authorization || state.authorization.sha256 !== original.sha256 || state.reassignment
+      || !state.storedScope || state.entries.length !== 5 || state.historical.size !== 5
+      || !isDeepStrictEqual(state.allocatedMaximumCost, { currency: 'CNY', amount: 125, scale: 2 })) {
+      invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_HISTORY_MISMATCH');
+    }
+    const history = historyBinding(scope, state.storedScope.sha256, state.entries, [...state.historical.values()]);
+    if (!isDeepStrictEqual(input.history, history)) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_HISTORY_MISMATCH');
+    const proposal = await artifact(scope, input.proposal);
+    const approval = await artifact(scope, input.approval);
+    const consent = wanxReassignmentConsentSchema.parse(approval.record);
+    if (consent.execution.roundId !== input.expected.roundId || consent.execution.adapterRevision !== input.expected.adapterRevision
+      || consent.execution.providerAccountUidSha256 !== input.expected.providerAccountUidSha256
+      || consent.execution.credentialRevision !== input.expected.credentialRevision
+      || consent.execution.manifestSha256 !== input.manifestSha256) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_INVALID');
+    await validateReassignmentInputs(scope, { authorization: state.authorization, consent, proposal, history, historical: state.historical });
+    if (state.historical.has(consent.execution.requestFingerprint)
+      || [...state.historical.values()].some(item => item.operationId === consent.execution.operationId)) invalid('WANX_TRIAL_CAMPAIGN_ALREADY_RESERVED');
+    await assertNoOperationAttempt(scope, consent.execution);
+    await input.assertRevision();
+    await assertNoOperationAttempt(scope, consent.revokedOperation);
+    const record = wanxReassignmentRecordSchema.parse({ schemaVersion: 1, kind: 'WANX_TRIAL_FULL_EDIT_TO_INPAINT_REASSIGNMENT_V1',
+      canSubmit: false, billingReconciliation: 'REQUIRED', proposal: proposal.ref, approval: approval.ref, consent });
+    const bytes = jsonBytes(record);
+    release = false;
+    await writeAiImageSandboxPrivateEvidenceFile(reassignmentPath, bytes, scope.path);
+    await snapshot(scope, { lockSha256: lock.sha256 });
+    await input.assertRevision();
+    release = true;
+    return { reassignmentPath, reassignmentSha256: digest(bytes), replayed: false, canSubmit: false };
+  } catch (error) { preserveCampaignError(error); }
+  finally {
+    if (lock && release) {
+      await readRecord(lock.scope, resolve(lock.scope.path, LOCK_FILE), MAX_RECORD_BYTES, lock.sha256);
+      await assertRoot(lock.scope);
+      await unlink(resolve(lock.scope.path, LOCK_FILE));
+    }
+  }
+}
+
 interface AuthorizationExecutionInput {
   roundId: string; manifestSha256: string; operation: 'FULL_EDIT' | 'INPAINT';
-  campaignAuthorizationSha256?: string; inpaintQualityApproval?: WanxCampaignArtifact;
+  campaignAuthorizationSha256?: string; campaignReassignmentSha256?: string; inpaintQualityApproval?: WanxCampaignArtifact;
 }
 
 async function assertAuthorizedExecution(scope: RootScope, state: Awaited<ReturnType<typeof snapshot>>, input: AuthorizationExecutionInput) {
   const authorization = state.authorization;
   if (!authorization) {
-    if (input.campaignAuthorizationSha256 || input.inpaintQualityApproval) invalid('WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED');
+    if (input.campaignAuthorizationSha256 || input.campaignReassignmentSha256 || input.inpaintQualityApproval) invalid('WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED');
     return;
   }
+  const reassignment = state.reassignment;
+  if (reassignment) {
+    const amended = reassignment.record.consent;
+    if (input.roundId === amended.revokedOperation.roundId && input.operation === 'FULL_EDIT') {
+      invalid('WANX_TRIAL_CAMPAIGN_REASSIGNED_OPERATION_REVOKED');
+    }
+    if (input.roundId === amended.execution.roundId) {
+      if (input.operation !== 'INPAINT' || input.manifestSha256 !== amended.execution.manifestSha256
+        || input.campaignAuthorizationSha256 !== authorization.sha256 || input.campaignReassignmentSha256 !== reassignment.sha256
+        || input.inpaintQualityApproval) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_REQUIRED');
+      return;
+    }
+  }
+  if (input.campaignReassignmentSha256) invalid('WANX_TRIAL_CAMPAIGN_REASSIGNMENT_REQUIRED');
   const consent = authorization.record.consent;
   if (input.roundId !== consent.execution.roundId) {
     if (input.campaignAuthorizationSha256 || input.inpaintQualityApproval
@@ -559,7 +727,7 @@ export async function assertAiImageWanxTrialCampaignAuthorization(input: ScopeIn
   try {
     const scope = await rootScope(input);
     if (!await exists(resolve(scope.path, WANX_ADDITIONAL_AUTHORIZATION_FILE))) {
-      if (input.campaignAuthorizationSha256 || input.inpaintQualityApproval) invalid('WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED');
+      if (input.campaignAuthorizationSha256 || input.campaignReassignmentSha256 || input.inpaintQualityApproval) invalid('WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED');
       return;
     }
     await assertAuthorizedExecution(scope, await snapshot(scope), input);
@@ -579,6 +747,7 @@ export async function reserveAiImageWanxTrialCampaignOperation<T>(input: {
   claimSha256: string;
   approvalApprovedAt?: string;
   campaignAuthorizationSha256?: string;
+  campaignReassignmentSha256?: string;
   inpaintQualityApproval?: WanxCampaignArtifact;
   now: () => Date;
   assertCurrent: () => Promise<void>;
@@ -627,7 +796,10 @@ export async function reserveAiImageWanxTrialCampaignOperation<T>(input: {
     const append = async (allocation: Allocation, source: 'LEGACY_CLAIM' | 'RESERVATION') => {
       if (state.entries.length >= MAX_RESERVATIONS) invalid();
       const record: Reservation['record'] = { ...(state.authorization && source === 'RESERVATION'
-        ? { schemaVersion: 2 as const, kind: 'WANX_TRIAL_CAMPAIGN_RESERVATION_V2' as const, campaignAuthorizationSha256: state.authorization.sha256 }
+        ? state.reassignment
+          ? { schemaVersion: 3 as const, kind: 'WANX_TRIAL_CAMPAIGN_RESERVATION_V3' as const,
+              campaignAuthorizationSha256: state.authorization.sha256, campaignReassignmentSha256: state.reassignment.sha256 }
+          : { schemaVersion: 2 as const, kind: 'WANX_TRIAL_CAMPAIGN_RESERVATION_V2' as const, campaignAuthorizationSha256: state.authorization.sha256 }
         : { schemaVersion: 1 as const, kind: 'WANX_TRIAL_CAMPAIGN_RESERVATION_V1' as const }),
         sequence: state.entries.length + 1, previousSha256: state.entries.at(-1)?.sha256 || null,
         campaignScopeSha256, source, ...allocationPart(allocation), reservedAt: input.now().toISOString() };
@@ -647,9 +819,10 @@ export async function reserveAiImageWanxTrialCampaignOperation<T>(input: {
       invalid('WANX_TRIAL_CAMPAIGN_ALREADY_RESERVED');
     }
     if (state.authorization) {
-      const consent = state.authorization.record.consent;
+      const consent = state.reassignment?.record.consent || state.authorization.record.consent;
       if (roundId !== consent.execution.roundId
-        || (operation === 'INPAINT' ? state.entries.length !== 4 : state.entries.length !== 5)
+        || (state.reassignment ? operation !== 'INPAINT' || state.entries.length !== 5
+          : operation === 'INPAINT' ? state.entries.length !== 4 : state.entries.length !== 5)
         || [...state.historical.values()].some(item => item.approvalId === approvalId || item.approvalSha256 === approvalSha256)
         || !input.approvalApprovedAt || Date.parse(timestamp.parse(input.approvalApprovedAt)) < Date.parse(consent.approvedAt)) {
         release = true;

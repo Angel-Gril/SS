@@ -206,6 +206,24 @@ async function fixture(experimentalInpaint = false) {
 
 describe('Wanx trial execution through the real single-submit pipeline', () => {
   describe('campaign authorization inputs', () => {
+    it('does not ignore an unbound reassignment pin before creating any claim', async () => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, {
+        AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256: 'e'.repeat(64),
+      })).rejects.toThrow();
+      expect(value.calls).toHaveLength(0);
+      expect(await readdir(value.evidenceRoot)).not.toContain('intents');
+    }, 60_000);
+
+    it('requires explicit trial mode for a reassignment pin', async () => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, {
+        AI_IMAGE_SANDBOX_MODE: 'SUBMIT', AI_IMAGE_SANDBOX_TRIAL_ROUND_ID: '',
+        AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256: '', AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256: 'e'.repeat(64),
+      })).rejects.toMatchObject({ code: 'WANX_TRIAL_MODE_REQUIRED' });
+      expect(value.calls).toHaveLength(0);
+    });
+
     it.each([
       'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
       'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',

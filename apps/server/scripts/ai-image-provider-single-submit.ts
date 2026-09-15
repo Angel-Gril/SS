@@ -584,6 +584,7 @@ export async function runAiImageProviderSingleSubmit(
   if (!isTrial && [
     'AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256',
     'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256',
     'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
     'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
     'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
@@ -629,9 +630,12 @@ export async function runAiImageProviderSingleSubmit(
     }
     const campaignAuthorizationSha256 = optionalEnvironment('AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256', environment)
       ? requiredSha256('AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256', environment) : undefined;
+    const campaignReassignmentSha256 = optionalEnvironment('AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256', environment)
+      ? requiredSha256('AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256', environment) : undefined;
     const qualityPath = optionalEnvironment('AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', environment);
     const qualityDigest = optionalEnvironment('AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256', environment);
-    if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)) {
+    if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)
+      || (campaignReassignmentSha256 && (!campaignAuthorizationSha256 || qualityPath))) {
       throw Object.assign(new Error('An INPAINT quality approval requires its path, digest and campaign authorization'), {
         code: 'WANX_TRIAL_CAMPAIGN_INPUT_INVALID',
       });
@@ -655,7 +659,7 @@ export async function runAiImageProviderSingleSubmit(
       repositoryRoot, evidenceRoot: requiredEnvironment('AI_IMAGE_SANDBOX_EVIDENCE_ROOT', environment),
       manifestSha256: requiredSha256('AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256', environment),
       operation: requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION', environment), expected, assertRevision,
-      campaignAuthorizationSha256, inpaintQualityApproval,
+      campaignAuthorizationSha256, campaignReassignmentSha256, inpaintQualityApproval,
     });
     const selected = trial.selected;
     environment = {

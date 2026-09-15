@@ -135,6 +135,7 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
   }
   const campaignNames = new Set([
     'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256',
     'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
   ]);
   for (const [name, value] of Object.entries(environment)) {
@@ -154,9 +155,12 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
   const draftSettings = mode === 'approval-draft' ? approvalDraftSettings(environment) : null;
   const campaignAuthorizationSha256 = String(environment.AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256 || '').trim()
     ? requiredDigest(environment, 'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256') : undefined;
+  const campaignReassignmentSha256 = String(environment.AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256 || '').trim()
+    ? requiredDigest(environment, 'AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256') : undefined;
   const qualityPath = String(environment.AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH || '').trim();
   const qualityDigest = String(environment.AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256 || '').trim();
-  if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)) {
+  if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)
+    || (campaignReassignmentSha256 && (!campaignAuthorizationSha256 || qualityPath))) {
     invalid('WANX_TRIAL_CONFIG_INVALID', 'Quality approval inputs require a path, digest and campaign authorization');
   }
   const inpaintQualityApproval = qualityPath ? {
@@ -215,7 +219,7 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
       repositoryRoot, evidenceRoot, expected, assertRevision,
       operation: draftSettings.operation,
       manifestSha256: requiredDigest(environment, 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256'),
-      campaignAuthorizationSha256, inpaintQualityApproval,
+      campaignAuthorizationSha256, campaignReassignmentSha256, inpaintQualityApproval,
     });
     const { aiImageWanx21EditSubmitEndpoint } = await import('../src/services/ai-image-wanx-edit-profile.js');
     const { writeAiImageSandboxPrivateEvidenceFile } = await import('../src/services/ai-image-sandbox-billing-settlement.js');

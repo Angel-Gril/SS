@@ -524,6 +524,57 @@ trial binding and both claim digests for successful and failed dispatches. It ex
 The original report format and `actualCost:null` are preserved. This evidence cannot be described
 as normal ERP end-to-end acceptance, settled billing, complete QA-02 or formal QA-04.
 
+### Direction-First INPAINT Trial
+
+The `ai-image-wanx21-edit-prompt/direction-first-preview-v3` and
+`ai-image-wanx21-edit-prompt/direction-first-experimental-v3` renderers accept only the reviewed
+default `inpaint.base` template and its unchanged constraints. They place the operator-direction
+block before the complete scoped-print v2 policy, then retain the remaining template instructions
+and inline exclusions. All six policy clauses and all operator text remain literal; the order is
+the only intended prompt change. Custom templates and FULL_EDIT reject these profiles because the
+new renderer has no reviewed segment mapping for them.
+
+Preview remains ineligible for execution. The experimental profile is accepted only by the
+explicit trial boundary with independent full-snapshot re-rendering; ordinary hosted creation,
+execution and recovery remain on v1. The new contract binds segment order and the direction-template
+digest. Unicode, control-character and complete 800-codepoint limits still apply after assembly.
+This is an isolated quality hypothesis, not evidence of improved output or capability promotion.
+
+### Reassign One Unused Conditional Quarter
+
+After exactly five immutable CNY 0.25 allocations, a separately reviewed reassignment may revoke
+the unused conditional FULL_EDIT and designate exactly one new INPAINT. This keeps the original
+CNY 1.50 ceiling and CNY 1.25 consumed allocation. It never refunds a failed, unknown or free-quota
+operation, increases the total allowance, or permits a retry of the fifth operation. A general
+request to continue development does not approve reassignment.
+
+Prepare the new exact manifest and a private `WANX_TRIAL_SINGLE_INPAINT_REASSIGNMENT_PROPOSAL_V1`
+first. A new consent must bind its digest, a new human approval digest, the original authorization,
+all five history records, the known fifth INPAINT report, the revoked FULL_EDIT identity and one
+new INPAINT identity. The command rejects missing, reused or mismatched approval evidence and any
+old FULL_EDIT attempt, including incomplete intent, fingerprint, claim or report evidence.
+
+```bash
+pnpm --filter server sandbox:ai-image:wanx-trial:campaign:reassign
+```
+
+The offline environment matches campaign authorization: current clean revision, same physical
+evidence root/account/credential, new trial round/manifest, proposal PATH/SHA256 and consent
+PATH/SHA256. Also supply the original `AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256`.
+Provider secrets and paid confirmation are rejected. The owner acquires the existing campaign
+lock and writes exactly one immutable file under the original round:
+`execution/FULL_EDIT.reassigned.json`. Its name intentionally violates the old execution allowlist,
+so older frozen readers also reject the revoked operation. No original scope, grant or reservation
+is rewritten. A failed or partial durable write retains the fault lock.
+
+For the new INPAINT only, supply both `AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256` and
+`AI_IMAGE_SANDBOX_CAMPAIGN_REASSIGNMENT_SHA256` to v4 drafting, verification and single-submit.
+The new v3 reservation follows the existing chain and binds both digests; final dispatch rechecks
+the complete history and revoked-operation evidence. The original FULL_EDIT and the unused
+FULL_EDIT companion in the new preparation remain forbidden. The new operation still needs its
+own valid v4 approval. No normal ERP execution, final billing, publishing or capability promotion
+is authorized by this offline reassignment.
+
 ## Private JSON Record
 
 Create the file outside the repository or under the private persistent sandbox evidence root. On

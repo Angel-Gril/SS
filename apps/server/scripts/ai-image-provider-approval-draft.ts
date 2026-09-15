@@ -1037,10 +1037,11 @@ const isDirectRun = process.argv[1]
 if (isDirectRun) {
   const args = process.argv.slice(2);
   const run = args.length === 0 ? () => runAiImageProviderApprovalDraft({ requireGitCheckout: true })
-    : args.length === 1 && ['--inspect-wanx-campaign', '--authorize-wanx-campaign'].includes(args[0]!)
+    : args.length === 1 && ['--inspect-wanx-campaign', '--authorize-wanx-campaign', '--reassign-wanx-campaign'].includes(args[0]!)
       ? async () => {
           const { runAiImageWanxCampaignCommand } = await import('./ai-image-wanx-campaign.js');
-          return runAiImageWanxCampaignCommand(args[0] === '--inspect-wanx-campaign' ? 'inspect' : 'authorize');
+          return runAiImageWanxCampaignCommand(args[0] === '--inspect-wanx-campaign' ? 'inspect'
+            : args[0] === '--reassign-wanx-campaign' ? 'reassign' : 'authorize');
         }
     : args.length === 1 && ['--prepare-wanx-trial', '--verify-wanx-trial', '--draft-wanx-trial-approval', '--compile-wanx-trial-input', '--import-wanx-template-sources'].includes(args[0]!)
       ? async () => {
