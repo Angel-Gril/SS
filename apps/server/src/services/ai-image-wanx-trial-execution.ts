@@ -18,13 +18,15 @@ import {
   verifyAiImageWanxTrial,
   type AiImageWanxTrialExpected,
 } from './ai-image-wanx-trial-preparation.js';
-import { reserveAiImageWanxTrialCampaignOperation } from './ai-image-wanx-trial-campaign.js';
+import { assertAiImageWanxTrialCampaignAuthorization, reserveAiImageWanxTrialCampaignOperation } from './ai-image-wanx-trial-campaign.js';
+import type { WanxCampaignArtifact } from './ai-image-wanx-campaign-authorization.js';
 
 // Additional dependencies reached only by the explicit trial execution mode.
 export const AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS = [
   'packages/shared/package.json',
   'apps/server/src/services/ai-image-wanx-trial-execution.ts',
   'apps/server/src/services/ai-image-wanx-trial-campaign.ts',
+  'apps/server/src/services/ai-image-wanx-campaign-authorization.ts',
   'apps/server/src/services/ai-image-wanx-trial-preparation.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'apps/server/src/services/ai-image-sandbox-money.ts',
@@ -73,6 +75,8 @@ export async function loadAiImageWanxTrialExecution(input: {
   manifestSha256: string;
   expected: AiImageWanxTrialExpected;
   operation: string;
+  campaignAuthorizationSha256?: string;
+  inpaintQualityApproval?: WanxCampaignArtifact;
   assertRevision: () => Promise<void>;
 }) {
   if (input.operation !== 'FULL_EDIT' && input.operation !== 'INPAINT') {
@@ -91,7 +95,7 @@ export async function loadAiImageWanxTrialExecution(input: {
     requestFingerprint: binding.requestFingerprint,
     frozenPromptSha256: binding.frozenPromptSha256,
   });
-  const assertCurrent = async () => {
+  const assertSourceCurrent = async () => {
     await input.assertRevision();
     if ((await rootIdentity(input.repositoryRoot, input.evidenceRoot)).sha256 !== root.sha256) {
       invalid('WANX_TRIAL_ROOT_CHANGED', 'The approved private evidence directory changed');
@@ -101,10 +105,20 @@ export async function loadAiImageWanxTrialExecution(input: {
       path: resolve(directory, 'manifest.json'), sha256: input.manifestSha256,
     });
   };
+  const assertCurrent = async () => {
+    await assertSourceCurrent();
+    await assertAiImageWanxTrialCampaignAuthorization({
+      repositoryRoot: input.repositoryRoot, evidenceRoot: root.path,
+      providerAccountUidSha256: input.expected.providerAccountUidSha256, evidenceRootSha256: root.sha256,
+      roundId: input.expected.roundId, manifestSha256: input.manifestSha256, operation: selected.operation,
+      campaignAuthorizationSha256: input.campaignAuthorizationSha256, inpaintQualityApproval: input.inpaintQualityApproval,
+    });
+  };
   await assertCurrent();
   return {
     repositoryRoot: input.repositoryRoot, evidenceRoot: root.path, directory,
-    manifest: verified.manifest, selected, binding, trialBinding, assertCurrent,
+    manifest: verified.manifest, selected, binding, trialBinding, assertCurrent, assertSourceCurrent,
+    campaignAuthorizationSha256: input.campaignAuthorizationSha256, inpaintQualityApproval: input.inpaintQualityApproval,
     sourcePath: resolve(directory, selected.source.path),
     maskPath: selected.mask ? resolve(directory, selected.mask.path) : null,
   };
@@ -167,7 +181,9 @@ export async function claimAiImageWanxTrialOperation(input: {
     trialBinding: execution.trialBinding, operation: execution.selected.operation,
     operationId: execution.selected.operationId, approvalId: approval.approvalId,
     approvalSha256: approval.approvalSha256, roundSha256, claimSha256,
-    now: input.now, assertCurrent: execution.assertCurrent,
+    approvalApprovedAt: approval.approvedAt,
+    campaignAuthorizationSha256: execution.campaignAuthorizationSha256, inpaintQualityApproval: execution.inpaintQualityApproval,
+    now: input.now, assertCurrent: execution.assertSourceCurrent,
   }, async () => {
     // Persist the original records unchanged, after the cumulative reservation
     // and while the campaign lock still excludes concurrent claim writers.

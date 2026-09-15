@@ -165,6 +165,35 @@ function draftEnvironment(value: Awaited<ReturnType<typeof fixture>>, operation 
 }
 
 describe('Wanx trial v4 non-approval draft', () => {
+  it.each([
+    'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
+  ])('rejects campaign-only budget grant material while drafting: %s', async name => {
+    const value = await fixture();
+    const result = await command('--draft-wanx-trial-approval', {
+      ...draftEnvironment(value, 'INPAINT'), [name]: 'synthetic-campaign-binding',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('WANX_TRIAL_CONFIG_INVALID');
+    expect(await readdir(value.directory)).not.toContain('approval-drafts');
+  }, 60_000);
+
+  it.each([
+    { AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256: 'a'.repeat(64) },
+    { AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH: 'unreviewed-quality.json' },
+    { AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256: 'a'.repeat(64) },
+  ])('does not ignore campaign authorization inputs while drafting: %j', async extra => {
+    const value = await fixture();
+    const result = await command('--draft-wanx-trial-approval', {
+      ...draftEnvironment(value, 'INPAINT'), ...extra,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(await readdir(value.directory)).not.toContain('approval-drafts');
+    expect(await readdir(value.directory)).not.toContain('execution');
+  }, 60_000);
+
   it.each(['FULL_EDIT', 'INPAINT'] as const)('writes a v4 draft for %s from verified owner bindings without authorizing it', async (operation) => {
     const value = await fixture();
     const result = await command('--draft-wanx-trial-approval', draftEnvironment(value, operation));

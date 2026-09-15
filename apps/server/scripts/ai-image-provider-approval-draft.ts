@@ -768,6 +768,11 @@ export async function runAiImageProviderApprovalDraft(
     );
   }
   assertUnsafeEnvironmentAbsent(environment);
+  if (Object.entries(environment).some(([name, value]) => String(value || '').trim()
+    && ['AI_IMAGE_SANDBOX_TRIAL_', 'AI_IMAGE_SANDBOX_CAMPAIGN_', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_']
+      .some(prefix => name.toUpperCase().startsWith(prefix)))) {
+    throw draftError('WANX_TRIAL_MODE_REQUIRED', 'Trial and campaign bindings require an explicit trial command');
+  }
   const repositoryRoot = options.repositoryRoot
     || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
   const draftPath = resolve(
@@ -1032,6 +1037,11 @@ const isDirectRun = process.argv[1]
 if (isDirectRun) {
   const args = process.argv.slice(2);
   const run = args.length === 0 ? () => runAiImageProviderApprovalDraft({ requireGitCheckout: true })
+    : args.length === 1 && ['--inspect-wanx-campaign', '--authorize-wanx-campaign'].includes(args[0]!)
+      ? async () => {
+          const { runAiImageWanxCampaignCommand } = await import('./ai-image-wanx-campaign.js');
+          return runAiImageWanxCampaignCommand(args[0] === '--inspect-wanx-campaign' ? 'inspect' : 'authorize');
+        }
     : args.length === 1 && ['--prepare-wanx-trial', '--verify-wanx-trial', '--draft-wanx-trial-approval', '--compile-wanx-trial-input', '--import-wanx-template-sources'].includes(args[0]!)
       ? async () => {
           const { runAiImageWanxTrialCommand } = await import('./ai-image-wanx-trial-prepare.js');

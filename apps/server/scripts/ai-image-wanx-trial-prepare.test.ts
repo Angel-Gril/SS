@@ -131,6 +131,78 @@ async function prepare(value: Awaited<ReturnType<typeof fixture>>, extra: NodeJS
 }
 
 describe('offline Wanx trial preparation CLI', () => {
+  describe('campaign budget commands', () => {
+    it.each([
+      ['--assume-unchanged', '--no-assume-unchanged', 'apps/server/src/services/ai-image-sandbox-media.ts'],
+      ['--skip-worktree', '--no-skip-worktree', 'packages/shared/src/ai-image-workbench-contract.ts'],
+    ])('rejects hidden dependency drift (%s)', async (hide, restore, name) => {
+      const value = await fixture();
+      const path = join(repositoryRoot, name);
+      const original = await readFile(path);
+      const git = (args: string[]) => execFileAsync('git', args, {
+        cwd: repositoryRoot, windowsHide: true, env: sanitizeAiImageSandboxGitEnvironment(),
+      });
+      try {
+        await git(['update-index', hide, '--', name]);
+        await writeFile(path, Buffer.concat([original, Buffer.from('\n// Hidden campaign dependency drift.\n')]));
+        expect((await git(['status', '--porcelain=v1'])).stdout).toBe('');
+        const result = await command('--inspect-wanx-campaign', value.evidenceRoot, '', {
+          AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: '',
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('SANDBOX_ADAPTER_FILE_DIRTY');
+        expect(await readdir(value.evidenceRoot)).not.toContain('wanx-campaign.authorization.json');
+      } finally {
+        await writeFile(path, original);
+        await git(['update-index', restore, '--', name]);
+      }
+    }, 30_000);
+
+    it('inspects an empty campaign without creating authorization or reservations', async () => {
+      const value = await fixture();
+      const before = (await readdir(value.evidenceRoot)).sort();
+      const result = await command('--inspect-wanx-campaign', value.evidenceRoot, '', {
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: '',
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        canSubmit: false, observationOnly: true, allocationCount: 0,
+        maximumCost: { currency: 'CNY', amount: 1, scale: 0 },
+        history: { campaignScopeSha256: null, reservationSha256s: [], tipSha256: null },
+      });
+      expect((await readdir(value.evidenceRoot)).sort()).toEqual(before);
+    });
+
+    it.each([
+      'AI_IMAGE_SANDBOX_API_KEY', 'AI_IMAGE_SANDBOX_CONFIRM', 'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
+    ])('rejects %s in offline campaign authorization without leaking its value', async name => {
+      const value = await fixture();
+      const before = (await readdir(value.evidenceRoot)).sort();
+      const result = await command('--authorize-wanx-campaign', value.evidenceRoot, value.request.roundId, {
+        [name]: 'synthetic-campaign-secret-sentinel',
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('WANX_TRIAL_UNSAFE_ENV');
+      expect(result.stderr).not.toContain('synthetic-campaign-secret-sentinel');
+      expect((await readdir(value.evidenceRoot)).sort()).toEqual(before);
+    });
+
+    it('rejects consent inputs in the history-only mode', async () => {
+      const value = await fixture();
+      const result = await command('--inspect-wanx-campaign', value.evidenceRoot, '', {
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: '',
+        AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH: 'unreviewed.json',
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('WANX_TRIAL_CONFIG_INVALID');
+      expect(await readdir(value.evidenceRoot)).not.toContain('wanx-campaign.authorization.json');
+    });
+  });
+
   it('imports pinned HTTP captures before compiling, preparing and verifying through real CLI processes', async () => {
     const value = await fixture();
     const captures = await makeWanxTemplateSourceCaptures(value.evidenceRoot, revision, value.request.roundId);

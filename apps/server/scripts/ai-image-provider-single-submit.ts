@@ -581,7 +581,13 @@ export async function runAiImageProviderSingleSubmit(
   }
   const isTrial = modeValue === 'TRIAL_SUBMIT' || modeValue === 'TRIAL_VERIFY_APPROVAL';
   const mode = modeValue === 'VERIFY_APPROVAL' || modeValue === 'TRIAL_VERIFY_APPROVAL' ? 'VERIFY_APPROVAL' : 'SUBMIT';
-  if (!isTrial && ['AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256'].some((name) => optionalEnvironment(name, environment))) {
+  if (!isTrial && [
+    'AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
+    'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
+  ].some((name) => optionalEnvironment(name, environment))) {
     throw Object.assign(new Error('Trial bindings require an explicit trial mode'), { code: 'WANX_TRIAL_MODE_REQUIRED' });
   }
   if (mode === 'VERIFY_APPROVAL' && (
@@ -615,10 +621,24 @@ export async function runAiImageProviderSingleSubmit(
       'AI_IMAGE_SANDBOX_SOURCE_PATH', 'AI_IMAGE_SANDBOX_SOURCE_SHA256', 'AI_IMAGE_SANDBOX_MASK_PATH', 'AI_IMAGE_SANDBOX_MASK_SHA256',
       'AI_IMAGE_SANDBOX_CURRENCY', 'AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT', 'AI_IMAGE_SANDBOX_MAX_COST_AMOUNT',
       'AI_IMAGE_SANDBOX_COST_SCALE', 'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', 'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
+      'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+      'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
     ];
     if (conflicting.some((name) => optionalEnvironment(name, environment))) {
       throw Object.assign(new Error('Trial request and costs must come from the frozen manifest'), { code: 'WANX_TRIAL_REQUEST_OVERRIDE_FORBIDDEN' });
     }
+    const campaignAuthorizationSha256 = optionalEnvironment('AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256', environment)
+      ? requiredSha256('AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256', environment) : undefined;
+    const qualityPath = optionalEnvironment('AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', environment);
+    const qualityDigest = optionalEnvironment('AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256', environment);
+    if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)) {
+      throw Object.assign(new Error('An INPAINT quality approval requires its path, digest and campaign authorization'), {
+        code: 'WANX_TRIAL_CAMPAIGN_INPUT_INVALID',
+      });
+    }
+    const inpaintQualityApproval = qualityPath ? {
+      path: qualityPath, sha256: requiredSha256('AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256', environment),
+    } : undefined;
     const expected = {
       adapterRevision: requiredAdapterRevision(environment),
       roundId: requiredEnvironment('AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', environment),
@@ -635,6 +655,7 @@ export async function runAiImageProviderSingleSubmit(
       repositoryRoot, evidenceRoot: requiredEnvironment('AI_IMAGE_SANDBOX_EVIDENCE_ROOT', environment),
       manifestSha256: requiredSha256('AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256', environment),
       operation: requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION', environment), expected, assertRevision,
+      campaignAuthorizationSha256, inpaintQualityApproval,
     });
     const selected = trial.selected;
     environment = {

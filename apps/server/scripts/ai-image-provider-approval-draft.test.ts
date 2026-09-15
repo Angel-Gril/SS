@@ -192,6 +192,20 @@ afterEach(async () => {
 
 describe('AI image sandbox approval draft generator', () => {
   it.each([
+    'AI_IMAGE_SANDBOX_TRIAL_ROUND_ID', 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
+    'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+    'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
+  ])('rejects campaign-only bindings in ordinary drafting: %s', async name => {
+    const resolveRevision = vi.fn();
+    await expect(runAiImageProviderApprovalDraft({
+      environment: { NODE_ENV: 'sandbox', [name]: 'synthetic-campaign-binding' }, resolveRevision,
+    })).rejects.toMatchObject({ code: 'WANX_TRIAL_MODE_REQUIRED' });
+    expect(resolveRevision).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['IMAGE_TO_IMAGE', 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1'],
     ['FULL_EDIT', 'DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1'],
     ['INPAINT', 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1'],

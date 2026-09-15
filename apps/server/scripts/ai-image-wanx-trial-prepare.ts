@@ -12,7 +12,7 @@ import {
 
 // All source dependencies of this entry, including the shared media limits, must
 // belong to the same clean checkout. Installed third-party packages are unchanged.
-const TRACKED_PATHS = [
+export const AI_IMAGE_WANX_TRIAL_PREPARATION_TRACKED_PATHS = [
   'apps/server/scripts/ai-image-provider-approval-draft.ts',
   'apps/server/scripts/ai-image-wanx-trial-prepare.ts',
   'apps/server/src/lib/ai-media-transaction.ts',
@@ -62,6 +62,8 @@ const MIXED_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_APPROVAL_DRAFT_PATH', 'AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_PATH',
   'AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_SHA256', 'AI_IMAGE_SANDBOX_BILLING_OBSERVATION_PATH',
   'AI_IMAGE_SANDBOX_BILLING_OBSERVATION_SHA256',
+  'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+  'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
 ]);
 const DRAFT_OVERRIDE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_BASE_URL', 'AI_IMAGE_SANDBOX_EXPECTED_HOST', 'AI_IMAGE_SANDBOX_MODEL',
@@ -131,12 +133,17 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
   if (environment.NODE_ENV !== 'sandbox' || !['prepare', 'verify', 'approval-draft', 'compile-input', 'import-sources'].includes(mode)) {
     invalid('WANX_TRIAL_CONFIG_INVALID', 'The offline trial command requires sandbox mode');
   }
+  const campaignNames = new Set([
+    'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+    'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH', 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
+  ]);
   for (const [name, value] of Object.entries(environment)) {
     if (!String(value || '').trim()) continue;
     if (UNSAFE_ENVIRONMENT_NAMES.has(name.toUpperCase())) invalid('WANX_TRIAL_UNSAFE_ENV', 'Offline trial preparation must not receive credentials or paid confirmation');
     if (MIXED_ENVIRONMENT_NAMES.has(name.toUpperCase())
       || ((mode === 'approval-draft' || mode === 'compile-input' || mode === 'import-sources') && DRAFT_OVERRIDE_ENVIRONMENT_NAMES.has(name.toUpperCase()))
       || (mode !== 'import-sources' && name.toUpperCase() === 'AI_IMAGE_SANDBOX_ERP_ORIGIN')
+      || (mode !== 'approval-draft' && campaignNames.has(name.toUpperCase()))
       || (mode === 'import-sources' && name.toUpperCase() === 'AI_IMAGE_SANDBOX_OPERATION')) {
       invalid('WANX_TRIAL_CONFIG_INVALID', 'Trial preparation cannot be combined with approval, submission or request overrides');
     }
@@ -145,6 +152,16 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
     : ['AI_IMAGE_SANDBOX_TRIAL_INPUT_PATH', 'AI_IMAGE_SANDBOX_TRIAL_INPUT_SHA256'];
   if (incompatible.some((name) => String(environment[name] || '').trim())) invalid('WANX_TRIAL_CONFIG_INVALID', 'Prepare and verify inputs must not be mixed');
   const draftSettings = mode === 'approval-draft' ? approvalDraftSettings(environment) : null;
+  const campaignAuthorizationSha256 = String(environment.AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256 || '').trim()
+    ? requiredDigest(environment, 'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256') : undefined;
+  const qualityPath = String(environment.AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH || '').trim();
+  const qualityDigest = String(environment.AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256 || '').trim();
+  if (Boolean(qualityPath) !== Boolean(qualityDigest) || (qualityPath && !campaignAuthorizationSha256)) {
+    invalid('WANX_TRIAL_CONFIG_INVALID', 'Quality approval inputs require a path, digest and campaign authorization');
+  }
+  const inpaintQualityApproval = qualityPath ? {
+    path: qualityPath, sha256: requiredDigest(environment, 'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256'),
+  } : undefined;
   const adapterRevision = required(environment, 'AI_IMAGE_SANDBOX_ADAPTER_REVISION');
   if (!AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(adapterRevision)) invalid('WANX_TRIAL_CONFIG_INVALID', 'A full Git revision is required');
   const expected = {
@@ -162,8 +179,8 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
   const resolveRevision = options.resolveRevision || resolveAiImageSandboxRepositoryRevision;
   const executionModule = mode === 'approval-draft' ? await import('../src/services/ai-image-wanx-trial-execution.js') : null;
   const trackedPaths = executionModule
-    ? [...new Set([...TRACKED_PATHS, ...executionModule.AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS])]
-    : TRACKED_PATHS;
+    ? [...new Set([...AI_IMAGE_WANX_TRIAL_PREPARATION_TRACKED_PATHS, ...executionModule.AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS])]
+    : AI_IMAGE_WANX_TRIAL_PREPARATION_TRACKED_PATHS;
   const assertRevision = async () => {
     if (await resolveRevision(repositoryRoot, undefined, trackedPaths, true) !== adapterRevision) {
       invalid('SANDBOX_ADAPTER_REVISION_MISMATCH', 'Offline trial source revision changed');
@@ -198,6 +215,7 @@ export async function runAiImageWanxTrialCommand(mode: 'prepare' | 'verify' | 'a
       repositoryRoot, evidenceRoot, expected, assertRevision,
       operation: draftSettings.operation,
       manifestSha256: requiredDigest(environment, 'AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256'),
+      campaignAuthorizationSha256, inpaintQualityApproval,
     });
     const { aiImageWanx21EditSubmitEndpoint } = await import('../src/services/ai-image-wanx-edit-profile.js');
     const { writeAiImageSandboxPrivateEvidenceFile } = await import('../src/services/ai-image-sandbox-billing-settlement.js');

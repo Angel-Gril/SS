@@ -422,11 +422,20 @@
 - **新增预算已批准。** 用户明确批准重测提案中的新增最多 CNY 0.50，保留原 CNY 1，占位累计上限最多 CNY 1.50；每次最多 CNY 0.25，先一次 INPAINT，质量通过才允许一次 FULL_EDIT，失败或未知不重发。批准提案 SHA-256 为 `2d8e91e18e22e2fd1b6f9aa21f843a34c64250b9de350097efcaa32c6eccb1ad`。两个视觉输入、源图、mask、模型及参数已独立复核；原准备 input/manifest 摘要分别为 `6dd79a7a34f76eae12804e2de116767ee5dcce1330dfcb129855672f7a213b07` / `148437b302d6ff125b76daa74f307d20d5105c82166970e9a257a3cdd3ea6d1f`。这些准备材料不包含新预算机制，执行前须在同一物理根追加不可变授权、通过 T2/回归并冻结新代码，重新编译同一视觉输入后分别绑定一次性审批。
 - **范围与下一步。** 本次授权只覆盖上述至多两张隔离样本，不开启 AI/Media/BYOK/Ozon，不创建或应用 ERP 工作流，不修改官网。先完成预算 owner 与薄 CLI、离线真实账单回放和新冻结执行修订，再只读复核账户/价格/历史调用后执行 INPAINT 及质量复核。本节记录时没有新增 Provider 请求或费用；后续实际结果另行追加。
 
+### 固定预算追加实现与发包前门禁（2026-09-15）
+
+- **真实账单回放已完成。** 已推送 `54c5b612` 的 clean 主检出在禁用网络环境通过原生 CLI 回放四条已采集明细；结果与原评估逐条一致，保留 `RECONCILIATION_REQUIRED`、`actualCost:null`、`canFinalize:false`。原 wrapper SHA-256 为 `6b68bac7467ceb251d34a5cec61f2f370808a9d896f926fe3c6db30d3924102c`，新回放输出为 `0e4f23124ca6a7ece8da87082960d9f7ae2b7c53ec9947b17edc93a891aec92f`；原件、scope 与四笔账本摘要不变。
+- **预算 owner 已实现，T2。** 原 `wanx-campaign.scope.json` 与四笔各 CNY 0.25 的记录保留；同一物理根新增一次性 `wanx-campaign.authorization.json`，固定追加 CNY 0.50、累计 1.50。授权绑定完整旧历史、账户/凭据、提案/批准摘要、新执行修订及两个确切操作；新占位沿旧链追加并绑定授权摘要。输入在新 `<proposal-round>-exec` 物化，旧准备不改；owner 深比较原/新清单，只有代码修订、round 和派生 operation ID 可变。
+- **顺序和失败边界。** INPAINT 先行；FULL_EDIT 必须取得同一授权下已消费 INPAINT 的成功报告、图片摘要及质量 PASS 收据，最终发包再次重读。每笔仍独立验证 v4 一次性审批，拒绝复用旧审批、越序、改输入、换根或超额；失败/未知/免费均保留占位。质量收据承载操作者对实际图片的审查，不把 JSON 布尔值当作模型质量自动验收；追加额度不结清账单或晋升能力。
+- **测试证据。** campaign owner 先取得 18 项目标 RED，逐笔旧占位上限另有 1 项 RED，完成后新增 22 项。薄入口先取得 15 项 RED；独立审查发现源码依赖列表遗漏和跨入口混用，又以 2 项隐藏 Git 改动及 17 项参数负例 RED→GREEN 修复。新增完整真实子进程场景串联 campaign authorize、v4 draft/verify、合成网络 runner、实际 INPAINT report/image、质量收据和 FULL_EDIT；提前 FULL_EDIT 与重复 INPAINT 无额外 POST，最终合计 1.50，旧证据字节不变。该测试只使用合成图片/HTTP，所有真实网络入口关闭。
+- **组合与审查。** 主 Agent 复核所有 owner、薄适配及新测试；9 文件组合为 `386 passed / 1 条既有条件 skipped`，sandbox strict typecheck、定向 ESLint 与 diff 通过。最终独立源码审查未发现剩余阻断性问题。完整 clean revision offline gate 及获批真实样本尚待执行，不能用上述本地门禁宣称图片质量或正式 QA 通过。
+- **当前只读外部预检。** 11:58（北京时间）的真实账户核对一致，指定 Key 当日用量为空，完整明细仍为四条、当前应付零；新原生 wrapper/评估 SHA-256 分别为 `155efad724f06b56948bc857adf71477bfb48f9a6dce5c12fb49a0843f7b2db3` / `35c3f5d3af13323e11f6cc98d5bfbf5b659c7d2ee58421abccd611d956210d57`。官方模型参考本次 GET 仍列 `wanx2.1-imageedit` 为 CNY 0.14/张，响应 SHA-256 为 `47eaa6faccc35518f073aa08b7b9b5d3bc363a8bd6914d9be17dee53496a9664`。预算批准原件另存，SHA-256 为 `3424a50e9c6bb1c79d394c16a42dc58b6947fe8bd470b4d75c2ea094737912bd`；尚未写真实预算追加、操作 claim 或发送新的生成请求。
+
 ### 剩余五项的执行入口
 
 | 项目 | 已有入口与本轮进展 | 下一步必需的输入或授权 |
 | --- | --- | --- |
-| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；新 Wanx 四次技术成功、质量均未通过，第四条原生免费抵扣明细已回显，完整证据见上节 | 保留四笔 task、占位和图片，只读跟进分日用量及最终结算；本轮 CNY 1 已全部占位。继续离线诊断，任何新生成须另有明确预算及单次批准。正常 ERP、非零扣费、旧 Wanx 账单和完整 QA-02/能力晋升仍未关闭 |
+| Provider 费用账户与 pilot | Xiaoyi 单张已完成[离线凭单对账](../docs/runbooks/ai-image-provider-sandbox-billing.md#xiaoyi-console-bill-and-account-credit-review)，原审批币种差异保留；新 Wanx 四次技术成功、质量均未通过，四条免费抵扣明细已回显并原生离线回放 | 原 CNY 1 占位保留，用户已批准固定追加 CNY 0.50；按新执行修订先 INPAINT、质量通过才 FULL_EDIT，详细准备/执行证据见上节。正常 ERP、非零扣费、旧 Wanx 账单、最终结算和完整 QA-02/能力晋升仍未关闭 |
 | Ozon 测试店与商品事实 | 归档参数/主图/私有准备包齐备；审核任务 500 修复与两种 rollout 的 PostgreSQL 隔离链路通过，源码已随维护部署；线上临时配置保持关闭 | 按原隔离边界重验 ERP 审核草稿。DOTH 样本有 FBS 库存，真实专用测试隔离仍未成立，本地测试不能授权 import/archive |
 | 新提交与部署证据 | `63b98b2c` 全暗态维护双区部署已验收；候选 `1.0.327` 未切换官网，旧 v1 已签署发布继续验证 | 维护证据不能替代 QA-02/正式 QA-04 和正式 REL-04；正式发布继续补齐其独立外部门禁 |
 | 备份、Redis、域名验收 | 两地当前运行版本完整 verifier 均为 `0 failure / 1 warning`，本地备份/临时恢复/认证刷新已完成；远端备份继续延期 | 副本/告警仍需独立的可用性、运维、成本/停机决定；新部署需重新收集该提交的域名和完整 VPS 回执 |

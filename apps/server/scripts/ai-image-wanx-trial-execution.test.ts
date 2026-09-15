@@ -205,6 +205,54 @@ async function fixture(experimentalInpaint = false) {
 }
 
 describe('Wanx trial execution through the real single-submit pipeline', () => {
+  describe('campaign authorization inputs', () => {
+    it.each([
+      'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256',
+      'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH', 'AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256',
+    ])('rejects campaign-only budget grant material while submitting: %s', async name => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, { [name]: 'synthetic-campaign-binding' }))
+        .rejects.toMatchObject({ code: 'WANX_TRIAL_REQUEST_OVERRIDE_FORBIDDEN' });
+      expect(value.calls).toHaveLength(0);
+      expect(await readdir(value.evidenceRoot)).not.toContain('intents');
+    }, 60_000);
+
+    it.each([
+      { AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH: 'private-quality.json' },
+      { AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256: 'a'.repeat(64) },
+      { AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256: 'not-a-sha256' },
+    ])('rejects incomplete or malformed campaign input before claims: %j', async extra => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, extra)).rejects.toThrow();
+      expect(value.calls).toHaveLength(0);
+      expect(await readdir(value.directory)).not.toContain('execution');
+      expect(await readdir(value.evidenceRoot)).not.toContain('intents');
+    }, 60_000);
+
+    it('does not ignore an authorization pin when no campaign authorization exists', async () => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, {
+        AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256: 'a'.repeat(64),
+      })).rejects.toThrow();
+      expect(value.calls).toHaveLength(0);
+      expect(await readdir(value.directory)).not.toContain('execution');
+      expect(await readdir(value.evidenceRoot)).not.toContain('intents');
+    }, 60_000);
+
+    it.each([
+      'AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256',
+      'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH',
+      'AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256',
+    ])('rejects %s outside explicit trial mode', async name => {
+      const value = await fixture();
+      await expect(value.run('INPAINT', false, {
+        AI_IMAGE_SANDBOX_MODE: 'SUBMIT', AI_IMAGE_SANDBOX_TRIAL_ROUND_ID: '',
+        AI_IMAGE_SANDBOX_TRIAL_MANIFEST_SHA256: '', [name]: 'a'.repeat(64),
+      })).rejects.toMatchObject({ code: 'WANX_TRIAL_MODE_REQUIRED' });
+      expect(value.calls).toHaveLength(0);
+    }, 60_000);
+  });
+
   it('submits the explicit experimental INPAINT through frozen preparation, v4 approval and the real sandbox runner', async () => {
     const value = await fixture(true);
     const selected = value.prepared.manifest.request.operations.find(operation => operation.operation === 'INPAINT')!;

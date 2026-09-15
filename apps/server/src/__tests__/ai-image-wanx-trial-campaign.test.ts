@@ -13,6 +13,7 @@ import { prepareAiImageWanxTrial } from '../services/ai-image-wanx-trial-prepara
 import { writeAiImageSandboxPrivateEvidenceFile } from '../services/ai-image-sandbox-billing-settlement.js';
 import * as privateEvidence from '../services/ai-image-sandbox-billing-settlement.js';
 import { inspectAiImageWanxTrialCampaign } from '../services/ai-image-wanx-trial-campaign.js';
+import * as campaignOwner from '../services/ai-image-wanx-trial-campaign.js';
 import { sanitizeAiImageSandboxGitEnvironment } from '../services/ai-image-sandbox-code-revision.js';
 import { AiPromptTemplateRegistryService } from '../services/ai-prompt-template-registry.js';
 import { InMemoryAiPromptTemplateStore } from '../services/ai-prompt-templates.js';
@@ -142,6 +143,257 @@ async function treeDigests(path: string): Promise<Array<[string, string]>> {
   }
   return result;
 }
+
+function campaignApi(name: string) {
+  const fn = (campaignOwner as Record<string, any>)[name];
+  expect(typeof fn, `${name} must implement scoped additional authorization`).toBe('function');
+  return fn;
+}
+
+async function additionalAuthorizationFixture(historicalAmounts?: number[]) {
+  const root = await fixture();
+  if (historicalAmounts) {
+    for (let index = 0; index < 3; index++) await legacyClaim(await round(root, `legacy-varied-${index}`,
+      { maximum: { currency: 'CNY', amount: historicalAmounts[index]!, scale: 2 } }));
+  } else await threeLegacy(root);
+  const fourth = await round(root, 'fourth-authorized', historicalAmounts
+    ? { maximum: { currency: 'CNY', amount: historicalAmounts[3]!, scale: 2 } } : {});
+  await claim(fourth);
+  const original = await round(root, 'visual-proposal');
+  const prior = original.prepared.manifest;
+  const executionRoundId = `${prior.request.roundId}-exec`;
+  const request = structuredClone(prior.request);
+  request.roundId = executionRoundId;
+  request.adapterRevision = 'b'.repeat(40);
+  for (const operation of request.operations) {
+    operation.operationId = `${executionRoundId}-${operation.operation.toLowerCase()}`;
+    operation.source.path = `wanx-trial-${prior.request.roundId}/${operation.source.path}`;
+    if (operation.mask) operation.mask.path = `wanx-trial-${prior.request.roundId}/${operation.mask.path}`;
+  }
+  const expected = { roundId: executionRoundId, adapterRevision: request.adapterRevision,
+    providerAccountUidSha256: trialAccountDigest, credentialRevision: trialCredentialRevision };
+  const requestPath = join(root, 'execution-input.json');
+  await writeFile(requestPath, trialJson(request), { mode: 0o600 });
+  const prepared = await prepareAiImageWanxTrial({ repositoryRoot, evidenceRoot: root, expected,
+    requestPath, requestSha256: trialDigest(trialJson(request)), assertRevision: async () => undefined });
+  const proposal = {
+    kind: 'WANX_VISUAL_RETEST_INPUT_PROPOSAL', status: 'INPUTS_PREPARED_NOT_AUTHORIZED',
+    roundId: prior.request.roundId, inputPreparationRevision: revision,
+    requiresFreshFrozenExecutionRevision: true, requiresBudgetExtensionImplementation: true,
+    requiresNewBudgetAuthorization: true, historicalAllocatedMaximumCost: { currency: 'CNY', amount: 1, scale: 0 },
+    proposedAdditionalMaximumCost: { currency: 'CNY', amount: 50, scale: 2 },
+    proposedCumulativeMaximumCost: { currency: 'CNY', amount: 150, scale: 2 }, maximumNewRequests: 2,
+    sequence: 'INPAINT_FIRST_STOP_IF_QUALITY_FAILS_THEN_FULL_EDIT', canSubmit: false,
+    draftSha256: trialDigest('synthetic-draft'), inputSha256: prior.sourceInputSha256,
+    manifestSha256: original.prepared.manifestSha256,
+    operations: prior.request.operations.map(operation => ({ operationId: operation.operationId,
+      operation: operation.operation, sourceSha256: operation.source.sha256, maskSha256: operation.mask?.sha256 ?? null,
+      quotedCost: operation.quotedCost, maximumCost: operation.maximumCost,
+      prompt: operation.frozenPrompt.prompt, negativePrompt: operation.frozenPrompt.negativePrompt,
+      renderedCharacters: Array.from(operation.frozenPrompt.resolvedPrompt).length,
+      resolvedPromptSha256: trialDigest(operation.frozenPrompt.resolvedPrompt),
+      renderingProfile: (operation.frozenPrompt.templateSnapshot as any).renderingContract.profile,
+    })), verifiedCanSubmit: false, realProviderRequests: 0,
+  };
+  const save = async (name: string, value: unknown) => {
+    const path = join(root, name); const bytes = trialJson(value);
+    await writeFile(path, bytes, { mode: 0o600 });
+    return { path, sha256: trialDigest(bytes) };
+  };
+  const proposalRef = await save('proposal.json', proposal);
+  const scope = { repositoryRoot, evidenceRoot: root, providerAccountUidSha256: trialAccountDigest };
+  const observed = await campaignApi('inspectAiImageWanxTrialCampaignHistory')(scope);
+  const history = observed.history;
+  const consent = { schemaVersion: 1, kind: 'WANX_TRIAL_CAMPAIGN_BUDGET_CONSENT_V1',
+    statement: 'I_APPROVE_EXACT_WANX_VISUAL_RETEST_ADDITIONAL_CNY_0_50',
+    approvedAt: new Date(Date.now() - 120_000).toISOString(), approverRefSha256: trialDigest('synthetic-user-approval'),
+    proposalSha256: proposalRef.sha256, history,
+    execution: { ...expected, manifestSha256: prepared.manifestSha256,
+      operations: prepared.manifest.bindings.map(binding => ({ operation: binding.operation,
+        approvedOperationId: prior.request.operations.find(item => item.operation === binding.operation)!.operationId,
+        operationId: binding.operationId, requestFingerprint: binding.requestFingerprint })) },
+    additionalMaximumCost: proposal.proposedAdditionalMaximumCost,
+    cumulativeMaximumCost: proposal.proposedCumulativeMaximumCost, sequence: proposal.sequence,
+  };
+  const approval = await save('consent.json', consent);
+  const input = { ...scope, expected, manifestSha256: prepared.manifestSha256, proposal: proposalRef,
+    approval, history, assertRevision: async () => undefined, now: () => new Date() };
+  const authorize = () => campaignApi('authorizeAiImageWanxTrialCampaign')(input);
+  const execution = async (operation: string, pin?: string, quality?: { path: string; sha256: string }) => loadAiImageWanxTrialExecution({
+    repositoryRoot, evidenceRoot: root, expected, manifestSha256: prepared.manifestSha256, operation,
+    campaignAuthorizationSha256: pin, inpaintQualityApproval: quality,
+    assertRevision: async () => undefined,
+  } as any);
+  const claimExecution = (execution: Awaited<ReturnType<typeof loadAiImageWanxTrialExecution>>) => {
+    const approval = { ...fourth.approval, approvalId: `approve-${execution.selected.operationId}`,
+      approvalSha256: trialDigest(`approved-${execution.selected.operationId}`), approvedAt: new Date(Date.now() - 1000).toISOString() };
+    return claimAiImageWanxTrialOperation({ execution, approval,
+      requestFingerprint: execution.binding.requestFingerprint, now: () => new Date() });
+  };
+  return { root, original, fourth, expected, prepared, proposal, consent, input, history, scope, save, authorize, execution, claimExecution };
+}
+
+async function passingInpaint(value: Awaited<ReturnType<typeof additionalAuthorizationFixture>>, authorizationSha256: string) {
+  const execution = await value.execution('INPAINT', authorizationSha256);
+  const claimed = await value.claimExecution(execution);
+  const image = await readFile(execution.sourcePath);
+  const imagePath = join(value.root, 'reviewed-inpaint.png');
+  await writeFile(imagePath, image, { mode: 0o600 });
+  const report = { schemaVersion: 5, operationId: execution.selected.operationId, operation: 'INPAINT', state: 'SUCCEEDED',
+    provider: 'dashscope-wanx21-image-edit', model: execution.manifest.request.model,
+    adapterRevision: value.expected.adapterRevision, credentialRevision: trialCredentialRevision,
+    requestProfile: execution.binding.requestProfile, promptSha256: execution.binding.promptSha256,
+    sourceSha256: [execution.binding.sourceSha256], maskSha256: execution.binding.maskSha256,
+    quotedCost: execution.selected.quotedCost, maximumCost: execution.selected.maximumCost, actualCost: null,
+    approvalEvidence: { approvalId: `approve-${execution.selected.operationId}`,
+      approvalSha256: trialDigest(`approved-${execution.selected.operationId}`) },
+    imageCount: 1, width: 1024, height: 1024, mimeType: 'image/png', bytes: image.length, sha256: trialDigest(image), imagePath,
+    completedAt: new Date().toISOString(),
+  };
+  const reportRef = await value.save(`${execution.selected.operationId}.report.json`, report);
+  const quality = { schemaVersion: 1, kind: 'WANX_TRIAL_INPAINT_QUALITY_APPROVAL_V1',
+    statement: 'I_CONFIRM_THIS_INPAINT_PASSES_BEFORE_FULL_EDIT', authorizationSha256,
+    inpaintOperationId: execution.selected.operationId, inpaintRequestFingerprint: execution.binding.requestFingerprint,
+    reportSha256: reportRef.sha256, imageSha256: report.sha256, reviewerRefSha256: trialDigest('synthetic-quality-reviewer'),
+    reviewedAt: new Date().toISOString(), decision: 'PASS',
+    checks: { targetColor: true, boundary: true, productIdentity: true, outsideMaskPixelsUnchanged: true },
+  };
+  return { execution, claimed, report, quality, qualityRef: await value.save('quality.json', quality) };
+}
+
+describe('exact CNY 0.50 additional Wanx authorization', () => {
+  it('requires four individual quarters, not merely an aggregate one-yuan history', async () => {
+    const value = await additionalAuthorizationFixture([40, 20, 20, 20]);
+    await expect(value.authorize()).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_AUTHORIZATION_HISTORY_MISMATCH' });
+    await expect(lstat(join(value.root, 'wanx-campaign.authorization.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(join(value.root, 'wanx-campaign.lock.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps empty history inspection read-only', async () => {
+    const root = await fixture();
+    const result = await campaignApi('inspectAiImageWanxTrialCampaignHistory')({ repositoryRoot, evidenceRoot: root, providerAccountUidSha256: trialAccountDigest });
+    expect(result.history.reservationSha256s).toEqual([]);
+    expect(result.allocationCount).toBe(0);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('appends authorization without rewriting the original four allocations and gates the two exact operations in order', async () => {
+    const value = await additionalAuthorizationFixture();
+    const originalFiles = await treeDigests(join(value.root, 'wanx-campaign'));
+    const scopeBytes = await readFile(join(value.root, 'wanx-campaign.scope.json'));
+    const authorized = await value.authorize();
+    expect(authorized.canSubmit).toBe(false);
+    expect(await treeDigests(join(value.root, 'wanx-campaign'))).toEqual(originalFiles);
+    expect(await readFile(join(value.root, 'wanx-campaign.scope.json'))).toEqual(scopeBytes);
+    await expect(value.execution('INPAINT')).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_AUTHORIZATION_REQUIRED' });
+    await expect(value.execution('FULL_EDIT', authorized.authorizationSha256)).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_QUALITY_REQUIRED' });
+    const inpaint = await passingInpaint(value, authorized.authorizationSha256);
+    const full = await value.execution('FULL_EDIT', authorized.authorizationSha256, inpaint.qualityRef);
+    const final = await value.claimExecution(full);
+    await final.assertCurrent();
+    expect(final.campaign.allocatedMaximumCost).toEqual({ currency: 'CNY', amount: 15, scale: 1 });
+    expect(final.campaign.remainingMaximumCost.amount).toBe(0);
+    await expect(value.claimExecution(full)).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_ALREADY_RESERVED' });
+    await expect(value.authorize()).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_AUTHORIZATION_EXISTS' });
+    for (const [path, sha256] of originalFiles) expect(trialDigest(await readFile(path))).toBe(sha256);
+  }, 30_000);
+
+  it.each(['statement', 'ceiling', 'history tip', 'history digest', 'scope', 'account', 'revision', 'manifest', 'fingerprint', 'future approval'])(
+    'rejects an additional consent with changed %s without granting budget', async change => {
+      const value = await additionalAuthorizationFixture();
+      const consent = value.consent as any;
+      if (change === 'statement') consent.statement = 'NOT_APPROVED';
+      if (change === 'ceiling') consent.cumulativeMaximumCost.amount = 200;
+      if (change === 'history tip') consent.history.tipSha256 = '0'.repeat(64);
+      if (change === 'history digest') consent.history.allocationsSha256 = '0'.repeat(64);
+      if (change === 'scope') consent.history.campaignScopeSha256 = '0'.repeat(64);
+      if (change === 'account') consent.execution.providerAccountUidSha256 = '0'.repeat(64);
+      if (change === 'revision') consent.execution.adapterRevision = revision;
+      if (change === 'manifest') consent.execution.manifestSha256 = '0'.repeat(64);
+      if (change === 'fingerprint') consent.execution.operations[0].requestFingerprint = '0'.repeat(64);
+      if (change === 'future approval') consent.approvedAt = '2099-01-01T00:00:00.000Z';
+      value.input.approval = await value.save('consent.json', consent);
+      await expect(value.authorize()).rejects.toThrow();
+      await expect(lstat(join(value.root, 'wanx-campaign.authorization.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+  it('refuses another round, a wrong pin, and reuse of an earlier operation approval', async () => {
+    const value = await additionalAuthorizationFixture();
+    const unrelated = await round(value.root, 'not-authorized');
+    const authorized = await value.authorize();
+    await expect(value.execution('INPAINT', '0'.repeat(64))).rejects.toThrow();
+    await expect(loadAiImageWanxTrialExecution({ ...unrelated.executionInput,
+      campaignAuthorizationSha256: authorized.authorizationSha256, assertRevision: async () => undefined } as any)).rejects.toThrow();
+    const execution = await value.execution('INPAINT', authorized.authorizationSha256);
+    await expect(claimAiImageWanxTrialOperation({ execution, approval: value.fourth.approval,
+      requestFingerprint: execution.binding.requestFingerprint, now: () => new Date() })).rejects.toThrow();
+    expect((await inspectAiImageWanxTrialCampaign(value.scope)).allocationCount).toBe(4);
+  }, 20_000);
+
+  it.each(['reject', 'wrong report', 'wrong image', 'changed bytes'])('keeps FULL_EDIT blocked after %s quality evidence', async change => {
+    const value = await additionalAuthorizationFixture();
+    const authorized = await value.authorize();
+    const inpaint = await passingInpaint(value, authorized.authorizationSha256);
+    if (change === 'reject') inpaint.quality.decision = 'FAIL';
+    if (change === 'wrong report') inpaint.quality.reportSha256 = '0'.repeat(64);
+    if (change === 'wrong image') inpaint.quality.imageSha256 = '0'.repeat(64);
+    if (change !== 'changed bytes') inpaint.qualityRef = await value.save('quality.json', inpaint.quality);
+    else await writeFile(inpaint.report.imagePath, 'changed image bytes');
+    await expect(value.execution('FULL_EDIT', authorized.authorizationSha256, inpaint.qualityRef)).rejects.toThrow();
+    expect((await inspectAiImageWanxTrialCampaign(value.scope)).allocationCount).toBe(5);
+  }, 20_000);
+
+  it('rechecks authorization bytes after reservation and never refunds the fifth operation', async () => {
+    const value = await additionalAuthorizationFixture();
+    const authorized = await value.authorize();
+    const inpaint = await passingInpaint(value, authorized.authorizationSha256);
+    await writeFile(authorized.authorizationPath, '{}\n');
+    await expect(inpaint.claimed.assertCurrent()).rejects.toThrow();
+    expect((await readdir(join(value.root, 'wanx-campaign'))).length).toBe(5);
+  }, 20_000);
+
+  it('rejects a copied authorization in another physical root', async () => {
+    const value = await additionalAuthorizationFixture();
+    const authorized = await value.authorize();
+    const copied = await fixture();
+    await cp(value.root, copied, { recursive: true });
+    await expect(loadAiImageWanxTrialExecution({ repositoryRoot, evidenceRoot: copied, expected: value.expected,
+      manifestSha256: value.prepared.manifestSha256, operation: 'INPAINT',
+      campaignAuthorizationSha256: authorized.authorizationSha256, assertRevision: async () => undefined }))
+      .rejects.toThrow();
+  }, 20_000);
+
+  it('keeps the fifth reservation and lock when its operation claim cannot be persisted', async () => {
+    const value = await additionalAuthorizationFixture();
+    const authorized = await value.authorize();
+    const execution = await value.execution('INPAINT', authorized.authorizationSha256);
+    const originalWriter = privateEvidence.writeAiImageSandboxPrivateEvidenceFile;
+    const writer = vi.spyOn(privateEvidence, 'writeAiImageSandboxPrivateEvidenceFile').mockImplementation(async (path, bytes, root) => {
+      if (path.endsWith('INPAINT.claim.json')) throw new Error('Synthetic failure after the additional reservation');
+      return originalWriter(path, bytes, root);
+    });
+    await expect(value.claimExecution(execution)).rejects.toThrow();
+    writer.mockRestore();
+    const reservations = await readdir(join(value.root, 'wanx-campaign'));
+    expect(reservations).toHaveLength(5);
+    const fifth = JSON.parse(await readFile(join(value.root, 'wanx-campaign', reservations.sort()[4]!), 'utf8'));
+    expect(fifth).toMatchObject({ schemaVersion: 2, campaignAuthorizationSha256: authorized.authorizationSha256,
+      maximumCost: { currency: 'CNY', amount: 25, scale: 2 } });
+    expect((await lstat(join(value.root, 'wanx-campaign.lock.json'))).isFile()).toBe(true);
+    await expect(execution.assertCurrent()).rejects.toMatchObject({ code: 'WANX_TRIAL_CAMPAIGN_LOCKED' });
+  }, 20_000);
+
+  it('rechecks the quality approval immediately before FULL_EDIT sends', async () => {
+    const value = await additionalAuthorizationFixture();
+    const authorized = await value.authorize();
+    const inpaint = await passingInpaint(value, authorized.authorizationSha256);
+    const full = await value.execution('FULL_EDIT', authorized.authorizationSha256, inpaint.qualityRef);
+    const claimed = await value.claimExecution(full);
+    await writeFile(inpaint.qualityRef.path, '{}\n');
+    await expect(claimed.assertCurrent()).rejects.toThrow();
+    expect((await readdir(join(value.root, 'wanx-campaign'))).length).toBe(6);
+  }, 30_000);
+});
 
 describe('Wanx campaign authorization across immutable rounds', () => {
   it.each([['inspect', 0], ['claim', 0], ['inspect', 129]] as const)('allows ordinary wanx-trial-* private files during %s with %s extra notes without counting them as rounds', async (mode, noteCount) => {

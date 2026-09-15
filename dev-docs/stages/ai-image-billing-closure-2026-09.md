@@ -17,6 +17,7 @@
 | --- | --- | --- | --- |
 | 隔离实验提示词 | 根 Agent：`ai-image-edit-prompt-contract.ts`、`ai-image-edit-provider-contract.ts`、`ai-image-wanx-trial-input.ts`、`ai-image-wanx-trial-preparation.ts` 及定向测试 | 原编译/准备 CLI、single-submit 的 trial 路径 | 新实验 profile 显式选择且绑定完整快照；preview 仍不可发包，普通 hosted 仍固定 v1；历史 v1/preview 摘要不变 |
 | 跨 round 累计上限 | 预算 Agent：新的 campaign 预算 owner、`ai-image-wanx-trial-execution.ts` 与专用测试 | trial claim 及最后发包校验 | 同一物理私有根绑定账户和 CNY 1；读取并保留历史已消费槽位，跨进程累计，超限在发包前拒绝；失败/未知/免费不释放金额 |
+| 已批准的固定追加 | `ai-image-wanx-trial-campaign.ts`、`ai-image-wanx-campaign-authorization.ts`；execution 复用原 claim | 离线 campaign CLI、v4 草稿/核验、single-submit | 只对原四笔各 0.25 的完整历史追加 0.50，累计 1.50；原记录不变，绑定获批提案与新执行输入，INPAINT 质量通过才可 FULL_EDIT |
 | 原生控制台明细 | 账单 Agent：新的 ListConsumeDetails 观察 owner、必要的共享原生 JSON/金额 reader 及测试 | 根 Agent 接入现有 billing CLI；真实私有采集回放 | Count/Data 原始响应及查询范围保真；账号、分页、日期、精确金额、免费抵扣分别验证；只输出脱敏观察，不能生成正式结算或晋升能力 |
 | CLI、组合门禁和真源 | 根 Agent：billing CLI、package scripts、对应 CLI 测试、`dev-docs/` 和必要 runbook | 操作员、后续 Agent、正式原生证据回放 | 完成源码/命令验证后，使用真实已采集账单回放；准备新的可审阅输入，任何新真实请求等待单独批准 |
 
@@ -42,7 +43,8 @@
 
 ## 剩余外部验收
 
+- 2026-09-15 接续开发已取得新增固定预算授权，owner 与薄 CLI 正在组合门禁；最新测试、代码冻结及实际发包结果统一回写[当前状态审计](../current-state-audit.md#生图与计费接续http-来源复验及重测授权2026-09-15)。原四次历史批准与当前追加批准分开保存。
 - 新实验提示词的真实质量、正常 ERP 任务来源与候选接收链、非零扣费分支及正式单任务最终结算尚未通过。
 - 第四次输入已经消费，四次授权均不能重用；先保留结果并做离线诊断，新实测另需完整预算和审批绑定。
-- 当前离线诊断未证明质量根因；继续以质量阈值、提示词/参数合同和原生账单只读核对为主，新增生成必须重新取得整轮预算及逐次批准。
+- 当前离线诊断未证明质量根因；按已批准的固定追加完成至多两次条件重测，范围外的生成仍需新的预算和批准。原生账单只读核对、质量阈值和正式结算要求保持。
 - 外部账单最终性遵守原计费 runbook，不能仅凭日期、零应付或单条时间窗匹配宣称完成。

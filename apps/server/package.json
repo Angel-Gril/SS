@@ -27,6 +27,8 @@
     "smoke:remote": "node scripts/remote-smoke.mjs",
     "sandbox:ai-image:approval:draft": "tsx scripts/ai-image-provider-approval-draft.ts",
     "sandbox:ai-image:wanx-trial:prepare": "tsx scripts/ai-image-provider-approval-draft.ts --prepare-wanx-trial",
+    "sandbox:ai-image:wanx-trial:campaign:inspect": "tsx scripts/ai-image-provider-approval-draft.ts --inspect-wanx-campaign",
+    "sandbox:ai-image:wanx-trial:campaign:authorize": "tsx scripts/ai-image-provider-approval-draft.ts --authorize-wanx-campaign",
     "sandbox:ai-image:wanx-trial:input:compile": "tsx scripts/ai-image-provider-approval-draft.ts --compile-wanx-trial-input",
     "sandbox:ai-image:wanx-trial:sources:import": "tsx scripts/ai-image-provider-approval-draft.ts --import-wanx-template-sources",
     "sandbox:ai-image:wanx-trial:verify": "tsx scripts/ai-image-provider-approval-draft.ts --verify-wanx-trial",

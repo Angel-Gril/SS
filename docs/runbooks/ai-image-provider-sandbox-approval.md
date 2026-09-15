@@ -448,7 +448,7 @@ the manifest; the slot name is the operation, not a replaceable approval ID. The
 revalidates the code, manifest, directory identity, claims and approval validity. The in-memory
 POST guard also claims synchronously before body, DNS or approval awaits.
 
-All rounds in the same physical evidence root share the fixed CNY 1 campaign ceiling and the
+Without a reviewed scoped addition, all rounds in the same physical evidence root share the fixed CNY 1 campaign ceiling and the
 independently reviewed account UID digest. A new round or credential revision cannot reset it.
 The campaign owner validates each historical operation claim against its original round and
 fully verified manifest, then reserves that operation's maximum. An unclaimed companion slot
@@ -471,6 +471,51 @@ spending cap or proof of the eventual bill amount. For an offline budget observa
 `inspectAiImageWanxTrialCampaign` service returns the same checked ceiling, allocation and
 remaining maximum without creating any file or lock. Its `observationOnly:true/canSubmit:false`
 result is a point-in-time view; a later submission must still acquire the lock and recalculate.
+
+### Append The Approved Two-Sample Budget
+
+The optional campaign addition supports one fixed CNY 0.50 visual retest after exactly four
+durable CNY 0.25 allocations have exhausted the original CNY 1. It is not a general budget editor.
+The original scope, claims and reservation bytes stay unchanged; one new, exclusive
+`wanx-campaign.authorization.json` binds their complete history and original physical root.
+The resulting cumulative ceiling is CNY 1.50. Free quota, failure and unknown outcomes never
+release either the old or the additional allocation.
+
+Use the offline commands through the existing approval CLI:
+
+```bash
+pnpm --filter server sandbox:ai-image:wanx-trial:campaign:inspect
+pnpm --filter server sandbox:ai-image:wanx-trial:campaign:authorize
+```
+
+Inspection requires only `NODE_ENV=sandbox`, the clean `AI_IMAGE_SANDBOX_ADAPTER_REVISION`,
+`AI_IMAGE_SANDBOX_EVIDENCE_ROOT` and `AI_IMAGE_SANDBOX_BILLING_ACCOUNT_UID_SHA256`.
+It returns the history digests for review without writing a lock or authorization.
+Authorization additionally requires the prepared execution round/manifest and credential revision,
+`AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_PATH` / `AI_IMAGE_SANDBOX_CAMPAIGN_PROPOSAL_SHA256`, and
+`AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_PATH` / `AI_IMAGE_SANDBOX_CAMPAIGN_CONSENT_SHA256`.
+The pinned consent must match the current history and exact new execution bindings. Both commands
+reject Provider/cloud credentials, paid confirmation, ordinary approval and request overrides.
+
+Retain the original proposal and preparation. Recompile the same approved visual inputs at the
+new reviewed revision using `<proposal-round>-exec` and its derived operation IDs. The owner
+compares the original and execution manifests; changing the model, account, credential revision,
+prompts, template snapshots, source, mask, quote or operation maxima invalidates the addition.
+Only these two mapped operations may use the new allowance. An authorization file cannot
+substitute for either operation's separate v4 approval.
+
+For the new round, supply `AI_IMAGE_SANDBOX_CAMPAIGN_AUTHORIZATION_SHA256` to approval drafting,
+approval verification and single-submit. Execute INPAINT first. FULL_EDIT additionally requires
+`AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_PATH` and
+`AI_IMAGE_SANDBOX_INPAINT_QUALITY_APPROVAL_SHA256`, binding a reviewed PASS to this authorization,
+the consumed INPAINT claim, its successful report and output image. The quality record preserves
+the reviewer's responsibility for color, boundary and product checks; reading it does not
+automatically measure image quality. Missing, failed, stale or mismatched evidence stops FULL_EDIT.
+Review the raw result and any composited result separately, retaining the evidence for the
+outside-mask pixel check. Every final send rechecks the authorization and quality evidence.
+
+The grant returns `canSubmit:false`. It does not finalize a native bill, promote a capability,
+authorize retries, enable normal ERP workflows or alter production flags.
 
 Retain the normal intent, report, Wanx async evidence and
 `<operationId>.wanx.trial-evidence.json` together. The latter binds the immutable report digest,
