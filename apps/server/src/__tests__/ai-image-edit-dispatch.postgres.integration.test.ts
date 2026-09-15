@@ -87,11 +87,14 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     vi.resetAllMocks();
   });
 
-  async function fixture(operation: 'FULL_EDIT' | 'INPAINT', providerMode: 'openai' | 'wanx' = 'openai') {
-    const activeRuntime: AiImageEditProviderRuntimeConfig = providerMode === 'wanx'
+  async function fixture(operation: 'FULL_EDIT' | 'INPAINT', providerMode: 'openai' | 'wanx' = 'openai', options: {
+    currency?: 'CNY'; costPerImageCents?: number; useDefaultRegistry?: boolean;
+  } = {}) {
+    const activeRuntime: AiImageEditProviderRuntimeConfig = { ...(providerMode === 'wanx'
       ? { ...runtime, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
         credentialRevision: { recordId: 'synthetic-wanx-config', revision: 3, updatedAt: '2026-09-09T10:00:00.000Z' } }
-      : runtime;
+      : runtime), ...(options.currency ? { currency: options.currency } : {}),
+      ...(options.costPerImageCents !== undefined ? { costPerImageCents: options.costPerImageCents } : {}) };
     const activeCapability: AiImageProviderCapability = providerMode === 'wanx' ? {
       ...fixtureCapability, provider: activeRuntime.provider, model: activeRuntime.model,
       inputTransport: 'base64', resultMode: 'async',
@@ -168,13 +171,14 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     }
 
     const workflowRepository = new PrismaAiMediaWorkflowRepository(database);
-    const workflowService = createAiMediaWorkflowService(workflowRepository, { resolveCapability: () => activeCapability });
+    const workflowService = createAiMediaWorkflowService(workflowRepository,
+      options.useDefaultRegistry ? {} : { resolveCapability: () => activeCapability });
     const compiled = providerMode === 'wanx'
       ? await new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' })
         .resolveTemplate({ templateKey: operation === 'INPAINT' ? 'inpaint.base' : 'full-image-edit.base',
           renderingProfile: 'ai-image-wanx21-edit-prompt/v1', variables: { userPrompt: 'Edit the background', userNegativePrompt: '' } })
       : null;
-    // Capability is a declared fixture. The real registry remains unverified and disabled.
+    // External HTTP is synthetic; normal admission can use the actual registered adapter contract.
     const creationInput = {
       ownerUserId, actorUserId: ownerUserId, operation, sourceAssetId, width: WIDTH, height: HEIGHT,
       ...(operation === 'INPAINT' ? { maskAssetId, maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS } : {}),
@@ -196,7 +200,7 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     expect(created.replayed).toBe(false);
     expect(resolveAiImageEditProvider(
       activeRuntime.provider, activeRuntime.model, operation, activeRuntime, undefined, 'test',
-    ).name).toBe('disabled');
+    ).name).toBe(activeRuntime.provider);
 
     const repository = new PrismaAiImageJobRepository(database);
     const loadInputBuffer = (asset: Parameters<typeof loadAiImageEditInputBuffer>[0]) => loadAiImageEditInputBuffer(asset, {
@@ -223,7 +227,7 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
       resolveProvider: (provider, model, requestedOperation, config, onCreated, nodeEnv, dependencies) => (
         resolveAiImageEditProvider(provider, model, requestedOperation, config, onCreated, nodeEnv, {
           ...dependencies,
-          resolveCapability: () => activeCapability,
+          ...(options.useDefaultRegistry ? {} : { resolveCapability: () => activeCapability }),
           createOpenAiEditProvider: (options) => createOpenAiImageEditProvider({
             ...options, timeoutMs: 10_000,
           }),
@@ -244,7 +248,8 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
       return { job, workflow, reservation, assets };
     };
     expect((await state()).reservation).toMatchObject({
-      status: 'RESERVED', currency: 'USD', estimatedCostMinor: 7, maximumCostMinor: 7,
+      status: 'RESERVED', currency: options.currency ?? 'USD',
+      estimatedCostMinor: activeRuntime.costPerImageCents, maximumCostMinor: activeRuntime.costPerImageCents,
     });
     const response = () => new Response(JSON.stringify({
       id: `synthetic-request-${suffix}`, data: [{ b64_json: candidate.toString('base64') }],
@@ -372,7 +377,7 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     expect(fetcher.mock.calls.filter((call: any[]) => call[1]?.method === 'POST')).toHaveLength(1);
   });
 
-  it.each(['wrong-id', 'wrong-dimensions', 'changed-source', 'unknown', 'failed'] as const)('keeps %s recovery unreviewable and never infers a free request', async (failure) => {
+  it.each(['wrong-id', 'wrong-dimensions', 'changed-source', 'unknown', 'failed'] as const)('keeps %s recovery unreviewable and only releases confirmed zero-output task fees', async (failure) => {
     const { target, taskId, fetcher } = await interruptedWanx();
     const before = await target.state();
     if (failure === 'unknown' || failure === 'failed') {
@@ -389,7 +394,14 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     expect(result).toMatchObject({ recovered: 0, ...(failure === 'failed' ? { noOutput: 1 } : { manualReview: 1 }) });
     const after = await target.state();
     expect(after.job).toMatchObject({ status: 'FAILED', providerJobId: taskId });
-    expect(after.reservation).toEqual(before.reservation);
+    if (failure === 'failed') {
+      expect(after.reservation.status).toBe('RELEASED');
+      expect(after.reservation.settlements.filter((entry) => entry.kind === 'RECONCILED_RELEASE'))
+        .toEqual([expect.objectContaining({ actualCostMinor: 0, billedUnits: 0 })]);
+      expect(after.job.actualCostCents).toBe(0);
+    } else {
+      expect(after.reservation).toEqual(before.reservation);
+    }
     expect(after.assets).toHaveLength(0);
     expect(fetcher.mock.calls.filter((call: any[]) => call[1]?.method === 'POST')).toHaveLength(1);
   });
@@ -514,7 +526,7 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     expect(after.assets).toEqual([expect.objectContaining({ kind: 'AI_PROVIDER_OUTPUT' })]);
   });
 
-  it('refuses translation-style completion and a status-only free-charge claim for an accepted edit', async () => {
+  it('refuses translation-style completion and a pending task pretending to have no output', async () => {
     const { target } = await interruptedWanx();
     const repo = recoveryRepository(target.jobId);
     const [claim] = await repo.claimDue({ workerId: 'invalid-path', now: new Date(), limit: 1, leaseMs: 60_000 });
@@ -524,9 +536,9 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
       url: 'https://fixture.invalid/bypass.png', storageBackend: 'oss', storageKey: 'bypass.png',
       mimeType: 'image/png', sizeBytes: target.candidate.length, sha256: digest(target.candidate), width: WIDTH, height: HEIGHT,
     } })).rejects.toMatchObject({ code: 'INVALID_EDIT_OUTPUT_GRAPH' });
-    await expect(repo.completeNoOutput({ claim: claim!, providerStatus: 'FAILED', errorCode: 'PROVIDER_TASK_FAILED',
+    await expect(repo.completeNoOutput({ claim: claim!, providerStatus: 'PENDING', errorCode: 'PROVIDER_TASK_FAILED',
       errorMessage: 'Synthetic failure', billingDisposition: 'NO_CHARGE',
-    })).rejects.toMatchObject({ code: 'PROVIDER_COST_EVIDENCE_MISMATCH' });
+    })).rejects.toMatchObject({ code: 'PROVIDER_NO_OUTPUT_UNPROVEN' });
     const after = await target.state();
     expect(after.assets).toHaveLength(0);
     expect(after.reservation).toEqual(before.reservation);
@@ -577,6 +589,75 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
     expect(await recover()).toMatchObject({ claimed: 0 });
     expect((await target.state()).assets).toHaveLength(2);
     expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('completes normal %s at CNY 0.14 once, independently of changed prices and later review', async (operation) => {
+    const target = await fixture(operation, 'wanx', { currency: 'CNY', costPerImageCents: 14, useDefaultRegistry: true });
+    const taskId = `normal-priced-${target.jobId}`;
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ output: { task_id: taskId, task_status: 'PENDING' } }))
+      .mockResolvedValueOnce(wanxSuccess(taskId))
+      .mockResolvedValueOnce(new Response(target.candidate, { headers: { 'content-type': 'image/png' } }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(target.execute(1, { getProviderConfig: async () => ({
+      ...target.activeRuntime, costPerImageCents: 99, currency: 'USD',
+    }) })).resolves.toBe('completed');
+    const state = await target.state();
+    expect(state.job).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 14, billedUnits: 1 });
+    expect(state.workflow).toMatchObject({ status: 'SUCCEEDED', reviewStatus: 'PENDING' });
+    expect(state.reservation).toMatchObject({ status: 'SETTLED', currency: 'CNY', maximumCostMinor: 14 });
+    expect(state.reservation.settlements).toEqual([expect.objectContaining({ kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 })]);
+    const final = state.assets.find((asset) => asset.kind === 'AI_GENERATED')!;
+    expect(final).toBeDefined();
+    await target.workflowService.review({ id: state.workflow.id, ownerUserId: target.ownerUserId, actorUserId: target.ownerUserId,
+      expectedRevision: state.workflow.revision, outputAssetId: final.id, decision: 'REJECT', note: 'Choose another design' });
+    await expect(target.execute(2)).resolves.toBe('ignored');
+    const after = await target.state();
+    expect(after.reservation.settlements).toEqual(state.reservation.settlements);
+    expect(after.job.actualCostCents).toBe(14);
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('releases a confirmed zero-output CNY task without waiting for a supplier bill', async () => {
+    const target = await fixture('INPAINT', 'wanx', { currency: 'CNY', costPerImageCents: 14, useDefaultRegistry: true });
+    const taskId = `no-output-${target.jobId}`;
+    const failed = () => jsonResponse({ output: { task_id: taskId, task_status: 'FAILED', code: 'GenerationFailed', message: 'Synthetic no output' } });
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ output: { task_id: taskId, task_status: 'PENDING' } }))
+      .mockImplementationOnce(failed);
+    vi.stubGlobal('fetch', fetcher);
+    await expect(target.execute()).rejects.toThrow();
+    const state = await target.state();
+    expect(state.job).toMatchObject({ status: 'FAILED', providerReconciliationStatus: 'NO_OUTPUT', actualCostCents: 0, billedUnits: 0 });
+    expect(state.assets).toHaveLength(0);
+    expect(state.reservation).toMatchObject({ status: 'RELEASED', currency: 'CNY' });
+    expect(state.reservation.settlements.filter((entry) => ['RELEASE', 'RECONCILED_RELEASE'].includes(entry.kind)))
+      .toEqual([expect.objectContaining({ actualCostMinor: 0, billedUnits: 0 })]);
+    await expect(recoverTarget(target)).resolves.toMatchObject({ claimed: 0 });
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases a confirmed zero-output CNY task during recovery without a second submission', async () => {
+    const target = await fixture('FULL_EDIT', 'wanx', { currency: 'CNY', costPerImageCents: 14, useDefaultRegistry: true });
+    const taskId = `recovered-no-output-${target.jobId}`;
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ output: { task_id: taskId, task_status: 'PENDING' } }))
+      .mockRejectedValueOnce(new Error('Synthetic interrupted poll'))
+      .mockResolvedValueOnce(jsonResponse({ output: { task_id: taskId, task_status: 'FAILED', code: 'GenerationFailed', message: 'Synthetic no output' } }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(target.execute()).rejects.toThrow('Synthetic interrupted poll');
+    await expect(recoverTarget(target)).resolves.toMatchObject({ noOutput: 1, recovered: 0 });
+    const state = await target.state();
+    expect(state.job).toMatchObject({ status: 'FAILED', providerReconciliationStatus: 'NO_OUTPUT', actualCostCents: 0, billedUnits: 0 });
+    expect(state.assets).toHaveLength(0);
+    expect(state.reservation).toMatchObject({ status: 'RELEASED', currency: 'CNY' });
+    expect(state.reservation.settlements.filter((entry) => entry.kind === 'RECONCILED_RELEASE'))
+      .toEqual([expect.objectContaining({ actualCostMinor: 0, billedUnits: 0 })]);
+    await expect(recoverTarget(target)).resolves.toMatchObject({ claimed: 0 });
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it.each(['FULL_EDIT', 'INPAINT'] as const)('executes frozen Wanx %s through the real service, database and async adapter', async (operation) => {

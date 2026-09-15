@@ -18,6 +18,26 @@ const allowPaidDispatch = async () => ({
 });
 
 describe('AI image BullMQ worker boundary', () => {
+  it.each([
+    { provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1' },
+    { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', baseUrl: 'https://dashscope.aliyuncs.com/api/v1' },
+    { provider: 'custom', model: 'admin-configured-model', baseUrl: 'https://relay.example/v1' },
+  ])('selects the implemented normal $provider/$model adapter without supplier receipts', (identity) => {
+    const provider = resolveAiImageProvider(identity.provider, { ...identity, apiKey: 'synthetic-key', costPerImageCents: 7 });
+    expect(provider.name).toBe(identity.provider);
+  });
+
+  it.each([
+    { provider: 'openai-images', model: 'unregistered-model', baseUrl: 'https://api.openai.com/v1' },
+    { provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://relay.example/v1' },
+    { provider: 'dashscope-wanx', model: 'unregistered-model', baseUrl: 'https://dashscope.aliyuncs.com/api/v1' },
+    { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', baseUrl: 'https://workspace-other.cn-beijing.maas.aliyuncs.com/api/v1' },
+    { provider: 'unknown', model: 'some-model', baseUrl: 'https://relay.example/v1' },
+    { provider: 'custom', model: '', baseUrl: 'https://relay.example/v1' },
+  ])('keeps an unsupported normal adapter disabled: $provider/$model/$baseUrl', (identity) => {
+    expect(resolveAiImageProvider(identity.provider, { ...identity, apiKey: 'synthetic-key', costPerImageCents: 7 }).name)
+      .toBe('disabled');
+  });
   it('allows one BullMQ redelivery for state recovery without provider resubmission', () => {
     expect(AI_IMAGE_QUEUE_JOB_OPTIONS).toEqual(expect.objectContaining({
       attempts: 2,
@@ -185,7 +205,7 @@ describe('AI image BullMQ worker boundary', () => {
     }));
   });
 
-  it('does not let text-to-image sandbox evidence unlock IMAGE_TO_IMAGE dispatch', async () => {
+  it('does not let a text-only capability unlock IMAGE_TO_IMAGE dispatch', async () => {
     const generate = vi.fn(async () => ({ images: [] }));
     const edit = vi.fn(async () => ({ images: [] }));
     const endpointSha256 = aiImageProviderEndpointSha256(
@@ -202,7 +222,7 @@ describe('AI image BullMQ worker boundary', () => {
       {
         resolveCapability: () => ({
           provider: 'openai-images', model: 'gpt-image-1',
-          operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'], maxReferences: 16,
+          operations: ['TEXT_TO_IMAGE'], maxReferences: 16,
           supportsMask: false, inputTransport: 'multipart', resultMode: 'sync',
           evidenceLevel: 'sandbox-verified', evidence: 'text-only sandbox evidence',
           sandboxEvidence: [{
@@ -290,7 +310,7 @@ describe('AI image BullMQ worker boundary', () => {
     expect(getProviderConfig).not.toHaveBeenCalled();
   });
 
-  it('dispatches only when the active endpoint, model, price and request match the frozen contract', async () => {
+  it.each([7, 11, 0])('dispatches using the confirmed price when the configured price is %s', async (activePrice) => {
     const providerConfig = {
       provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'secret',
       model: 'gpt-image-1', costPerImageCents: 7,
@@ -308,22 +328,27 @@ describe('AI image BullMQ worker boundary', () => {
         estimatedCostMinor: 7, maximumCostMinor: 7,
       },
     };
-    const repository = { getById: vi.fn(async () => job) };
+    const repository = { getById: vi.fn(async () => job), markEnqueueFailed: vi.fn(async () => true) };
     const provider = { name: 'openai-images', generate: vi.fn() };
     const run = vi.fn(async () => undefined);
+    const resolveProvider = vi.fn(() => provider);
 
     await processAiImageQueueJob('job-frozen', 1, {
       repository: repository as any,
       getDispatchAuthorization: vi.fn(async () => ({
         enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
       })),
-      getProviderConfig: vi.fn(async () => providerConfig),
-      resolveProvider: vi.fn(() => provider),
+      getProviderConfig: vi.fn(async () => ({ ...providerConfig, costPerImageCents: activePrice })),
+      resolveProvider,
       uploadBuffer: vi.fn(),
       run,
     });
 
     expect(run).toHaveBeenCalledWith('job-frozen', 1, expect.objectContaining({ provider }));
+    expect(resolveProvider).toHaveBeenCalledWith('openai-images', {
+      ...providerConfig, currency: 'USD',
+    }, undefined);
+    expect(repository.markEnqueueFailed).not.toHaveBeenCalled();
   });
 
   it('fails before Provider resolution when the configured endpoint changed after queueing', async () => {
@@ -502,7 +527,7 @@ describe('AI image BullMQ worker boundary', () => {
     expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
   });
 
-  it('keeps an unverified custom image provider disabled in the normal worker', async () => {
+  it('uses the configured custom text adapter without requiring supplier receipts', async () => {
     const providerConfig = {
       provider: 'custom', baseUrl: 'https://relay.example', apiKey: 'secret',
       model: 'custom-image-model', costPerImageCents: 5,
@@ -526,7 +551,7 @@ describe('AI image BullMQ worker boundary', () => {
       getProviderConfig: vi.fn(async () => providerConfig),
       uploadBuffer: vi.fn(), run,
     });
-    expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
+    expect((run as any).mock.calls[0]?.[2].provider.name).toBe('custom');
   });
   it('quarantines an unclassified paid provider failure when the queue allows one attempt', async () => {
     const providerConfig = {

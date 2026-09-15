@@ -10,6 +10,9 @@ export const AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION =
   'ai-image-provider-runtime/v1' as const;
 export const AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION =
   'ai-image-provider-runtime/v2' as const;
+export const AI_IMAGE_PROVIDER_CURRENCY_RUNTIME_CONTRACT_VERSION =
+  'ai-image-provider-runtime/v3' as const;
+export type AiImageProviderCurrency = 'USD' | 'CNY';
 
 export interface AiImageProviderCredentialRevision {
   recordId: string;
@@ -22,12 +25,14 @@ export interface AiImageProviderRuntimeIdentity {
   baseUrl: string;
   model: string;
   costPerImageCents: number;
+  currency?: AiImageProviderCurrency;
   credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 export interface AiImageProviderRuntimeContract extends Record<string, unknown> {
   contractVersion: typeof AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
-    | typeof AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION;
+    | typeof AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION
+    | typeof AI_IMAGE_PROVIDER_CURRENCY_RUNTIME_CONTRACT_VERSION;
   provider: string;
   model: string;
   baseUrlSha256: string;
@@ -36,6 +41,7 @@ export interface AiImageProviderRuntimeContract extends Record<string, unknown> 
   width: number;
   height: number;
   maximumCostCents: number;
+  currency?: AiImageProviderCurrency;
   credentialRevision?: AiImageProviderCredentialRevision;
 }
 
@@ -62,6 +68,13 @@ function positiveInteger(value: unknown, label: string): number {
     throw new AiImageProviderRuntimeContractError(`${label} is invalid`);
   }
   return normalized;
+}
+
+function supportedCurrency(value: unknown): AiImageProviderCurrency {
+  if (value !== 'USD' && value !== 'CNY') {
+    throw new AiImageProviderRuntimeContractError('Provider quote currency must be USD or CNY');
+  }
+  return value;
 }
 
 function providerDefaultBaseUrl(provider: string): string {
@@ -162,11 +175,12 @@ export function createAiImageProviderRuntimeContract(
   const imageCount = positiveInteger(request.count, 'image count');
   const width = positiveInteger(request.width, 'image width');
   const height = positiveInteger(request.height, 'image height');
+  const currency = identity.currency === undefined ? undefined : supportedCurrency(identity.currency);
   const credentialRevision = requiresAiImageProviderCredentialRevision(provider, model)
     ? parseAiImageProviderCredentialRevision(identity.credentialRevision) : undefined;
   return {
-    contractVersion: credentialRevision
-      ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+    contractVersion: currency ? AI_IMAGE_PROVIDER_CURRENCY_RUNTIME_CONTRACT_VERSION
+      : credentialRevision ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
     provider,
     model,
     baseUrlSha256: aiImageProviderEndpointSha256(provider, identity.baseUrl),
@@ -175,6 +189,7 @@ export function createAiImageProviderRuntimeContract(
     width,
     height,
     maximumCostCents: safeMaximumCost(unitCostCents, imageCount),
+    ...(currency ? { currency } : {}),
     ...(credentialRevision ? { credentialRevision } : {}),
   };
 }
@@ -187,11 +202,13 @@ export function parseAiImageProviderRuntimeContract(value: unknown): AiImageProv
   const provider = requiredText(input.provider, 'frozen provider');
   const model = requiredText(input.model, 'frozen model');
   const credentialBound = requiresAiImageProviderCredentialRevision(provider, model);
-  const contractVersion = credentialBound
-    ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION;
+  const currencyBound = input.contractVersion === AI_IMAGE_PROVIDER_CURRENCY_RUNTIME_CONTRACT_VERSION;
+  const contractVersion = currencyBound ? AI_IMAGE_PROVIDER_CURRENCY_RUNTIME_CONTRACT_VERSION
+    : credentialBound ? AI_IMAGE_PROVIDER_CREDENTIAL_RUNTIME_CONTRACT_VERSION : AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION;
   if (input.contractVersion !== contractVersion) {
     throw new AiImageProviderRuntimeContractError('Provider runtime contract version is invalid');
   }
+  const currency = currencyBound ? supportedCurrency(input.currency) : undefined;
   const credentialRevision = credentialBound
     ? parseAiImageProviderCredentialRevision(input.credentialRevision) : undefined;
   const baseUrlSha256 = String(input.baseUrlSha256 || '');
@@ -216,6 +233,7 @@ export function parseAiImageProviderRuntimeContract(value: unknown): AiImageProv
     width,
     height,
     maximumCostCents,
+    ...(currency ? { currency } : {}),
     ...(credentialRevision ? { credentialRevision } : {}),
   };
 }
@@ -236,6 +254,7 @@ export function assertAiImageProviderRuntimeContract(
     || frozen.model !== active.model
     || frozen.baseUrlSha256 !== active.baseUrlSha256
     || frozen.unitCostCents !== active.unitCostCents
+    || (frozen.currency ?? 'USD') !== (active.currency ?? 'USD')
     || !isDeepStrictEqual(frozen.credentialRevision, active.credentialRevision)) {
     throw new AiImageProviderRuntimeContractError(
       'Active Provider identity does not match the frozen runtime contract',
@@ -255,4 +274,16 @@ export function assertAiImageProviderRuntimeContract(
     );
   }
   return frozen;
+}
+
+/** Execute an already confirmed quote without adopting subsequent price changes. */
+export function bindAiImageProviderExecutionConfig<T extends AiImageProviderRuntimeIdentity>(
+  frozenValue: unknown,
+  activeIdentity: T,
+  request: { count: number; width: number; height: number; estimatedCostCents: number },
+): T {
+  const frozen = parseAiImageProviderRuntimeContract(frozenValue);
+  const executionIdentity = { ...activeIdentity, costPerImageCents: frozen.unitCostCents, currency: frozen.currency ?? 'USD' };
+  assertAiImageProviderRuntimeContract(frozen, executionIdentity, request);
+  return executionIdentity;
 }

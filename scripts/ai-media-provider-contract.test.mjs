@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { reviewedPaidDerivedCapabilityMatches } from './sandbox/ai-media-provider-review.mjs';
@@ -109,6 +109,44 @@ for (const [label, changed] of [
     `Wanx characterized contract must reject ${label}`);
 }
 assert.equal(reviewedPaidDerivedCapabilityMatches(wanxCapability, undefined), false);
+for (const evidenceLevel of [undefined, 'local-test', 'unknown']) {
+  assert.equal(reviewedPaidDerivedCapabilityMatches({ ...wanxCapability, evidenceLevel }, reviewedWanx), false,
+    'paid capability review must reject an invalid evidence classification');
+}
+
+const wanxEndpoint = createHash('sha256').update('https://dashscope.aliyuncs.com/api/v1').digest('hex');
+const verifiedWanx = {
+  ...wanxCapability,
+  evidenceLevel: 'sandbox-verified',
+  evidence: 'Official Beijing create/poll/download transport verified; visual quality and supplier settlement remain separate.',
+  sandboxEvidence: ['FULL_EDIT', 'INPAINT'].map((operation) => ({
+    endpointSha256: wanxEndpoint, operation, inputTransport: 'base64', resultMode: 'async',
+  })),
+};
+const reviewedVerifiedWanx = {
+  ...reviewedWanx,
+  sandboxEvidence: new Set([
+    `${wanxEndpoint}:FULL_EDIT:base64:async`,
+    `${wanxEndpoint}:INPAINT:base64:async`,
+  ]),
+};
+assert.equal(reviewedPaidDerivedCapabilityMatches(verifiedWanx, reviewedVerifiedWanx), true);
+for (const [label, changed] of [
+  ['lost classification', { evidenceLevel: 'adapter-characterized' }],
+  ['missing operation evidence', { sandboxEvidence: verifiedWanx.sandboxEvidence.slice(0, 1) }],
+  ['duplicate evidence', { sandboxEvidence: [...verifiedWanx.sandboxEvidence, verifiedWanx.sandboxEvidence[0]] }],
+  ['unknown operation', { operations: ['FULL_EDIT', 'INPAINT', 'IMAGE_TO_IMAGE'] }],
+  ['text inheritance', { operations: ['TEXT_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] }],
+  ['different domain', { sandboxEvidence: verifiedWanx.sandboxEvidence.map((evidence) => ({
+    ...evidence,
+    endpointSha256: createHash('sha256').update('https://other.cn-beijing.maas.aliyuncs.com/api/v1').digest('hex'),
+  })) }],
+  ['wrong wire transport', { sandboxEvidence: verifiedWanx.sandboxEvidence.map((evidence) => ({ ...evidence, inputTransport: 'multipart' })) }],
+  ['wrong result mode', { sandboxEvidence: verifiedWanx.sandboxEvidence.map((evidence) => ({ ...evidence, resultMode: 'sync' })) }],
+]) {
+  assert.equal(reviewedPaidDerivedCapabilityMatches({ ...verifiedWanx, ...changed }, reviewedVerifiedWanx), false,
+    `reviewed official Wanx transport must reject ${label}`);
+}
 const script = path.join(root, 'scripts', 'sandbox', 'ai-media-provider-contract.mjs');
 const output = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
 assert.match(output, /PASS AI media provider foundation contract/);

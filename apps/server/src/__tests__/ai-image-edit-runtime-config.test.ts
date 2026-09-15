@@ -42,6 +42,7 @@ describe('hosted edit credential snapshot', () => {
       baseUrl: values.ai_image_base_url,
       apiKey: values.ai_image_api_key,
       costPerImageCents: 7,
+      currency: 'CNY',
       credentialRevision: {
         recordId: 'record-ai_image_api_key', revision: 3, updatedAt: changedAt.toISOString(),
       },

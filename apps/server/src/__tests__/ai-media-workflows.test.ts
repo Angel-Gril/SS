@@ -180,7 +180,7 @@ describe('AI media workflow service', () => {
     expect(repo.createImageToImage).toHaveBeenCalledWith(createInput);
   });
 
-  it('fails closed before persistence when a paid IMAGE_TO_IMAGE capability is not sandbox verified', async () => {
+  it('creates a configured official OpenAI IMAGE_TO_IMAGE workflow without supplier receipts', async () => {
     const repo = repository();
     await expect(createAiMediaWorkflowService(repo).createImageToImage({
       ...createInput,
@@ -189,14 +189,14 @@ describe('AI media workflow service', () => {
       estimatedCostCents: 7,
       globalDailyBudgetCents: 100,
       providerRuntimeContract: paidProviderRuntime,
-    } as CreateAiMediaWorkflowInput)).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
-    expect(repo.createImageToImage).not.toHaveBeenCalled();
+    } as CreateAiMediaWorkflowInput)).resolves.toMatchObject({ jobId: 'job-1' });
+    expect(repo.createImageToImage).toHaveBeenCalledOnce();
   });
 
   it.each(['FULL_EDIT', 'INPAINT'] as const)(
-    'fails closed before persistence when a paid %s capability is not sandbox verified',
+    'creates a configured official OpenAI %s workflow without supplier receipts',
     async (operation) => {
-      const createImageEdit = vi.fn();
+      const createImageEdit = vi.fn(async () => ({ kind: 'created' as const, workflow: { ...workflow, operation }, jobId: 'job-1' }));
       const repo = repository({ createImageEdit });
       await expect(createAiMediaWorkflowService(repo).createImageEdit({
         ownerUserId: 'owner-1', actorUserId: 'actor-1', operation,
@@ -213,10 +213,19 @@ describe('AI media workflow service', () => {
         globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime,
         idempotencyKey: `paid-${operation.toLowerCase()}-1`,
         context: { type: 'collect', id: 'goods-1' },
-      })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
-      expect(createImageEdit).not.toHaveBeenCalled();
+      })).resolves.toMatchObject({ jobId: 'job-1' });
+      expect(createImageEdit).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(['a'.repeat(64), ''])('rejects an official input workflow with a different frozen endpoint digest', async (baseUrlSha256) => {
+    const repo = repository();
+    await expect(createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput, provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: { ...paidProviderRuntime, baseUrlSha256 },
+    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
 
   it('rejects a malformed paid runtime contract before persistence', async () => {
     const repo = repository();

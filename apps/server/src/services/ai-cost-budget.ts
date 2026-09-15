@@ -1,5 +1,6 @@
 export const AI_GLOBAL_COST_BUDGET_LOCK_KEY = 'ai-global-cost-budget/v1';
 export const AI_GLOBAL_COST_BUDGET_MAX_MINOR = 10_000_000;
+export type AiCostBudgetCurrency = 'USD' | 'CNY';
 
 const PENDING_RESERVATION_STATUSES = [
   'RESERVED',
@@ -7,6 +8,12 @@ const PENDING_RESERVATION_STATUSES = [
   'RECONCILIATION_REQUIRED',
 ] as const;
 const CHARGE_SETTLEMENT_KINDS = ['CHARGE', 'RECONCILED_CHARGE'] as const;
+
+function budgetCurrency(value: unknown): AiCostBudgetCurrency {
+  if (value === undefined) return 'USD';
+  if (value === 'USD' || value === 'CNY') return value;
+  throw new AiGlobalCostBudgetError('INVALID_BUDGET', 'AI budget currency must be USD or CNY');
+}
 
 export interface AiGlobalCostBudgetSummary {
   settledCostMinor: number;
@@ -62,7 +69,7 @@ async function summarizeGlobalAiCostBudgetInTransaction(
       aggregate(input: Record<string, unknown>): Promise<{ _sum?: { maximumCostMinor?: unknown } }>;
     };
   },
-  input: { limit: number; requestedMaximumCostMinor: number },
+  input: { limit: number; requestedMaximumCostMinor: number; currency: AiCostBudgetCurrency },
 ): Promise<AiGlobalCostBudgetSummary> {
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
@@ -72,11 +79,12 @@ async function summarizeGlobalAiCostBudgetInTransaction(
         kind: { in: [...CHARGE_SETTLEMENT_KINDS] },
         createdAt: { gte: dayStart },
         actualCostMinor: { not: null },
+        reservation: { currency: input.currency },
       },
       _sum: { actualCostMinor: true },
     }),
     database.aiCostReservation.aggregate({
-      where: { status: { in: [...PENDING_RESERVATION_STATUSES] } },
+      where: { currency: input.currency, status: { in: [...PENDING_RESERVATION_STATUSES] } },
       _sum: { maximumCostMinor: true },
     }),
   ]);
@@ -118,14 +126,16 @@ export async function assertGlobalAiCostBudgetInTransaction(
       aggregate(input: Record<string, unknown>): Promise<{ _sum?: { maximumCostMinor?: unknown } }>;
     };
   },
-  input: { limit: number },
+  input: { limit: number; currency?: AiCostBudgetCurrency },
   options: { alreadyLocked?: boolean } = {},
 ): Promise<AiGlobalCostBudgetSummary> {
   const limit = configuredLimit(input.limit);
+  const currency = budgetCurrency(input.currency);
   if (!options.alreadyLocked) await lockGlobalAiCostBudgetInTransaction(database);
   return summarizeGlobalAiCostBudgetInTransaction(database, {
     limit,
     requestedMaximumCostMinor: 0,
+    currency,
   });
 }
 
@@ -156,14 +166,16 @@ export async function reserveGlobalAiCostBudgetInTransaction(
       aggregate(input: Record<string, unknown>): Promise<{ _sum?: { maximumCostMinor?: unknown } }>;
     };
   },
-  input: { limit: number; requestedMaximumCostMinor: number },
+  input: { limit: number; requestedMaximumCostMinor: number; currency?: AiCostBudgetCurrency },
   options: { alreadyLocked?: boolean } = {},
 ): Promise<AiGlobalCostBudgetSummary> {
   const limit = configuredLimit(input.limit);
   const requestedMaximumCostMinor = requestedCost(input.requestedMaximumCostMinor);
+  const currency = budgetCurrency(input.currency);
   if (!options.alreadyLocked) await lockGlobalAiCostBudgetInTransaction(database);
   return summarizeGlobalAiCostBudgetInTransaction(database, {
     limit,
     requestedMaximumCostMinor,
+    currency,
   });
 }

@@ -31,12 +31,12 @@ import {
 import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
 import { isWanxHostedEdit, resolveAiImageEditProviderContract } from '../services/ai-image-edit-provider-contract.js';
 import {
-  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
+import { canRunAiImageProviderOperation } from '../services/ai-image-provider-admission.js';
 import {
   AiImageProviderRuntimeContractError,
-  assertAiImageProviderRuntimeContract,
+  bindAiImageProviderExecutionConfig,
 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AiImageJobError,
@@ -247,7 +247,7 @@ export function resolveAiImageEditProvider(
     provider,
     model,
   );
-  if (!hasExactAiMediaSandboxEvidence({
+  if (!canRunAiImageProviderOperation({
     capability,
     provider,
     model,
@@ -423,7 +423,7 @@ export async function processAiImageEditQueueJob(
     let provider: AiImageProvider;
     let uploadBuffer: (...args: any[]) => Promise<any>;
     try {
-      const providerConfig = await (
+      let providerConfig = await (
         overrides.getProviderConfig || getAiImageEditProviderRuntimeConfig
       )();
       if (paidJob) {
@@ -431,7 +431,7 @@ export async function processAiImageEditQueueJob(
           ? job.operationConfig
           : {};
         try {
-          assertAiImageProviderRuntimeContract(
+          providerConfig = bindAiImageProviderExecutionConfig(
             operationConfig.providerRuntime,
             providerConfig,
             {

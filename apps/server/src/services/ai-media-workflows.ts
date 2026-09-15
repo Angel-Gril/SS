@@ -18,6 +18,7 @@ import {
 } from './ai-image-provider-runtime-contract.js';
 import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
 import { assertWanxHostedEditPrompt } from './ai-image-edit-provider-contract.js';
+import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
 export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
@@ -651,15 +652,15 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
           model: execution.model,
           operation: 'IMAGE_TO_IMAGE',
           inputCount: references.length,
-        });
-        if (execution.paid && (
-          capability.provider !== execution.provider
-          || capability.model !== execution.model
-          || capability.evidenceLevel !== 'sandbox-verified'
-        )) {
+        }, options.resolveCapability);
+        if (execution.paid && !canRunAiImageProviderOperation({
+          capability, provider: execution.provider, model: execution.model,
+          baseUrlSha256: execution.providerRuntimeContract?.baseUrlSha256,
+          operation: 'IMAGE_TO_IMAGE', inputTransport: capability.inputTransport, resultMode: capability.resultMode,
+        })) {
           throw new AiMediaWorkflowError(
             'PROVIDER_NOT_READY',
-            'AI image Provider has not passed its exact sandbox capability gate',
+            'AI image Provider endpoint or request protocol is not supported',
           );
         }
       } catch (error) {
@@ -803,14 +804,14 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
           inputCount: 1,
           maskCount: input.operation === 'INPAINT' ? 1 : 0,
         }, options.resolveCapability);
-        if (execution.paid && (
-          capability.provider !== execution.provider
-          || capability.model !== execution.model
-          || capability.evidenceLevel !== 'sandbox-verified'
-        )) {
+        if (execution.paid && !canRunAiImageProviderOperation({
+          capability, provider: execution.provider, model: execution.model,
+          baseUrlSha256: execution.providerRuntimeContract?.baseUrlSha256,
+          operation: input.operation, inputTransport: capability.inputTransport, resultMode: capability.resultMode,
+        })) {
           throw new AiMediaWorkflowError(
             'PROVIDER_NOT_READY',
-            'AI image Provider has not passed its exact sandbox capability gate',
+            'AI image Provider endpoint or request protocol is not supported',
           );
         }
       } catch (error) {

@@ -2249,7 +2249,7 @@ const AI_IMAGE_PROVIDER_PRESETS = [
   {
     value: 'custom',
     label: 'OpenAI-compatible 自定义网关',
-    desc: '仅用于连接与沙箱验证；通过精确模型、价格和成本门禁前不进入正式任务队列',
+    desc: '兼容 OpenAI Images 文生图协议；按配置的模型与确认单价执行任务',
     baseUrl: '',
     model: '',
   },
@@ -2560,8 +2560,8 @@ function AiSettingsPanel({
                   <h3 className="text-sm font-medium">AI 生图基础平台</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
                     此处保存供应商参数。OpenAI-compatible 只检查鉴权与模型目录，不验证生图或改图；DashScope
-                    当前只校验配置格式。真实 Provider 的生产任务仍受精确模型、成本、租户和
-                    费用门禁限制；检查通过不会自动开启工作流。
+                    当前只校验配置格式。真实 Provider 任务按已配置的模型、单价、租户权限和
+                    预算执行；检查通过不会自动开启工作流。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant="outline">任务队列：基础就绪</Badge>
@@ -2569,7 +2569,7 @@ function AiSettingsPanel({
                     <Badge variant={imageProviderReady ? 'default' : 'secondary'}>
                       {imageProviderReady ? '配置项已填写' : '等待供应商配置'}
                     </Badge>
-                    <Badge variant="warning">生产调度：尚未验收</Badge>
+                    <Badge variant="outline">调度：由功能开关控制</Badge>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2783,8 +2783,8 @@ function AiSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">功能与额度</h3>
                   <p className="text-xs text-muted-foreground">
-                    缓存命中不扣用户额度；功能开关只表达操作意图，生产调用仍需通过 Provider、
-                    成本、租户和费用门禁。
+                    生图按确认单价和实际成功张数记账，明确生成失败不收费；
+                    权限、配额与预算由服务端检查。
                   </p>
                 </div>
                 <div className="flex gap-2">

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AiImageJobError,
   applyAiImageJob,
@@ -117,8 +118,28 @@ function repository(initial = job()) {
 }
 
 describe('AI image job foundation', () => {
+  it.each([0, 99, null, undefined])('uses the confirmed unit price instead of Provider amount %s', async actualCostCents => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 14,
+      operationConfig: createAiImageProviderRuntimeContract({ provider: 'openai-images', model: 'gpt-image-1',
+        baseUrl: 'https://api.openai.com/v1', costPerImageCents: 14 }, { count: 1, width: 1024, height: 1024 }) }));
+    await runAiImageJob('job-1', 1, { repository: state.repo,
+      provider: { name: 'openai-images', generate: async () => ({ images: [{ buffer: sourcePng, mimeType: 'image/png' }], actualCostCents }) },
+      uploadBuffer: async (_buffer, filename) => ({ url: `/synthetic/${filename}`, backend: 'local', key: filename }) });
+    expect(state.repo.complete).toHaveBeenCalledWith('job-1', expect.objectContaining({ actualCostCents: 14, billedUnits: 1 }));
+  });
+
+  it('charges one successful image at the frozen unit price when a two-image result omits money', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1', requestedImageCount: 2, estimatedCostCents: 28,
+      operationConfig: createAiImageProviderRuntimeContract({ provider: 'openai-images', model: 'gpt-image-1',
+        baseUrl: 'https://api.openai.com/v1', costPerImageCents: 14 }, { count: 2, width: 1024, height: 1024 }) }));
+    await runAiImageJob('job-1', 1, { repository: state.repo,
+      provider: { name: 'openai-images', generate: async () => ({ images: [{ buffer: sourcePng, mimeType: 'image/png' }] }) },
+      uploadBuffer: async (_buffer, filename) => ({ url: `/synthetic/${filename}`, backend: 'local', key: filename }) });
+    expect(state.repo.complete).toHaveBeenCalledWith('job-1', expect.objectContaining({ actualCostCents: 14, billedUnits: 1 }));
+  });
+
   it('persists generated buffers before completing and bills only stored images', async () => {
-    const state = repository();
+    const state = repository(job({ estimatedCostCents: 0 }));
     const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string) => ({
       url: `https://cdn.example/${filename}`,
       key: `ai/${filename}`,
@@ -139,7 +160,7 @@ describe('AI image job foundation', () => {
     });
     expect(state.repo.complete).toHaveBeenCalledWith('job-1', expect.objectContaining({
       providerJobId: 'provider-123',
-      actualCostCents: 3,
+      actualCostCents: 0,
       billedUnits: 1,
       assets: [expect.objectContaining({ ownerUserId: 'owner-1', mimeType: 'image/png' })],
     }));

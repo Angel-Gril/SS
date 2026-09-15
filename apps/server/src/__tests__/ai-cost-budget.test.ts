@@ -8,10 +8,10 @@ function database(input: { settled?: number; pending?: number } = {}) {
   return {
     $queryRawUnsafe: vi.fn(async () => [{ locked: 1 }]),
     aiCostSettlement: {
-      aggregate: vi.fn(async () => ({ _sum: { actualCostMinor: input.settled || 0 } })),
+      aggregate: vi.fn(async (_query: Record<string, unknown>) => ({ _sum: { actualCostMinor: input.settled || 0 } })),
     },
     aiCostReservation: {
-      aggregate: vi.fn(async () => ({ _sum: { maximumCostMinor: input.pending || 0 } })),
+      aggregate: vi.fn(async (_query: Record<string, unknown>) => ({ _sum: { maximumCostMinor: input.pending || 0 } })),
     },
   };
 }
@@ -35,6 +35,7 @@ describe('global AI cost budget', () => {
         kind: { in: ['CHARGE', 'RECONCILED_CHARGE'] },
         createdAt: { gte: expect.any(Date) },
         actualCostMinor: { not: null },
+        reservation: { currency: 'USD' },
       },
       _sum: { actualCostMinor: true },
     });
@@ -44,9 +45,38 @@ describe('global AI cost budget', () => {
     const start = settledCalls[0]![0].where.createdAt.gte;
     expect(start.toISOString()).toMatch(/T00:00:00\.000Z$/u);
     expect(db.aiCostReservation.aggregate).toHaveBeenCalledWith({
-      where: { status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } },
+      where: { currency: 'USD', status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } },
       _sum: { maximumCostMinor: true },
     });
+  });
+
+  it('counts only the quote currency so a CNY task cannot consume or be blocked by USD exposure', async () => {
+    const db = database();
+    db.aiCostSettlement.aggregate.mockImplementation(async (query: any) => ({
+      _sum: { actualCostMinor: query.where.reservation?.currency === 'CNY' ? 14 : 114 },
+    }));
+    db.aiCostReservation.aggregate.mockImplementation(async (query: any) => ({
+      _sum: { maximumCostMinor: query.where.currency === 'CNY' ? 14 : 214 },
+    }));
+    const result = await reserveGlobalAiCostBudgetInTransaction(db, {
+      limit: 50, requestedMaximumCostMinor: 14, currency: 'CNY',
+    });
+    expect(result).toMatchObject({ settledCostMinor: 14, pendingMaximumCostMinor: 14, totalExposureMinor: 42 });
+    expect(db.aiCostSettlement.aggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ reservation: { currency: 'CNY' } }),
+    }));
+    expect(db.aiCostReservation.aggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ currency: 'CNY' }),
+    }));
+  });
+
+  it.each(['RUB', '', null])('rejects an unsupported explicit quote currency before querying: %s', async (currency) => {
+    const db = database();
+    await expect(reserveGlobalAiCostBudgetInTransaction(db, {
+      limit: 50, requestedMaximumCostMinor: 14, currency,
+    } as Parameters<typeof reserveGlobalAiCostBudgetInTransaction>[1])).rejects.toMatchObject({ code: 'INVALID_BUDGET' });
+    expect(db.$queryRawUnsafe).not.toHaveBeenCalled();
+    expect(db.aiCostSettlement.aggregate).not.toHaveBeenCalled();
   });
 
   it.each([

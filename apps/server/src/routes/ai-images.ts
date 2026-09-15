@@ -44,9 +44,9 @@ import {
   type AiImageEditStorageReadiness,
 } from '../services/ai-image-edit-storage.js';
 import {
-  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
+import { canRunAiImageProviderOperation } from '../services/ai-image-provider-admission.js';
 import { isOpenAiCompatibleImageEditSizeSupported } from '../services/ai-image-providers.js';
 import {
   isAiImageEditProviderCanvasSupported,
@@ -58,6 +58,7 @@ import { getAiImageEditProviderRuntimeConfig } from '../services/ai-image-edit-r
 import {
   assertAiImageProviderRuntimeContract,
   type AiImageProviderCredentialRevision,
+  type AiImageProviderCurrency,
 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
@@ -308,6 +309,7 @@ interface AiImageRouteSettings {
   baseUrl?: string;
   dailyLimit: number;
   estimatedCostCents: number;
+  currency?: AiImageProviderCurrency;
   globalDailyBudgetCents?: number;
 }
 
@@ -322,6 +324,7 @@ interface AiImageTranslationRouteSettings {
 }
 
 interface AiImageEditRouteSettings {
+  generationEnabled: boolean;
   imageToImageEnabled: boolean;
   fullEditEnabled: boolean;
   inpaintEnabled: boolean;
@@ -330,6 +333,7 @@ interface AiImageEditRouteSettings {
   model: string;
   baseUrl: string;
   estimatedCostCents: number;
+  currency?: AiImageProviderCurrency;
   globalDailyBudgetCents: number;
   credentialRevision?: AiImageProviderCredentialRevision;
 }
@@ -679,7 +683,7 @@ export function resolveAiImageToImageReadiness(
       testOnly: true,
     };
   }
-  if (!hasExactAiMediaSandboxEvidence({
+  if (!canRunAiImageProviderOperation({
     capability,
     provider,
     model,
@@ -692,7 +696,7 @@ export function resolveAiImageToImageReadiness(
       enabled: true,
       ready: false,
       reasonCode: 'PROVIDER_NOT_READY',
-      reason: 'AI image-to-image Provider has not passed its sandbox capability gate',
+      reason: 'AI image-to-image Provider endpoint or request protocol is not supported',
     };
   }
   if (!Number.isSafeInteger(options.estimatedCostCents) || Number(options.estimatedCostCents) < 1) {
@@ -722,6 +726,7 @@ export function resolveAiImageToImageReadiness(
 export function resolveAiImageEditReadiness(
   operation: 'FULL_EDIT' | 'INPAINT',
   settings: {
+    generationEnabled?: boolean;
     fullEditEnabled: boolean;
     inpaintEnabled: boolean;
     provider?: string;
@@ -742,6 +747,14 @@ export function resolveAiImageEditReadiness(
       ready: false,
       reasonCode: 'AI_MEDIA_WORKFLOW_DISABLED',
       reason: 'AI media workflow is not enabled for this account',
+    };
+  }
+  if (settings.generationEnabled !== true) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: 'AI image generation is disabled',
     };
   }
   const enabled = operation === 'FULL_EDIT'
@@ -782,7 +795,7 @@ export function resolveAiImageEditReadiness(
       testOnly: true,
     };
   }
-  if (provider !== 'fake' && (!editContract || !hasExactAiMediaSandboxEvidence({
+  if (provider !== 'fake' && (!editContract || !canRunAiImageProviderOperation({
     capability,
     provider,
     model,
@@ -795,7 +808,7 @@ export function resolveAiImageEditReadiness(
       enabled: true,
       ready: false,
       reasonCode: 'PROVIDER_NOT_READY',
-      reason: 'AI image edit Provider has not passed its sandbox capability gate',
+      reason: 'AI image edit Provider endpoint or request protocol is not supported',
     };
   }
   if (provider !== 'fake' && (
@@ -1007,6 +1020,7 @@ function retryProviderConfigMatches(
       model: settings.model,
       baseUrl: settings.baseUrl,
       costPerImageCents: settings.estimatedCostCents,
+      currency: settings.currency,
       credentialRevision: settings.credentialRevision,
     }, {
       count,
@@ -1145,15 +1159,19 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const mediaContextService = options.mediaContextService || createAiMediaContextService(prisma);
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const authHook = options.authenticate || authenticate;
-  const getSettings = options.getSettings || (async () => ({
-    enabled: await getConfig('ai_image_generation_enabled'),
-    provider: await getConfig('ai_image_provider'),
-    baseUrl: await getConfig('ai_image_base_url'),
-    model: await getConfig('ai_image_model'),
-    dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
-    estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
-    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
-  }));
+  const getSettings = options.getSettings || (async () => {
+    const provider = await getConfig('ai_image_provider');
+    return {
+      enabled: await getConfig('ai_image_generation_enabled'),
+      provider,
+      baseUrl: await getConfig('ai_image_base_url'),
+      model: await getConfig('ai_image_model'),
+      dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
+      estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
+      ...(provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}),
+      globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
+    };
+  });
   const getTranslationSettings = options.getTranslationSettings || (async () => ({
     enabled: await getConfig('feature_image_translate'),
     provider: await getConfig('ai_image_translation_provider'),
@@ -1183,6 +1201,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image edit Provider configuration could not be verified');
     }
     return {
+      generationEnabled: await getConfig('ai_image_generation_enabled'),
       imageToImageEnabled: await getConfig('feature_ai_media_image_to_image'),
       fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
       inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
@@ -1191,6 +1210,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       model: runtime.model,
       baseUrl: runtime.baseUrl,
       estimatedCostCents: runtime.costPerImageCents,
+      currency: runtime.currency,
       credentialRevision: runtime.credentialRevision,
       globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
     };
@@ -1418,7 +1438,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         storageReadiness: translationStorageReadiness,
       });
       const imageToImage = resolveAiImageToImageReadiness({
-        enabled: editSettings.imageToImageEnabled,
+        enabled: editSettings.generationEnabled && editSettings.imageToImageEnabled,
         workflowEnabled,
         production,
         provider: editSettings.provider,
@@ -1479,7 +1499,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     }
     const generationCapability = resolveProviderCapability(settings.provider, settings.model);
     if (settings.provider !== 'fake' && (
-      !hasExactAiMediaSandboxEvidence({
+      !canRunAiImageProviderOperation({
         capability: generationCapability,
         provider: settings.provider,
         model: settings.model,
@@ -1509,6 +1529,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         model: settings.model,
         baseUrl: settings.baseUrl || '',
         costPerImageCents: settings.estimatedCostCents,
+        currency: settings.currency,
       }, {
         count: parsed.data.count,
         width: parsed.data.width,
@@ -1909,6 +1930,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             model: editSettings.model,
             baseUrl: editSettings.baseUrl,
             costPerImageCents: editSettings.estimatedCostCents,
+            currency: editSettings.currency,
             credentialRevision: editSettings.credentialRevision,
           }, { count: 1, ...dimensions });
           providerExecution = {
@@ -1961,7 +1983,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           getEditStorageReadiness(),
         ]);
         const readiness = resolveAiImageToImageReadiness({
-          enabled: editSettings.imageToImageEnabled,
+          enabled: editSettings.generationEnabled && editSettings.imageToImageEnabled,
           production,
           provider: editSettings.provider,
           model: editSettings.model,
@@ -1983,6 +2005,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             model: editSettings.model,
             baseUrl: editSettings.baseUrl,
             costPerImageCents: editSettings.estimatedCostCents,
+            currency: editSettings.currency,
           }, {
             count: parsed.data.count,
             width: parsed.data.width,
@@ -2265,7 +2288,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           getEditStorageReadiness(),
         ]);
         const readiness = resolveAiImageToImageReadiness({
-          enabled: editSettings.imageToImageEnabled,
+          enabled: editSettings.generationEnabled && editSettings.imageToImageEnabled,
           production,
           provider: editSettings.provider,
           model: editSettings.model,

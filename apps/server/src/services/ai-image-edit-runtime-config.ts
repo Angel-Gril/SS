@@ -38,6 +38,6 @@ export async function getAiImageEditProviderRuntimeConfig(): Promise<AiImageEdit
     apiKey: values.ai_image_api_key,
     costPerImageCents: values.ai_image_generation_cost_cents,
     ...(credentialBound
-      ? { credentialRevision: credentialRevision(revisions.ai_image_api_key) } : {}),
+      ? { currency: 'CNY' as const, credentialRevision: credentialRevision(revisions.ai_image_api_key) } : {}),
   };
 }

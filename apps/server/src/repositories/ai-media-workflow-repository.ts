@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { assertWanxHostedEditPrompt } from '../services/ai-image-edit-provider-contract.js';
+import { getFrozenAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 import {
   AI_MEDIA_WORKFLOW_MODEL,
   AI_MEDIA_WORKFLOW_PROVIDER,
@@ -589,6 +590,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         await reserveGlobalAiCostBudgetInTransaction(tx, {
           limit: execution.globalDailyBudgetCents,
           requestedMaximumCostMinor: execution.estimatedCostCents,
+          currency: execution.providerRuntimeContract?.currency ?? 'USD',
         }, { alreadyLocked: true });
       }
       const workflow = await tx.aiMediaWorkflow.create({ data: {
@@ -655,7 +657,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         provider: execution.provider,
         model: execution.model,
         operation: 'IMAGE_TO_IMAGE',
-        currency: 'USD',
+        currency: execution.providerRuntimeContract?.currency ?? 'USD',
         estimatedCostMinor: execution.estimatedCostCents,
         maximumCostMinor: execution.estimatedCostCents,
       });
@@ -822,6 +824,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           await reserveGlobalAiCostBudgetInTransaction(tx, {
             limit: frozenExecution.globalDailyBudgetCents,
             requestedMaximumCostMinor: frozenExecution.estimatedCostCents,
+            currency: frozenExecution.providerRuntimeContract?.currency ?? 'USD',
           }, { alreadyLocked: true });
         }
 
@@ -919,7 +922,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           provider: frozenExecution.provider,
           model: frozenExecution.model,
           operation: input.operation,
-          currency: 'USD',
+          currency: frozenExecution.providerRuntimeContract?.currency ?? 'USD',
           estimatedCostMinor: frozenExecution.estimatedCostCents,
           maximumCostMinor: frozenExecution.estimatedCostCents,
         });
@@ -1389,12 +1392,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         }
         const estimatedCostCents = Math.max(0, Number(previous.estimatedCostCents || 0));
         const paid = previous.provider !== 'fake';
+        const currency = getFrozenAiImageTaskPrice({ ...previous, estimatedCostCents, costReservation: previousCost }).currency;
         if (paid) {
           await lockGlobalAiCostBudgetInTransaction(tx);
           try {
             await reserveGlobalAiCostBudgetInTransaction(tx, {
               limit: Number(input.globalDailyBudgetCents ?? 0),
               requestedMaximumCostMinor: estimatedCostCents,
+              currency,
             }, { alreadyLocked: true });
           } catch (error: any) {
             if (error?.code === 'BUDGET_EXCEEDED') throw error;
@@ -1479,7 +1484,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           provider: previous.provider,
           model: previous.model,
           operation: previous.operation,
-          currency: 'USD',
+          currency,
           estimatedCostMinor: estimatedCostCents,
           maximumCostMinor: estimatedCostCents,
         });

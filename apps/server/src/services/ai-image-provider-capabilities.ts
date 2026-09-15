@@ -1,5 +1,8 @@
 import { aiImageProviderEndpointSha256 } from './ai-image-provider-runtime-contract.js';
-import { AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
+import {
+  AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+  AI_IMAGE_WANX21_EDIT_MODEL,
+} from './ai-image-wanx-edit-profile.js';
 
 export type AiMediaOperation =
   | 'TEXT_TO_IMAGE'
@@ -56,8 +59,12 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
   {
     provider: 'dashscope-wanx', model: AI_IMAGE_WANX21_EDIT_MODEL,
     operations: ['FULL_EDIT', 'INPAINT'], maxReferences: 1, supportsMask: true,
-    inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'adapter-characterized',
-    evidence: 'bounded Wanx hosted edits; exact hosted endpoint, prompt profile, quality and billing acceptance are not promoted from legacy sandbox evidence',
+    inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'sandbox-verified',
+    evidence: 'official Beijing Wanx full-edit and inpaint create/poll/download transport verified; color fidelity and supplier bill settlement are separate from normal dispatch readiness',
+    sandboxEvidence: (['FULL_EDIT', 'INPAINT'] as const).map<AiMediaSandboxEvidence>((operation) => ({
+      endpointSha256: aiImageProviderEndpointSha256('dashscope-wanx', AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE),
+      operation, inputTransport: 'base64', resultMode: 'async',
+    })),
   },
   {
     provider: AI_IMAGE_EDIT_PROVIDER,

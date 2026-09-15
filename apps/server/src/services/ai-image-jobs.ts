@@ -5,6 +5,7 @@ import {
   type AiMediaOperation,
 } from './ai-image-provider-capabilities.js';
 import { AiImageJobError } from './ai-image-job-error.js';
+import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
 
 export { AiImageJobError } from './ai-image-job-error.js';
 
@@ -448,6 +449,7 @@ export async function runAiImageJob(
         `${operation} must run through its operation-specific worker`,
       );
     }
+    getFrozenAiImageTaskPrice(job);
     try {
       assertAiMediaCapability({
         provider: job.provider,
@@ -531,11 +533,12 @@ export async function runAiImageJob(
       });
     }
     if (assets.length === 0) throw new AiImageJobError('EMPTY_RESULT', 'Provider returned no images');
+    const taskCost = calculateAiImageTaskCost(job, assets.length);
     await deps.repository.complete(job.id, {
       providerJobId: generated.providerJobId || null,
       providerResultReceivedWithoutIdentity: paidProviderResultReceived && !generated.providerJobId,
-      actualCostCents: generated.actualCostCents ?? job.estimatedCostCents,
-      billedUnits: assets.length,
+      actualCostCents: taskCost.actualCostCents,
+      billedUnits: taskCost.billedUnits,
       assets,
     });
   } catch (error) {
@@ -565,6 +568,8 @@ export async function runAiImageJob(
           'PROVIDER_NOT_READY',
           'INVALID_MEDIA_INPUT',
           'FROZEN_INPUT_MISMATCH',
+          'INVALID_FROZEN_JOB_PRICE',
+          'INVALID_GENERATED_IMAGE_COUNT',
         ].includes(error.code));
     if (!permanent && attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
     else await deps.repository.markFailed(job.id, details);

@@ -182,6 +182,7 @@ describe('AI image generation cost safety', () => {
         kind: { in: ['CHARGE', 'RECONCILED_CHARGE'] },
         createdAt: { gte: expect.any(Date) },
         actualCostMinor: { not: null },
+        reservation: { currency: 'USD' },
       },
       _sum: { actualCostMinor: true },
     });
@@ -191,7 +192,7 @@ describe('AI image generation cost safety', () => {
     const utcStart = settledQuery.where.createdAt.gte;
     expect(utcStart.toISOString()).toMatch(/T00:00:00\.000Z$/u);
     expect(state.pendingAggregate).toHaveBeenCalledWith({
-      where: { status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } },
+      where: { status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] }, currency: 'USD' },
       _sum: { maximumCostMinor: true },
     });
   });

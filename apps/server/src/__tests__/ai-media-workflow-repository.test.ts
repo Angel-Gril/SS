@@ -9,10 +9,10 @@ import {
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
-function paidProviderRuntime(width = 1024, height = 1024, costPerImageCents = 7) {
+function paidProviderRuntime(width = 1024, height = 1024, costPerImageCents = 7, currency?: 'CNY' | 'USD') {
   return createAiImageProviderRuntimeContract({
     provider: 'openai-images', model: 'gpt-image-1',
-    baseUrl: 'https://api.openai.com/v1', costPerImageCents,
+    baseUrl: 'https://api.openai.com/v1', costPerImageCents, ...(currency ? { currency } : {}),
   }, { count: 1, width, height });
 }
 
@@ -343,8 +343,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     }) });
   });
 
-  it('freezes paid FULL_EDIT Provider identity, runtime contract and cost in one transaction', async () => {
-    const runtime = paidProviderRuntime(1000, 1000);
+  it.each([undefined, 'CNY'] as const)('freezes paid FULL_EDIT identity, price and currency in one transaction: %s', async (currency) => {
+    const runtime = paidProviderRuntime(1000, 1000, 7, currency);
     const workflowCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-workflow-1', ...data }));
     const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-job-1', ...data }));
     const costCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-cost-1', ...data }));
@@ -403,7 +403,11 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
       provider: 'openai-images', model: 'gpt-image-1',
       estimatedCostMinor: 7, maximumCostMinor: 7,
+      currency: currency ?? 'USD',
     }) });
+    expect(tx.aiCostReservation.aggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ currency: currency ?? 'USD' }),
+    }));
     expect(tx.aiCostReservation.aggregate.mock.invocationCallOrder[0])
       .toBeLessThan(workflowCreate.mock.invocationCallOrder[0]!);
     expect(workflowCreate.mock.invocationCallOrder[0]).toBeLessThan(jobCreate.mock.invocationCallOrder[0]!);
@@ -757,8 +761,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(jobCreate).not.toHaveBeenCalled();
   });
 
-  it('locks and reserves the global budget before atomically freezing a paid IMAGE_TO_IMAGE job', async () => {
-    const runtime = paidProviderRuntime();
+  it.each([undefined, 'CNY'] as const)('locks the budget and freezes the paid IMAGE_TO_IMAGE currency: %s', async (currency) => {
+    const runtime = paidProviderRuntime(1024, 1024, 7, currency);
     const lock = vi.fn(async () => [{ locked: 1 }]);
     const idempotencyRead = vi.fn()
       .mockResolvedValueOnce(null)
@@ -809,7 +813,11 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
       provider: 'openai-images', model: 'gpt-image-1',
       estimatedCostMinor: 7, maximumCostMinor: 7,
+      currency: currency ?? 'USD',
     }) });
+    expect(tx.aiCostReservation.aggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ currency: currency ?? 'USD' }),
+    }));
     expect(lock.mock.invocationCallOrder[0]).toBeLessThan(idempotencyRead.mock.invocationCallOrder[0]!);
     expect(tx.aiCostReservation.aggregate.mock.invocationCallOrder[0])
       .toBeLessThan(workflowCreate.mock.invocationCallOrder[0]!);

@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { assertAiImageEditRawAsset, matchesAiImageEditRaw, persistAiImageEditRawOutput } from './ai-image-edit-output.js';
 import type { AiImageAssetInput, AiImageJobRecord, AiImageJobRepository, ApplyAiImageJobInput, CreateAiImageJobInput, CreateWithQuotaResult } from '../services/ai-image-jobs.js';
 import {
+  appendAiCostSettlementInTransaction,
   markAiCostSubmissionUncertainInTransaction,
   markAiCostUnknownInTransaction,
   releaseAiCostInTransaction,
@@ -9,6 +10,7 @@ import {
   settleAiCostInTransaction,
 } from '../services/ai-cost-ledger.js';
 import { aiMediaPayloadHash } from '../services/ai-media-workflows.js';
+import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 import {
   aiProviderReconciliationEventData,
   appendAiProviderReconciliationEvent,
@@ -293,7 +295,13 @@ async function loadJobCostReservation(tx: any, job: any) {
   });
 }
 
-async function loadProviderAcceptedAt(tx: any, job: any, explicit?: Date): Promise<Date> {
+async function loadProviderAcceptedAt(tx: any, job: any, explicit?: Date, reservation?: any): Promise<Date> {
+  // Once quarantined, the immutable task-bound ledger already owns this time.
+  // A later queue attempt must not require a second acceptance event.
+  if (reservation?.status === 'RECONCILIATION_REQUIRED'
+    && reservation.providerRequestId === job.providerJobId
+    && reservation.providerAcceptedAt instanceof Date
+    && !Number.isNaN(reservation.providerAcceptedAt.getTime())) return reservation.providerAcceptedAt;
   if (job.workflowId && tx.aiMediaWorkflowEvent?.findUnique) {
     const event = await tx.aiMediaWorkflowEvent.findUnique({ where: {
       eventKey: `${job.workflowId}:PROVIDER_SUBMITTED:${job.id}:${job.attemptCount || 0}`,
@@ -346,15 +354,6 @@ function providerReconciliationFailureData(
     };
   }
   const editRecovery = hasWanxEditReconciliationContract(job);
-  if ((job.operation !== 'IMAGE_TRANSLATE' && !editRecovery)
-    || PROVIDER_RECONCILIATION_MANUAL_ERRORS.has(errorCode || '')) {
-    return {
-      ...common,
-      providerReconciliationStatus: 'MANUAL_REVIEW',
-      providerReconciliationNextAt: null,
-      providerReconciliationDeadlineAt: null,
-    };
-  }
   if (errorCode === 'PROVIDER_TASK_FAILED') {
     return {
       ...common,
@@ -363,6 +362,15 @@ function providerReconciliationFailureData(
       providerReconciliationNextAt: null,
       providerReconciliationDeadlineAt: null,
       providerReconciledAt: now,
+    };
+  }
+  if ((job.operation !== 'IMAGE_TRANSLATE' && !editRecovery)
+    || PROVIDER_RECONCILIATION_MANUAL_ERRORS.has(errorCode || '')) {
+    return {
+      ...common,
+      providerReconciliationStatus: 'MANUAL_REVIEW',
+      providerReconciliationNextAt: null,
+      providerReconciliationDeadlineAt: null,
     };
   }
   const acceptedAt = job.providerDispatchedAt instanceof Date
@@ -391,6 +399,27 @@ async function finalizeJobCost(
   },
 ) {
   const reservation = await loadJobCostReservation(tx, job);
+  const confirmedNoOutput = outcome !== 'COMPLETED' && String(job.providerJobId || '').trim()
+    && job.errorCode === 'PROVIDER_TASK_FAILED' && job.providerReconciliationStatus === 'NO_OUTPUT';
+  if (confirmedNoOutput && !['RELEASED', 'SETTLED'].includes(reservation?.status)) {
+    if (reservation) {
+      if (reservation.providerRequestId && reservation.providerRequestId !== job.providerJobId) throw providerJobIdMismatchError();
+      await appendAiCostSettlementInTransaction(tx, {
+        reservationId: reservation.id, ownerUserId: job.ownerUserId,
+        actorUserId: data?.actorUserId || job.actorUserId || reservation.actorUserId,
+        requestFingerprint: reservation.requestFingerprint, idempotencyKey: `${job.id}:cost:no-output`,
+        kind: reservation.status === 'RESERVED' ? 'RELEASE' : 'RECONCILED_RELEASE',
+        actualCostMinor: 0, billedUnits: 0,
+        reason: 'Confirmed Provider task produced zero valid images; ERP task fee released',
+      });
+    }
+    const projected = await tx.aiImageJob.updateMany({ where: {
+      id: job.id, ownerUserId: job.ownerUserId, providerJobId: job.providerJobId,
+      status: { in: ['FAILED', 'CANCELLED'] }, providerReconciliationStatus: 'NO_OUTPUT', errorCode: 'PROVIDER_TASK_FAILED',
+    }, data: { actualCostCents: 0, billedUnits: 0 } });
+    if (projected.count !== 1) throw new Error('AI image no-output fee projection CAS failed');
+    return;
+  }
   if (!reservation) return;
   const common = {
     reservationId: reservation.id,
@@ -410,7 +439,7 @@ async function finalizeJobCost(
     return;
   }
   if (job.providerJobId) {
-    const providerAcceptedAt = await loadProviderAcceptedAt(tx, job, data?.providerAcceptedAt);
+    const providerAcceptedAt = await loadProviderAcceptedAt(tx, job, data?.providerAcceptedAt, reservation);
     await markAiCostUnknownInTransaction(tx, {
       ...common,
       idempotencyKey: `${job.id}:cost:unknown`,
@@ -770,6 +799,11 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
     if (paid && (!Number.isSafeInteger(globalDailyBudgetCents) || globalDailyBudgetCents < 0)) {
       return { kind: 'invalid-cost', reason: 'Global daily AI budget must be a non-negative integer' };
     }
+    let currency: 'USD' | 'CNY' = 'USD';
+    if (paid) {
+      try { currency = getFrozenAiImageTaskPrice({ ...input, requestedImageCount: input.count }).currency; }
+      catch (error) { return { kind: 'invalid-cost', reason: error instanceof Error ? error.message : 'The frozen task price is invalid' }; }
+    }
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
         if (paid) await lockGlobalAiCostBudgetInTransaction(tx);
@@ -808,6 +842,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
             const exposure = await reserveGlobalAiCostBudgetInTransaction(tx, {
               limit: globalDailyBudgetCents,
               requestedMaximumCostMinor: input.estimatedCostCents,
+              currency,
             }, { alreadyLocked: true });
             void exposure;
           } catch (error) {
@@ -860,6 +895,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           provider: input.provider,
           model: input.model,
           operation: 'TEXT_TO_IMAGE',
+          currency,
           estimatedCostMinor: input.estimatedCostCents,
           maximumCostMinor: input.estimatedCostCents,
         });
@@ -1027,12 +1063,15 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         return false;
       }
       const reconciliationFailure = providerReconciliationFailureData(job, failure);
+      const previousCost = reconciliationFailure.providerReconciliationStatus === 'NO_OUTPUT'
+        ? await loadJobCostReservation(tx, job) : null;
+      const preserveTerminalCost = ['SETTLED', 'RELEASED'].includes(previousCost?.status);
       const changed = await tx.aiImageJob.updateMany({
         where: { id, status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } },
         data: {
           status: 'FAILED',
           progress: 0,
-          billedUnits: 0,
+          billedUnits: preserveTerminalCost ? job.billedUnits : 0,
           completedAt: new Date(),
           ...failure,
           ...reconciliationFailure,
@@ -1049,7 +1088,10 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
             : 'PROVIDER_RECONCILIATION_MANUAL_REVIEW',
         reconciliationFailure,
       );
-      await finalizeJobCost(tx, job, 'FAILED', { providerAcceptedAt, providerSubmissionRejected });
+      await finalizeJobCost(tx, { ...job, errorCode: failure.errorCode, errorMessage: failure.errorMessage,
+        ...reconciliationFailure, status: 'FAILED' }, 'FAILED', {
+        providerAcceptedAt, providerSubmissionRejected,
+      });
       if (!job.workflowId) return false;
       const parent = await tx.aiMediaWorkflow.updateMany({
         where: { id: job.workflowId, ownerUserId: job.ownerUserId, currentAttempt: job.workflowAttempt, status: { in: ['QUEUED', 'RUNNING'] } },
@@ -1163,13 +1205,18 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         }
       }
       const providerJobId = job.providerJobId;
+      if (!data.assets.length) {
+        throw Object.assign(new Error('A successful image job requires an effective output'), { code: 'EMPTY_RESULT' });
+      }
+      const reservation = await loadJobCostReservation(tx, job);
+      const taskCost = calculateAiImageTaskCost({ ...job, costReservation: reservation }, data.assets.length);
       await finalizeJobCost(tx, job, 'COMPLETED', {
-        actualCostCents: data.actualCostCents,
-        billedUnits: data.billedUnits,
+        actualCostCents: taskCost.actualCostCents,
+        billedUnits: taskCost.billedUnits,
       });
       const completed = await tx.aiImageJob.updateMany({
         where: { id, status: 'RUNNING' },
-        data: { status: 'SUCCEEDED', progress: 100, providerJobId, actualCostCents: data.actualCostCents, billedUnits: data.billedUnits, completedAt: new Date(), errorCode: null, errorMessage: null },
+        data: { status: 'SUCCEEDED', progress: 100, providerJobId, actualCostCents: taskCost.actualCostCents, billedUnits: taskCost.billedUnits, completedAt: new Date(), errorCode: null, errorMessage: null },
       });
       if (completed.count !== 1) return false;
       const inputs = job.workflowId

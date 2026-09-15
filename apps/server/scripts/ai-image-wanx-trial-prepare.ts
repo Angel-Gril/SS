@@ -22,6 +22,7 @@ export const AI_IMAGE_WANX_TRIAL_PREPARATION_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-edit-provider-contract.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-jobs.ts',
+  'apps/server/src/services/ai-image-task-cost.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
   'apps/server/src/services/ai-image-prompt-plan.ts',

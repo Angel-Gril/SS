@@ -8,7 +8,8 @@ import {
 } from './ai-image-edit-artifacts.js';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import { resolveAiImageEditProviderContract } from './ai-image-edit-provider-contract.js';
-import { assertAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
+import { bindAiImageProviderExecutionConfig } from './ai-image-provider-runtime-contract.js';
+import { calculateAiImageTaskCost } from './ai-image-task-cost.js';
 import { getAiImageEditProviderRuntimeConfig } from './ai-image-edit-runtime-config.js';
 import { createDashScopeWanx21ImageEditProvider } from './ai-image-wanx-edit-provider.js';
 import {
@@ -35,9 +36,9 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
       || !repository.recordRecoveredEditRaw || !repository.completeRecoveredEdit) {
       throw new AiImageJobError('PROVIDER_LOOKUP_UNSUPPORTED', 'Revision-bound edit recovery is not installed');
     }
-    const config = await getProviderConfig();
+    const activeConfig = await getProviderConfig();
     const job = await repository.getClaimedEditJob(claim);
-    assertAiImageProviderRuntimeContract(job.operationConfig?.providerRuntime, config, {
+    const config = bindAiImageProviderExecutionConfig(job.operationConfig?.providerRuntime, activeConfig, {
       count: job.requestedImageCount, width: job.width, height: job.height,
       estimatedCostCents: job.estimatedCostCents,
     });
@@ -59,10 +60,10 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
   };
   return {
     async lookup(claim: AiProviderReconciliationClaim): Promise<AiProviderTaskLookupResult> {
-      const { config, contract } = await context(claim);
+      const { job, config, contract } = await context(claim);
       const provider = (options.createProvider || createDashScopeWanx21ImageEditProvider)({
         baseUrl: contract.baseUrl, apiKey: config.apiKey, model: config.model,
-        costPerImageCents: claim.estimatedCostCents,
+        costPerImageCents: config.costPerImageCents,
         beforeTaskLookup: async () => {
           const current = await context(claim);
           if (current.config.apiKey !== config.apiKey) {
@@ -72,12 +73,14 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
       });
       const result = await provider.poll(claim.providerJobId);
       await context(claim);
-      return result;
+      return result.status === 'SUCCEEDED'
+        ? { ...result, actualCostCents: calculateAiImageTaskCost(job, 1).actualCostCents }
+        : result;
     },
     async recover(claim: AiProviderReconciliationClaim, result: Extract<AiProviderTaskLookupResult, { status: 'SUCCEEDED' }>) {
       const { job } = await context(claim);
-      if (result.providerJobId !== claim.providerJobId || result.actualCostCents !== job.estimatedCostCents) {
-        throw new AiImageJobError('PROVIDER_COST_EVIDENCE_MISMATCH', 'Recovered output does not match the frozen task and cost');
+      if (result.providerJobId !== claim.providerJobId) {
+        throw new AiImageJobError('PROVIDER_COST_EVIDENCE_MISMATCH', 'Recovered output does not match the frozen task identity');
       }
       const inputs = await loadAiImageEditInputs(job, options.loadInputBuffer || loadAiImageEditInputBuffer);
       await context(claim);
@@ -88,7 +91,7 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
         : await storeAiImageEditFinal(job, inputs, result.image.buffer, persistedRaw.id, upload);
       await context(claim);
       await repository.completeRecoveredEdit!({
-        claim, providerStatus: result.providerStatus, actualCostCents: result.actualCostCents,
+        claim, providerStatus: result.providerStatus, actualCostCents: calculateAiImageTaskCost(job, 1).actualCostCents,
         rawAssetId: persistedRaw.id, finalAsset,
       });
     },

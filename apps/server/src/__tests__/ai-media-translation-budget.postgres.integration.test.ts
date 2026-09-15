@@ -104,6 +104,7 @@ async function createTranslationFixture(database: PrismaClient, label: string) {
 }
 
 async function currentGlobalExposure(database: PrismaClient) {
+  // These legacy translation fixtures quote USD; CNY tasks have a separate budget bucket.
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
   const [settled, pending] = await Promise.all([
@@ -112,11 +113,12 @@ async function currentGlobalExposure(database: PrismaClient) {
         kind: { in: ['CHARGE', 'RECONCILED_CHARGE'] },
         createdAt: { gte: dayStart },
         actualCostMinor: { not: null },
+        reservation: { currency: 'USD' },
       },
       _sum: { actualCostMinor: true },
     }),
     database.aiCostReservation.aggregate({
-      where: { status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } },
+      where: { currency: 'USD', status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } },
       _sum: { maximumCostMinor: true },
     }),
   ]);

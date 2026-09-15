@@ -25,7 +25,7 @@ const config = {
   },
 };
 const PROFILE = 'ai-image-wanx21-edit-prompt/v1' as const;
-const settings = { ...config, fullEditEnabled: true, inpaintEnabled: true, estimatedCostCents: 7 };
+const settings = { ...config, generationEnabled: true, fullEditEnabled: true, inpaintEnabled: true, estimatedCostCents: 7 };
 const readyStorage = { ready: true, backend: 'local' as const, reason: 'synthetic local storage' };
 
 function capability(baseUrl = config.baseUrl): AiImageProviderCapability {
@@ -91,27 +91,58 @@ describe('Wanx hosted edit entry', () => {
     }));
   });
 
-  it('characterizes the exact edit model without promoting it or inheriting text-to-image', () => {
+  it('enables the reviewed official edit transport without inheriting other operations', () => {
     expect(resolveAiImageProviderCapability(config.provider, config.model)).toMatchObject({
       model: config.model, operations: ['FULL_EDIT', 'INPAINT'],
-      inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'adapter-characterized',
+      inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'sandbox-verified',
     });
     expect(supportsAiMediaOperation(config.provider, config.model, 'TEXT_TO_IMAGE')).toBe(false);
     expect(supportsAiMediaOperation(config.provider, config.model, 'IMAGE_TO_IMAGE', 1)).toBe(false);
-    expect(resolveAiImageEditReadiness('FULL_EDIT', settings, { storageReadiness: readyStorage }).ready).toBe(false);
-    expect(resolveAiImageEditProvider(config.provider, config.model, 'FULL_EDIT', config).name).toBe('disabled');
   });
 
-  it.each(['FULL_EDIT', 'INPAINT'] as const)('requires exact async evidence for %s', (operation) => {
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('uses the real registry to make official %s ready and select its worker adapter', (operation) => {
+    expect(resolveAiImageEditReadiness(operation, settings, {
+      workflowEnabled: true, production: true, storageReadiness: readyStorage,
+    })).toMatchObject({ ready: true, reasonCode: 'READY' });
+    expect(resolveAiImageEditProvider(config.provider, config.model, operation, config, undefined, 'production').name)
+      .toBe(config.provider);
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('requires an enabled generation master before %s readiness', (operation) => {
+    for (const generationEnabled of [false, undefined]) {
+      expect(resolveAiImageEditReadiness(operation, { ...settings, generationEnabled }, {
+        workflowEnabled: true, production: true, storageReadiness: readyStorage,
+        resolveCapability: () => capability(),
+      })).toMatchObject({ enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED' });
+    }
+  });
+
+  it.each([
+    { model: 'wanx-unreviewed', baseUrl: config.baseUrl },
+    { model: config.model, baseUrl: 'https://workspace-other.cn-beijing.maas.aliyuncs.com/api/v1' },
+    { model: config.model, baseUrl: 'https://dashscope-intl.aliyuncs.com/api/v1' },
+    { model: config.model, baseUrl: 'https://relay.example/api/v1' },
+  ])('does not promote another model or endpoint: $model / $baseUrl', ({ model, baseUrl }) => {
+    for (const operation of ['FULL_EDIT', 'INPAINT'] as const) {
+      expect(resolveAiImageEditReadiness(operation, { ...settings, model, baseUrl }, {
+        workflowEnabled: true, production: true, storageReadiness: readyStorage,
+      })).toMatchObject({ ready: false, reasonCode: 'PROVIDER_NOT_READY' });
+      expect(resolveAiImageEditProvider(config.provider, model, operation, { ...config, model, baseUrl }).name)
+        .toBe('disabled');
+    }
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('requires the implemented official async protocol for %s', (operation) => {
     expect(resolveAiImageEditReadiness(operation, settings, {
       storageReadiness: readyStorage, resolveCapability: () => capability(),
     })).toMatchObject({ ready: true, reasonCode: 'READY' });
-    expect(resolveAiImageEditReadiness(operation, settings, {
+    expect(resolveAiImageEditReadiness(operation, { ...settings, baseUrl: 'https://workspace-other.cn-beijing.maas.aliyuncs.com/api/v1' }, {
       storageReadiness: readyStorage,
       resolveCapability: () => capability('https://workspace-other.cn-beijing.maas.aliyuncs.com/api/v1'),
     }).ready).toBe(false);
     const wrongTransport = capability();
-    wrongTransport.sandboxEvidence = wrongTransport.sandboxEvidence!.map((entry) => ({ ...entry, inputTransport: 'multipart', resultMode: 'sync' }));
+    wrongTransport.inputTransport = 'multipart';
+    wrongTransport.resultMode = 'sync';
     expect(resolveAiImageEditReadiness(operation, settings, {
       storageReadiness: readyStorage, resolveCapability: () => wrongTransport,
     }).ready).toBe(false);
@@ -143,7 +174,7 @@ describe('Wanx hosted edit entry', () => {
     const beforeProviderDispatch = vi.fn(async () => undefined);
     const accepted = vi.fn(async () => undefined);
     const provider = resolveAiImageEditProvider(config.provider, config.model, 'FULL_EDIT', config, accepted, 'test', {
-      resolveCapability: () => capability(), beforeProviderDispatch,
+      beforeProviderDispatch,
       createWanxEditProvider: (options) => createDashScopeWanx21ImageEditProvider({ ...options, fetch: fetcher, pollIntervalMs: 0 }),
     });
     expect(provider.name).toBe(config.provider);
@@ -157,9 +188,9 @@ describe('Wanx hosted edit entry', () => {
     expect(fetcher.mock.calls.map((call) => call[1]?.method)).toEqual(['POST', 'GET', 'GET']);
   });
 
-  it('accepts a fully frozen compiled request at the real workflow service with fixture evidence', async () => {
+  it('accepts a fully frozen compiled request at the real workflow service with the registered transport', async () => {
     const repository = workflowRepository();
-    const service = createAiMediaWorkflowService(repository as never, { resolveCapability: () => capability() });
+    const service = createAiMediaWorkflowService(repository as never);
     await expect(service.createImageEdit(await editInput())).resolves.toMatchObject({ jobId: 'job-1' });
     expect(repository.createImageEdit).toHaveBeenCalledOnce();
     expect(repository.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
@@ -167,6 +198,79 @@ describe('Wanx hosted edit entry', () => {
         contractVersion: 'ai-image-provider-runtime/v2', credentialRevision: config.credentialRevision,
       }),
     }));
+  });
+
+  it.each([
+    { operation: 'FULL_EDIT' as const, currency: undefined, unitCost: 7 },
+    { operation: 'INPAINT' as const, currency: undefined, unitCost: 7 },
+    { operation: 'FULL_EDIT' as const, currency: 'CNY' as const, unitCost: 14 },
+    { operation: 'INPAINT' as const, currency: 'CNY' as const, unitCost: 14 },
+  ])('creates and enqueues official $operation with the confirmed $currency quote', async ({ operation, currency, unitCost }) => {
+    const repository = workflowRepository();
+    const service = createAiMediaWorkflowService(repository as never);
+    const prompts = promptRegistry();
+    const enqueue = vi.fn(async () => undefined);
+    const app = Fastify();
+    await app.register(aiImageRoutes, {
+      repository: {} as never, mediaWorkflowService: service, production: true,
+      authenticate: async (request: FastifyRequest) => { (request as any).user = { userId: 'owner-1', actorUserId: 'owner-1' }; },
+      getMediaWorkflowEnabled: async () => true, getSourceListingWebMediaEnabled: async () => true,
+      getEditSettings: async () => ({ ...settings, currency, estimatedCostCents: unitCost, imageToImageEnabled: false, dailyLimit: 20, globalDailyBudgetCents: 100 }),
+      getEditStorageReadiness: async () => readyStorage,
+      getOwnedAssetDimensions: async () => ({ width: 1024, height: 1024 }),
+      resolveEditPrompt: (input: Parameters<AiPromptTemplateRegistryService['resolveTemplate']>[0]) => prompts.resolveTemplate(input),
+      enqueueEdit: enqueue,
+    });
+    try {
+      const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+        operation, sourceAssetId: 'source-1', userPrompt: '只改背景，保持商品。', userNegativePrompt: '不要加字。',
+        ...(operation === 'INPAINT' ? { maskAssetId: 'mask-1', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' } : {}),
+        idempotencyKey: 'registered-wanx-http', context: { type: 'collect', id: 'goods-1' },
+      } });
+      expect(response.statusCode, response.body).toBe(202);
+      expect(repository.createImageEdit).toHaveBeenCalledOnce();
+      expect(repository.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
+        operation, provider: config.provider, model: config.model, estimatedCostCents: unitCost,
+        providerRuntimeContract: expect.objectContaining({ credentialRevision: config.credentialRevision, ...(currency ? { currency } : {}) }),
+      }));
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith('job-1');
+    } finally { await app.close(); }
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('preserves the explicit CNY currency when retrying an authorized %s workflow', async (operation) => {
+    const prior = {
+      id: 'workflow-cny', ownerUserId: 'owner-1', actorUserId: 'owner-1', operation,
+      status: 'FAILED', reviewStatus: 'NOT_READY', revision: 1, currentAttempt: 1,
+      inputs: [], events: [],
+      jobs: [{
+        provider: config.provider, model: config.model, requestedImageCount: 1,
+        width: 1024, height: 1024, estimatedCostCents: 14,
+        operationConfig: { providerRuntime: createAiImageProviderRuntimeContract({
+          ...config, currency: 'CNY', costPerImageCents: 14,
+        }, { count: 1, width: 1024, height: 1024 }) },
+      }],
+    };
+    const retry = vi.fn(async () => ({ workflow: { ...prior, status: 'QUEUED' }, jobId: 'job-cny-retry', replayed: false }));
+    const enqueue = vi.fn(async () => undefined);
+    const app = Fastify();
+    await app.register(aiImageRoutes, {
+      repository: {} as never, mediaWorkflowService: { get: async () => prior, retry } as never,
+      authenticate: async (request: FastifyRequest) => { (request as any).user = { userId: 'owner-1', actorUserId: 'owner-1' }; },
+      getMediaWorkflowEnabled: async () => true, getSourceListingWebMediaEnabled: async () => true,
+      getEditSettings: async () => ({
+        ...settings, currency: 'CNY' as const, estimatedCostCents: 14,
+        imageToImageEnabled: false, dailyLimit: 20, globalDailyBudgetCents: 100,
+      }),
+      getEditStorageReadiness: async () => readyStorage, enqueueEdit: enqueue,
+    });
+    try {
+      const response = await app.inject({ method: 'POST', url: '/workflows/workflow-cny/retry', payload: {
+        expectedRevision: 1, idempotencyKey: 'retry-confirmed-cny',
+      } });
+      expect(response.statusCode, response.body).toBe(202);
+      expect(retry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'workflow-cny', ownerUserId: 'owner-1' }));
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith('job-cny-retry');
+    } finally { await app.close(); }
   });
 
   it.each(['prompt', 'negative', 'contract', 'checksum', 'release', 'empty-release', 'null-release'] as const)('rejects altered frozen %s before persistence', async (field) => {

@@ -511,7 +511,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_daily_budget_cents: {
     label: 'AI 全局每日预算',
     group: 'ai',
-    description: '付费文生图创建前执行的全局费用熔断：UTC 当日已结算费用 + 全部历史未决预留最大暴露 + 新任务最大费用；0 会禁止新付费任务',
+    description: '按任务报价币种分别执行的全局每日预算（最小货币单位）：UTC 当日已结算费用 + 全部历史未决预留上限 + 新任务上限；不同币种不混加，0 禁止新付费任务',
   },
   ai_user_daily_category_translation_limit: {
     label: '用户每日类目翻译额度',
@@ -557,12 +557,12 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_provider: {
     label: '生图服务来源',
     group: 'ai',
-    description: 'disabled 表示关闭；适配器可做连接与沙箱验证，真实任务仍受 Provider 验收门禁',
+    description: 'disabled 表示关闭；配置已实现的服务协议、模型、密钥和单价后，正常任务按权限与额度执行',
   },
   ai_image_base_url: {
     label: '生图 Base URL',
     group: 'ai',
-    description: '生图服务接口地址；自定义网关仅用于连接和本地单次沙箱验证，不能直接进入正式队列',
+    description: '生图服务 HTTPS API 基址；官方服务使用官方地址，自定义服务按已实现的 OpenAI-compatible 文生图协议执行',
   },
   ai_image_api_key: {
     label: '生图 API Key',
@@ -574,12 +574,12 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_model: {
     label: '生图模型',
     group: 'ai',
-    description: 'Provider 模型 ID；自定义模型必须按精确端点、模型、价格和配置版本单独验收',
+    description: '填写该服务实际支持的模型 ID；操作能力由已实现的协议决定，任务确认时冻结端点、模型和价格',
   },
   ai_image_generation_cost_cents: {
-    label: '文生图单张成本（分）',
+    label: '生图单张费用（分）',
     group: 'ai',
-    description: '按已验收价格填写；创建任务时按图片数冻结总成本，0 会禁止付费 Provider 任务',
+    description: '填写已确认的单张价格；Wanx 使用人民币分（0.14元填14），其他现有通道沿用其报价币种。确认时冻结价格，成功按实际张数计费；0 禁止新付费任务',
   },
   ai_image_prompt: {
     label: '旧版生图提示词（兼容）',

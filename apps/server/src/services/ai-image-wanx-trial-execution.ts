@@ -34,6 +34,7 @@ export const AI_IMAGE_WANX_TRIAL_EXECUTION_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-edit-prompt-contract.ts',
   'apps/server/src/services/ai-image-edit-provider-contract.ts',
   'apps/server/src/services/ai-image-jobs.ts',
+  'apps/server/src/services/ai-image-task-cost.ts',
   'apps/server/src/services/ai-image-provider-capabilities.ts',
   'apps/server/src/services/ai-image-provider-runtime-contract.ts',
   'apps/server/src/services/ai-prompt-templates.ts',

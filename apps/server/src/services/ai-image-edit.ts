@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
 import {
   AI_IMAGE_EDIT_MAX_INPUT_BYTES,
   AI_IMAGE_EDIT_POLICY_VERSION,
@@ -493,6 +494,7 @@ export async function runAiImageEditJob(
       );
     }
     assertAiImageEditInputPolicy(job);
+    getFrozenAiImageTaskPrice(job);
     if (!deps.repository.recordProviderOutput) {
       throw new AiImageJobError('EDIT_PERSISTENCE_NOT_READY', 'Raw edit output persistence is not installed');
     }
@@ -545,28 +547,24 @@ export async function runAiImageEditJob(
         throw Object.assign(acceptedError, acceptedProviderEvidence);
       }
     }
-    const actualCostCents = generated.actualCostCents ?? job.estimatedCostCents;
     if (job.provider === 'fake') {
       if (
         generated.images.length !== 1
         || generated.providerJobId
-        || Number(actualCostCents) !== 0
+        || (generated.actualCostCents != null && Number(generated.actualCostCents) !== 0)
       ) {
         throw new AiImageJobError(
           'INVALID_PROVIDER_RESULT',
           'Fake edit Provider must return one zero-cost synchronous image',
         );
       }
-    } else if (
-      generated.images.length !== 1
-      || !Number.isSafeInteger(actualCostCents)
-      || actualCostCents < 0
-    ) {
+    } else if (generated.images.length !== 1) {
       throw new AiImageJobError(
         'INVALID_PROVIDER_RESULT',
-        'Paid edit Provider must return one image with a valid actual cost',
+        'Paid edit Provider must return one image',
       );
     }
+    const taskCost = calculateAiImageTaskCost(job, generated.images.length);
     const raw = generated.images[0]!;
     const rawDiagnostics = await validateAiImageEditCandidate({
       buffer: raw.buffer,
@@ -607,7 +605,7 @@ export async function runAiImageEditJob(
       providerJobId: generated.providerJobId || null,
       providerResultReceivedWithoutIdentity:
         paidProviderResultReceived && !generated.providerJobId,
-      actualCostCents,
+      actualCostCents: taskCost.actualCostCents,
       billedUnits: 1,
       assets: [finalAsset],
     });

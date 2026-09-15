@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 describe('AI image workflow child terminal transitions', () => {
   const unresolvedQuotaFilter = expect.objectContaining({
@@ -50,6 +51,89 @@ describe('AI image workflow child terminal transitions', () => {
       },
     };
   }
+
+  it.each([0, 99])('derives the final task fee and count instead of persisting caller amount %s', async suppliedCost => {
+    const ledger = costLedger();
+    Object.assign(ledger.reservation, { estimatedCostMinor: 28, maximumCostMinor: 28, currency: 'USD' });
+    const job = { id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
+      operation: 'TEXT_TO_IMAGE', status: 'RUNNING', provider: 'openai-images', model: 'gpt-image-1', providerJobId: null,
+      requestedImageCount: 2, width: 1024, height: 1024, estimatedCostCents: 28, actualCostCents: null, billedUnits: 0,
+      operationConfig: createAiImageProviderRuntimeContract({ provider: 'openai-images', model: 'gpt-image-1',
+        baseUrl: 'https://api.openai.com/v1', costPerImageCents: 14 }, { count: 2, width: 1024, height: 1024 }) };
+    const tx = { aiImageJob: { findUnique: async () => job,
+      updateMany: async ({ data }: any) => { Object.assign(job, data); return { count: 1 }; } },
+      mediaAsset: { create: async ({ data }: any) => ({ id: 'result-1', ...data }) },
+      aiCostReservation: ledger.aiCostReservation, aiCostSettlement: ledger.aiCostSettlement };
+    const repository = new PrismaAiImageJobRepository({ $transaction: async (callback: any) => callback(tx) } as never);
+    const completion = { providerJobId: null, actualCostCents: suppliedCost, billedUnits: 999,
+      assets: [{ ownerUserId: 'owner-1', jobId: 'job-1', url: '/synthetic.png', storageBackend: 'local',
+        storageKey: 'synthetic.png', mimeType: 'image/png', sizeBytes: 10, sha256: 'a'.repeat(64) }] };
+    await repository.complete('job-1', completion);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 14, billedUnits: 1 });
+    expect(ledger.settlements).toHaveLength(1);
+    expect(ledger.settlements[0]).toMatchObject({ kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 });
+    await repository.complete('job-1', completion);
+    expect(ledger.settlements).toHaveLength(1);
+  });
+
+  it.each(['RESERVED', 'RECONCILIATION_REQUIRED'] as const)('releases %s task fees after the first definite no-output result', async status => {
+    const acceptedAt = new Date('2026-09-15T00:00:00.000Z');
+    const cost = costLedger(status);
+    Object.assign(cost.reservation, { currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14,
+      providerRequestId: status === 'RESERVED' ? null : 'provider-task-1', providerAcceptedAt: status === 'RESERVED' ? null : acceptedAt });
+    const runtime = createAiImageProviderRuntimeContract({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY',
+      credentialRevision: { recordId: 'key-record', revision: 1, updatedAt: acceptedAt.toISOString() } }, { count: 1, width: 1024, height: 1024 });
+    const job: Record<string, any> = { id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
+      provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', operation: 'INPAINT', status: 'RUNNING',
+      requestedImageCount: 1, width: 1024, height: 1024, estimatedCostCents: 14, actualCostCents: null, billedUnits: 0,
+      providerJobId: 'provider-task-1', providerDispatchedAt: acceptedAt, operationConfig: { providerRuntime: runtime },
+      providerReconciliationStatus: 'NOT_REQUIRED', providerReconciliationRevision: 0 };
+    const tx = { ...cost, aiImageJob: { findUnique: async () => structuredClone(job),
+      updateMany: async ({ data }: any) => { Object.assign(job, data); return { count: 1 }; } },
+      aiProviderReconciliationEvent: { create: async ({ data }: any) => data } };
+    const repository = new PrismaAiImageJobRepository({ $transaction: async (callback: any) => callback(tx) } as never);
+    const failure = { attemptCount: 1, errorCode: 'PROVIDER_TASK_FAILED', errorMessage: 'Provider task returned no output',
+      providerJobId: 'provider-task-1', providerAcceptedAt: acceptedAt };
+    await repository.markFailed('job-1', failure);
+    expect(job).toMatchObject({ status: 'FAILED', providerReconciliationStatus: 'NO_OUTPUT', actualCostCents: 0, billedUnits: 0 });
+    expect(cost.reservation.status).toBe('RELEASED');
+    expect(cost.settlements).toEqual([expect.objectContaining({ kind: status === 'RESERVED' ? 'RELEASE' : 'RECONCILED_RELEASE',
+      actualCostMinor: 0, billedUnits: 0 })]);
+    await repository.markFailed('job-1', failure);
+    expect(cost.settlements).toHaveLength(1);
+  });
+
+  it.each([true, false])('keeps the submitted attempt evidence when a later failure count advances (event=%s)', async hasAcceptanceEvent => {
+    const providerAcceptedAt = new Date('2026-09-15T00:00:00.000Z');
+    const cost = costLedger();
+    const job = { id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1', workflowAttempt: 1,
+      provider: 'openai-images', model: 'gpt-image-1', operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
+      providerJobId: 'provider-task-1', attemptCount: 1, billedUnits: 0, providerReconciliationStatus: 'NOT_REQUIRED' };
+    const findEvent = vi.fn(async ({ where }: any) => hasAcceptanceEvent && where.eventKey === 'workflow-1:PROVIDER_SUBMITTED:job-1:1'
+      ? { payload: { providerAcceptedAt: providerAcceptedAt.toISOString() }, createdAt: providerAcceptedAt } : null);
+    const tx = { ...cost,
+      aiImageJob: { findUnique: async () => structuredClone(job),
+        updateMany: async ({ data }: any) => { Object.assign(job, data); return { count: 1 }; } },
+      aiMediaWorkflow: { updateMany: async () => ({ count: 1 }) },
+      aiMediaWorkflowEvent: { findUnique: findEvent, create: async ({ data }: any) => data },
+      aiProviderReconciliationEvent: { create: async ({ data }: any) => data } };
+    const repository = new PrismaAiImageJobRepository({ $transaction: async (callback: any) => callback(tx) } as never);
+    const failure = { attemptCount: 2, errorCode: 'PROVIDER_RECOVERY_REQUIRED', errorMessage: 'Interrupted after the first submission',
+      providerJobId: 'provider-task-1' };
+    if (!hasAcceptanceEvent) {
+      await expect(repository.markFailed('job-1', failure)).rejects.toMatchObject({ code: 'PROVIDER_ACCEPTANCE_EVIDENCE_MISSING' });
+      expect(cost.settlements).toHaveLength(0);
+      return;
+    }
+    await repository.markFailed('job-1', failure);
+    expect(job).toMatchObject({ status: 'FAILED', attemptCount: 2 });
+    expect(cost.reservation).toMatchObject({ status: 'RECONCILIATION_REQUIRED', providerRequestId: 'provider-task-1', providerAcceptedAt });
+    expect(findEvent).toHaveBeenCalledWith({ where: { eventKey: 'workflow-1:PROVIDER_SUBMITTED:job-1:1' } });
+    await repository.markFailed('job-1', failure);
+    expect(cost.settlements).toHaveLength(1);
+    expect(cost.reservation.providerAcceptedAt).toEqual(providerAcceptedAt);
+  });
 
   it('charges cancelled recovered outputs against the standalone daily quota', async () => {
     const aggregate = vi.fn()
@@ -151,6 +235,7 @@ describe('AI image workflow child terminal transitions', () => {
 
   it('inherits the frozen source snapshot onto a final edit candidate with one input read', async () => {
     const job = {
+      provider: 'fake', model: 'fake-image-edit-v1', estimatedCostCents: 0, requestedImageCount: 1, width: 2, height: 2,
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
       workflowAttempt: 1, attemptCount: 1, operation: 'FULL_EDIT', status: 'RUNNING',
       providerJobId: null,
@@ -198,6 +283,7 @@ describe('AI image workflow child terminal transitions', () => {
     'inherits one frozen source snapshot onto %s outputs',
     async (operation) => {
       const job = {
+        provider: 'fake', model: 'fake-image-v1', estimatedCostCents: 0, requestedImageCount: 1, width: 2, height: 2,
         id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
         workflowAttempt: 1, attemptCount: 1, operation, status: 'RUNNING', providerJobId: null,
       };
@@ -242,6 +328,7 @@ describe('AI image workflow child terminal transitions', () => {
 
   it('rejects ambiguous frozen source snapshots before persisting an input-based output', async () => {
     const job = {
+      provider: 'fake', model: 'fake-image-v1', estimatedCostCents: 0, requestedImageCount: 1, width: 2, height: 2,
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
       workflowAttempt: 1, attemptCount: 1, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
       providerJobId: null,
@@ -814,6 +901,7 @@ describe('AI image workflow child terminal transitions', () => {
 
   it('preserves a previously persisted provider task when completion omits it', async () => {
     const job = {
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7, requestedImageCount: 1, width: 1024, height: 1024,
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
       workflowAttempt: null, attemptCount: 1, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
       providerJobId: 'provider-task-1', errorCode: null as string | null, errorMessage: null as string | null,
@@ -875,6 +963,7 @@ describe('AI image workflow child terminal transitions', () => {
 
   it('settles an existing reservation atomically with successful completion', async () => {
     const job = {
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7, requestedImageCount: 1, width: 1024, height: 1024,
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
       workflowAttempt: null, attemptCount: 1, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
       providerJobId: 'provider-task-1',

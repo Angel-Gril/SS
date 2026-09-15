@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_EDIT_MASK_SEMANTICS,
 } from '../services/ai-image-compositor.js';
@@ -142,6 +143,22 @@ function provider(image: Buffer): AiImageProvider {
 }
 
 describe('AI image manual edit lifecycle', () => {
+  it.each([0, 99, null, undefined])('records the frozen edit price despite Provider amount %s', async actualCostCents => {
+    const source = await rgbaPng(2, 2, new Array(16).fill(200));
+    const job = editJob({ operation: 'FULL_EDIT', source });
+    Object.assign(job, { provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 14 });
+    job.operationConfig = { ...job.operationConfig, providerRuntime: createAiImageProviderRuntimeContract({
+      provider: job.provider, model: job.model, baseUrl: 'https://api.openai.com/v1', costPerImageCents: 14,
+    }, { count: 1, width: 2, height: 2 }) };
+    const state = memoryRepository(job);
+    await runAiImageEditJob(job.id, 1, { repository: state.repository,
+      provider: { name: job.provider, generate: async () => ({ images: [{ buffer: source, mimeType: 'image/png' }], actualCostCents }) },
+      loadInputBuffer: async () => source,
+      uploadBuffer: async (_buffer, filename) => ({ url: `/synthetic/${filename}`, backend: 'local', key: filename }) });
+    expect(state.completions).toHaveLength(1);
+    expect(state.completions[0]).toMatchObject({ actualCostCents: 14, billedUnits: 1 });
+  });
+
   it('treats an uncoordinated duplicate RUNNING invocation as a no-op', async () => {
     const source = await rgbaPng(2, 2, new Array(16).fill(10));
     const initial = editJob({ operation: 'FULL_EDIT', source });

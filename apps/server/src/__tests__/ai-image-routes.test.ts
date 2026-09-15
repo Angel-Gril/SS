@@ -24,6 +24,7 @@ async function buildApp(
     model?: string;
     baseUrl?: string;
     estimatedCostCents?: number;
+    currency?: 'USD' | 'CNY';
     resolveProviderCapability?: (
       provider: string,
       model: string,
@@ -81,6 +82,7 @@ async function buildApp(
       baseUrl: overrides.baseUrl,
       dailyLimit: 5,
       estimatedCostCents: overrides.estimatedCostCents ?? 4,
+      currency: overrides.currency,
     }),
     getMediaWorkflowDecision: async () => workflowDecision,
     resolvePrompt,
@@ -90,6 +92,26 @@ async function buildApp(
 }
 
 describe('AI image job routes', () => {
+  it.each([
+    { provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1', currency: undefined },
+    { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY' as const },
+    { provider: 'custom', model: 'admin-configured-model', baseUrl: 'https://relay.example/v1', currency: undefined },
+  ])('creates a normal $provider text job from configured protocol and price', async ({ provider, model, baseUrl, currency }) => {
+    const { app, repository, enqueue } = await buildApp('owner-1', provider, {
+      enabled: true, reason: 'tenant_allowed', revision: 1,
+    }, { model, baseUrl, currency, estimatedCostCents: 7 });
+    try {
+      const response = await app.inject({ method: 'POST', url: '/jobs', payload: {
+        prompt: 'A studio product photograph', count: 2, width: 1024, height: 1024, idempotencyKey: 'normal-text-job',
+      } });
+      expect(response.statusCode, response.body).toBe(202);
+      expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({
+        provider, model, estimatedCostCents: 14,
+        operationConfig: expect.objectContaining({ unitCostCents: 7, imageCount: 2, ...(currency ? { currency } : {}) }),
+      }), 5, 0);
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith('job-1');
+    } finally { await app.close(); }
+  });
   it.each([
     ['fake', 900, 1200, true],
     ['custom', 1024, 1536, true],
@@ -158,7 +180,7 @@ describe('AI image job routes', () => {
     expect(enqueue).toHaveBeenCalledWith('job-1');
   });
 
-  it('rejects a sandbox-verified custom Relay when endpoint evidence is not exact', async () => {
+  it('uses the configured custom text endpoint instead of an unrelated supplier receipt', async () => {
     const baseUrl = 'https://relay.example/v1';
     const model = 'relay-image-v2';
     const capability: AiImageProviderCapability = {
@@ -190,11 +212,14 @@ describe('AI image job routes', () => {
       payload: { prompt: 'studio product photo', idempotencyKey: 'idem-custom-relay-2' },
     });
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
-    expect(resolvePrompt).not.toHaveBeenCalled();
-    expect(repository.createWithQuota).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(202);
+    expect(resolvePrompt).toHaveBeenCalledOnce();
+    expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({
+      operationConfig: expect.objectContaining({
+        baseUrlSha256: '889271d70d18282b00bbed393fc85cc923bc38817f3aea457379d58f98bd9d3b',
+      }),
+    }), 5, 0);
+    expect(enqueue).toHaveBeenCalledOnce();
   });
 
   it('rejects a tenant outside the canonical media rollout before any job side effect', async () => {
@@ -282,7 +307,7 @@ describe('AI image job routes', () => {
       targetUpdatedAt: '2026-07-17T00:00:00.000Z',
     }));
   });
-  it('keeps every paid legacy provider dark until sandbox evidence and cost are accepted', async () => {
+  it('rejects unregistered official models and an unconfigured custom endpoint', async () => {
     const { app: dashscope, enqueue } = await buildApp('owner-1', 'dashscope-wanx');
     const rejectedDashscope = await dashscope.inject({
       method: 'POST', url: '/jobs',

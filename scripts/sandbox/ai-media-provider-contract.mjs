@@ -2,12 +2,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { reviewedPaidDerivedCapabilityMatches } from './ai-media-provider-review.mjs';
 
 const root = process.cwd();
 const matrixPath = path.join(root, 'docs/contracts/ai-media-provider-matrix.md');
 const policyDir = path.join(root, 'scripts/fixtures/ai-media-evaluation');
 const evaluationContractPath = path.join(root, 'scripts/ai-media-evaluation-contract.test.mjs');
+const reviewedWanxEndpoint = createHash('sha256')
+  .update('https://dashscope.aliyuncs.com/api/v1')
+  .digest('hex');
 const reviewedPaidDerivedCapabilities = new Map([
   ['dashscope-wanx:wanx2.1-imageedit', {
     operations: new Set(['FULL_EDIT', 'INPAINT']),
@@ -16,7 +20,10 @@ const reviewedPaidDerivedCapabilities = new Map([
     maxReferences: 1,
     supportsMask: true,
     allowTextToImage: false,
-    sandboxEvidence: null,
+    sandboxEvidence: new Set([
+      `${reviewedWanxEndpoint}:FULL_EDIT:base64:async`,
+      `${reviewedWanxEndpoint}:INPAINT:base64:async`,
+    ]),
   }],
   ['dashscope-qwen-mt-image:qwen-mt-image', {
     operations: new Set(['IMAGE_TRANSLATE']),
@@ -122,15 +129,17 @@ for (const entry of capabilities) {
   if (
     paidDerivedOperations.length &&
     entry.evidenceLevel === 'sandbox-verified' &&
-    !entry.evidence.toLowerCase().includes('sandbox')
+    (typeof entry.evidence !== 'string' || !entry.evidence.trim())
   ) {
-    fail(`paid provider sandbox capability is missing sandbox evidence: ${entry.provider}`);
+    fail(`paid provider transport evidence is missing its summary: ${entry.provider}`);
   }
 }
 
 const matrix = fs.existsSync(matrixPath) ? fs.readFileSync(matrixPath, 'utf8') : '';
 for (const required of [
-  'adapter capability foundation',
+  'normal generation uses configured adapter contracts',
+  'supplier billing evidence is separate',
+  'canRunAiImageProviderOperation',
   'dashscope-wanx',
   'openai-images',
   'qwen-mt-image',

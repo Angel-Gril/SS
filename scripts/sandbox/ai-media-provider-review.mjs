@@ -8,7 +8,8 @@ function evidenceKey(evidence) {
 }
 
 export function reviewedPaidDerivedCapabilityMatches(entry, reviewed) {
-  if (!reviewed || !Array.isArray(entry.operations) || !(reviewed.operations instanceof Set)) {
+  if (!entry || !reviewed || !Array.isArray(entry.operations) || !(reviewed.operations instanceof Set)
+    || !['adapter-characterized', 'sandbox-verified'].includes(entry.evidenceLevel)) {
     return false;
   }
   const operations = new Set(entry.operations);

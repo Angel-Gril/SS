@@ -17,6 +17,7 @@ import { PrismaAiImageJobRepository } from './ai-image-job-repository.js';
 import { persistAiImageEditRawOutput } from './ai-image-edit-output.js';
 import { AI_IMAGE_EDIT_POLICY_VERSION } from '../services/ai-image-edit-artifacts.js';
 import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
+import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 
 const ACTIVE_RECONCILIATION_STATUSES = ['PENDING', 'RETRY_WAIT'] as const;
 const TERMINAL_COST_STATUSES = new Set(['SETTLED', 'RELEASED']);
@@ -186,7 +187,8 @@ async function assertClaimedEdit(tx: any, job: any, claim: AiProviderReconciliat
   const reservation = await tx.aiCostReservation.findUnique({
     where: { ai_cost_reservation_job_owner: { jobId: job.id, ownerUserId: job.ownerUserId } },
   });
-  if (!reservation || reservation.currency !== 'USD'
+  const frozenPrice = getFrozenAiImageTaskPrice(job);
+  if (!reservation || reservation.currency !== frozenPrice.currency
     || reservation.provider !== job.provider || reservation.model !== job.model
     || reservation.requestFingerprint !== job.requestFingerprint
     || reservation.providerRequestId !== job.providerJobId
@@ -225,12 +227,17 @@ async function settleRecoveredCost(
     preservedTerminalDecision: false,
     differsFromProvider: false,
   };
-  if (!tx.aiCostReservation?.findUnique) return providerProjection;
+  const taskProjection = (reservation?: any) => {
+    if (release) return providerProjection;
+    const cost = calculateAiImageTaskCost({ ...job, costReservation: reservation }, billedUnits);
+    return { ...providerProjection, ...cost, differsFromProvider: cost.actualCostCents !== actualCostCents };
+  };
+  if (!tx.aiCostReservation?.findUnique) return taskProjection();
   const reservation = await tx.aiCostReservation.findUnique({
     where: { ai_cost_reservation_job_owner: { jobId: job.id, ownerUserId: job.ownerUserId } },
     include: { settlements: true },
   });
-  if (!reservation) return providerProjection;
+  if (!reservation) return taskProjection();
   const costProviderJobId = String(reservation.providerRequestId || '').trim();
   if (costProviderJobId && costProviderJobId !== String(job.providerJobId || '').trim()) {
     throw new AiProviderReconciliationRepositoryError(
@@ -279,6 +286,7 @@ async function settleRecoveredCost(
     };
   }
   const reconciled = ['SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'].includes(reservation.status);
+  const confirmed = taskProjection(reservation);
   const kind: AiCostSettlementKind = release
     ? (reconciled ? 'RECONCILED_RELEASE' : 'RELEASE')
     : (reconciled ? 'RECONCILED_CHARGE' : 'CHARGE');
@@ -289,14 +297,14 @@ async function settleRecoveredCost(
     idempotencyKey: `${job.id}:cost:provider-reconciliation:${release ? 'release' : 'settle'}`,
     requestFingerprint: reservation.requestFingerprint,
     kind,
-    actualCostMinor: release ? 0 : actualCostCents,
-    billedUnits: release ? 0 : billedUnits,
+    actualCostMinor: confirmed.actualCostCents,
+    billedUnits: confirmed.billedUnits,
     reason: release
-      ? 'Provider reconciliation proved no billable output'
-      : 'Provider reconciliation recovered the accepted task output',
+      ? 'Confirmed Provider task produced zero valid images; ERP task fee released'
+      : 'Recovered images billed at the confirmed task unit price',
     expectedReservationUpdatedAt: reservation.updatedAt,
   });
-  return { ...providerProjection, reservationStatus: String(settled.reservation.status) };
+  return { ...confirmed, reservationStatus: String(settled.reservation.status) };
 }
 
 function sourceSnapshotId(inputs: any[]) {
@@ -485,23 +493,26 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
   }
 
   async completeNoOutput(input: Parameters<AiProviderReconciliationRepository['completeNoOutput']>[0]) {
+    if (!String(input.claim.providerJobId || '').trim()
+      || !['FAILED', 'CANCELED', 'CANCELLED'].includes(bounded(input.providerStatus, 100).toUpperCase())
+      || input.errorCode !== 'PROVIDER_TASK_FAILED') {
+      throw new AiProviderReconciliationRepositoryError('PROVIDER_NO_OUTPUT_UNPROVEN', 'A stable task and explicit terminal failure are required');
+    }
     await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       if (isWanxEditReconciliationOperation(input.claim)) {
         await loadClaimedEdit(tx, input.claim);
-        if (input.billingDisposition !== 'UNKNOWN') {
-          throw new AiProviderReconciliationRepositoryError('PROVIDER_COST_EVIDENCE_MISMATCH', 'Wanx task status alone cannot prove a zero charge');
-        }
       }
       const job = await tx.aiImageJob.findUnique({ where: { id: input.claim.jobId } });
       if (!job) ensureLeaseMutation({ count: 0 });
-      if (input.billingDisposition === 'NO_CHARGE') {
-        await settleRecoveredCost(tx, job, 0, 0, true);
-      }
+      if (job.ownerUserId !== input.claim.ownerUserId || job.providerJobId !== input.claim.providerJobId) ensureLeaseMutation({ count: 0 });
+      const costProjection = await settleRecoveredCost(tx, job, 0, 0, true);
       const reconciledAt = new Date();
       const changed = await tx.aiImageJob.updateMany({
         where: claimFence(input.claim),
         data: {
           providerReconciliationStatus: 'NO_OUTPUT',
+          actualCostCents: costProjection.actualCostCents,
+          billedUnits: costProjection.billedUnits,
           providerReconciliationRevision: input.claim.reconciliationRevision + 1,
           providerReconciliationNextAt: null,
           ...releasedLeaseData(),
@@ -516,6 +527,8 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
         providerStatus: bounded(input.providerStatus, 100),
         errorCode: bounded(input.errorCode, 100),
         billingDisposition: input.billingDisposition,
+        taskCost: { actualCostCents: costProjection.actualCostCents, billedUnits: costProjection.billedUnits,
+          preservedTerminalDecision: costProjection.preservedTerminalDecision },
       });
     });
   }
@@ -571,7 +584,7 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
       const raw = edit ? await tx.mediaAsset.findFirst({ where: {
         id: input.rawAssetId, aiImageJobId: job.id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT',
       } }) : null;
-      if (edit && (!raw || input.actualCostCents !== job.estimatedCostCents
+      if (edit && (!raw
         || (!cancelled && (!asset || asset.kind !== 'AI_GENERATED'
           || asset.ownerUserId !== job.ownerUserId || asset.jobId !== job.id
           || asset.width !== job.width || asset.height !== job.height
@@ -695,7 +708,7 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
             reservationStatus: costProjection.reservationStatus,
             projectionSource: costProjection.preservedTerminalDecision
               ? 'TERMINAL_COST_DECISION'
-              : 'PROVIDER_RESULT',
+              : 'FROZEN_TASK_PRICE',
             actualCostCents: costProjection.actualCostCents,
             billedUnits: costProjection.billedUnits,
             providerActualCostCents: input.actualCostCents,

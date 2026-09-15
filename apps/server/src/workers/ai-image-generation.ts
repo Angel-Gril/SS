@@ -13,12 +13,13 @@ import {
   createOpenAiImagesProvider,
 } from '../services/ai-image-providers.js';
 import {
-  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
+import { canRunAiImageProviderOperation } from '../services/ai-image-provider-admission.js';
 import {
   AiImageProviderRuntimeContractError,
-  assertAiImageProviderRuntimeContract,
+  bindAiImageProviderExecutionConfig,
+  type AiImageProviderRuntimeIdentity,
 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AiImageJobError,
@@ -41,12 +42,8 @@ export const AI_IMAGE_QUEUE_JOB_OPTIONS = {
   removeOnFail: 500,
 } as const;
 
-export interface AiImageProviderRuntimeConfig {
-  provider: string;
-  baseUrl: string;
+export interface AiImageProviderRuntimeConfig extends AiImageProviderRuntimeIdentity {
   apiKey: string;
-  model: string;
-  costPerImageCents: number;
 }
 
 export interface AiImageDispatchAuthorization {
@@ -57,10 +54,12 @@ export interface AiImageDispatchAuthorization {
 
 export async function getAiImageDispatchAuthorization(
   ownerUserId: string,
+  operation: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE' = 'TEXT_TO_IMAGE',
 ): Promise<AiImageDispatchAuthorization> {
-  const [generationEnabled, rollout] = await Promise.all([
+  const [generationEnabled, rollout, operationEnabled] = await Promise.all([
     getConfig('ai_image_generation_enabled'),
     getAiMediaRolloutDecision(ownerUserId),
+    operation === 'IMAGE_TO_IMAGE' ? getConfig('feature_ai_media_image_to_image') : Promise.resolve(true),
   ]);
   if (!generationEnabled) {
     return {
@@ -76,6 +75,13 @@ export async function getAiImageDispatchAuthorization(
       reason: 'AI media rollout was revoked before Provider dispatch',
     };
   }
+  if (!operationEnabled) {
+    return {
+      enabled: false,
+      reasonCode: 'feature_off',
+      reason: 'Reference image generation was disabled before Provider dispatch',
+    };
+  }
   return {
     enabled: true,
     reasonCode: rollout.reason,
@@ -89,7 +95,8 @@ export async function getAiImageProviderRuntimeConfig(): Promise<AiImageProvider
     getConfig('ai_image_api_key'), getConfig('ai_image_model'),
     getConfig('ai_image_generation_cost_cents'),
   ]);
-  return { provider, baseUrl, apiKey, model, costPerImageCents };
+  return { provider, baseUrl, apiKey, model, costPerImageCents,
+    ...(provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}) };
 }
 
 export interface AiImageProviderResolverDependencies {
@@ -107,17 +114,17 @@ export function resolveAiImageProvider(
   if (provider === 'fake') {
     return createFakeAiImageProvider({ images: [{ buffer: fakePng, mimeType: 'image/png' }], actualCostCents: 0 });
   }
-  if (provider !== config.provider || !config.apiKey || !config.model) return createDisabledAiImageProvider();
+  if (provider !== config.provider || !config.apiKey.trim() || !config.model.trim()) return createDisabledAiImageProvider();
   const capability = (dependencies.resolveCapability || resolveAiImageProviderCapability)(
     provider,
     config.model,
   );
-  if (capability?.evidenceLevel !== 'sandbox-verified' || config.costPerImageCents <= 0) {
+  if (!capability || config.costPerImageCents <= 0) {
     return createDisabledAiImageProvider();
   }
   const options = { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, costPerImageCents: config.costPerImageCents, onProviderJobCreated };
   if (provider === 'dashscope-wanx') {
-    if (!hasExactAiMediaSandboxEvidence({
+    if (!canRunAiImageProviderOperation({
       capability,
       provider,
       model: config.model,
@@ -129,6 +136,13 @@ export function resolveAiImageProvider(
     return createDashScopeWanxProvider(options);
   }
   if (provider === 'openai-images' || provider === 'custom') {
+    const operationReady = (operation: Parameters<AiImageProvider['generate']>[0]['operation']) => canRunAiImageProviderOperation({
+      capability, provider, model: config.model, baseUrl: config.baseUrl,
+      operation: operation || 'TEXT_TO_IMAGE',
+      inputTransport: !operation || operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
+      resultMode: 'sync',
+    });
+    if (!operationReady('TEXT_TO_IMAGE') && !operationReady('IMAGE_TO_IMAGE')) return createDisabledAiImageProvider();
     const generation = (
       dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider
     )(options);
@@ -137,18 +151,10 @@ export function resolveAiImageProvider(
     )(options);
     const assertReady = (request: Parameters<AiImageProvider['generate']>[0]) => {
       const operation = request.operation || 'TEXT_TO_IMAGE';
-      if (!hasExactAiMediaSandboxEvidence({
-        capability,
-        provider,
-        model: config.model,
-        baseUrl: config.baseUrl,
-        operation,
-        inputTransport: operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
-        resultMode: 'sync',
-      })) {
+      if (!operationReady(operation)) {
         throw new AiImageJobError(
           'PROVIDER_NOT_READY',
-          `OpenAI ${operation} has not passed its exact endpoint and request-mode sandbox gate`,
+          `OpenAI ${operation} endpoint or request protocol is not supported`,
         );
       }
     };
@@ -289,7 +295,7 @@ export async function processAiImageQueueJob(
   if (paidJob) {
     const authorization = await (
       overrides.getDispatchAuthorization || getAiImageDispatchAuthorization
-    )(persisted.ownerUserId);
+    )(persisted.ownerUserId, persisted.operation === 'IMAGE_TO_IMAGE' ? 'IMAGE_TO_IMAGE' : 'TEXT_TO_IMAGE');
     if (!authorization.enabled) {
       await failBeforeDispatch('AI_IMAGE_DISPATCH_REVOKED', authorization.reason);
       return;
@@ -323,7 +329,7 @@ export async function processAiImageQueueJob(
     providerConfig = await (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)();
     if (paidJob) {
       try {
-        assertAiImageProviderRuntimeContract(
+        providerConfig = bindAiImageProviderExecutionConfig(
           persisted.operationConfig,
           providerConfig,
           {

@@ -1,21 +1,21 @@
 # AI Media Provider Capability Matrix
 
-Status: **adapter capability foundation implemented; the Unit 0B media acceptance gate remains open**
+Status: **normal generation uses configured adapter contracts; supplier billing evidence is separate (2026-09-15)**
 
-The server registry is a fail-closed operation/input guard. Text-to-image job creation checks it before quota reservation and the worker checks every job again before provider submission. It describes current adapter behavior only; it is not paid-provider sandbox acceptance.
+The server registry describes implemented operation/input contracts. Normal routes, workflow services and workers share `canRunAiImageProviderOperation`; configured standard adapters do not wait for a supplier invoice or a separate manual sandbox promotion. The independent sandbox evidence fields record actual transport observations and do not guarantee visual quality. Feature flags, tenant authorization, credentials, frozen prices, quotas and media/network limits still apply.
 
 | Provider         | Model scope                                                                  | Current operations                | Inputs                                                                    | Result                        | Evidence level                              |
 | ---------------- | ---------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------- |
 | `fake`           | local non-production lifecycle wildcard                                      | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `IMAGE_TRANSLATE` | zero references for text-to-image; owned reference(s) for derived operations | sync                          | local test only                             |
 | `dashscope-wanx` | preset `wanx2.1-t2i-turbo`; legacy model wildcard retained for compatibility | `TEXT_TO_IMAGE`                   | no source asset                                                           | async task + URL download     | adapter characterized, not sandbox verified |
-| `dashscope-wanx` | exact `wanx2.1-imageedit` | `FULL_EDIT`, `INPAINT` only | one owned 1024x1024 source; one matching mask only for inpaint; bounded JSON/data URLs and a complete 800-character prompt | async task + bounded polling + URL download | adapter characterized, **not sandbox verified** |
+| `dashscope-wanx` | exact `wanx2.1-imageedit` | `FULL_EDIT`, `INPAINT` only | one owned 1024x1024 source; one matching mask only for inpaint; bounded JSON/data URLs and a complete 800-character prompt | async task + bounded polling + URL download | official Beijing edit transport verified; per-image visual review remains required |
 | `openai-images`  | exact `gpt-image-1`; legacy wildcard remains text-to-image compatibility only | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, `INPAINT` | multipart; up to 16 references, with one mask only for inpaint | sync JSON (`b64_json` or URL) | adapter characterized, **not sandbox verified** |
 | `custom` | exact model configured per environment; wildcard is compatibility only | `TEXT_TO_IMAGE` | no source asset | OpenAI-compatible sync JSON (`b64_json` or URL) | adapter characterized, exact host/model not sandbox verified |
 | `dashscope-qwen-mt-image` | exact `qwen-mt-image` model                                         | `IMAGE_TRANSLATE`                 | one owned HTTPS/public source URL; `imageSegment=false`                   | async task + immediate URL download | adapter characterized, **not sandbox verified** |
 
-Wildcard model entries exist only to avoid breaking historical text-to-image jobs. A wildcard entry can never count as `sandbox-verified`. The normal routes and Workers reject every non-fake operation while its exact capability is below `sandbox-verified` or its verified cost is not positive; selecting `openai-images` cannot be used as an alias to send an arbitrary Base URL into the paid queue. The exact `gpt-image-1` multipart generation/edit transport is registered so its request, input and result contracts can be tested, but registration is not activation: image-to-image, full edit, masked inpaint and multi-reference execution remain dark until sandbox evidence is promoted. Future activation also requires a frozen normalized endpoint/config hash and non-secret credential revision on each job. Provider cancellation remains unsupported. The qwen-mt-image adapter is implemented as a resumable submit/poll contract with frozen positive/constraint Prompt provenance, bounded recovery, and cost reservation; paid dispatch remains blocked until Unit 0B sandbox evidence and a positive verified price upgrade its capability level.
+Normal single-image admission supports registered operations at the official OpenAI endpoint, implemented operations at the official Beijing Wanx endpoint, and text-to-image through an administrator-configured custom OpenAI-compatible endpoint. Custom text models may use the declared compatibility wildcard; that wildcard does not claim `sandbox-verified` status or enable reference/masked editing. Unknown providers, unsupported operations, mismatched transports and unregistered custom editing remain rejected. Selecting `openai-images` cannot route credentials to a relay. Registration does not enable feature flags or tenant rollout. Suite/batch and image-translation gates retain their separate contracts.
 
-## Required Evidence Before Enabling A Capability
+## Normal Task Admission And Charging
 
 The exact Wanx edit model does not inherit the text-to-image wildcard or enable suite/reference generation.
 Its normal manual-edit path selects the explicit `ai-image-wanx21-edit-prompt/v1` rendering contract,
@@ -28,25 +28,29 @@ The configured base must canonicalize to the exact API base used by the adapter 
 and capability evidence must match that endpoint, model, operation and `base64/async` transport.
 Revision-bound Wanx manual edits now support read-only restart recovery: one task GET and, on success,
 one bounded image GET, using the original task identity and a deadline no later than 24 hours after
-the original dispatch. The v2 runtime contract binds non-secret SystemConfig record ID, revision and
-update time from the same snapshot as the credential; missing bindings, empty credentials, legacy
-Wanx v1 jobs and credential rotations fail closed. Other Provider v1 contracts are unchanged.
+the original dispatch. Versioned runtime contracts bind non-secret SystemConfig record ID, revision and
+update time from the same snapshot as the Wanx credential; missing bindings, empty credentials, legacy
+Wanx v1 jobs and credential rotations fail closed. New explicit-currency quotes use runtime v3; legacy
+v1/v2 quotes retain their original USD interpretation.
 Recovery reuses the foreground raw/composite/normalization/review path, preserves the original
 invocation and acceptance evidence, and fences writes by current workflow attempt and unexpired
 reconciliation lease. Cancellation retains only raw output. Existing terminal billing decisions
-remain authoritative. UNKNOWN, expired lookup records, HTTP 404 and terminal task failure are not
-proof of a free request and never authorize resubmission. Internal hosted reservations remain USD;
-a public Wanx CNY price is not a currency conversion or a settled Provider bill. Fixture recovery
-tests are not live capability promotion or paid Provider acceptance.
+remain authoritative. UNKNOWN, expired lookup records and HTTP 404 do not prove an empty result and
+never authorize blind resubmission. A stable task confirmed to have failed with no output releases its
+ERP task reservation at zero, without claiming anything about the supplier's invoice. Valid successful
+images are charged once at the task's confirmed unit price times its successful image count; Provider
+money fields and later price changes cannot override that quote. New Wanx prices use CNY minor units
+(CNY 0.14 is 14), and budgets are evaluated within each quote currency without inventing exchange rates.
+Supplier free quotas and final invoices are independent from ERP task charging.
 
 - Exact provider, normalized endpoint digest, model, request profile, request shape, input transport, size, and verified reference-count limits.
 - Result form and maximum fetch/poll window; temporary URLs must be internalized immediately.
 - Cancellation and retry behavior, including accepted-but-unrecorded reconciliation.
-- Measured cost or a bounded reservation estimate.
+- A confirmed positive per-image price, explicit quote currency and bounded reservation; successful image count drives the final task fee.
 - Executable fixtures and recorded results for identity consistency, Russian readability, and Chinese-text residue. The current JSON files are threshold-policy scaffolds only.
 - A route/worker preflight that rejects unsupported combinations before quota or cost reservation and revalidates before submission.
 
-No localhost/private URL may be sent to a cloud provider. A signed URL is valid only when its TTL exceeds the documented provider fetch and polling window. Transport, timing, dimension and cost fields are intentionally absent from runtime acceptance until sandbox evidence exists.
+No localhost/private URL may be sent to a cloud provider. A signed URL is valid only when its TTL exceeds the documented provider fetch and polling window. Normal task snapshots bind transport-relevant identity, dimensions and price before dispatch; external billing observation is not a prerequisite for those fields or for successful task charging.
 
 ## Local Single-Submit Smoke (2026-07-21)
 

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiProviderReconciliationRepository } from '../repositories/ai-provider-reconciliation-repository.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import type { AiProviderReconciliationClaim } from '../services/ai-provider-reconciliation.js';
 
 const NOW = new Date('2026-07-21T08:00:00.000Z');
 
@@ -15,6 +17,9 @@ function pendingJob(overrides: Record<string, unknown> = {}) {
     provider: 'fake',
     model: 'fake-image-translation-v1',
     estimatedCostCents: 0,
+    requestedImageCount: 1,
+    width: 1024,
+    height: 1024,
     actualCostCents: null,
     billedUnits: 0,
     providerJobId: 'provider-task-1',
@@ -32,7 +37,81 @@ function pendingJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function noOutputHarness(currency: 'USD' | 'CNY') {
+  const acceptedAt = new Date(Date.now() - 1000);
+  const deadline = new Date(Date.now() + 60_000);
+  const leaseToken = 'no-output-lease';
+  const fingerprint = 'a'.repeat(64);
+  const provider = 'dashscope-wanx';
+  const model = 'wanx2.1-imageedit';
+  const job = pendingJob({ provider, model, operation: 'INPAINT', estimatedCostCents: 14, attemptCount: 1,
+    requestFingerprint: fingerprint, providerDispatchedAt: acceptedAt, providerReconciliationStatus: 'RUNNING',
+    providerReconciliationRevision: 2, providerReconciliationLeaseTokenHash: createHash('sha256').update(leaseToken).digest('hex'),
+    providerReconciliationLeaseExpiresAt: deadline, providerReconciliationDeadlineAt: deadline,
+    operationConfig: { providerRuntime: createAiImageProviderRuntimeContract({ provider, model,
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, ...(currency === 'CNY' ? { currency } : {}),
+      credentialRevision: { recordId: 'key-record', revision: 1, updatedAt: acceptedAt.toISOString() } }, { count: 1, width: 1024, height: 1024 }) },
+    workflow: { id: 'workflow-1', ownerUserId: 'owner-1', currentAttempt: 1, operation: 'INPAINT', status: 'FAILED' } });
+  const settlements: any[] = [];
+  const reservation = { id: 'cost-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', jobId: 'job-1', currency, provider, model,
+    requestFingerprint: fingerprint, status: 'RECONCILIATION_REQUIRED', estimatedCostMinor: 14, maximumCostMinor: 14,
+    providerRequestId: 'provider-task-1', providerAcceptedAt: acceptedAt, updatedAt: acceptedAt, settlements };
+  const tx = { $queryRawUnsafe: vi.fn(async () => [{ id: job.id }]),
+    aiImageJob: { findUnique: vi.fn(async () => job), updateMany: vi.fn(async ({ data }: any) => { Object.assign(job, data); return { count: 1 }; }) },
+    aiCostReservation: { findUnique: vi.fn(async () => reservation), updateMany: vi.fn(async ({ data }: any) => { Object.assign(reservation, data); return { count: 1 }; }) },
+    aiCostSettlement: { findUnique: vi.fn(async ({ where }: any) => settlements.find(row => row.idempotencyKey === where.ai_cost_settlement_reservation_idempotency.idempotencyKey) || null),
+      create: vi.fn(async ({ data }: any) => { const row = { id: 'settlement-1', ...data }; settlements.push(row); return row; }) },
+    aiProviderReconciliationEvent: { create: vi.fn(async ({ data }: any) => data) } };
+  const repository = new PrismaAiProviderReconciliationRepository({ $transaction: async (callback: any) => callback(tx) } as never);
+  const claim: AiProviderReconciliationClaim = { jobId: job.id, workflowId: 'workflow-1', workflowAttempt: 1, attemptCount: 1,
+    ownerUserId: 'owner-1', actorUserId: 'actor-1', provider, model, operation: 'INPAINT', estimatedCostCents: 14,
+    providerJobId: 'provider-task-1', jobStatus: 'FAILED', reconciliationStatus: 'RUNNING', reconciliationRevision: 2,
+    reconciliationAttemptCount: 1, requestFingerprint: fingerprint, deadlineAt: deadline, leaseToken };
+  const input = { claim, providerStatus: 'FAILED', errorCode: 'PROVIDER_TASK_FAILED', errorMessage: 'Definite no output', billingDisposition: 'UNKNOWN' as const };
+  return { job, reservation, settlements, tx, repository, input };
+}
+
 describe('Prisma AI Provider reconciliation repository', () => {
+  it.each(['USD', 'CNY'] as const)('releases a confirmed no-output %s task without requiring supplier charge proof', async currency => {
+    const state = noOutputHarness(currency);
+    await state.repository.completeNoOutput(state.input);
+    expect(state.reservation.status).toBe('RELEASED');
+    expect(state.job).toMatchObject({ status: 'FAILED', providerReconciliationStatus: 'NO_OUTPUT', actualCostCents: 0, billedUnits: 0 });
+    expect(state.settlements).toEqual([expect.objectContaining({ kind: 'RECONCILED_RELEASE', actualCostMinor: 0, billedUnits: 0 })]);
+    await expect(state.repository.completeNoOutput(state.input)).rejects.toMatchObject({ code: 'PROVIDER_RECONCILIATION_LEASE_LOST' });
+    expect(state.settlements).toHaveLength(1);
+  });
+
+  it.each(['UNKNOWN', 'PENDING', 'NOT_FOUND'])('does not relabel Provider status %s as confirmed no output', async providerStatus => {
+    const state = noOutputHarness('USD');
+    await expect(state.repository.completeNoOutput({ ...state.input, providerStatus })).rejects.toThrow();
+    expect(state.settlements).toHaveLength(0);
+    expect(state.tx.aiImageJob.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'different-task'])('requires the exact stable task identity before zero-output release: %j', providerJobId => {
+    const state = noOutputHarness('USD');
+    return expect(state.repository.completeNoOutput({ ...state.input, claim: { ...state.input.claim, providerJobId } }))
+      .rejects.toThrow().then(() => {
+        expect(state.settlements).toHaveLength(0);
+        expect(state.tx.aiImageJob.updateMany).not.toHaveBeenCalled();
+      });
+  });
+
+  it.each(['SETTLED', 'RELEASED'])('preserves an earlier %s fee decision when no output is later observed', async status => {
+    const state = noOutputHarness('USD');
+    state.reservation.status = status;
+    const actualCostCents = status === 'SETTLED' ? 14 : 0;
+    const billedUnits = status === 'SETTLED' ? 1 : 0;
+    Object.assign(state.job, { actualCostCents, billedUnits });
+    state.settlements.push({ reservationId: 'cost-1', idempotencyKey: 'prior-terminal',
+      kind: status === 'SETTLED' ? 'RECONCILED_CHARGE' : 'RECONCILED_RELEASE', actualCostMinor: actualCostCents, billedUnits });
+    await state.repository.completeNoOutput(state.input);
+    expect(state.reservation.status).toBe(status);
+    expect(state.job).toMatchObject({ actualCostCents, billedUnits });
+    expect(state.settlements).toHaveLength(1);
+  });
+
   it('prioritizes expired running leases before a sustained due-task backlog', async () => {
     const expired = pendingJob({
       id: 'job-expired',
@@ -249,10 +328,11 @@ describe('Prisma AI Provider reconciliation repository', () => {
     ).rejects.toMatchObject({ code: 'PROVIDER_RECONCILIATION_LEASE_LOST' });
   });
 
-  it('atomically restores the same failed attempt, lineage and reconciled charge', async () => {
+  it.each([0, 99])('atomically restores the same failed attempt at its frozen price despite amount %s', async reportedCost => {
     const leaseToken = '8c4b21aa-4c52-4a5d-a574-b9a46104267c';
     const fingerprint = 'a'.repeat(64);
     const job = pendingJob({
+      provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image', estimatedCostCents: 12,
       status: 'FAILED',
       requestFingerprint: fingerprint,
       providerReconciliationStatus: 'RUNNING',
@@ -325,9 +405,9 @@ describe('Prisma AI Provider reconciliation repository', () => {
         ownerUserId: 'owner-1',
         actorUserId: 'actor-1',
         operation: 'IMAGE_TRANSLATE',
-        provider: 'fake',
-        model: 'fake-image-translation-v1',
-        estimatedCostCents: 0,
+        provider: 'dashscope-qwen-mt-image',
+        model: 'qwen-mt-image',
+        estimatedCostCents: 12,
         providerJobId: 'provider-task-1',
         jobStatus: 'FAILED',
         reconciliationStatus: 'RUNNING',
@@ -337,7 +417,7 @@ describe('Prisma AI Provider reconciliation repository', () => {
         leaseToken,
       },
       providerStatus: 'SUCCEEDED',
-      actualCostCents: 12,
+      actualCostCents: reportedCost,
       asset: {
         ownerUserId: 'owner-1',
         jobId: 'job-1',

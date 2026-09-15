@@ -3,6 +3,7 @@ import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import {
   AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED,
   assertAiImageEditProviderRuntime,
@@ -116,7 +117,7 @@ describe('AI image edit worker boundary', () => {
     ).generate({
       operation: 'FULL_EDIT', prompt: 'edit', negativePrompt: null,
       count: 1, width: 3, height: 2, model: 'gpt-image-1',
-    })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED' });
+    })).rejects.toMatchObject({ code: 'INVALID_MEDIA_INPUT' });
   });
 
   it('blocks the fake edit Provider in production even when called directly', () => {
@@ -129,7 +130,12 @@ describe('AI image edit worker boundary', () => {
       .toThrowError(expect.objectContaining({ code: AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED }));
   });
 
-  it('requires an exact sandbox-verified OpenAI edit capability before creating the adapter', async () => {
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('selects the characterized official OpenAI %s adapter for normal generation', (operation) => {
+    expect(resolveAiImageEditProvider('openai-images', 'gpt-image-1', operation, paidProviderConfig, undefined, 'production').name)
+      .toBe('openai-images');
+  });
+
+  it('requires a registered OpenAI model and operation before creating the adapter', async () => {
     const createOpenAiEditProvider = vi.fn(() => ({
       name: 'openai-image-edits',
       edit: vi.fn(async () => ({ images: [] })),
@@ -140,7 +146,7 @@ describe('AI image edit worker boundary', () => {
       paidProviderConfig.baseUrl,
     );
     const exactCapability = () => ({
-      provider: 'openai-images', model: 'gpt-image-1', operations: ['FULL_EDIT', 'INPAINT'] as const,
+      provider: 'openai-images', model: 'gpt-image-1', operations: ['FULL_EDIT'] as const,
       maxReferences: 1, supportsMask: true, inputTransport: 'multipart' as const, resultMode: 'sync' as const,
       evidenceLevel: 'sandbox-verified' as const, evidence: 'test-only evidence',
       sandboxEvidence: [{
@@ -152,7 +158,7 @@ describe('AI image edit worker boundary', () => {
     });
 
     const disabled = resolveAiImageEditProvider(
-      'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig, undefined,
+      'openai-images', 'unknown-image-model', 'FULL_EDIT', { ...paidProviderConfig, model: 'unknown-image-model' }, undefined,
       'production', { createOpenAiEditProvider },
     );
     await expect(disabled.generate({
@@ -283,7 +289,7 @@ describe('AI image edit worker boundary', () => {
     ['authorization-unavailable', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
     ['credential', 'PROVIDER_CONFIG_CHANGED'],
     ['endpoint', 'PROVIDER_RUNTIME_CONTRACT_MISMATCH'],
-    ['price', 'PROVIDER_RUNTIME_CONTRACT_MISMATCH'],
+    ['price', null],
     ['lease', 'EDIT_EXECUTION_LEASE_LOST'],
     ['cancel', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
     ['reservation', 'AI_IMAGE_COST_RESERVATION_REQUIRED'],
@@ -291,7 +297,7 @@ describe('AI image edit worker boundary', () => {
     ['reservation-during-renewal', 'AI_IMAGE_COST_RESERVATION_REQUIRED'],
     ['authorization-during-renewal', 'AI_IMAGE_EDIT_DISPATCH_REVOKED'],
     ['credential-during-renewal', 'PROVIDER_CONFIG_CHANGED'],
-  ])('blocks a late %s change at the actual adapter dispatch boundary', async (change, code) => {
+  ])('enforces the frozen price and dispatch authorization after a late %s change', async (change, code) => {
     const requestFingerprint = 'e'.repeat(64);
     const job = {
       id: 'job-late-dispatch', ownerUserId: 'owner-1', status: 'QUEUED', operation: 'FULL_EDIT',
@@ -312,9 +318,10 @@ describe('AI image edit worker boundary', () => {
     };
     let preparing = false;
     let renewed = false;
+    const image = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: '#334455' } }).png().toBuffer();
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       id: 'synthetic-late-response',
-      data: [{ b64_json: Buffer.from('89504e470d0a1a0a', 'hex').toString('base64') }],
+      data: [{ b64_json: image.toString('base64') }],
     }), { headers: { 'content-type': 'application/json' } }));
     const releaseLease = vi.fn(async () => undefined);
     const repository = {
@@ -362,11 +369,12 @@ describe('AI image edit worker boundary', () => {
         job.attemptCount = 1;
         job.providerDispatchedAt = new Date();
         if (change === 'reservation') job.costReservation.status = 'RELEASED';
-        await dependencies.provider.generate({
+        const generated = await dependencies.provider.generate({
           operation: 'FULL_EDIT', model: job.model, prompt: 'Edit the background',
           negativePrompt: null, count: 1, width: 1024, height: 1024,
-          inputImages: [{ buffer: Buffer.from('89504e470d0a1a0a', 'hex'), mimeType: 'image/png' }],
+          inputImages: [{ buffer: image, mimeType: 'image/png' }],
         });
+        if (change === 'price') expect(generated.actualCostCents).toBe(7);
         return 'completed';
       },
       uploadBuffer: vi.fn(), loadInputBuffer: vi.fn(),
@@ -379,9 +387,41 @@ describe('AI image edit worker boundary', () => {
       releaseLease,
     });
 
-    await expect(result).rejects.toMatchObject({ code, providerSubmissionRejected: true });
-    expect(fetcher).not.toHaveBeenCalled();
+    if (change === 'price') {
+      await expect(result).resolves.toBe('completed');
+      expect(fetcher).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toMatchObject({ code, providerSubmissionRejected: true });
+      expect(fetcher).not.toHaveBeenCalled();
+    }
     expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
+  it.each([11, 0])('binds a queued edit to its confirmed price when active price is %s', async (activePrice) => {
+    const requestFingerprint = 'b'.repeat(64);
+    const job = {
+      id: 'job-frozen-edit-price', ownerUserId: 'owner-1', status: 'QUEUED', operation: 'FULL_EDIT',
+      provider: paidProviderConfig.provider, model: paidProviderConfig.model, estimatedCostCents: 7,
+      requestedImageCount: 1, width: 1024, height: 1024, requestFingerprint,
+      operationConfig: { providerRuntime: createAiImageProviderRuntimeContract(paidProviderConfig, {
+        count: 1, width: 1024, height: 1024,
+      }) },
+      costReservation: {
+        id: 'reservation-frozen-price', status: 'RESERVED', currency: 'USD', provider: paidProviderConfig.provider,
+        model: paidProviderConfig.model, estimatedCostMinor: 7, maximumCostMinor: 7, requestFingerprint,
+      },
+    };
+    const repository = { getById: vi.fn(async () => job), markEnqueueFailed: vi.fn(async () => true) };
+    const resolveProvider = vi.fn<typeof resolveAiImageEditProvider>(() => ({ name: paidProviderConfig.provider, generate: vi.fn() }));
+    const run = vi.fn(async () => 'completed' as const);
+    await expect(processAiImageEditQueueJob(job.id, 1, {
+      repository: repository as any, getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: async () => ({ ...paidProviderConfig, costPerImageCents: activePrice }),
+      resolveProvider, run, uploadBuffer: vi.fn(),
+    })).resolves.toBe('completed');
+    expect(resolveProvider.mock.calls[0]?.[3]).toEqual({ ...paidProviderConfig, currency: 'USD' });
+    expect(run).toHaveBeenCalledOnce();
+    expect(repository.markEnqueueFailed).not.toHaveBeenCalled();
   });
 
   it('fails a paid edit before reading Provider config when dispatch authorization is revoked', async () => {

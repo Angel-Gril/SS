@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import * as runtimeOwner from '../services/ai-image-provider-runtime-contract.js';
 import {
   AiImageProviderRuntimeContractError,
   assertAiImageProviderRuntimeContract,
@@ -28,6 +29,42 @@ describe('AI image Provider runtime contract', () => {
     credentialRevision,
   };
   const shape = { count: 1, width: 1024, height: 1024 };
+
+  it.each(['USD', 'CNY'] as const)('freezes an explicit %s price in the v3 contract', currency => {
+    const contract = createAiImageProviderRuntimeContract({ ...wanx, currency }, shape);
+    expect(contract).toMatchObject({ contractVersion: 'ai-image-provider-runtime/v3', currency, unitCostCents: 7, credentialRevision });
+    expect(runtimeOwner.parseAiImageProviderRuntimeContract(contract)).toEqual(contract);
+    const legacy = createAiImageProviderRuntimeContract(wanx, shape);
+    expect(legacy.contractVersion).toBe('ai-image-provider-runtime/v2');
+    expect(legacy).not.toHaveProperty('currency');
+  });
+
+  it.each(['EUR', '', null])('rejects an unsupported explicit currency %j', currency => {
+    expect(() => createAiImageProviderRuntimeContract({ ...wanx, currency } as never, shape)).toThrow(AiImageProviderRuntimeContractError);
+  });
+
+  it('keeps strict quote validation sensitive to currency', () => {
+    const contract = createAiImageProviderRuntimeContract({ ...wanx, currency: 'CNY' } as never, shape);
+    expect(() => assertAiImageProviderRuntimeContract(contract, { ...wanx, currency: 'USD' } as never,
+      { ...shape, estimatedCostCents: 7 })).toThrow(AiImageProviderRuntimeContractError);
+  });
+
+  it.each([false, true])('binds execution to the frozen price/currency while active pricing changes (v3=%s)', explicit => {
+    const identity = explicit ? { ...wanx, currency: 'CNY' as const } : wanx;
+    const contract = createAiImageProviderRuntimeContract(identity, shape);
+    const bind = (runtimeOwner as Record<string, any>).bindAiImageProviderExecutionConfig;
+    expect(typeof bind).toBe('function');
+    const current = { ...wanx, costPerImageCents: 99, currency: explicit ? 'USD' : 'CNY' };
+    const bound = bind(contract, current, { ...shape, estimatedCostCents: 7 });
+    expect(bound).toMatchObject({ costPerImageCents: 7, currency: explicit ? 'CNY' : 'USD', apiKey: config.apiKey });
+    expect(current.costPerImageCents).toBe(99);
+    expect(() => bind(contract, { ...current, credentialRevision: { ...credentialRevision, revision: 8 } },
+      { ...shape, estimatedCostCents: 7 })).toThrow(AiImageProviderRuntimeContractError);
+    expect(() => bind(contract, { ...current, model: 'changed-model' }, { ...shape, estimatedCostCents: 7 }))
+      .toThrow(AiImageProviderRuntimeContractError);
+    expect(() => bind(contract, current, { ...shape, count: 2, estimatedCostCents: 14 }))
+      .toThrow(AiImageProviderRuntimeContractError);
+  });
 
   it('freezes a non-secret credential record revision for Wanx without changing other providers', () => {
     const contract = createAiImageProviderRuntimeContract(wanx, shape);

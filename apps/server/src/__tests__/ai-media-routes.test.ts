@@ -92,6 +92,7 @@ async function build(
   translationCategoryGlossaryJson = '{"version":1,"profiles":[]}',
   translationCategory: { categoryId: number; typeId: number } | null = null,
   editRuntime: {
+    generationEnabled?: boolean;
     provider?: string;
     model?: string;
     baseUrl?: string;
@@ -274,6 +275,7 @@ async function build(
     applyListingDraftApplication, listListingDraftApplications, rollbackListingDraftApplication,
     createEditMask: createEditMask as any,
     getEditSettings: async () => ({
+      generationEnabled: editRuntime.generationEnabled ?? true,
       imageToImageEnabled: true,
       fullEditEnabled,
       inpaintEnabled,
@@ -1076,6 +1078,36 @@ describe('AI media workflow routes', () => {
     expect(enqueueTranslation).not.toHaveBeenCalled();
   });
 
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)('blocks %s before source reads or quota work when generation is disabled', async (operation) => {
+    const { app, mediaWorkflowService, enqueue, enqueueEdit, resolveEditPrompt, getOwnedAssetDimensions } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true,
+      true, true, 5, true, true, true, 'oss', 'IMAGE_TO_IMAGE',
+      '{"version":1,"profiles":[]}', null, { generationEnabled: false },
+    );
+    try {
+      const capabilities = await app.inject({ method: 'GET', url: '/capabilities' });
+      const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+        operation, sourceAssetId: 'asset-1',
+        ...(operation === 'IMAGE_TO_IMAGE'
+          ? { prompt: 'Keep the product and edit the background', count: 1, width: 1024, height: 1024 }
+          : { userPrompt: 'Keep the product and edit the background' }),
+        ...(operation === 'INPAINT' ? { maskAssetId: 'mask-1', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' } : {}),
+        idempotencyKey: 'generation-disabled-edit', context: { type: 'collect', id: 'goods-1' },
+      } });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: 'AI_MEDIA_OPERATION_DISABLED' });
+      expect(capabilities.json().data.operations[operation]).toMatchObject({
+        enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      });
+      expect(mediaWorkflowService.createImageEdit).not.toHaveBeenCalled();
+      expect(mediaWorkflowService.createImageToImage).not.toHaveBeenCalled();
+      expect(getOwnedAssetDimensions).not.toHaveBeenCalled();
+      expect(resolveEditPrompt).not.toHaveBeenCalled();
+      expect(enqueueEdit).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
   it('keeps the fake image-to-image lifecycle unavailable in production', () => {
     expect(resolveAiImageToImageReadiness({
       enabled: true, workflowEnabled: true, production: true,
@@ -1110,7 +1142,7 @@ describe('AI media workflow routes', () => {
     });
   });
 
-  it('keeps characterized OpenAI input operations dark until exact sandbox evidence is promoted', () => {
+  it('makes characterized official OpenAI reference generation ready without supplier receipts', () => {
     expect(resolveAiImageToImageReadiness({
       enabled: true,
       workflowEnabled: true,
@@ -1121,10 +1153,17 @@ describe('AI media workflow routes', () => {
       storageReadiness: { ready: true, backend: 'oss', reason: 'ready' },
     })).toMatchObject({
       enabled: true,
-      ready: false,
-      reasonCode: 'PROVIDER_NOT_READY',
-      reason: expect.stringMatching(/sandbox/u),
+      ready: true,
+      reasonCode: 'READY',
     });
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('makes characterized official OpenAI %s ready with valid normal configuration', (operation) => {
+    expect(resolveAiImageEditReadiness(operation, {
+      generationEnabled: true, fullEditEnabled: true, inpaintEnabled: true,
+      provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1', estimatedCostCents: 7,
+    }, { workflowEnabled: true, production: true, storageReadiness: { ready: true, backend: 'oss', reason: 'ready' } }))
+      .toMatchObject({ ready: true, reasonCode: 'READY' });
   });
 
   it('requires an exact custom Base and operation binding for standalone edit readiness', () => {
@@ -1153,6 +1192,7 @@ describe('AI media workflow routes', () => {
 
     for (const operation of ['FULL_EDIT', 'INPAINT'] as const) {
       const settings = {
+        generationEnabled: true,
         fullEditEnabled: true,
         inpaintEnabled: true,
         provider: common.provider,

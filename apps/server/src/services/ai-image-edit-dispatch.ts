@@ -1,17 +1,24 @@
 import { AiImageJobError, type AiImageJobRecord } from './ai-image-jobs.js';
 import {
   AiImageProviderRuntimeContractError,
-  assertAiImageProviderRuntimeContract,
+  bindAiImageProviderExecutionConfig,
   type AiImageProviderRuntimeIdentity,
 } from './ai-image-provider-runtime-contract.js';
+import { getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
 
 type ProviderConfig = AiImageProviderRuntimeIdentity & { apiKey: string };
 
 export function assertAiImageEditCostReservation(job: AiImageJobRecord): void {
   const reservation = job.costReservation;
+  let currency: string;
+  try {
+    currency = getFrozenAiImageTaskPrice(job).currency;
+  } catch {
+    throw new AiImageJobError('AI_IMAGE_COST_RESERVATION_REQUIRED', 'Paid AI image edit dispatch requires its confirmed price and currency');
+  }
   if (
     !reservation?.id
-    || reservation.currency !== 'USD'
+    || reservation.currency !== currency
     || reservation.status !== 'RESERVED'
     || reservation.provider !== job.provider
     || reservation.model !== job.model
@@ -66,7 +73,7 @@ export function createAiImageEditDispatchFence(input: {
     }
     const activeConfig = await dependencies.loadProviderConfig();
     try {
-      assertAiImageProviderRuntimeContract(job.operationConfig?.providerRuntime, activeConfig, {
+      bindAiImageProviderExecutionConfig(job.operationConfig?.providerRuntime, activeConfig, {
         count: 1, width: job.width, height: job.height, estimatedCostCents: job.estimatedCostCents,
       });
     } catch (error) {
