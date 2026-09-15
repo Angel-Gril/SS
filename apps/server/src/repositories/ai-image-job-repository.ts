@@ -762,6 +762,13 @@ async function loadCancellationActor(tx: any, job: any): Promise<string | null> 
 
 export class PrismaAiImageJobRepository implements AiImageJobRepository {
   constructor(private readonly prisma: PrismaClient) {}
+  async findByOwnerAndIdempotencyKey(ownerUserId: string, idempotencyKey: string) {
+    const row = await (this.prisma as any).aiImageJob.findUnique({
+      where: { ai_image_job_owner_idempotency: { ownerUserId, idempotencyKey } },
+      include: { assets: true, costReservation: { select: COST_RESERVATION_SELECT } },
+    });
+    return row ? record(row) : null;
+  }
   async getById(id: string) {
     const row = await (this.prisma as any).aiImageJob.findUnique({
       where: { id },

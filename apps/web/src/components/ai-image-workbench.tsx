@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ImagePlus, Loader2, Sparkles, Square, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,10 +26,33 @@ interface AiImageJob {
   attemptCount: number;
   maxAttempts: number;
   billedUnits: number;
+  actualCostCents: number | null;
+  costStatus: string | null;
+  pricing: { currency: 'CNY' | 'USD'; unitCostCents: number; maximumCostCents: number } | null;
   errorCode: string | null;
   errorMessage: string | null;
   appliedMode?: 'append' | 'replace' | null;
   assets?: Array<{ id: string; url: string }>;
+}
+interface AiImageQuote {
+  provider: string;
+  model: string;
+  currency: 'CNY' | 'USD';
+  unitCostCents: number;
+  maximumCostCents: number;
+  requestedImageCount: number;
+  width: number;
+  height: number;
+  quoteFingerprint: string;
+}
+interface AiImageSubmission {
+  prompt: string;
+  negativePrompt: string | null;
+  count: number;
+  width: number;
+  height: number;
+  idempotencyKey: string;
+  quoteFingerprint: string;
 }
 interface AiImageApplyResult {
   jobId: string;
@@ -60,6 +83,10 @@ function resolveAssetUrl(value: string) {
   return /^https?:\/\//i.test(value) ? value : apiUrl(value);
 }
 
+function formatCost(cents: number, currency: 'CNY' | 'USD') {
+  return `${currency} ${(cents / 100).toFixed(2)}`;
+}
+
 export function AiImageWorkbench() {
   const systemDialog = useSystemDialog();
   const [prompt, setPrompt] = useState('');
@@ -68,11 +95,39 @@ export function AiImageWorkbench() {
   const [size, setSize] = useState('1024x1024');
   const [job, setJob] = useState<AiImageJob | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const submissionRef = useRef<AiImageSubmission | null>(null);
+  const [submissionUnknown, setSubmissionUnknown] = useState(false);
+  const [reconfirmQuote, setReconfirmQuote] = useState(false);
+  const [quote, setQuote] = useState<AiImageQuote | null>(null);
+  const [quoteError, setQuoteError] = useState('');
+  const [quoteRevision, setQuoteRevision] = useState(0);
   const [cancelling, setCancelling] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applyMode, setApplyMode] = useState<'append' | 'replace'>('append');
   const [targetType, setTargetType] = useState('collect');
   const [targetId, setTargetId] = useState('');
+
+  const [width = 1024, height = 1024] = size.split('x').map(Number);
+  const currentQuote = quote?.requestedImageCount === Number(count) && quote.width === width && quote.height === height ? quote : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setQuote(null);
+    setQuoteError('');
+    async function loadQuote() {
+      try {
+        const res = await api.get<AiImageQuote>(`/api/ai-images/quote?count=${count}&width=${width}&height=${height}`);
+        if (cancelled) return;
+        if (res.code === 1 && res.data) setQuote(res.data);
+        else setQuoteError(res.msg || '暂时无法获取报价');
+      } catch {
+        if (!cancelled) setQuoteError('网络异常，请重新获取报价');
+      }
+    }
+    void loadQuote();
+    return () => { cancelled = true; };
+  }, [count, width, height, quoteRevision]);
 
   useEffect(() => {
     if (!job || TERMINAL.has(job.status)) return;
@@ -81,17 +136,19 @@ export function AiImageWorkbench() {
     const polledJobId = job.id;
 
     async function pollJob() {
-      const res = await api.get<AiImageJob>(`/api/ai-images/jobs/${polledJobId}`);
-      if (cancelled) return;
-      if (res.code === 1 && res.data) {
-        const nextJob = res.data;
-        setJob((current) => {
-          if (!current || current.id !== polledJobId || TERMINAL.has(current.status)) return current;
-          return nextJob;
-        });
-        if (TERMINAL.has(nextJob.status)) return;
-      }
-      timer = window.setTimeout(pollJob, 2000);
+      try {
+        const res = await api.get<AiImageJob>(`/api/ai-images/jobs/${polledJobId}`);
+        if (cancelled) return;
+        if (res.code === 1 && res.data) {
+          const nextJob = res.data;
+          setJob((current) => {
+            if (!current || current.id !== polledJobId || TERMINAL.has(current.status)) return current;
+            return nextJob;
+          });
+          if (TERMINAL.has(nextJob.status)) return;
+        }
+      } catch { /* Keep reading the same task after a temporary connection failure. */ }
+      if (!cancelled) timer = window.setTimeout(pollJob, 2000);
     }
 
     timer = window.setTimeout(pollJob, 2000);
@@ -102,22 +159,55 @@ export function AiImageWorkbench() {
   }, [job?.id, job?.status]);
 
   async function submitJob() {
+    if (submittingRef.current || (job && !TERMINAL.has(job.status))) return;
     if (!prompt.trim()) {
       toast({ title: '请输入生成提示词', variant: 'destructive' });
       return;
     }
-    const [width, height] = size.split('x').map(Number);
+    if (!submissionRef.current && !currentQuote) return;
+    submittingRef.current = true;
     setSubmitting(true);
-    const res = await api.post<AiImageJob>('/api/ai-images/jobs', {
+    const submission = submissionRef.current ? {
+      ...submissionRef.current,
+      // A changed quote may be confirmed, but an uncertain request always keeps
+      // its original key so a late first response cannot create a second task.
+      ...(reconfirmQuote && currentQuote ? { quoteFingerprint: currentQuote.quoteFingerprint } : {}),
+    } : {
       prompt: prompt.trim(), negativePrompt: negativePrompt.trim() || null,
       count: Number(count), width, height, idempotencyKey: createIdempotencyKey(),
-    });
-    setSubmitting(false);
-    if (res.code === 1 && res.data) {
-      setJob(res.data);
-      setApplyMode('append');
-      toast({ title: '生图任务已提交', description: '页面会自动刷新任务状态。' });
-    } else toast({ title: '任务提交失败', description: res.msg, variant: 'destructive' });
+      quoteFingerprint: currentQuote!.quoteFingerprint,
+    };
+    submissionRef.current = submission;
+    try {
+      const res = await api.post<AiImageJob>('/api/ai-images/jobs', submission);
+      if (res.code === 1 && res.data) {
+        submissionRef.current = null;
+        setSubmissionUnknown(false);
+        setReconfirmQuote(false);
+        setJob(res.data);
+        setApplyMode('append');
+        toast({ title: '生图任务已提交', description: '页面会自动刷新任务状态。' });
+      } else {
+        const rejected = ['QUOTE_CHANGED', 'INVALID_REQUEST', 'PROVIDER_DISABLED', 'PROVIDER_NOT_READY',
+          'AI_MEDIA_WORKFLOW_DISABLED', 'QUOTA_EXCEEDED', 'BUDGET_EXCEEDED', 'IDEMPOTENCY_KEY_CONFLICT',
+          'QUEUE_UNAVAILABLE', 'UNSUPPORTED_OPERATION', 'UNSUPPORTED_PROVIDER_MODEL', 'PROMPT_TEMPLATE_UNAVAILABLE',
+          'PROMPT_PROFILE_LIMIT_EXCEEDED', 'INVALID_PROMPT_PROFILE_INPUT'].includes(String(res.code));
+        if (rejected && !submissionUnknown) submissionRef.current = null;
+        setSubmissionUnknown(submissionUnknown || !rejected);
+        if (res.code === 'QUOTE_CHANGED') {
+          if (submissionUnknown) setReconfirmQuote(true);
+          setQuote(null);
+          setQuoteRevision((revision) => revision + 1);
+        }
+        toast({ title: rejected && !submissionUnknown ? '任务未提交' : '暂未收到提交结果', description: res.msg, variant: 'destructive' });
+      }
+    } catch {
+      setSubmissionUnknown(true);
+      toast({ title: '暂未收到提交结果', description: '连接恢复后可获取原任务结果。', variant: 'destructive' });
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   }
 
   async function cancelJob() {
@@ -182,18 +272,22 @@ export function AiImageWorkbench() {
           <CardContent className="space-y-4">
             <div>
               <Label htmlFor="ai-prompt">生成提示词</Label>
-              <textarea id="ai-prompt" rows={6} maxLength={8000} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="例如：保持商品主体和颜色不变，生成干净明亮的电商影棚背景，无文字、无 Logo" className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              <textarea id="ai-prompt" rows={6} maxLength={8000} value={prompt} disabled={submitting || submissionUnknown} onChange={(e) => setPrompt(e.target.value)} placeholder="例如：保持商品主体和颜色不变，生成干净明亮的电商影棚背景，无文字、无 Logo" className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
               <p className="mt-1 text-right text-xs text-muted-foreground">{prompt.length}/8000</p>
             </div>
             <div>
               <Label htmlFor="ai-negative">负面提示词（可选）</Label>
-              <textarea id="ai-negative" rows={3} maxLength={4000} value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} placeholder="例如：模糊、畸变、文字、水印、额外商品" className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+              <textarea id="ai-negative" rows={3} maxLength={4000} value={negativePrompt} disabled={submitting || submissionUnknown} onChange={(e) => setNegativePrompt(e.target.value)} placeholder="例如：模糊、畸变、文字、水印、额外商品" className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div><Label htmlFor="ai-count">生成数量</Label><select id="ai-count" value={count} onChange={(e) => setCount(e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} 张</option>)}</select></div>
-              <div><Label htmlFor="ai-size">图片尺寸</Label><select id="ai-size" value={size} onChange={(e) => setSize(e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{SIZE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
+              <div><Label htmlFor="ai-count">生成数量</Label><select id="ai-count" value={count} disabled={submitting || submissionUnknown} onChange={(e) => setCount(e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} 张</option>)}</select></div>
+              <div><Label htmlFor="ai-size">图片尺寸</Label><select id="ai-size" value={size} disabled={submitting || submissionUnknown} onChange={(e) => setSize(e.target.value)} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{SIZE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
             </div>
-            <Button onClick={submitJob} disabled={submitting || (!!job && !TERMINAL.has(job.status))}>{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{submitting ? '正在提交' : '提交生图任务'}</Button>
+            <div aria-live="polite" className="rounded-md bg-muted/50 p-3 text-sm">
+              {currentQuote ? <><div className="flex flex-wrap items-baseline justify-between gap-2"><span className="text-muted-foreground">单价 {formatCost(currentQuote.unitCostCents, currentQuote.currency)} / 张</span><span className="font-medium">本次最高费用 {formatCost(currentQuote.maximumCostCents, currentQuote.currency)}</span></div><p className="mt-1 text-xs text-muted-foreground">按成功图片计费；点击提交即确认本次最高费用。</p></> : quoteError ? <div className="flex flex-wrap items-center justify-between gap-2"><span>{quoteError}</span><Button variant="outline" size="sm" onClick={() => setQuoteRevision((revision) => revision + 1)}>重新获取报价</Button></div> : <span className="text-muted-foreground">正在获取报价…</span>}
+            </div>
+            {submissionUnknown ? <p role="status" className="text-sm text-muted-foreground">{reconfirmQuote && currentQuote ? '报价已更新。确认后继续原任务，已接受的任务仍按原价执行。' : '暂未收到提交结果，请获取原任务结果后继续。'}</p> : null}
+            <Button onClick={submitJob} disabled={submitting || (!currentQuote && !submissionUnknown) || (!!job && !TERMINAL.has(job.status))}>{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{submitting ? '正在提交' : submissionUnknown ? reconfirmQuote && currentQuote ? '确认新报价并继续原任务' : '获取原任务结果' : '提交生图任务'}</Button>
           </CardContent>
         </Card>
 
@@ -203,6 +297,7 @@ export function AiImageWorkbench() {
             {!job ? <div className="flex min-h-44 flex-col items-center justify-center text-center text-muted-foreground"><ImagePlus className="mb-2 h-8 w-8 opacity-40" /><p className="text-sm">尚未提交任务</p></div> : (
               <div className="space-y-4 text-sm">
                 <div className="grid grid-cols-2 gap-3 rounded-md bg-muted/50 p-3"><div><span className="text-muted-foreground">尺寸</span><p className="font-medium">{job.width} × {job.height}</p></div><div><span className="text-muted-foreground">数量</span><p className="font-medium">{job.requestedImageCount} 张</p></div><div><span className="text-muted-foreground">模型</span><p className="truncate font-medium">{job.model}</p></div><div><span className="text-muted-foreground">尝试次数</span><p className="font-medium">{job.attemptCount}/{job.maxAttempts}</p></div></div>
+                {job.pricing ? <div className="space-y-1 rounded-md bg-muted/50 p-3"><p className="text-muted-foreground">确认最高费用 {formatCost(job.pricing.maximumCostCents, job.pricing.currency)}</p>{job.actualCostCents != null && (job.costStatus === 'SETTLED' || job.costStatus === 'RELEASED' || (job.provider === 'fake' && TERMINAL.has(job.status))) ? <p className="font-medium">已记费用 {formatCost(job.actualCostCents, job.pricing.currency)} · {job.billedUnits} 张成功</p> : <p className="text-muted-foreground">费用将在生成结果确认后记录</p>}</div> : <p className="text-xs text-muted-foreground">此任务暂无可用的价格记录</p>}
                 {!TERMINAL.has(job.status) ? <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin text-primary" />正在处理，请保持页面打开</div> : null}
                 {job.status === 'SUCCEEDED' ? <div className="flex items-center gap-2 text-emerald-600"><CheckCircle2 className="h-4 w-4" />已保存 {job.billedUnits || job.assets?.length || 0} 张候选图</div> : null}
                 {job.status === 'FAILED' ? <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive"><div className="flex items-center gap-2 font-medium"><XCircle className="h-4 w-4" />任务失败</div><p className="mt-1 text-xs">{job.errorMessage || job.errorCode || '服务暂时不可用'}</p></div> : null}

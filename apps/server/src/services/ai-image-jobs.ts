@@ -150,6 +150,7 @@ export interface AiImageAssetInput {
 
 export interface AiImageJobRepository {
   getById(id: string): Promise<AiImageJobRecord | null>;
+  findByOwnerAndIdempotencyKey?(ownerUserId: string, idempotencyKey: string): Promise<AiImageJobRecord | null>;
   markRunning(id: string, attemptCount: number): Promise<boolean>;
   markRetrying(id: string, data: FailureUpdate): Promise<void>;
   markFailed(id: string, data: FailureUpdate): Promise<void>;
@@ -575,6 +576,23 @@ export async function runAiImageJob(
     else await deps.repository.markFailed(job.id, details);
     throw error;
   }
+}
+
+/** Replaying an accepted request only reads its original task; it never reserves or dispatches. */
+export async function findAiImageJobReplay(
+  input: Pick<CreateAiImageJobInput, 'ownerUserId' | 'idempotencyKey' | 'prompt' | 'negativePrompt' | 'count' | 'width' | 'height'>,
+  repository: Pick<AiImageJobRepository, 'findByOwnerAndIdempotencyKey'>,
+) {
+  if (!input.idempotencyKey || !repository.findByOwnerAndIdempotencyKey) return null;
+  const job = await repository.findByOwnerAndIdempotencyKey(input.ownerUserId, input.idempotencyKey);
+  if (!job) return null;
+  if (job.ownerUserId !== input.ownerUserId) throw new AiImageJobError('NOT_FOUND', 'AI image job not found');
+  if ((job.operation && job.operation !== 'TEXT_TO_IMAGE') || job.workflowId
+    || job.prompt !== input.prompt || (job.negativePrompt || '') !== (input.negativePrompt || '')
+    || job.requestedImageCount !== input.count || job.width !== input.width || job.height !== input.height) {
+    throw new AiImageJobError('IDEMPOTENCY_KEY_CONFLICT', 'Idempotency key was already used for a different AI image request');
+  }
+  return job;
 }
 
 export async function createAiImageJob(

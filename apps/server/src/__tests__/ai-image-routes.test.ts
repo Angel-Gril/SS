@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { aiImageRoutes, isPaidAiImageEditCanvasSupported } from '../routes/ai-images.js';
 import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import type { AiImageJobRecord, AiImageJobRepository } from '../services/ai-image-jobs.js';
+import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
 
 const baseJob: AiImageJobRecord = {
   id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'SUCCEEDED',
@@ -33,6 +34,7 @@ async function buildApp(
 ) {
   const repository: AiImageJobRepository = {
     getById: vi.fn(async () => baseJob),
+    findByOwnerAndIdempotencyKey: vi.fn(async () => null),
     createWithQuota: vi.fn(async () => ({ kind: 'created' as const, job: { ...baseJob, status: 'QUEUED' as const } })),
     requestCancellation: vi.fn(async (_id, owner) => owner === 'owner-1' ? { ...baseJob, status: 'CANCEL_REQUESTED' as const } : null),
     recordApplication: vi.fn(async (_id, data) => ({ ...baseJob, appliedMode: data.mode })),
@@ -92,6 +94,98 @@ async function buildApp(
 }
 
 describe('AI image job routes', () => {
+  const pricedProvider = { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY' as const };
+  const pricedRequest = { prompt: 'photo', count: 2, width: 1024, height: 1024, idempotencyKey: 'quoted-request-1' };
+  const pricedOptions = { ...pricedProvider, estimatedCostCents: pricedProvider.costPerImageCents };
+
+  it('returns the authenticated server quote without creating, reserving or dispatching a task', async () => {
+    const { app, repository, enqueue, resolvePrompt } = await buildApp('owner-1', pricedProvider.provider, undefined, pricedOptions);
+    try {
+      const response = await app.inject({ method: 'GET', url: '/quote?count=2&width=1024&height=1024' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toEqual(buildAiImageGenerationQuote(pricedProvider, pricedRequest).preview);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(repository.createWithQuota).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(resolvePrompt).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('rejects quotes outside the tenant rollout and invalid image counts', async () => {
+    const { app, repository } = await buildApp('owner-1', 'fake', { enabled: false, reason: 'tenant_not_allowed', revision: 2 });
+    try {
+      const denied = await app.inject({ method: 'GET', url: '/quote' });
+      expect(denied.statusCode).toBe(503);
+      expect(denied.json().code).toBe('AI_MEDIA_WORKFLOW_DISABLED');
+      const invalid = await app.inject({ method: 'GET', url: '/quote?count=5' });
+      expect(invalid.statusCode).toBe(400);
+      expect(repository.createWithQuota).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('accepts the displayed quote and refuses a stale price before reserving or enqueuing', async () => {
+    const { app, repository, enqueue } = await buildApp('owner-1', pricedProvider.provider, undefined, pricedOptions);
+    try {
+      const stale = buildAiImageGenerationQuote({ ...pricedProvider, costPerImageCents: 7 }, pricedRequest).preview;
+      const rejected = await app.inject({ method: 'POST', url: '/jobs', payload: { ...pricedRequest, quoteFingerprint: stale.quoteFingerprint } });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json().code).toBe('QUOTE_CHANGED');
+      expect(repository.createWithQuota).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      const current = buildAiImageGenerationQuote(pricedProvider, pricedRequest).preview;
+      const accepted = await app.inject({ method: 'POST', url: '/jobs', payload: { ...pricedRequest, quoteFingerprint: current.quoteFingerprint } });
+      expect(accepted.statusCode).toBe(202);
+      expect(repository.createWithQuota).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ estimatedCostCents: 28 }), 5, 0);
+    } finally { await app.close(); }
+  });
+
+  it('retrieves a lost response with its frozen price even after current pricing and rollout change', async () => {
+    const frozen = buildAiImageGenerationQuote(pricedProvider, pricedRequest);
+    const stored = { ...baseJob, ...pricedProvider, operation: 'TEXT_TO_IMAGE' as const,
+      idempotencyKey: pricedRequest.idempotencyKey, requestedImageCount: 2,
+      operationConfig: frozen.operationConfig, estimatedCostCents: 28, actualCostCents: 28, billedUnits: 2 };
+    const { app, repository, enqueue, resolvePrompt } = await buildApp('owner-1', 'disabled', { enabled: false, reason: 'master_off', revision: 3 });
+    vi.mocked(repository.findByOwnerAndIdempotencyKey!).mockResolvedValue(stored);
+    try {
+      const response = await app.inject({ method: 'POST', url: '/jobs', payload: { ...pricedRequest, quoteFingerprint: frozen.preview.quoteFingerprint } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ replayed: true, data: { id: baseJob.id,
+        pricing: { currency: 'CNY', unitCostCents: 14, maximumCostCents: 28 }, actualCostCents: 28 } });
+      expect(repository.findByOwnerAndIdempotencyKey).toHaveBeenCalledWith('owner-1', pricedRequest.idempotencyKey);
+      expect(repository.createWithQuota).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(resolvePrompt).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it.each([{ prompt: 'another request' }, { count: 1 }, { width: 1536 }, { negativePrompt: 'different' }])(
+    'rejects an existing idempotency key used with changed request fields %j', async (change) => {
+      const { app, repository, enqueue } = await buildApp();
+      vi.mocked(repository.findByOwnerAndIdempotencyKey!).mockResolvedValue({ ...baseJob, requestedImageCount: 2 });
+      try {
+        const response = await app.inject({ method: 'POST', url: '/jobs', payload: { ...pricedRequest, ...change } });
+        expect(response.statusCode).toBe(409);
+        expect(response.json().code).toBe('IDEMPOTENCY_KEY_CONFLICT');
+        expect(repository.createWithQuota).not.toHaveBeenCalled();
+        expect(enqueue).not.toHaveBeenCalled();
+      } finally { await app.close(); }
+    },
+  );
+
+  it('does not expose another owner through replay or let broken historical pricing hide an owned job', async () => {
+    const { app, repository } = await buildApp();
+    try {
+      vi.mocked(repository.findByOwnerAndIdempotencyKey!).mockResolvedValue({ ...baseJob, ownerUserId: 'other-owner' });
+      const other = await app.inject({ method: 'POST', url: '/jobs', payload: { prompt: 'photo', idempotencyKey: 'another-owner-key' } });
+      expect(other.statusCode).toBe(404);
+      vi.mocked(repository.getById).mockResolvedValue({ ...baseJob, provider: 'custom', operationConfig: { contractVersion: 'broken' } });
+      const historic = await app.inject({ method: 'GET', url: '/jobs/job-1' });
+      expect(historic.statusCode).toBe(200);
+      expect(historic.json().data.pricing).toBeNull();
+      expect(historic.json().data.operationConfig).toBeUndefined();
+    } finally { await app.close(); }
+  });
   it.each([
     { provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1', currency: undefined },
     { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY' as const },

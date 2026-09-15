@@ -7,7 +7,7 @@ import { getConfig } from '../config/system-config-schema.js';
 import { UploadLimiterUnavailableError, uploadLimiter } from '../lib/upload-limiter.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
-import { AiImageJobError, createAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
+import { AiImageJobError, createAiImageJob, findAiImageJobReplay, type AiImageJobRepository, type AiImageJobRecord } from '../services/ai-image-jobs.js';
 import {
   AiMediaWorkflowError,
   createAiMediaWorkflowService,
@@ -54,6 +54,7 @@ import {
   resolveAiImageEditProviderContract,
 } from '../services/ai-image-edit-provider-contract.js';
 import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
+import { getPublicAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 import { getAiImageEditProviderRuntimeConfig } from '../services/ai-image-edit-runtime-config.js';
 import {
   assertAiImageProviderRuntimeContract,
@@ -99,7 +100,13 @@ const createSchema = z.object({
   width: z.number().int().min(256).max(4096).default(1024),
   height: z.number().int().min(256).max(4096).default(1024),
   idempotencyKey: z.string().trim().min(8).max(128).nullable().optional(),
+  quoteFingerprint: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 });
+const generationQuoteSchema = z.object({
+  count: z.coerce.number().int().min(1).max(4).default(1),
+  width: z.coerce.number().int().min(256).max(4096).default(1024),
+  height: z.coerce.number().int().min(256).max(4096).default(1024),
+}).strict();
 const applySchema = z.object({
   mode: z.enum(['append', 'replace']),
   targetType: z.enum(['collect', 'product']),
@@ -484,6 +491,7 @@ function sendError(reply: any, error: unknown) {
     const status = error.code === 'NOT_FOUND' || error.code === 'SOURCE_ASSET_NOT_FOUND'
       ? 404
       : error.code === 'IDEMPOTENCY_KEY_CONFLICT'
+        || error.code === 'QUOTE_CHANGED'
         || error.code === 'STALE_MEDIA_WORKFLOW'
         || error.code === 'APPLICATION_MUTATION_REQUIRED'
         ? 409
@@ -1088,6 +1096,7 @@ function publicJob(job: Record<string, unknown>, workflow?: Record<string, unkno
     && (!providerResultNeedsReconciliation || providerResultTerminalWithoutOutput);
   return {
     ...visible,
+    pricing: getPublicAiImageTaskPrice(job as unknown as AiImageJobRecord),
     ...(visible.operation === 'IMAGE_TRANSLATE' && translationConfig ? {
       translation: {
         sourceLanguage: String(translationConfig.sourceLanguage || ''),
@@ -1489,13 +1498,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.post('/jobs', async (request, reply) => {
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+  const generationQuoteForOwner = async (ownerUserId: string, input: { count: number; width: number; height: number }) => {
     const settings = await getSettings();
-    if (!settings.enabled || settings.provider === 'disabled') return reply.status(503).send({ code: 'PROVIDER_DISABLED', msg: 'AI image generation is disabled' });
+    if (!settings.enabled || settings.provider === 'disabled') throw new AiImageJobError('PROVIDER_DISABLED', 'AI image generation is disabled');
     if (!['fake', 'dashscope-wanx', 'openai-images', 'custom'].includes(settings.provider)) {
-      return reply.status(503).send({ code: 'PROVIDER_NOT_READY', msg: 'AI image provider adapter is not enabled yet' });
+      throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image provider adapter is not enabled yet');
     }
     const generationCapability = resolveProviderCapability(settings.provider, settings.model);
     if (settings.provider !== 'fake' && (
@@ -1510,31 +1517,43 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       })
       || settings.estimatedCostCents <= 0
     )) {
-      return reply.status(503).send({
-        code: 'PROVIDER_NOT_READY',
-        msg: 'AI image provider has not passed its paid dispatch and cost gates',
-      });
+      throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image provider has not passed its paid dispatch and cost gates');
     }
+    const workflowDecision = await getMediaWorkflowDecision(ownerUserId);
+    if (!workflowDecision.enabled) {
+      throw new AiMediaWorkflowError('AI_MEDIA_WORKFLOW_DISABLED', 'AI media workflow is disabled');
+    }
+    const quote = buildAiImageGenerationQuote({
+      provider: settings.provider,
+      model: settings.model,
+      baseUrl: settings.baseUrl || '',
+      costPerImageCents: settings.estimatedCostCents,
+      currency: settings.currency,
+    }, input);
+    return { settings, quote };
+  };
+
+  app.get('/quote', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const parsed = generationQuoteSchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    try {
+      const { quote } = await generationQuoteForOwner(actor(request).ownerUserId, parsed.data);
+      return { code: 1, data: quote.preview };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/jobs', async (request, reply) => {
+    const parsed = createSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     const ids = actor(request);
     try {
-      const workflowDecision = await getMediaWorkflowDecision(ids.ownerUserId);
-      if (!workflowDecision.enabled) {
-        return reply.status(503).send({
-          code: 'AI_MEDIA_WORKFLOW_DISABLED',
-          msg: 'AI media workflow is disabled',
-        });
+      const existing = await findAiImageJobReplay({ ...parsed.data, ...ids, idempotencyKey: parsed.data.idempotencyKey || null }, repository);
+      if (existing) return reply.status(200).send({ code: 1, data: publicJob(existing as unknown as Record<string, unknown>), replayed: true });
+      const { settings, quote } = await generationQuoteForOwner(ids.ownerUserId, parsed.data);
+      if (parsed.data.quoteFingerprint && parsed.data.quoteFingerprint !== quote.preview.quoteFingerprint) {
+        throw new AiImageJobError('QUOTE_CHANGED', '生成报价已更新，请确认最新价格后重新提交');
       }
-      const quote = buildAiImageGenerationQuote({
-        provider: settings.provider,
-        model: settings.model,
-        baseUrl: settings.baseUrl || '',
-        costPerImageCents: settings.estimatedCostCents,
-        currency: settings.currency,
-      }, {
-        count: parsed.data.count,
-        width: parsed.data.width,
-        height: parsed.data.height,
-      });
       const resolved = await resolvePrompt({
         templateKey: DEFAULT_TEMPLATE_KEY,
         userPrompt: parsed.data.prompt,

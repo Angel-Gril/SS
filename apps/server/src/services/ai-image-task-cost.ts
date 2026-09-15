@@ -56,3 +56,9 @@ export function calculateAiImageTaskCost(job: FrozenTask, successfulImageCount: 
   if (!Number.isSafeInteger(actualCostCents) || actualCostCents > price.maximumCostCents) invalid('Task cost exceeds its confirmed maximum');
   return { currency: price.currency, unitCostCents: price.unitCostCents, actualCostCents, billedUnits: successfulImageCount };
 }
+
+/** Display historical prices without making an unreadable legacy quote hide the job. */
+export function getPublicAiImageTaskPrice(job: FrozenTask): FrozenAiImageTaskPrice | null {
+  try { return getFrozenAiImageTaskPrice(job); }
+  catch { return null; }
+}
