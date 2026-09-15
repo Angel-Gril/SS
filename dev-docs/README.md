@@ -32,6 +32,7 @@
 ## 当前状态
 
 - 当前运行检查点为 `63b98b2c`：COM/CN 全暗态维护部署、完整 VPS 与管理员模板 source 只读验收已通过；官网扩展保持 `1.0.316` / `1.0.311`，受管扩展未升级。源码的完整 offline gate 通过，正式 QA、图片质量、账单最终性和正常 ERP 业务链仍待关闭。结果与下一步见[当前状态审计](current-state-audit.md)，维护证据只维护在[维护阶段](stages/dark-maintenance-deployment-2026-09.md)。
+- 最新本地修复（2026-09-15）：VPS 回执导出器已修复符号链接入口静默成功的问题，Windows native/tsx 与 Linux 最低 Node 版本的真实子进程验证通过；尚未重新部署。T2 证据和具体范围见[回执入口修复](current-state-audit.md#vps-回执链接入口修复2026-09-15)。
 - 历史已验证：对应提交的完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要；不自动覆盖本轮新改动。
 - 当前主风险：四次新 Wanx 编辑均技术成功、质量未通过，CNY 1 整轮占位已耗尽；原生免费抵扣明细已核对，旧凭据账单和最终结算、正常 ERP 完整生成链及 QA-02 仍待关闭。管理员 source 路由已真实验收；Ozon ERP-only 源码修复随维护上线，线上草稿流程仍待按原隔离边界重验，DOTH 样本有 FBS 库存，不能当作已证实的专用测试店。两台 VPS 的 Redis 最近盘点均为 standalone、无副本/集群和专用告警；远端备份仍按决定未配置。Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
 - 推荐下一步：第四次 Wanx INPAINT 已执行并完成质量复核，四个改色样本均未通过，整轮 CNY 1 已全部占位。第四条原生免费抵扣明细已回显；保留原 task、审批与结果，只读跟进分日用量及最终结算，并继续离线诊断，不得重发或以免费抵扣恢复预算。局部合成的遮罩外像素保护已验证，正常 ERP、QA-02/QA-04 和发布门禁继续保持。详细证据只维护在[当前状态审计](current-state-audit.md#第四次实验接续与质量验收2026-09-14)；真实 Ozon 写入仍等待专用测试隔离。

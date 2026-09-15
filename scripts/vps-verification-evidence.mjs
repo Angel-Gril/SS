@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { parseVpsVerificationEvidence } from '../packages/shared/src/rel04-release-evidence.ts';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { readStablePublicationFile } from './extension-website-publication-approval.mjs';
@@ -102,7 +101,7 @@ function main() {
   )));
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   try { main(); } catch {
     console.error('FAIL VPS verification evidence was not retained; check counts, candidate binding and private output');
     process.exitCode = 1;
