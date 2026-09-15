@@ -452,38 +452,42 @@ describe('extension media launch route', () => {
     expect(capabilitiesEnd).toBeGreaterThan(capabilitiesStart);
     const block = source.slice(capabilitiesStart, capabilitiesEnd);
     for (const key of [
-      'feature_ai_media_image_to_image',
-      'feature_ai_media_full_edit',
-      'feature_ai_media_inpaint',
       'feature_image_translate',
       'ai_image_translation_provider',
       'ai_image_translation_model',
       'ai_user_daily_image_translation_limit',
       'ai_image_translation_cost_cents',
-      'ai_image_base_url',
     ]) {
       expect(block.match(new RegExp(`getConfig\\('${key}'\\)`, 'gu'))).toHaveLength(1);
     }
-    expect(block.match(/getRuntimeConfigForStorage\(\)/gu)).toHaveLength(1);
+    expect(block.match(/loadExtensionStandaloneSnapshot\(\)/gu)).toHaveLength(1);
+    expect(block).not.toMatch(/getRuntimeConfigForStorage\(\)/u);
     expect(block).not.toMatch(/getExtensionStandaloneReadiness/u);
-    expect(block).toMatch(/resolveAiImageToImageReadiness/u);
-    expect(block).toMatch(/baseUrl: imageBaseUrl/u);
-    expect(block).toMatch(/resolveAiImageEditReadiness\('FULL_EDIT'/u);
-    expect(block).toMatch(/resolveAiImageEditReadiness\('INPAINT'/u);
-    expect(block).toMatch(/baseUrl: imageBaseUrl,[\s\S]*resolveAiImageEditReadiness\('FULL_EDIT'/u);
+    for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+      expect(block).toContain(`resolveExtensionMediaStandaloneReadiness('${operation}', snapshot.settings, snapshot.options)`);
+    }
+    expect(block).toContain('resolveAiImageTranslationStorageReadiness(snapshot.runtimeConfig)');
     expect(block).toMatch(/resolveExtensionMediaTranslationReadiness/u);
   });
 
   it('binds standalone edit launch readiness to the active Provider Base', () => {
     const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-    const start = source.indexOf('const getExtensionStandaloneReadiness');
+    const start = source.indexOf('const loadExtensionStandaloneSnapshot');
     const end = source.indexOf('const extensionMediaWorkflowLauncher', start);
     const block = source.slice(start, end);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    expect(block).toContain("getConfig('ai_image_base_url')");
-    expect(block).toMatch(/resolveAiImageToImageReadiness\(\{[\s\S]*baseUrl,/u);
-    expect(block).toMatch(/resolveAiImageEditReadiness\(operation, \{[\s\S]*baseUrl,/u);
+    expect(block.match(/getAiImageEditProviderRuntimeConfig\(\)/gu)).toHaveLength(1);
+    expect(block.match(/getRuntimeConfigForStorage\(\)/gu)).toHaveLength(1);
+    for (const key of ['ai_image_generation_enabled', 'feature_ai_media_image_to_image', 'feature_ai_media_full_edit', 'feature_ai_media_inpaint']) {
+      expect(block.match(new RegExp(`getConfig\\('${key}'\\)`, 'gu'))).toHaveLength(1);
+    }
+    expect(block).toContain('baseUrl: providerRuntime.baseUrl');
+    expect(block).toContain('currency: providerRuntime.currency');
+    expect(block).toContain('credentialRevision: providerRuntime.credentialRevision');
+    expect(block).toContain('resolveImageToImageReadiness: resolveAiImageToImageReadiness');
+    expect(block).toContain('resolveAiImageEditReadiness,');
+    expect(block).toContain('resolveExtensionMediaStandaloneReadiness(operation, snapshot.settings, snapshot.options, frozenRuntime)');
   });
 });

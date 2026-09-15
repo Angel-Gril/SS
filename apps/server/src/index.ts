@@ -1755,10 +1755,7 @@ if (isExtensionDeviceAuthEnabled()) {
       errorMessage: 'AI media queue is temporarily unavailable',
     }),
   });
-  const getExtensionStandaloneReadiness = async (
-    operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
-    frozenRuntime?: AiImageProviderRuntimeContract,
-  ) => {
+  const loadExtensionStandaloneSnapshot = async () => {
     const [
       generationEnabled,
       imageToImageEnabled,
@@ -1776,7 +1773,7 @@ if (isExtensionDeviceAuthEnabled()) {
       getConfig('ai_daily_budget_cents'),
       getRuntimeConfigForStorage(),
     ]);
-    return resolveExtensionMediaStandaloneReadiness(operation, {
+    const settings = {
       generationEnabled,
       imageToImageEnabled,
       fullEditEnabled,
@@ -1788,12 +1785,21 @@ if (isExtensionDeviceAuthEnabled()) {
       currency: providerRuntime.currency,
       credentialRevision: providerRuntime.credentialRevision,
       globalDailyBudgetCents,
-    }, {
+    };
+    const options = {
       production: process.env.NODE_ENV === 'production',
       storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
       resolveImageToImageReadiness: resolveAiImageToImageReadiness,
       resolveAiImageEditReadiness,
-    }, frozenRuntime);
+    };
+    return { settings, options, runtimeConfig };
+  };
+  const getExtensionStandaloneReadiness = async (
+    operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+    frozenRuntime?: AiImageProviderRuntimeContract,
+  ) => {
+    const snapshot = await loadExtensionStandaloneSnapshot();
+    return resolveExtensionMediaStandaloneReadiness(operation, snapshot.settings, snapshot.options, frozenRuntime);
   };
   const extensionMediaWorkflowLauncher = createExtensionMediaWorkflowLauncher({
     workflowService: extensionMediaWorkflowService,
@@ -2829,28 +2835,25 @@ if (isExtensionDeviceAuthEnabled()) {
     },
     getCapabilities: async ({ workflowDecision }) => {
       const [
-        imageToImage,
-        fullEdit,
-        inpaint,
+        snapshot,
         translationEnabled,
         translationProvider,
         translationModel,
         translationDailyLimit,
         translationEstimatedCostCents,
         translationCategoryGlossaryJson,
-        runtimeConfig,
       ] = await Promise.all([
-        getExtensionStandaloneReadiness('IMAGE_TO_IMAGE'),
-        getExtensionStandaloneReadiness('FULL_EDIT'),
-        getExtensionStandaloneReadiness('INPAINT'),
+        loadExtensionStandaloneSnapshot(),
         getConfig('feature_image_translate'),
         getConfig('ai_image_translation_provider'),
         getConfig('ai_image_translation_model'),
         getConfig('ai_user_daily_image_translation_limit'),
         getConfig('ai_image_translation_cost_cents'),
         getConfig('ai_image_translation_category_glossary_json'),
-        getRuntimeConfigForStorage(),
       ]);
+      const imageToImage = resolveExtensionMediaStandaloneReadiness('IMAGE_TO_IMAGE', snapshot.settings, snapshot.options);
+      const fullEdit = resolveExtensionMediaStandaloneReadiness('FULL_EDIT', snapshot.settings, snapshot.options);
+      const inpaint = resolveExtensionMediaStandaloneReadiness('INPAINT', snapshot.settings, snapshot.options);
       const production = process.env.NODE_ENV === 'production';
       const translation = resolveExtensionMediaTranslationReadiness({
         settings: {
@@ -2862,7 +2865,7 @@ if (isExtensionDeviceAuthEnabled()) {
           categoryGlossaryJson: translationCategoryGlossaryJson,
         },
         production,
-        storageReadiness: resolveAiImageTranslationStorageReadiness(runtimeConfig),
+        storageReadiness: resolveAiImageTranslationStorageReadiness(snapshot.runtimeConfig),
       });
       const operation = <T extends 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT'>(
         name: T,

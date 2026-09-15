@@ -498,6 +498,7 @@
 - 扩展实际装配的遗漏已修复：`index.ts` 的执行与能力投影共用 `resolveExtensionMediaStandaloneReadiness`，必填并合并生图总开关；launcher/command authorization 复用正常准入。Wanx 透传 CNY、凭据修订、既有提示词 profile 和 1024 方图限制；runtime v1/v2/v3 均由原 parser 校验，QUEUED 同任务恢复保留原价/币种，真正的新 RETRY 保留原费用和身份确认边界。未知操作、Wanx I2I、未登记 custom edit 继续拒绝；套图、BYOK 与翻译未扩大范围。
 - 扩展 T2 基线 119 项通过，新增 17 项中 16 个目标 RED，实现后目标与原回归 135 项 GREEN。继续沿调用链补齐 grant 的审核/应用/重试与工作台按钮状态两处旧门禁：`canUseAiImageJobOperation` 使用合法冻结 runtime 的端点身份判断正常准入；没有 runtime 标识的旧任务保留原 sandbox 兼容边界，显式损坏的 runtime 拒绝。两处真实查询补取内部 operationConfig，公开响应不暴露配置；租户、草稿、资产、状态和未决费用检查保持。
 - 上游准入与 grant 测试先 7 项目标 RED、后 114 项 GREEN；工作台实际 loadStatus 的 4 个目标 RED、后 28 项 GREEN，fixture 按 Prisma select 投影，能发现漏查字段。最终根 Agent 复核源码并联合 Web/任务/费用/扩展 owner 运行 11 文件 366 项，全部通过；独立复核无剩余实际发现。这些证据证明当前接线和边界，不等于生产 MV3/真实 Provider 验收。
+- 完整冻结检查在 `0810912f` 抓到请求级配置快照回归：三操作能力投影重复调用 getter；该轮后端为 6122 passed、2 failed、262 条条件跳过，失败日志保留，不包装成通过。已抽取一次读取的 `loadExtensionStandaloneSnapshot`，矩阵三操作与翻译存储共用同一快照，命令仍可传入旧任务冻结价；原两条合同同步跟随新 owner 并继续约束一次读取及 Base/币种/凭据传递。修复后四文件 149 项、server 类型检查和定向 lint 通过；完整原生回执须绑定此修复后的最终提交。独立检出另已补齐 Prisma 客户端，并将已跟踪文本与 Git blob 对齐到 LF，未更改应用内容。
 - 部署材料使用最终提交的独立 clean checkout、一次完整原生 `qa:04:offline` 回执及同版本 COM/CN 独立 origins 的未签名包。准备脚本和参考对照保存在私有 `rel-ai-cbcd9546-20260915`；原生回执仍标识 `completesFormalTask:false`，不能冒充线上或正式 QA 验收。当前公开 `/ready` 实查两区为 ready、DB/Redis ok，运行提交仍是 `63b98b2c4481f80aa74208186e14552d5070a16e`。本轮尚未部署、签名、发布官网或调用真实 Provider/Ozon。
 
 ### 剩余工作的执行入口
