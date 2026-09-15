@@ -269,13 +269,14 @@ import {
   createExtensionMediaTranslationLauncher,
   resolveExtensionMediaWorkflowSourceMediaKey,
   resolveExtensionMediaTranslationReadiness,
+  resolveExtensionMediaStandaloneReadiness,
 } from './services/extension-media-workflow-launch.js';
 import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-translation-storage.js';
 import { resolveTrustedAiImageTranslationCategory } from './services/ai-image-translation-glossary.js';
 import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
+import { getAiImageEditProviderRuntimeConfig } from './services/ai-image-edit-runtime-config.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
 import { createAiImageEditMask } from './services/ai-image-edit.js';
-import { resolveAiImageProviderCapability } from './services/ai-image-provider-capabilities.js';
 import type { AiImageProviderRuntimeContract } from './services/ai-image-provider-runtime-contract.js';
 import { uploadLimiter } from './lib/upload-limiter.js';
 import { applyAiMediaListingDraftApplication } from './services/ai-media-listing-draft-application-mutations.js';
@@ -1756,78 +1757,43 @@ if (isExtensionDeviceAuthEnabled()) {
   });
   const getExtensionStandaloneReadiness = async (
     operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+    frozenRuntime?: AiImageProviderRuntimeContract,
   ) => {
     const [
+      generationEnabled,
       imageToImageEnabled,
       fullEditEnabled,
       inpaintEnabled,
-      provider,
-      configuredModel,
-      baseUrl,
-      costPerImageCents,
+      providerRuntime,
       globalDailyBudgetCents,
       runtimeConfig,
     ] = await Promise.all([
+      getConfig('ai_image_generation_enabled'),
       getConfig('feature_ai_media_image_to_image'),
       getConfig('feature_ai_media_full_edit'),
       getConfig('feature_ai_media_inpaint'),
-      getConfig('ai_image_provider'),
-      getConfig('ai_image_model'),
-      getConfig('ai_image_base_url'),
-      getConfig('ai_image_generation_cost_cents'),
+      getAiImageEditProviderRuntimeConfig(),
       getConfig('ai_daily_budget_cents'),
       getRuntimeConfigForStorage(),
     ]);
-    const providerName = String(provider);
-    const model = providerName === 'fake'
-      ? operation === 'IMAGE_TO_IMAGE' ? 'fake-image-to-image-v1' : 'fake-image-edit-v1'
-      : configuredModel;
-    const storageReadiness = resolveAiImageEditStorageReadiness(runtimeConfig);
-    const production = process.env.NODE_ENV === 'production';
-    if (operation === 'IMAGE_TO_IMAGE') {
-      const readiness = resolveAiImageToImageReadiness({
-        enabled: imageToImageEnabled,
-        workflowEnabled: true,
-        production,
-        provider: providerName,
-        model,
-        baseUrl,
-        estimatedCostCents: costPerImageCents,
-        storageReadiness,
-      });
-      return {
-        ...readiness,
-        testOnly: readiness.testOnly === true,
-        provider: providerName,
-        model,
-        baseUrl,
-        costPerImageCents,
-        globalDailyBudgetCents,
-        evidenceLevel: resolveAiImageProviderCapability(providerName, model)?.evidenceLevel,
-      };
-    }
-    const readiness = resolveAiImageEditReadiness(operation, {
+    return resolveExtensionMediaStandaloneReadiness(operation, {
+      generationEnabled,
+      imageToImageEnabled,
       fullEditEnabled,
       inpaintEnabled,
-      provider: providerName,
-      model,
-      baseUrl,
-      estimatedCostCents: costPerImageCents,
-    }, {
-      workflowEnabled: true,
-      production,
-      storageReadiness,
-    });
-    return {
-      ...readiness,
-      testOnly: readiness.testOnly === true,
-      provider: providerName,
-      model,
-      baseUrl,
-      costPerImageCents,
+      provider: providerRuntime.provider,
+      model: providerRuntime.model,
+      baseUrl: providerRuntime.baseUrl,
+      costPerImageCents: providerRuntime.costPerImageCents,
+      currency: providerRuntime.currency,
+      credentialRevision: providerRuntime.credentialRevision,
       globalDailyBudgetCents,
-      evidenceLevel: resolveAiImageProviderCapability(providerName, model)?.evidenceLevel,
-    };
+    }, {
+      production: process.env.NODE_ENV === 'production',
+      storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
+      resolveImageToImageReadiness: resolveAiImageToImageReadiness,
+      resolveAiImageEditReadiness,
+    }, frozenRuntime);
   };
   const extensionMediaWorkflowLauncher = createExtensionMediaWorkflowLauncher({
     workflowService: extensionMediaWorkflowService,
@@ -2459,6 +2425,7 @@ if (isExtensionDeviceAuthEnabled()) {
                 provider: true,
                 model: true,
                 status: true,
+                operationConfig: true,
                 assets: {
                   where: { kind: 'AI_GENERATED' },
                   take: 10,
@@ -2515,6 +2482,7 @@ if (isExtensionDeviceAuthEnabled()) {
           suiteId: row.suiteSlot?.suiteId || null,
           provider: row.jobs[0]?.provider || null,
           model: row.jobs[0]?.model || null,
+          operationConfig: row.jobs[0]?.operationConfig,
           currentJobStatus: row.jobs[0]?.status || null,
           outputAssetIds: (row.jobs[0]?.assets || [])
             .filter((asset) => asset.ownerUserId === ownerUserId
@@ -2861,69 +2829,29 @@ if (isExtensionDeviceAuthEnabled()) {
     },
     getCapabilities: async ({ workflowDecision }) => {
       const [
-        imageToImageEnabled,
-        fullEditEnabled,
-        inpaintEnabled,
+        imageToImage,
+        fullEdit,
+        inpaint,
         translationEnabled,
         translationProvider,
         translationModel,
         translationDailyLimit,
         translationEstimatedCostCents,
         translationCategoryGlossaryJson,
-        imageProvider,
-        imageBaseUrl,
-        configuredImageModel,
-        imageEstimatedCostCents,
         runtimeConfig,
       ] = await Promise.all([
-        getConfig('feature_ai_media_image_to_image'),
-        getConfig('feature_ai_media_full_edit'),
-        getConfig('feature_ai_media_inpaint'),
+        getExtensionStandaloneReadiness('IMAGE_TO_IMAGE'),
+        getExtensionStandaloneReadiness('FULL_EDIT'),
+        getExtensionStandaloneReadiness('INPAINT'),
         getConfig('feature_image_translate'),
         getConfig('ai_image_translation_provider'),
         getConfig('ai_image_translation_model'),
         getConfig('ai_user_daily_image_translation_limit'),
         getConfig('ai_image_translation_cost_cents'),
         getConfig('ai_image_translation_category_glossary_json'),
-        getConfig('ai_image_provider'),
-        getConfig('ai_image_base_url'),
-        getConfig('ai_image_model'),
-        getConfig('ai_image_generation_cost_cents'),
         getRuntimeConfigForStorage(),
       ]);
       const production = process.env.NODE_ENV === 'production';
-      const imageProviderName = String(imageProvider);
-      const imageToImageModel = imageProviderName === 'fake'
-        ? 'fake-image-to-image-v1'
-        : configuredImageModel;
-      const imageToImage = resolveAiImageToImageReadiness({
-        enabled: imageToImageEnabled,
-        workflowEnabled: true,
-        production,
-        provider: imageProviderName,
-        model: imageToImageModel,
-        baseUrl: imageBaseUrl,
-        estimatedCostCents: imageEstimatedCostCents,
-        storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
-      });
-      const editFlags = { fullEditEnabled, inpaintEnabled };
-      const editModel = imageProviderName === 'fake'
-        ? 'fake-image-edit-v1'
-        : configuredImageModel;
-      const editSettings = {
-        ...editFlags,
-        provider: imageProviderName,
-        model: editModel,
-        baseUrl: imageBaseUrl,
-        estimatedCostCents: imageEstimatedCostCents,
-      };
-      const editOptions = {
-        workflowEnabled: true,
-        production,
-        storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
-      };
-      const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, editOptions);
-      const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, editOptions);
       const translation = resolveExtensionMediaTranslationReadiness({
         settings: {
           enabled: translationEnabled,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { canRunAiImageProviderOperation } from '../services/ai-image-provider-admission.js';
+import { canRunAiImageProviderOperation, canUseAiImageJobOperation } from '../services/ai-image-provider-admission.js';
 import { hasExactAiMediaSandboxEvidence, resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
-import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
+import { aiImageProviderEndpointSha256, createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 const openai = {
   provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1',
@@ -13,6 +13,23 @@ const wanx = {
 };
 
 describe('Normal AI image protocol admission', () => {
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)('admits an existing normal %s job by its frozen endpoint', (operation) => {
+    const runtime = createAiImageProviderRuntimeContract({ ...openai, costPerImageCents: 14, currency: 'CNY' }, { count: 1, width: 1024, height: 1024 });
+    const job = { provider: openai.provider, model: openai.model, operation,
+      operationConfig: operation === 'IMAGE_TO_IMAGE' ? runtime : { providerRuntime: runtime } };
+    expect(canUseAiImageJobOperation(job, true)).toBe(true);
+    expect(canUseAiImageJobOperation({ ...job, operationConfig: null }, true)).toBe(false);
+    expect(canUseAiImageJobOperation({ ...job, operationConfig: { ...runtime, baseUrlSha256: 'a'.repeat(64) } }, true)).toBe(false);
+    expect(canUseAiImageJobOperation({ ...job, model: 'another-model' }, true)).toBe(false);
+  });
+
+  it('keeps legacy characterized jobs closed and fake jobs out of production', () => {
+    expect(canUseAiImageJobOperation({ provider: 'fake', operation: 'IMAGE_TRANSLATE' }, false)).toBe(true);
+    expect(canUseAiImageJobOperation({ provider: 'fake', operation: 'IMAGE_TRANSLATE' }, true)).toBe(false);
+    expect(canUseAiImageJobOperation({ provider: 'custom', model: 'unregistered', operation: 'FULL_EDIT' }, true)).toBe(false);
+    expect(canUseAiImageJobOperation({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', operation: 'FULL_EDIT' }, true)).toBe(true);
+    expect(canUseAiImageJobOperation({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', operation: 'FULL_EDIT', operationConfig: { providerRuntime: null } }, true)).toBe(false);
+  });
   it.each([
     openai, wanx,
     ...(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const).map(operation => ({

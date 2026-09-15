@@ -5,6 +5,7 @@ import {
   createExtensionSourceWorkbenchService,
   ExtensionSourceWorkbenchError,
 } from '../services/extension-source-workbench.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 function decision(enabled: boolean) {
   return {
@@ -393,7 +394,7 @@ describe('extension source workbench status service', () => {
     ))).toBe(true);
   });
 
-  it('never exposes extension commands for a paid provider or a read-only device', async () => {
+  it('keeps unregistered translation and read-only media commands disabled', async () => {
     const row = {
       id: 'media-1', operation: 'IMAGE_TRANSLATE', status: 'FAILED',
       reviewStatus: 'NOT_READY', revision: 2, contextType: 'listing-draft',
@@ -433,5 +434,115 @@ describe('extension source workbench status service', () => {
       snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
     });
     expect(readOnly.media.items[0]).toMatchObject({ commandContext: null, allowedActions: [] });
+  });
+});
+
+function normalJobRuntime(version: 'v1' | 'v3' = 'v3', provider = 'openai-images', model = 'gpt-image-1') {
+  return createAiImageProviderRuntimeContract({
+    provider, model,
+    baseUrl: provider === 'openai-images' ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
+    costPerImageCents: 7,
+    ...(version === 'v3' ? { currency: 'USD' as const } : {}),
+  }, { count: 1, width: 1024, height: 1024 });
+}
+
+function normalMediaStatusFixture(input: {
+  provider?: string;
+  model?: string;
+  operation?: string;
+  operationConfig?: unknown;
+  status?: string;
+  costStatus?: string;
+  providerJobId?: string;
+  providerReconciliationStatus?: string;
+  errorCode?: string;
+  canExecuteMedia?: boolean;
+  production?: boolean;
+  contextDraftRevision?: number;
+}) {
+  const job: Record<string, unknown> = {
+    provider: input.provider ?? 'openai-images', model: input.model ?? 'gpt-image-1',
+    operationConfig: input.operationConfig,
+    providerJobId: input.providerJobId ?? null,
+    providerReconciliationStatus: input.providerReconciliationStatus ?? 'NOT_REQUIRED',
+    errorCode: input.errorCode ?? null,
+    costReservation: { status: input.costStatus ?? 'RELEASED' },
+  };
+  const client = {
+    sourceCaptureSnapshot: { findFirst: vi.fn(async () => ({
+      id: 'snapshot-1', version: 1, capturedAt: new Date('2026-07-21T00:00:00.000Z'),
+      subject: { snapshots: [{ id: 'snapshot-1' }] },
+    })) },
+    sourceListingWorkflow: { findMany: vi.fn(async () => [{
+      id: 'draft-1', shopId: 'shop-1', stage: 'MEDIA_REVIEW', status: 'ACTIVE',
+      currentRevision: 8, currentDraftVersion: 3, selectedSkuKeys: [],
+      updatedAt: new Date('2026-07-21T01:00:00.000Z'), currentDraft: { payload: {} },
+    }]) },
+    aiMediaWorkflow: { findMany: vi.fn(async (query: any) => [{
+      id: 'media-normal', operation: input.operation ?? 'IMAGE_TO_IMAGE', status: input.status ?? 'FAILED',
+      reviewStatus: 'NOT_READY', revision: 2, contextType: 'listing-draft', contextId: 'draft-1',
+      contextDraftRevision: input.contextDraftRevision ?? 8, contextDraftVersion: 3,
+      contextSkuKey: 'sku-1', contextSlotKey: 'hero', selectedOutputAssetId: null,
+      updatedAt: new Date('2026-07-21T02:00:00.000Z'),
+      // Respect the database projection: an unselected frozen contract cannot reach admission.
+      jobs: [Object.fromEntries(Object.keys(query.select.jobs.select).map((key) => [key, job[key]]))],
+    }]) },
+  };
+  const service = createExtensionSourceWorkbenchService({ client, production: input.production ?? true });
+  return {
+    load: () => service.loadStatus({
+      ownerUserId: 'owner-1', allowedShopIds: ['shop-1'],
+      canExecuteMedia: input.canExecuteMedia ?? true,
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    }),
+  };
+}
+
+describe('extension source workbench normal task commands', () => {
+  it.each([
+    { version: 'v1' as const, nested: false, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING', action: 'CANCEL' },
+    { version: 'v3' as const, nested: false, operation: 'IMAGE_TO_IMAGE', status: 'FAILED', action: 'RETRY' },
+    { version: 'v1' as const, nested: true, operation: 'FULL_EDIT', status: 'FAILED', action: 'RETRY' },
+    { version: 'v3' as const, nested: true, operation: 'INPAINT', status: 'RUNNING', action: 'CANCEL' },
+  ])('exposes $action for a normal OpenAI $version $operation task', async (testCase) => {
+    const runtime = normalJobRuntime(testCase.version);
+    const result = await normalMediaStatusFixture({
+      operation: testCase.operation, status: testCase.status,
+      costStatus: testCase.status === 'RUNNING' ? 'RESERVED' : 'RELEASED',
+      operationConfig: testCase.nested ? { providerRuntime: runtime } : runtime,
+    }).load();
+    expect(result.media.items[0]).toMatchObject({
+      commandContext: { shopId: 'shop-1', listingWorkflowId: 'draft-1', draftRevision: 8, draftVersion: 3 },
+      allowedActions: [testCase.action],
+    });
+    expect(JSON.stringify(result)).not.toContain(runtime.baseUrlSha256);
+    expect(result.media.items[0]).not.toHaveProperty('operationConfig');
+  });
+
+  it.each([
+    { name: 'a different endpoint', operationConfig: { ...normalJobRuntime(), baseUrlSha256: 'a'.repeat(64) } },
+    { name: 'missing frozen runtime', operationConfig: undefined },
+    { name: 'malformed frozen runtime', operationConfig: { providerRuntime: { contractVersion: 'invalid' } } },
+    { name: 'unregistered custom edit', provider: 'custom', model: 'unregistered-edit-model', operationConfig: normalJobRuntime('v3', 'custom', 'unregistered-edit-model') },
+    { name: 'production fake', provider: 'fake', model: 'fake', operationConfig: undefined },
+    { name: 'an unsupported operation', operation: 'IMAGE_TRANSLATE', operationConfig: normalJobRuntime() },
+    { name: 'a mismatched frozen identity', model: 'other-model', operationConfig: normalJobRuntime() },
+    { name: 'a read-only device', canExecuteMedia: false, operationConfig: normalJobRuntime() },
+    { name: 'a stale draft revision', contextDraftRevision: 7, operationConfig: normalJobRuntime() },
+  ])('keeps commands closed for $name', async ({ name: _name, ...input }) => {
+    const result = await normalMediaStatusFixture(input).load();
+    expect(result.media.items[0]).toMatchObject({ commandContext: null, allowedActions: [] });
+  });
+
+  it.each([
+    { costStatus: 'RESERVED' },
+    { costStatus: 'UNKNOWN_OUTCOME' },
+    { costStatus: 'SUBMISSION_UNCERTAIN' },
+    { providerJobId: 'accepted-provider-task' },
+    { errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN' },
+    { providerReconciliationStatus: 'MANUAL_REVIEW' },
+  ])('does not expose retry while a normal task has pending cost or Provider outcome: %j', async (pending) => {
+    const result = await normalMediaStatusFixture({ ...pending, operationConfig: normalJobRuntime() }).load();
+    expect(result.media.items[0]).toMatchObject({ commandContext: null, allowedActions: [] });
   });
 });

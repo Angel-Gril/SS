@@ -6,12 +6,21 @@ import {
 } from './ai-prompt-templates.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
 import { buildAiImageGenerationQuote } from './ai-image-generation-quote.js';
-import { isOpenAiCompatibleImageEditSizeSupported } from './ai-image-providers.js';
 import {
-  AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+  AiImageProviderRuntimeContractError,
+  bindAiImageProviderExecutionConfig,
+  parseAiImageProviderRuntimeContract,
   type AiImageProviderRuntimeContract,
+  type AiImageProviderRuntimeIdentity,
+  type AiImageProviderCurrency,
+  type AiImageProviderCredentialRevision,
 } from './ai-image-provider-runtime-contract.js';
 import { resolveAiImageTranslationGlossary } from './ai-image-translation-glossary.js';
+import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
+import { resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import { isAiImageEditProviderCanvasSupported, resolveAiImageEditProviderContract } from './ai-image-edit-provider-contract.js';
+import type { AiImageEditStorageReadiness } from './ai-image-edit-storage.js';
+import type { AiPromptRenderingProfile } from './ai-image-edit-prompt-contract.js';
 
 /**
  * Creation is deliberately a separate command contract from the B1 cancel/retry
@@ -785,15 +794,58 @@ interface ExtensionMediaStandaloneReadiness {
   costPerImageCents?: number;
   globalDailyBudgetCents?: number;
   evidenceLevel?: string;
+  currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
-interface ExtensionMediaStandaloneProviderConfig {
+interface ExtensionMediaStandaloneProviderConfig extends AiImageProviderRuntimeIdentity {
   paid: boolean;
   provider: string;
   model: string;
   baseUrl: string;
   costPerImageCents: number;
   globalDailyBudgetCents: number;
+}
+
+/** Both extension entry points project the same normal operation and frozen-runtime owners. */
+export function resolveExtensionMediaStandaloneReadiness(
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+  settings: AiImageProviderRuntimeIdentity & {
+    generationEnabled: boolean;
+    imageToImageEnabled: boolean;
+    fullEditEnabled: boolean;
+    inpaintEnabled: boolean;
+    globalDailyBudgetCents: number;
+  },
+  options: {
+    production: boolean;
+    storageReadiness: AiImageEditStorageReadiness;
+    resolveImageToImageReadiness: typeof import('../routes/ai-images.js').resolveAiImageToImageReadiness;
+    resolveAiImageEditReadiness: typeof import('../routes/ai-images.js').resolveAiImageEditReadiness;
+  },
+  frozenRuntime?: unknown,
+): ExtensionMediaStandaloneReadiness {
+  const frozen = frozenRuntime === undefined ? null : parseAiImageProviderRuntimeContract(frozenRuntime);
+  const configured = frozen ? bindAiImageProviderExecutionConfig(frozen, settings, {
+    count: frozen.imageCount, width: frozen.width, height: frozen.height, estimatedCostCents: frozen.maximumCostCents,
+  }) : settings;
+  const model = configured.provider === 'fake' ? standaloneFakeModel(operation) : configured.model;
+  const common = { provider: configured.provider, model, baseUrl: configured.baseUrl, estimatedCostCents: configured.costPerImageCents };
+  const core = operation === 'IMAGE_TO_IMAGE'
+    ? options.resolveImageToImageReadiness({ ...common,
+      enabled: settings.generationEnabled && settings.imageToImageEnabled,
+      workflowEnabled: true, production: options.production, storageReadiness: options.storageReadiness,
+    })
+    : options.resolveAiImageEditReadiness(operation, { ...common,
+      generationEnabled: settings.generationEnabled, fullEditEnabled: settings.fullEditEnabled, inpaintEnabled: settings.inpaintEnabled,
+    }, { workflowEnabled: true, production: options.production, storageReadiness: options.storageReadiness });
+  return { ...core, testOnly: core.testOnly === true, provider: configured.provider, model,
+    baseUrl: configured.baseUrl, costPerImageCents: configured.costPerImageCents,
+    globalDailyBudgetCents: settings.globalDailyBudgetCents,
+    ...(configured.currency === undefined ? {} : { currency: configured.currency }),
+    ...(configured.credentialRevision ? { credentialRevision: configured.credentialRevision } : {}),
+    evidenceLevel: resolveAiImageProviderCapability(configured.provider, model)?.evidenceLevel,
+  };
 }
 
 function standaloneReadinessError(readiness: ExtensionMediaStandaloneReadiness): ExtensionMediaWorkflowLaunchError {
@@ -851,24 +903,29 @@ function resolveStandaloneProviderConfig(input: {
   const baseUrl = normalizedProviderText(readiness.baseUrl);
   const costPerImageCents = Number(readiness.costPerImageCents);
   const globalDailyBudgetCents = Number(readiness.globalDailyBudgetCents);
+  const contract = resolveAiImageEditProviderContract(provider, model, baseUrl);
+  const capability = resolveAiImageProviderCapability(provider, model);
   if (testOnly
     || !provider
     || !model
-    || !baseUrl
-    || readiness.evidenceLevel !== 'sandbox-verified'
+    || !contract
+    || !canRunAiImageProviderOperation({ capability, provider, model, baseUrl, operation,
+      inputTransport: contract.inputTransport, resultMode: contract.resultMode })
     || !Number.isSafeInteger(costPerImageCents)
     || costPerImageCents < 1
     || !Number.isSafeInteger(globalDailyBudgetCents)
     || globalDailyBudgetCents < 1) {
-    providerConfigError('Paid AI image Provider readiness is incomplete or unverified');
+    providerConfigError('Paid AI image Provider readiness or normal request protocol is invalid');
   }
   return {
     paid: true,
     provider,
     model,
-    baseUrl,
+    baseUrl: contract.baseUrl,
     costPerImageCents,
     globalDailyBudgetCents,
+    ...(readiness.currency === undefined ? {} : { currency: readiness.currency }),
+    ...(readiness.credentialRevision ? { credentialRevision: readiness.credentialRevision } : {}),
   };
 }
 
@@ -932,12 +989,12 @@ function frozenStandaloneProvider(
       providerRuntimeContract: null,
     };
   }
-  const runtime = candidate.providerRuntimeContract;
+  let runtime: AiImageProviderRuntimeContract;
+  try { runtime = parseAiImageProviderRuntimeContract(candidate.providerRuntimeContract); }
+  catch { standaloneIdempotencyConflict(); }
   const estimatedCostCents = Number(candidate.estimatedCostCents);
   if (!provider
     || !model
-    || !runtime
-    || runtime.contractVersion !== AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
     || runtime.provider !== provider
     || runtime.model !== model
     || !/^[a-f0-9]{64}$/u.test(runtime.baseUrlSha256)
@@ -963,21 +1020,6 @@ function frozenStandaloneProvider(
   };
 }
 
-function sameProviderRuntimeContract(
-  left: AiImageProviderRuntimeContract,
-  right: AiImageProviderRuntimeContract,
-): boolean {
-  return left.contractVersion === right.contractVersion
-    && left.provider === right.provider
-    && left.model === right.model
-    && left.baseUrlSha256 === right.baseUrlSha256
-    && left.unitCostCents === right.unitCostCents
-    && left.imageCount === right.imageCount
-    && left.width === right.width
-    && left.height === right.height
-    && left.maximumCostCents === right.maximumCostCents;
-}
-
 function assertStandaloneProviderStillAuthorized(
   frozen: ExtensionMediaStandaloneFrozenProvider,
   active: ExtensionMediaStandaloneProviderConfig,
@@ -990,25 +1032,14 @@ function assertStandaloneProviderStillAuthorized(
   }
   if (!frozen.paid) return;
   const runtime = frozen.providerRuntimeContract!;
-  let activeExecution: {
-    estimatedCostCents?: number;
-    providerRuntimeContract?: AiImageProviderRuntimeContract | null;
-  };
   try {
-    activeExecution = buildStandalonePaidExecution(active, {
+    bindAiImageProviderExecutionConfig(runtime, active, {
       count: runtime.imageCount,
       width: runtime.width,
       height: runtime.height,
+      estimatedCostCents: frozen.estimatedCostCents,
     });
   } catch {
-    throw new ExtensionMediaWorkflowLaunchError(
-      'MEDIA_PROVIDER_CONFIG_CHANGED',
-      'The frozen AI image Provider configuration changed',
-    );
-  }
-  if (activeExecution.estimatedCostCents !== frozen.estimatedCostCents
-    || !activeExecution.providerRuntimeContract
-    || !sameProviderRuntimeContract(activeExecution.providerRuntimeContract, runtime)) {
     throw new ExtensionMediaWorkflowLaunchError(
       'MEDIA_PROVIDER_CONFIG_CHANGED',
       'The frozen AI image Provider configuration changed',
@@ -1038,10 +1069,12 @@ export function createExtensionMediaWorkflowLauncher(options: {
   }): Promise<{ id: string; width: number; height: number }>;
   getReadiness(
     operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+    frozenRuntime?: AiImageProviderRuntimeContract,
   ): Promise<ExtensionMediaStandaloneReadiness>;
   getEditDailyLimit(): Promise<number>;
   resolvePrompt(input: {
     templateKey: string;
+    renderingProfile?: AiPromptRenderingProfile;
     variables: Record<string, string>;
   }): Promise<{
     templateKey: string;
@@ -1069,21 +1102,33 @@ export function createExtensionMediaWorkflowLauncher(options: {
     if (!command) {
       throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Media creation command is invalid');
     }
-    const ensureReadiness = async () => {
+    const ensureReadiness = async (frozenRuntime?: AiImageProviderRuntimeContract) => {
       let readiness: ExtensionMediaStandaloneReadiness;
       try {
-        readiness = await options.getReadiness(command.operation);
-      } catch {
+        readiness = frozenRuntime
+          ? await options.getReadiness(command.operation, frozenRuntime)
+          : await options.getReadiness(command.operation);
+      } catch (error) {
+        if (error instanceof AiImageProviderRuntimeContractError) {
+          throw new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_CONFIG_CHANGED', error.message);
+        }
         throw new ExtensionMediaWorkflowLaunchError(
           'MEDIA_CAPABILITY_UNAVAILABLE',
           'Media capability is temporarily unavailable',
         );
       }
-      return resolveStandaloneProviderConfig({
-        readiness,
-        operation: command.operation,
-        production: options.production ?? process.env.NODE_ENV === 'production',
-      });
+      try {
+        return resolveStandaloneProviderConfig({
+          readiness,
+          operation: command.operation,
+          production: options.production ?? process.env.NODE_ENV === 'production',
+        });
+      } catch (error) {
+        if (frozenRuntime && error instanceof ExtensionMediaWorkflowLaunchError && error.code === 'MEDIA_PROVIDER_NOT_ALLOWED') {
+          throw new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_CONFIG_CHANGED', error.message);
+        }
+        throw error;
+      }
     };
     const enqueueFor = command.operation === 'IMAGE_TO_IMAGE'
       ? options.enqueueGeneration
@@ -1169,7 +1214,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
       const frozenProvider = assertMatchingWorkflow(candidate);
       assertReplayableWorkflowStatus(candidate.status, 'media workflow');
       if (candidate.status === 'QUEUED') {
-        const activeProvider = await ensureReadiness();
+        const activeProvider = await ensureReadiness(frozenProvider.providerRuntimeContract || undefined);
         assertStandaloneProviderStillAuthorized(frozenProvider, activeProvider);
         if (!candidate.jobId) {
           throw new ExtensionMediaWorkflowLaunchError(
@@ -1293,6 +1338,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
           context: workflowContext,
         });
       } else {
+        const editContract = resolveAiImageEditProviderContract(providerConfig.provider, providerConfig.model, providerConfig.baseUrl);
         const templateKey = command.operation === 'FULL_EDIT'
           ? AI_MEDIA_FULL_EDIT_TEMPLATE_KEY
           : AI_MEDIA_INPAINT_TEMPLATE_KEY;
@@ -1300,6 +1346,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
         try {
           resolved = await options.resolvePrompt({
             templateKey,
+            ...(editContract?.renderingProfile ? { renderingProfile: editContract.renderingProfile } : {}),
             variables: {
               userPrompt: command.prompt,
               userNegativePrompt: command.negativePrompt,
@@ -1340,10 +1387,12 @@ export function createExtensionMediaWorkflowLauncher(options: {
           );
         }
         const source = sources[0]!;
-        if (providerConfig.paid && !isOpenAiCompatibleImageEditSizeSupported(source.width, source.height)) {
+        if (providerConfig.paid && !isAiImageEditProviderCanvasSupported(providerConfig.provider, providerConfig.model, source.width, source.height)) {
           throw new ExtensionMediaWorkflowLaunchError(
             'MEDIA_PROVIDER_NOT_ALLOWED',
-            `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${source.width}x${source.height}. Resize or pad the source and mask before submitting`,
+            editContract?.kind === 'wanx21'
+              ? `Wanx image edits require a 1024x1024 source and mask canvas; received ${source.width}x${source.height}. Resize or pad the source and mask before submitting`
+              : `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${source.width}x${source.height}. Resize or pad the source and mask before submitting`,
           );
         }
         const providerExecution = buildStandalonePaidExecution(providerConfig, {

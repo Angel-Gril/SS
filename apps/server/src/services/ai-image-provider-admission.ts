@@ -1,10 +1,11 @@
 import {
+  resolveAiImageProviderCapability,
   type AiImageProviderCapability,
   type AiMediaInputTransport,
   type AiMediaOperation,
   type AiMediaResultMode,
 } from './ai-image-provider-capabilities.js';
-import { aiImageProviderEndpointSha256 } from './ai-image-provider-runtime-contract.js';
+import { aiImageProviderEndpointSha256, parseAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
 import { AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE, AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
 
 interface AiImageProviderAdmissionInput {
@@ -21,6 +22,35 @@ interface AiImageProviderAdmissionInput {
 
 const OPENAI_ENDPOINT = aiImageProviderEndpointSha256('openai-images', 'https://api.openai.com/v1');
 const WANX_ENDPOINT = aiImageProviderEndpointSha256('dashscope-wanx', AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE);
+
+/** Existing-job protocol admission; owners still enforce grants, state, revision and asset ownership. */
+export function canUseAiImageJobOperation(input: {
+  provider: string | null;
+  model?: string | null;
+  operation?: string;
+  operationConfig?: unknown;
+}, production: boolean): boolean {
+  const provider = String(input.provider || '').trim();
+  if (provider === 'fake') return !production;
+  const model = String(input.model || '').trim();
+  const operation = String(input.operation || '') as AiMediaOperation;
+  const capability = resolveAiImageProviderCapability(provider, model);
+  if (!capability || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)
+    || !capability.operations.includes(operation)) return false;
+  const config = input.operationConfig;
+  const object = config && typeof config === 'object' && !Array.isArray(config) ? config as Record<string, unknown> : null;
+  const nested = object != null && Object.hasOwn(object, 'providerRuntime');
+  const direct = object != null && Object.hasOwn(object, 'contractVersion');
+  // Retain the pre-runtime compatibility boundary without promoting unverified legacy jobs.
+  if (!nested && !direct) return capability.evidenceLevel === 'sandbox-verified';
+  try {
+    const runtime = parseAiImageProviderRuntimeContract(nested ? object!.providerRuntime : object);
+    return runtime.provider === provider && runtime.model === model && canRunAiImageProviderOperation({
+      provider, model, operation, capability, baseUrlSha256: runtime.baseUrlSha256,
+      inputTransport: capability.inputTransport, resultMode: capability.resultMode,
+    });
+  } catch { return false; }
+}
 
 /** Protocol admission only. Callers retain authorization, media, price and final dispatch checks. */
 export function canRunAiImageProviderOperation(input: AiImageProviderAdmissionInput): boolean {

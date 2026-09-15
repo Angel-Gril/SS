@@ -892,7 +892,7 @@ describe('extension standalone media launch', () => {
     ['test-only marker', { testOnly: true }],
     ['zero unit cost', { costPerImageCents: 0 }],
     ['missing global budget', { globalDailyBudgetCents: undefined }],
-    ['unverified evidence', { evidenceLevel: 'adapter-characterized' }],
+    ['unregistered model', { model: 'unregistered-image-model' }],
   ])('rejects paid readiness with an invalid %s before source internalization', async (_label, change) => {
     const state = setupV2({
       readiness: { ...paidStandaloneReadiness, ...change },
@@ -1072,13 +1072,12 @@ describe('extension standalone media launch', () => {
       revision: 2,
       replayed: true,
     });
-    expect(state.getReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+    expect(state.getReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE', paidImageToImageRuntimeContract);
     expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-existing-1');
     expect(state.createImageToImage).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['price', { costPerImageCents: 10 }],
     ['endpoint', { baseUrl: 'https://images.example.com/v1' }],
   ])('does not re-enqueue a paid workflow after its frozen %s changes', async (_label, change) => {
     const state = setupV2({

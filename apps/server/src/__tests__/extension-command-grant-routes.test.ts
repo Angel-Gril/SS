@@ -11,6 +11,7 @@ import {
 } from '../services/extension-command-grants.js';
 import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
 import { createExtensionMediaReviewCommandExecutor } from '../services/extension-media-review-commands.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 function device(overrides: Record<string, unknown> = {}) {
   return {
@@ -1472,6 +1473,37 @@ describe('extension command grant routes', () => {
     expect(loadShop).not.toHaveBeenCalled();
     expect(loadDraft).not.toHaveBeenCalled();
     expect(loadMediaLaunchContext).not.toHaveBeenCalled();
+  });
+
+  it.each(['REVIEW', 'APPLY', 'RETRY'] as const)('allows normal OpenAI %s only for its owned frozen job and endpoint', async (action) => {
+    const runtime = createAiImageProviderRuntimeContract({ provider: 'openai-images', model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1', costPerImageCents: 14, currency: 'CNY' }, { count: 1, width: 1024, height: 1024 });
+    const currentMedia = {
+      id: 'media-1', ownerUserId: 'owner-1', operation: 'FULL_EDIT', contextType: 'listing-draft', contextId: 'workflow-1',
+      contextDraftRevision: 11, contextDraftVersion: 7, revision: action === 'APPLY' ? 4 : 3,
+      status: action === 'RETRY' ? 'FAILED' : 'SUCCEEDED', reviewStatus: action === 'APPLY' ? 'APPROVED' : 'PENDING',
+      selectedOutputAssetId: action === 'APPLY' ? 'output-1' : null, suiteId: null,
+      provider: runtime.provider, model: runtime.model, operationConfig: { providerRuntime: runtime },
+      currentJobStatus: action === 'RETRY' ? 'FAILED' : 'SUCCEEDED', outputAssetIds: ['output-1'], reviewEvents: [], applications: [],
+    };
+    const resolve = createSourceWorkflowCommandResolver({
+      production: true,
+      featureFlags: { evaluate: vi.fn(async () => ({ enabled: true, legacyAllowed: false, captureStage: null, reason: 'pilot_match' as const, revision: 'pilot-1' })) },
+      loadShop: vi.fn(async () => ({ id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE' })),
+      loadDraft: vi.fn(async () => ({ id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1', draftVersion: 7, revision: 11,
+        stage: 'MEDIA_REVIEW', selectedSkuKeys: ['sku-1'], publishTaskIds: [] })),
+      loadMediaWorkflow: vi.fn(async () => currentMedia),
+    });
+    const request = { sessionId: 'session-1', ownerUserId: 'owner-1',
+      operation: action === 'RETRY' ? 'MEDIA_EXECUTE' as const : action === 'APPLY' ? 'MEDIA_APPLY' as const : 'MEDIA_REVIEW' as const,
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, idempotencyKey: 'normal-operation-1',
+      command: action === 'RETRY' ? mediaCommand({ action }) : action === 'APPLY' ? mediaApplyCommand() : mediaReviewCommand() };
+    await expect(resolve(request)).resolves.toMatchObject({ kind: 'allowed' });
+    currentMedia.operationConfig.providerRuntime = { ...runtime, baseUrlSha256: 'a'.repeat(64) };
+    await expect(resolve(request)).resolves.toMatchObject({ kind: 'forbidden' });
+    currentMedia.operationConfig.providerRuntime = runtime;
+    currentMedia.ownerUserId = 'another-owner';
+    await expect(resolve(request)).resolves.toMatchObject({ kind: 'forbidden' });
   });
 
   it('resolves an exact pending media review and an already-applied draft replay', async () => {

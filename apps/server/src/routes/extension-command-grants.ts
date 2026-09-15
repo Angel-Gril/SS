@@ -20,7 +20,7 @@ import {
   parseExtensionMediaReviewCommand,
 } from '../services/extension-media-review-commands.js';
 import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
-import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { canUseAiImageJobOperation } from '../services/ai-image-provider-admission.js';
 import {
   EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION,
   EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION,
@@ -133,6 +133,7 @@ export interface SourceWorkflowCommandResolverOptions {
     suiteId: string | null;
     provider: string | null;
     model?: string | null;
+    operationConfig?: unknown;
     currentJobStatus?: string | null;
     outputAssetIds?: string[];
     reviewEvents?: Array<{
@@ -197,21 +198,6 @@ function mediaWorkflowDecision(
   return options.getMediaWorkflowDecision
     ? options.getMediaWorkflowDecision(ownerUserId)
     : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId });
-}
-
-function mediaProviderAllowed(
-  media: { provider: string | null; model?: string | null; operation?: string },
-  production: boolean,
-): boolean {
-  const provider = String(media.provider || '').trim();
-  const model = String(media.model || '').trim();
-  const operation = String(media.operation || '');
-  if (!provider) return false;
-  if (provider === 'fake') return !production;
-  if (!model || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) return false;
-  const capability = resolveAiImageProviderCapability(provider, model);
-  return capability?.evidenceLevel === 'sandbox-verified'
-    && capability.operations.includes(operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT');
 }
 
 export function createSourceWorkflowCommandResolver(
@@ -443,7 +429,7 @@ export function createSourceWorkflowCommandResolver(
         || media.contextDraftRevision !== commandDraftRevision
         || media.contextDraftVersion !== commandDraftVersion
         || media.suiteId != null
-        || !mediaProviderAllowed(
+        || !canUseAiImageJobOperation(
           media,
           options.production ?? process.env.NODE_ENV === 'production',
         )
@@ -670,7 +656,7 @@ export function createSourceWorkflowCommandResolver(
         || media.contextDraftVersion !== input.draftVersion
         || media.suiteId != null
         || (parsedCommand.data.action === 'RETRY'
-          && !mediaProviderAllowed(
+          && !canUseAiImageJobOperation(
             media,
             options.production ?? process.env.NODE_ENV === 'production',
           ))) {

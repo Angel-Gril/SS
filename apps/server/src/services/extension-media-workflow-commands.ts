@@ -2,7 +2,12 @@ import type { AiMediaWorkflowService } from './ai-media-workflows.js';
 import {
   assertAiImageProviderRuntimeContract,
   type AiImageProviderRuntimeIdentity,
+  type AiImageProviderCurrency,
+  type AiImageProviderCredentialRevision,
 } from './ai-image-provider-runtime-contract.js';
+import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
+import { resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import { resolveAiImageEditProviderContract } from './ai-image-edit-provider-contract.js';
 import {
   parseExtensionMediaWorkflowCreateCommand,
   parseExtensionMediaTranslationCreateCommand,
@@ -41,6 +46,8 @@ export interface ExtensionMediaProviderReadiness {
   baseUrl?: string;
   costPerImageCents?: number;
   globalDailyBudgetCents?: number;
+  currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 type ExtensionMediaProviderAuthorizationCode =
@@ -163,8 +170,7 @@ export function assertExtensionMediaJobProviderAuthorized(input: {
   if (!readiness
     || readiness.enabled !== true
     || readiness.ready !== true
-    || readiness.testOnly !== false
-    || readiness.evidenceLevel !== 'sandbox-verified') {
+    || readiness.testOnly !== false) {
     providerAuthorizationFail(
       'MEDIA_CAPABILITY_UNAVAILABLE',
       'Paid AI image capability is disabled, unready, or unverified',
@@ -182,6 +188,8 @@ export function assertExtensionMediaJobProviderAuthorized(input: {
     model: providerText(readiness.model),
     baseUrl: providerText(readiness.baseUrl),
     costPerImageCents: Number(readiness.costPerImageCents),
+    ...(readiness.currency === undefined ? {} : { currency: readiness.currency }),
+    ...(readiness.credentialRevision ? { credentialRevision: readiness.credentialRevision } : {}),
   };
   if (!identity.provider
     || !identity.model
@@ -225,6 +233,15 @@ export function assertExtensionMediaJobProviderAuthorized(input: {
         ? error.message
         : 'The frozen AI image Provider runtime contract changed',
     );
+  }
+  const contract = resolveAiImageEditProviderContract(identity.provider, identity.model, identity.baseUrl);
+  if (!contract || !canRunAiImageProviderOperation({
+    capability: resolveAiImageProviderCapability(identity.provider, identity.model),
+    provider: identity.provider, model: identity.model, baseUrl: identity.baseUrl,
+    operation: input.operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+    inputTransport: contract.inputTransport, resultMode: contract.resultMode,
+  })) {
+    providerAuthorizationFail('MEDIA_CAPABILITY_UNAVAILABLE', 'The normal AI image Provider protocol is not available');
   }
   return {
     paid: true,

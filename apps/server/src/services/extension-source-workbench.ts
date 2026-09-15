@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
-import { resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import { canUseAiImageJobOperation } from './ai-image-provider-admission.js';
 
 export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
@@ -359,16 +359,12 @@ function mediaCommandContract(
     ? listingById.get(String(row.contextId || ''))
     : null;
   const currentJob = Array.isArray(row.jobs) ? row.jobs[0] : null;
-  const provider = String(currentJob?.provider || '');
-  const model = String(currentJob?.model || '');
-  const operation = String(row.operation || '');
-  const capability = provider && provider !== 'fake'
-    ? resolveAiImageProviderCapability(provider, model)
-    : null;
-  const providerAllowed = provider === 'fake'
-    ? !production
-    : capability?.evidenceLevel === 'sandbox-verified'
-      && capability.operations.includes(operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT');
+  const providerAllowed = canUseAiImageJobOperation({
+    provider: String(currentJob?.provider || ''),
+    model: String(currentJob?.model || ''),
+    operation: String(row.operation || ''),
+    operationConfig: currentJob?.operationConfig,
+  }, production);
   if (!canExecuteMedia
     || !listing
     || row.contextDraftRevision !== listing.revision
@@ -564,6 +560,7 @@ export function createExtensionSourceWorkbenchService(options: {
             select: {
               provider: true,
               model: true,
+              operationConfig: true,
               providerJobId: true,
               providerReconciliationStatus: true,
               errorCode: true,
