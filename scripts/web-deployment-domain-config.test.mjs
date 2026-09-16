@@ -12,6 +12,7 @@ function read(path) {
 const deploymentHosts = read('apps/web/src/lib/deployment-hosts.ts');
 const middleware = read('apps/web/src/middleware.ts');
 const dashboardLayout = read('apps/web/src/app/(dashboard)/layout.tsx');
+const api = read('apps/web/src/lib/api.ts');
 const userLogin = read('apps/web/src/app/(auth)/login/page-client.tsx');
 const adminLogin = read('apps/web/src/app/(auth)/admin/login/page-client.tsx');
 const downloadPage = read('apps/web/src/app/download/page.tsx');
@@ -105,9 +106,10 @@ test('middleware keeps the ERP homepage and canonical login hosts separated', ()
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /PASS Web middleware routing contract/);
   assert.match(
-    dashboardLayout,
-    /function getLoginPath[\s\S]*pathname\.startsWith\('\/admin'\)[\s\S]*return '\/login';/,
+    api,
+    /function redirectToLoginForCurrentPath[\s\S]*path\.startsWith\('\/admin'\)[\s\S]*\? '\/admin\/login'[\s\S]*: '\/login';/,
   );
+  assert.match(dashboardLayout, /loadDashboardSession\(\{ signal: controller\.signal \}\)/u);
   assert.doesNotMatch(dashboardLayout, /pathname === '\/'[\s\S]{0,80}'\/landing'/);
 });
 
