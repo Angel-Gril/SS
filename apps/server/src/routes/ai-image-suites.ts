@@ -33,7 +33,7 @@ import {
   type AiImageSuiteExecutionSummary,
 } from '../services/ai-image-suite-execution.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
-import { createProviderFreeAiImageSuiteConfig } from '../services/ai-image-suite-provider-runtime.js';
+import { createProviderFreeAiImageSuiteConfig, aiImageSuiteQuoteCurrency, isWanxAiImageSuiteProvider } from '../services/ai-image-suite-provider-runtime.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 import {
   AiImageSuiteCandidateError,
@@ -171,6 +171,7 @@ function publicPreview(preview: AiImageSuitePreview) {
     provider: preview.provider,
     model: preview.model,
     pricingVersion: preview.pricingVersion,
+    currency: aiImageSuiteQuoteCurrency(preview.pricingVersion),
     concurrencyLimit: preview.concurrencyLimit,
     itemCount: preview.itemCount,
     estimatedCostCents: preview.estimatedCostCents,
@@ -368,6 +369,7 @@ function publicSuite(
     provider: suite.provider,
     model: suite.model,
     pricingVersion: suite.pricingVersion,
+    currency: aiImageSuiteQuoteCurrency(suite.pricingVersion),
     itemCount: suite.itemCount,
     estimatedCostCents: suite.estimatedCostCents,
     maximumCostCents: suite.maximumCostCents,
@@ -721,7 +723,9 @@ export async function aiImageSuiteRoutes(
       providerConfig
       && capability?.operations.includes('IMAGE_TO_IMAGE')
     );
-    const testOnly = Boolean(capability && capability.evidenceLevel !== 'sandbox-verified');
+    const normalWanx = isWanxAiImageSuiteProvider(providerName, providerModel)
+      && aiImageSuiteQuoteCurrency(providerConfig?.pricingVersion || '') === 'CNY';
+    const testOnly = Boolean(capability && capability.evidenceLevel !== 'sandbox-verified' && !normalWanx);
     const providerReady = providerConfigReady && (!production || !testOnly);
     const operational = providerConfig
       ? await getOperationalReadiness(ids.ownerUserId, providerConfig)
@@ -864,7 +868,9 @@ export async function aiImageSuiteRoutes(
         providerConfig.provider,
         providerConfig.model,
       );
-      const providerExecutionVerified = capability?.evidenceLevel === 'sandbox-verified';
+      const normalWanx = isWanxAiImageSuiteProvider(providerConfig.provider, providerConfig.model)
+        && aiImageSuiteQuoteCurrency(providerConfig.pricingVersion) === 'CNY';
+      const providerExecutionVerified = capability?.evidenceLevel === 'sandbox-verified' || normalWanx;
       const localFakeExecution = !production && providerConfig.provider === 'fake';
       if (!providerExecutionVerified && !localFakeExecution) {
         return reply.status(503).send({

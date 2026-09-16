@@ -87,6 +87,16 @@
       && Object.keys(item).every(function (key) { return keys.includes(key); });
   }
 
+  function exactPriceKeys(value, keys) {
+    var item = record(value);
+    if (!item) return false;
+    var hasCurrency = Object.prototype.hasOwnProperty.call(item, 'currency');
+    var isCny = /^ai-image-suite-price-cny\/v1:[a-f0-9]{32}$/.test(item.pricingVersion);
+    if (!isCny && /^ai-image-suite-price-cny\//.test(item.pricingVersion)) return false;
+    return exactKeys(item, hasCurrency ? keys.concat('currency') : keys)
+      && (isCny ? item.currency === 'CNY' : !hasCurrency || item.currency === 'USD');
+  }
+
   function hasControlCharacter(value) {
     for (var index = 0; index < value.length; index += 1) {
       var code = value.charCodeAt(index);
@@ -580,7 +590,7 @@
     };
   }
 
-  function validateProjected(value, binding) {
+  function validateProjected(value, binding, rawProjection) {
     var code = 'SS_ERP_HOSTED_WORKBENCH_SUITE_RESPONSE_INVALID';
     if (!exactKeys(value, [
       'contractVersion', 'executionMode', 'binding', 'sourceBinding', 'applyPolicy',
@@ -607,7 +617,7 @@
       || !deeplyFrozen(value)
       || !leakFree(value)) fail(code);
     if (value.quote !== null) {
-      if (!exactKeys(value.quote, [
+      if (!exactPriceKeys(value.quote, [
         'pricingVersion', 'itemCount', 'estimatedCostCents', 'maximumCostCents',
       ])) fail(code);
       text(value.quote.pricingVersion, 100, code);
@@ -619,10 +629,21 @@
     var sourceSkuKey = nullableText(value.sourceBinding.skuKey, 500, code);
     var plan = validProjectedPlan(value.plan, binding, code);
     var suite = validProjectedSuite(value.suite, binding, code);
+    var rawPlan = record(rawProjection && rawProjection.plan);
+    var rawPreview = rawPlan && record(rawPlan.preview);
     if ((plan === null) !== (value.quote === null)
       || (suite !== null && plan === null)
       || (plan && plan.skuKey !== sourceSkuKey)
-      || (value.quote && value.quote.itemCount !== plan.slots.length)) fail(code);
+      || (value.quote && value.quote.itemCount !== plan.slots.length)
+      || (value.quote === null) !== (rawPreview === null)
+      || (value.quote && (
+        value.quote.pricingVersion !== rawPreview.pricingVersion
+        || (value.quote.currency || 'USD') !== (rawPreview.currency || 'USD')
+        || value.quote.itemCount !== rawPreview.itemCount
+        || value.quote.estimatedCostCents !== rawPreview.estimatedCostCents
+        || value.quote.maximumCostCents !== rawPreview.maximumCostCents
+        || plan.previewHash !== rawPreview.hash
+      ))) fail(code);
     return value;
   }
 
@@ -882,7 +903,7 @@
           }
           rawProjection = deepFreeze(clone(loaded.projection));
           projected = adapter.project(rawProjection);
-          validateProjected(projected, binding);
+          validateProjected(projected, binding, rawProjection);
         } catch (error) {
           if (error && error.code === 'SS_ERP_HOSTED_WORKBENCH_CONTEXT_STALE') throw error;
           fail('SS_ERP_HOSTED_WORKBENCH_SUITE_RESPONSE_INVALID');

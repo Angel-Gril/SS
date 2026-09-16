@@ -6,6 +6,8 @@ import {
 } from './ai-image-provider-capabilities.js';
 import { AiImageJobError } from './ai-image-job-error.js';
 import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
+import { assertFrozenWanxImageToImageJob } from './ai-image-wanx-image-to-image.js';
+import { AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
 
 export { AiImageJobError } from './ai-image-job-error.js';
 
@@ -371,7 +373,7 @@ function frozenImageToImageReferences(job: AiImageJobRecord): Array<{
   return references;
 }
 
-async function loadFrozenImageToImageInputs(
+export async function loadFrozenImageToImageInputs(
   job: AiImageJobRecord,
   loadInputBuffer: ((asset: FrozenInputAsset) => Promise<Buffer>) | undefined,
 ): Promise<{
@@ -449,6 +451,9 @@ export async function runAiImageJob(
         'UNSUPPORTED_OPERATION',
         `${operation} must run through its operation-specific worker`,
       );
+    }
+    if (operation === 'IMAGE_TO_IMAGE' && job.provider === 'dashscope-wanx' && job.model === AI_IMAGE_WANX21_EDIT_MODEL) {
+      assertFrozenWanxImageToImageJob(job);
     }
     getFrozenAiImageTaskPrice(job);
     try {

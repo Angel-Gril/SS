@@ -103,6 +103,7 @@ export async function enforceAiImageSuiteCostControlsInTransaction(
     controls: AiImageSuiteCostControls;
     requestedUnits: number;
     requestedMaximumCostCents: number;
+    currency?: 'USD' | 'CNY';
   },
 ): Promise<AiImageSuiteCostControlFailure | null> {
   if (!Number.isSafeInteger(input.requestedUnits)
@@ -159,10 +160,12 @@ export async function enforceAiImageSuiteCostControlsInTransaction(
     const exposure = input.requestedMaximumCostCents > 0
       ? await reserveGlobalAiCostBudgetInTransaction(database, {
         limit: input.controls.globalDailyBudgetCents,
+        currency: input.currency,
         requestedMaximumCostMinor: input.requestedMaximumCostCents,
       }, { alreadyLocked: true })
       : await assertGlobalAiCostBudgetInTransaction(database, {
         limit: input.controls.globalDailyBudgetCents,
+        currency: input.currency,
       }, { alreadyLocked: true });
     void exposure;
     return null;

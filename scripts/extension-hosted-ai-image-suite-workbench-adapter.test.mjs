@@ -140,6 +140,30 @@ function approvedSuiteFixture() {
 }
 
 const planned = adapter.project(projectionFixture());
+const cnyPricingVersion = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+const cnyRaw = projectionFixture();
+Object.assign(cnyRaw.plan.preview, { pricingVersion: cnyPricingVersion, currency: 'CNY' });
+cnyRaw.plan.commands.START.acceptedPricingVersion = cnyPricingVersion;
+const cnyProjected = adapter.project(cnyRaw);
+assert.equal(cnyProjected.quote.currency, 'CNY');
+assert.equal(cnyProjected.quote.maximumCostCents, 24);
+assert.equal(cnyProjected.plan.startIntent.commandTemplate.acceptedPricingVersion, cnyPricingVersion);
+assert.equal(Object.hasOwn(cnyProjected.plan.startIntent.commandTemplate, 'currency'), false);
+const explicitUsd = projectionFixture();
+explicitUsd.plan.preview.currency = 'USD';
+assert.equal(adapter.project(explicitUsd).quote.currency, 'USD');
+for (const [pricingVersion, currency] of [
+  ['pricing-v1', 'CNY'], ['pricing-v1', 'EUR'], ['pricing-v1', null],
+  [cnyPricingVersion, 'USD'], [cnyPricingVersion, undefined],
+  ['ai-image-suite-price-cny/v1:malformed', 'CNY'],
+]) {
+  const invalidCurrency = projectionFixture();
+  invalidCurrency.plan.preview.pricingVersion = pricingVersion;
+  invalidCurrency.plan.commands.START.acceptedPricingVersion = pricingVersion;
+  if (currency !== undefined) invalidCurrency.plan.preview.currency = currency;
+  assert.throws(() => adapter.project(invalidCurrency), (error) => error?.code === 'SS_ERP_HOSTED_WORKBENCH_PROJECTION_INVALID');
+  assert.throws(() => listingContract.createAiImageSuiteIntentWitness({ projection: invalidCurrency, action: 'START' }), TypeError);
+}
 assert.equal(planned.contractVersion, api.CONTRACT_VERSION);
 assert.equal(planned.executionMode, 'ERP_HOSTED');
 assert.deepEqual(JSON.parse(JSON.stringify(planned.binding)), {

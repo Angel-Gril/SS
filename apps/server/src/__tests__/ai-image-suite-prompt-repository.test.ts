@@ -205,7 +205,11 @@ function textHash(value: string) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}): CommitAiImageSuitePromptSetInput {
+function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}, wanx = false): CommitAiImageSuitePromptSetInput {
+  const templateKey = wanx ? 'ai_media_suite_generation_wanx' : 'image-suite-generation.base';
+  const compilerVersion = wanx ? 'ai-image-suite-prompt-compiler-wanx/v1' as const : AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION;
+  const provider = wanx ? 'dashscope-wanx' : 'fake';
+  const model = wanx ? 'wanx2.1-imageedit' : 'fake-image-suite-v1';
   const variablesSnapshot = {
     slotSpecJson: '{"goal":"sku_hero"}',
     referenceManifestJson: '{"references":["media-1"]}',
@@ -213,9 +217,9 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     safetyConstraintsJson: '{"constraints":["preserve"]}',
   };
   const resolvedPrompt = 'Generate an exact SKU hero.\n\nImmutable policy.';
-  const resolvedNegativePrompt = 'No unsupported claims.\n\nImmutable policy.';
+  const resolvedNegativePrompt = wanx ? '' : 'No unsupported claims.\n\nImmutable policy.';
   const templateSnapshot = {
-    templateKey: 'image-suite-generation.base',
+    templateKey,
     releaseId: 'release-1',
     revisionId: 'revision-1',
     sequence: 1,
@@ -233,7 +237,7 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     slotHash: suiteRow().slots[0]!.slotHash,
     referencesHash: suiteRow().slots[0]!.referencesHash,
     referenceSetHash: referenceSetHash(),
-    templateKey: 'image-suite-generation.base',
+    templateKey,
     templateReleaseId: 'release-1',
     templateRevisionId: 'revision-1',
     templateSequence: 1,
@@ -251,14 +255,14 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     bindingHash: hashAiMediaPlanningJson({
       ...core,
       templateSnapshotHash,
-      compilerVersion: AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION,
+      compilerVersion,
       policyVersion: AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
       policyHash,
     }),
   };
   const setCore = {
     version: AI_IMAGE_SUITE_PROMPT_SET_VERSION,
-    compilerVersion: AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION,
+    compilerVersion,
     policyVersion: AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
     policyHash,
     suiteId: 'suite-1',
@@ -266,8 +270,8 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     planId: 'plan-1',
     planVersionId: 'version-1',
     planHash,
-    provider: 'fake',
-    model: 'fake-image-suite-v1',
+    provider,
+    model,
     providerConfigHash,
     sourceSubjectId: 'subject-1',
     sourceCaptureSnapshotId: 'snapshot-1',
@@ -275,7 +279,7 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     sourceProfileHash,
     sourceSchemaVersion: 'source-product-capture-v2',
     referenceSetHash: referenceSetHash(),
-    templateKey: 'image-suite-generation.base',
+    templateKey,
     templateReleaseId: 'release-1',
     templateRevisionId: 'revision-1',
     templateSequence: 1,
@@ -285,7 +289,7 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
   };
   return {
     promptSetVersion: AI_IMAGE_SUITE_PROMPT_SET_VERSION,
-    compilerVersion: AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION,
+    compilerVersion,
     policyVersion: AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
     policyHash,
     suiteId: 'suite-1',
@@ -300,8 +304,8 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     planId: 'plan-1',
     planVersionId: 'version-1',
     planHash,
-    provider: 'fake',
-    model: 'fake-image-suite-v1',
+    provider,
+    model,
     providerConfigHash,
     sourceSubjectId: 'subject-1',
     sourceCaptureSnapshotId: 'snapshot-1',
@@ -309,7 +313,7 @@ function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}):
     sourceProfileHash,
     sourceSchemaVersion: 'source-product-capture-v2',
     referenceSetHash: referenceSetHash(),
-    templateKey: 'image-suite-generation.base',
+    templateKey,
     templateReleaseId: 'release-1',
     templateRevisionId: 'revision-1',
     templateSequence: 1,
@@ -430,6 +434,19 @@ function clientFixture(options: { latestId?: string; transactionFailure?: string
 }
 
 describe('Prisma AI image suite Prompt repository', () => {
+  it('persists and replays the separately versioned Wanx compiler with its joined negative constraints', async () => {
+    const fixture = clientFixture();
+    const input = commitInput({}, true);
+    Object.assign(fixture.suite, { provider: input.provider, model: input.model });
+    fixture.tx.aiPromptRelease.findFirst.mockResolvedValue({ id: 'release-1', templateKey: input.templateKey, revisionId: 'revision-1', sequence: 1 });
+    fixture.tx.aiPromptRevision.findFirst.mockResolvedValue({ id: 'revision-1', templateKey: input.templateKey, status: 'PUBLISHED', checksum: templateChecksum });
+    const repository = new PrismaAiImageSuitePromptRepository(fixture.client);
+    await expect(repository.commitPromptSet(input)).resolves.toMatchObject({ kind: 'committed', templateKey: 'ai_media_suite_generation_wanx' });
+    await expect(repository.findCommitReplay({ suiteId: input.suiteId, ownerUserId: input.ownerUserId,
+      actorUserId: input.actorUserId, expectedRevision: 2, operationKey: input.operationKey })).resolves.toMatchObject({ kind: 'existing' });
+    expect(fixture.slotPrompts[0].resolvedNegativePrompt).toBe('');
+  });
+
   it('loads only an owner-scoped approved/current rev2 authority with exact claim, references, and latest capture', async () => {
     const fixture = clientFixture();
     const repository = new PrismaAiImageSuitePromptRepository(fixture.client);

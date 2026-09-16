@@ -1,5 +1,5 @@
-// v2 workers include the sandbox-verified paid execution bridge and DB lease heartbeat.
-export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_KEY = 'health:ai-image-suite-generation-worker:v2';
+// v3 workers retain paid-suite support and add frozen CNY Wanx execution/recovery.
+export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_KEY = 'health:ai-image-suite-generation-worker:v3';
 export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_TTL_MS = 30_000;
 export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
 export const AI_IMAGE_SUITE_RUNTIME_PROBE_TIMEOUT_MS = 1_000;

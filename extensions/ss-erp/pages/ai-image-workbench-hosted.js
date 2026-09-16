@@ -274,8 +274,10 @@
   }
 
   function formatCost(cents) {
-    return Number.isSafeInteger(cents) && cents >= 0
-      ? '¥' + (cents / 100).toFixed(2) : '待读取';
+    var quote = currentQuote();
+    var currency = quote && (quote.currency === undefined ? 'USD' : quote.currency);
+    return Number.isSafeInteger(cents) && cents >= 0 && ['CNY', 'USD'].includes(currency)
+      ? currency + ' ' + (cents / 100).toFixed(2) : '待读取';
   }
 
   function trustedEvent(event) {

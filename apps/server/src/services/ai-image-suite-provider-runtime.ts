@@ -7,6 +7,7 @@ import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
+  AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION,
 } from './ai-image-suite-materialization.js';
 import {
   AI_IMAGE_SUITE_MODEL,
@@ -19,6 +20,7 @@ import {
 import {
   createAiImageProviderRuntimeContract,
   type AiImageProviderRuntimeContract,
+  parseAiImageProviderRuntimeContract,
 } from './ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
@@ -26,6 +28,9 @@ import {
   AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH,
 } from './ai-image-suite-output-normalizer.js';
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
+import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
+import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE } from './ai-image-wanx-edit-profile.js';
+import type { AiImageProviderCredentialRevision, AiImageProviderCurrency } from './ai-image-provider-runtime-contract.js';
 
 export const AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH =
   AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH;
@@ -35,6 +40,7 @@ export const AI_IMAGE_SUITE_PROVIDER_RUNTIME_VERSION =
   'ai-image-suite-provider-runtime/v1' as const;
 export const AI_IMAGE_SUITE_PAID_PRICING_VERSION =
   'ai-image-suite-price/v1' as const;
+export const AI_IMAGE_SUITE_CNY_PRICING_VERSION = 'ai-image-suite-price-cny/v1' as const;
 export const AI_IMAGE_SUITE_DEFAULT_CONCURRENCY = 2;
 
 export interface AiImageSuiteProviderRuntimeSettings {
@@ -43,7 +49,47 @@ export interface AiImageSuiteProviderRuntimeSettings {
   apiKey: string;
   model: string;
   costPerImageCents: number;
+  currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
   concurrencyLimit?: number;
+}
+
+export function isWanxAiImageSuiteProvider(provider: string, model: string): boolean {
+  return provider === 'dashscope-wanx' && model === AI_IMAGE_WANX21_EDIT_MODEL;
+}
+
+export function aiImageSuiteProviderRequestDimensions(provider: string, model: string) {
+  return isWanxAiImageSuiteProvider(provider, model)
+    ? { width: AI_IMAGE_WANX21_EDIT_PROFILE.width, height: AI_IMAGE_WANX21_EDIT_PROFILE.height }
+    : { width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH, height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT };
+}
+
+/** Legacy suite price versions remain USD; CNY is explicitly bound in the new price version. */
+export function aiImageSuiteQuoteCurrency(pricingVersion: string): AiImageProviderCurrency {
+  return new RegExp(`^${AI_IMAGE_SUITE_CNY_PRICING_VERSION}:[a-f0-9]{32}$`, 'u').test(pricingVersion)
+    ? 'CNY' : 'USD';
+}
+
+export function hasAdmittedWanxAiImageSuiteOperation(input: {
+  provider: string; model?: string | null; operationConfig?: unknown;
+}): boolean {
+  if (!isWanxAiImageSuiteProvider(input.provider, input.model || '')) return false;
+  const config = input.operationConfig as Record<string, any> | null;
+  try {
+    const runtime = parseAiImageProviderRuntimeContract(config?.providerRuntime);
+    return config?.version === AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION
+      && runtime.provider === input.provider && runtime.model === input.model
+      && runtime.currency === 'CNY' && runtime.imageCount === 1
+      && runtime.width === AI_IMAGE_WANX21_EDIT_PROFILE.width && runtime.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
+      && config.providerRequest?.count === 1
+      && config.providerRequest.width === runtime.width && config.providerRequest.height === runtime.height
+      && canRunAiImageProviderOperation({
+        provider: runtime.provider, model: runtime.model, operation: 'IMAGE_TO_IMAGE',
+        baseUrlSha256: runtime.baseUrlSha256,
+        capability: resolveAiImageProviderCapability(runtime.provider, runtime.model),
+        inputTransport: 'base64', resultMode: 'async',
+      });
+  } catch { return false; }
 }
 
 export type AiImageSuiteProviderRuntimeReasonCode =
@@ -155,8 +201,9 @@ function exactImageToImageCapability(
     && value.operations.includes('IMAGE_TO_IMAGE')
     && value.maxReferences >= 1
     && value.maxReferences <= 16
-    && value.inputTransport === 'multipart'
-    && value.resultMode === 'sync'
+    && (isWanxAiImageSuiteProvider(provider, model)
+      ? value.maxReferences === 1 && value.inputTransport === 'base64' && value.resultMode === 'async'
+      : value.inputTransport === 'multipart' && value.resultMode === 'sync')
   );
 }
 
@@ -189,18 +236,20 @@ function paidConfig(
     },
     concurrencyLimit,
   });
+  const pricingVersion = providerRuntime.currency === 'CNY'
+    ? AI_IMAGE_SUITE_CNY_PRICING_VERSION : AI_IMAGE_SUITE_PAID_PRICING_VERSION;
   const pricingHash = hashAiMediaPlanningJson({
-    version: AI_IMAGE_SUITE_PAID_PRICING_VERSION,
+    version: pricingVersion,
     provider: providerRuntime.provider,
     model: providerRuntime.model,
     unitCostCents: providerRuntime.unitCostCents,
-    currency: 'USD',
+    currency: providerRuntime.currency || 'USD',
   });
   return {
     provider: providerRuntime.provider,
     model: providerRuntime.model,
     providerConfigHash,
-    pricingVersion: `${AI_IMAGE_SUITE_PAID_PRICING_VERSION}:${pricingHash.slice(0, 32)}`,
+    pricingVersion: `${pricingVersion}:${pricingHash.slice(0, 32)}`,
     estimatedCostPerImageCents: providerRuntime.unitCostCents,
     maximumCostPerImageCents: providerRuntime.maximumCostCents,
     concurrencyLimit,
@@ -252,9 +301,11 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
     );
   }
   const concurrencyLimit = safeConcurrency(rawSettings?.concurrencyLimit);
+  const wanx = isWanxAiImageSuiteProvider(provider, model);
   if (!concurrencyLimit
     || !Number.isSafeInteger(rawSettings?.costPerImageCents)
-    || rawSettings.costPerImageCents < 1) {
+    || rawSettings.costPerImageCents < 1
+    || (wanx ? rawSettings.currency !== 'CNY' : rawSettings.currency !== undefined && rawSettings.currency !== 'USD')) {
     return invalidSnapshot(
       'PROVIDER_CONFIG_INVALID',
       'AI image suite Provider price or concurrency is invalid',
@@ -268,10 +319,10 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
       model,
       baseUrl: rawSettings.baseUrl,
       costPerImageCents: rawSettings.costPerImageCents,
+      ...(wanx ? { currency: 'CNY', credentialRevision: rawSettings.credentialRevision } : {}),
     }, {
       count: 1,
-      width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
-      height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
+      ...aiImageSuiteProviderRequestDimensions(provider, model),
     });
   } catch {
     return invalidSnapshot(
@@ -282,7 +333,10 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
 
   const providerConfig = paidConfig(providerRuntime, concurrencyLimit);
   const credentialConfigured = Boolean(String(rawSettings.apiKey || '').trim());
-  const evidenceReady = hasExactAiMediaSandboxEvidence({
+  const evidenceReady = wanx ? canRunAiImageProviderOperation({
+    capability, provider, model, baseUrl: rawSettings.baseUrl,
+    operation: 'IMAGE_TO_IMAGE', inputTransport: capability.inputTransport, resultMode: capability.resultMode,
+  }) : hasExactAiMediaSandboxEvidence({
     capability,
     provider,
     model,

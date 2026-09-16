@@ -95,7 +95,9 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
       captureHash,
     }).hash;
     client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
-    service = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client));
+    // Preserve the historical plan mutation/replay fixtures. Default source freezing is
+    // exercised separately by the normal paid-suite PostgreSQL path with real image bytes.
+    service = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), { sourcePreparation: false });
     await client.user.createMany({ data: [{
       id: ownerUserId,
       phone: `plan_owner_${suffix}`,

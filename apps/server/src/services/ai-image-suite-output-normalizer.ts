@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp, { type Metadata, type OutputInfo } from 'sharp';
+import { AI_IMAGE_WANX21_EDIT_PROFILE } from './ai-image-wanx-edit-profile.js';
 import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
@@ -40,6 +41,8 @@ export class AiImageSuiteOutputNormalizerError extends Error {
 export interface NormalizeAiImageSuiteProviderOutputInput {
   buffer: Buffer;
   mimeType: string;
+  /** Dimensions from the validated frozen Provider request, never decoded-image inference. */
+  providerRequest?: { width: number; height: number };
 }
 
 export interface NormalizedAiImageSuiteProviderOutput {
@@ -96,6 +99,19 @@ function sha256(buffer: Buffer): string {
 export async function normalizeAiImageSuiteProviderOutput(
   input: NormalizeAiImageSuiteProviderOutputInput,
 ): Promise<NormalizedAiImageSuiteProviderOutput> {
+  const providerRequest = input.providerRequest || {
+    width: AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH,
+    height: AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT,
+  };
+  if (!((providerRequest.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH
+      && providerRequest.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT)
+    || (providerRequest.width === AI_IMAGE_WANX21_EDIT_PROFILE.width
+      && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height))) {
+    throw new AiImageSuiteOutputNormalizerError(
+      'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
+      'Provider output dimensions are not a supported suite request profile',
+    );
+  }
   if (!Buffer.isBuffer(input?.buffer) || input.buffer.length < 1) {
     throw new AiImageSuiteOutputNormalizerError(
       'PROVIDER_OUTPUT_INVALID_IMAGE',
@@ -157,12 +173,12 @@ export async function normalizeAiImageSuiteProviderOutput(
     );
   }
   if (
-    metadata.width !== AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH
-    || metadata.height !== AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT
+    metadata.width !== providerRequest.width
+    || metadata.height !== providerRequest.height
   ) {
     throw new AiImageSuiteOutputNormalizerError(
       'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
-      `Provider output must be exactly ${AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH}x${AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT} pixels`,
+      `Provider output must be exactly ${providerRequest.width}x${providerRequest.height} pixels`,
     );
   }
 
@@ -171,7 +187,7 @@ export async function normalizeAiImageSuiteProviderOutput(
     normalized = await sharp(input.buffer, {
       animated: false,
       failOn: 'warning',
-      limitInputPixels: AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH * AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT,
+      limitInputPixels: providerRequest.width * providerRequest.height,
     })
       .toColourspace('srgb')
       .resize({

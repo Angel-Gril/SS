@@ -2210,6 +2210,8 @@ const AI_IMAGE_PROVIDER_KEYS = [
   'ai_image_base_url',
   'ai_image_api_key',
   'ai_image_model',
+  'ai_image_text_to_image_model',
+  'ai_image_text_to_image_cost_cents',
 ];
 
 const AI_IMAGE_TRANSLATION_PROVIDER_KEYS = [
@@ -2652,6 +2654,18 @@ function AiSettingsPanel({
                   editing={editing}
                   setValue={setValue}
                   placeholder="选择 Provider 后自动填充"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_text_to_image_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="留空继承；Wanx 可填 wanx2.1-t2i-turbo"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_text_to_image_cost_cents}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="独立文生图的已确认单价"
                 />
                 <SecretConfigInput
                   cfg={configs.ai_image_api_key}

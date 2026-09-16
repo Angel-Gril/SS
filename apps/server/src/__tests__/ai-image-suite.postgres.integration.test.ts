@@ -42,8 +42,16 @@ import { createAiImageSuiteExecutionService } from '../services/ai-image-suite-e
 import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
+  resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
+import sharp from 'sharp';
+import { createAiImageSuiteProviderRuntimeSnapshot, aiImageSuiteProviderRuntimeMatches } from '../services/ai-image-suite-provider-runtime.js';
+import { executeAiImageSuitePaidProvider, recoverAiImageSuitePaidProvider } from '../services/ai-image-suite-paid-execution.js';
+import { prepareAiImageSuitePaidProviderExecution } from '../services/ai-image-suite-paid-provider.js';
+import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
+import type { FetchLike } from '../services/ai-image-providers.js';
 
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1';
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
@@ -299,7 +307,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       rolloutStage: 'v2_only', capturedAt: new Date(),
     } });
 
-    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client));
+    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), { sourcePreparation: false });
     const created = await planning.createRuleBased({
       ownerUserId, actorUserId: ownerUserId, sourceSubjectId: subjectId,
       sourceCaptureSnapshotId: snapshotId, context: { type: 'collect', id: goodsId },
@@ -330,6 +338,237 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     await client?.$disconnect();
   });
 
+  it('runs normal Wanx planning through one accepted task, fenced read-only recovery and one CNY settlement', async () => {
+    const owner = `wanx_suite_owner_${suffix}`;
+    const goods = `wanx_suite_goods_${suffix}`;
+    const subject = `wanx_suite_subject_${suffix}`;
+    const snapshot = `wanx_suite_snapshot_${suffix}`;
+    const sourceCapture = structuredClone(sourceFixture.capture);
+    const submission = await createSourceProductCaptureV2Submission(sourceCapture);
+    const sourceProfile = buildSourceProductProfileFromCapture(sourceCapture, { itemId: submission.captureHash, captureHash: submission.captureHash });
+    await client.user.create({ data: { id: owner, phone: `wanx_suite_${suffix}`, passwordHash: 'integration-test' } });
+    await client.supplyGoods.create({ data: { id: goods, userId: owner, title: 'Wanx suite test product', sourcePlatform: '1688', sourceProductId: `wanx-suite-${suffix}` } });
+    await client.sourceCaptureSubject.create({ data: { id: subject, ownerUserId: owner, sourcePlatform: '1688', sourceProductId: `wanx-suite-${suffix}`, legacySupplyGoodsId: goods } });
+    await client.sourceCaptureSnapshot.create({ data: {
+      id: snapshot, subjectId: subject, version: 1, schemaVersion: 'source-product-capture-v2',
+      captureHash: submission.captureHash, payloadBytes: submission.payloadBytes, payload: sourceCapture as never,
+      stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
+      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {}, profileHash: sourceProfile.hash,
+      actorUserId: owner, ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only', capturedAt: new Date(),
+    } });
+    const sourceBytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#f0f0f0' } }).jpeg({ quality: 71 }).toBuffer();
+    const resultBytes = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: '#e4f0e4' } }).png().toBuffer();
+    const stored = new Map<string, Buffer>();
+    let sourceDownloads = 0;
+    const uploadBuffer = async (buffer: Buffer, filename: string) => {
+      const key = `${owner}/${createHash('sha256').update(buffer).digest('hex')}/${filename}`;
+      stored.set(key, buffer);
+      return { backend: 'oss' as const, key, url: `https://suite-storage.example/${key}` };
+    };
+    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), {
+      sourcePreparation: {
+        download: async (url: string) => { sourceDownloads++; return { sourceUrl: url, finalUrl: url, contentType: 'image/jpeg', buffer: sourceBytes, redirectCount: 0 }; },
+        getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+      },
+    });
+    const created = await planning.createRuleBased({ ownerUserId: owner, actorUserId: owner, sourceSubjectId: subject,
+      sourceCaptureSnapshotId: snapshot, context: { type: 'collect', id: goods }, idempotencyKey: `wanx-plan-${suffix}`,
+      selectedSkuKeys: [sourceCapture.skus[0]!.key], candidateMediaKeys: [sourceCapture.media[0]!.key], galleryGoals: ['scene'],
+    });
+    const approved = await planning.review({ planId: created.plan.id, ownerUserId: owner, actorUserId: owner,
+      expectedRevision: created.plan.revision, operationKey: `wanx-plan-approve-${suffix}`, decision: 'APPROVE', note: null });
+    const settings = { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+      apiKey: 'synthetic-wanx-suite-credential', costPerImageCents: 14, currency: 'CNY' as const, concurrencyLimit: 1,
+      credentialRevision: { recordId: `wanx-key-${suffix}`, revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' } };
+    const runtime = createAiImageSuiteProviderRuntimeSnapshot(settings);
+    expect(runtime.executionReady).toBe(true);
+    const suiteRepository = new PrismaAiImageSuiteRepository(client);
+    const authority = await suiteRepository.loadApprovedAuthority({ ownerUserId: owner, actorUserId: owner, planId: created.plan.id });
+    expect((authority!.inputSnapshot as any).candidates[0].contentHash).toBe(createHash('sha256').update(sourceBytes).digest('hex'));
+    const preview = createAiImageSuitePreview(authority!, runtime.providerConfig!);
+    const verifyStage = async (database: PrismaClient) => {
+      // Preserve normal per-stage deferred checks inside this rollback-only fixture.
+      await database.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+      await database.$executeRawUnsafe('SET CONSTRAINTS ALL DEFERRED');
+    };
+    // A compromised internal caller may not disguise a Wanx quote as the legacy
+    // USD family. Use real fresh inserts with all triggers active, then roll back.
+    await expect(client.$transaction(async tx => {
+      const nested = new Proxy(tx as any, { get(target, key) {
+        if (key === '$transaction') return async (action: (value: any) => Promise<unknown>) => action(nested);
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as PrismaClient;
+      const invalidConfig = { ...runtime.providerConfig!, pricingVersion: `ai-image-suite-price/v1:${'0'.repeat(32)}` };
+      const invalidPreview = createAiImageSuitePreview(authority!, invalidConfig);
+      const invalid = await new PrismaAiImageSuiteRepository(nested).claimApproved({ ownerUserId: owner, actorUserId: owner,
+        planId: created.plan.id, expectedPlanRevision: approved.plan.revision, idempotencyKey: `wanx-invalid-price-${suffix}`,
+        expectedPreviewHash: invalidPreview.previewHash, providerConfig: invalidConfig });
+      if (!invalid.suite) throw new Error('Bad-price fixture could not establish a real claimed suite');
+      await verifyStage(nested);
+      await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(nested),
+        preparationLease: passThroughPreparationLease, download: async () => { throw new Error('Frozen source must be reused'); },
+        getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+      }).internalize({ suiteId: invalid.suite.id, ownerUserId: owner, actorUserId: owner, expectedRevision: 1, operationKey: `wanx-bad-refs-${suffix}` });
+      await verifyStage(nested);
+      await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(nested),
+        templateResolver: new AiPromptTemplateRegistryService(new PrismaAiPromptTemplateStore(nested), { getLegacyPrompt: async () => 'unused' }),
+      }).freeze({ suiteId: invalid.suite.id, ownerUserId: owner, actorUserId: owner, expectedRevision: 2, operationKey: `wanx-bad-prompt-${suffix}` });
+    }, { isolationLevel: 'Serializable', timeout: 10_000 })).rejects.toThrow(/23514|Wanx suite|Prompt set provenance/u);
+    expect(await client.aiMediaSuite.count({ where: { ownerUserId: owner } })).toBe(0);
+    const openaiCapability = resolveAiImageProviderCapability('openai-images', 'gpt-image-1')!;
+    const usdRuntime = createAiImageSuiteProviderRuntimeSnapshot({ ...settings, provider: 'openai-images', model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1', costPerImageCents: 8, currency: 'USD' }, { resolveCapability: () => ({
+      ...openaiCapability, evidenceLevel: 'sandbox-verified', sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256('openai-images', 'https://api.openai.com/v1'),
+        operation: 'IMAGE_TO_IMAGE', inputTransport: 'multipart', resultMode: 'sync',
+      }],
+    }) });
+    expect(usdRuntime.providerRuntime?.contractVersion).toBe('ai-image-provider-runtime/v1');
+    await expect(client.$transaction(async tx => {
+      const nested = new Proxy(tx as any, { get(target, key) {
+        if (key === '$transaction') return async (action: (value: any) => Promise<unknown>) => action(nested);
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } }) as PrismaClient;
+      const usdPreview = createAiImageSuitePreview(authority!, usdRuntime.providerConfig!);
+      const usd = await new PrismaAiImageSuiteRepository(nested).claimApproved({ ownerUserId: owner, actorUserId: owner,
+        planId: created.plan.id, expectedPlanRevision: approved.plan.revision, idempotencyKey: `usd-suite-${suffix}`,
+        expectedPreviewHash: usdPreview.previewHash, providerConfig: usdRuntime.providerConfig! });
+      if (!usd.suite) throw new Error('USD fixture could not establish a real claimed suite');
+      await verifyStage(nested);
+      await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(nested),
+        preparationLease: passThroughPreparationLease, download: async () => { throw new Error('Frozen source must be reused'); },
+        getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+      }).internalize({ suiteId: usd.suite.id, ownerUserId: owner, actorUserId: owner, expectedRevision: 1, operationKey: `usd-refs-${suffix}` });
+      await verifyStage(nested);
+      await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(nested),
+        templateResolver: new AiPromptTemplateRegistryService(new PrismaAiPromptTemplateStore(nested), { getLegacyPrompt: async () => 'unused' }),
+      }).freeze({ suiteId: usd.suite.id, ownerUserId: owner, actorUserId: owner, expectedRevision: 2, operationKey: `usd-prompts-${suffix}` });
+      await verifyStage(nested);
+      await createAiImageSuiteMaterializationService(new PrismaAiImageSuiteMaterializationRepository(nested, {
+        getCostControls: async () => ({ dailyLimit: 100, globalDailyBudgetCents: 100_000 }), getProviderRuntime: async () => usdRuntime,
+      })).materialize({ suiteId: usd.suite.id, ownerUserId: owner, actorUserId: owner, expectedRevision: 3, operationKey: `usd-materialize-${suffix}` });
+      // Execute deferred graph guards before rolling this independent positive fixture back.
+      await nested.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+      const usdJob = await nested.aiImageJob.findFirstOrThrow({ where: { workflow: { suiteSlot: { suiteId: usd.suite.id } } }, include: { costReservation: true } });
+      expect(usdJob.costReservation?.currency).toBe('USD');
+      expect((usdJob.operationConfig as any).providerRequest).toEqual({ count: 1, width: 1024, height: 1536 });
+      throw new Error('ROLLBACK_VERIFIED_USD_SUITE');
+    }, { isolationLevel: 'Serializable', timeout: 10_000 })).rejects.toThrow('ROLLBACK_VERIFIED_USD_SUITE');
+    const claimed = await suiteRepository.claimApproved({ ownerUserId: owner, actorUserId: owner, planId: created.plan.id,
+      expectedPlanRevision: approved.plan.revision, idempotencyKey: `wanx-suite-${suffix}`, expectedPreviewHash: preview.previewHash, providerConfig: runtime.providerConfig! });
+    expect(claimed.kind).toBe('created');
+    const wanxSuiteId = claimed.suite!.id;
+    await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(client),
+      preparationLease: passThroughPreparationLease,
+      download: async () => { throw new Error('Planning-frozen source bytes must be reused without another fetch'); },
+      getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+    }).internalize({ suiteId: wanxSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 1, operationKey: `wanx-refs-${suffix}` });
+    expect(sourceDownloads).toBe(1);
+    await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(client),
+      templateResolver: new AiPromptTemplateRegistryService(new PrismaAiPromptTemplateStore(client), { getLegacyPrompt: async () => 'unused' }),
+    }).freeze({ suiteId: wanxSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 2, operationKey: `wanx-prompts-${suffix}` });
+    const controls = async () => ({ dailyLimit: 100, globalDailyBudgetCents: 100_000 });
+    await createAiImageSuiteMaterializationService(new PrismaAiImageSuiteMaterializationRepository(client, {
+      getCostControls: controls, getProviderRuntime: async () => runtime,
+    })).materialize({ suiteId: wanxSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 3, operationKey: `wanx-materialize-${suffix}` });
+    const executionRepository = new PrismaAiImageSuiteExecutionRepository(client, {
+      runtimeReady: async suite => aiImageSuiteProviderRuntimeMatches(suite, runtime), getCostControls: controls,
+    });
+    await createAiImageSuiteExecutionService(executionRepository).dispatch({ suiteId: wanxSuiteId, ownerUserId: owner,
+      actorUserId: owner, expectedRevision: 4, operationKey: `wanx-dispatch-${suffix}` });
+    let creates = 0;
+    let lookups = 0;
+    let disconnected = false;
+    const providerJobId = `wanx-suite-task-${suffix}`;
+    const fetchProvider: FetchLike = async (url, options = {}) => {
+      if (options.method === 'POST') {
+        creates++;
+        const body = JSON.parse(String(options.body));
+        expect(body.input.function).toBe('description_edit');
+        expect(Array.from(body.input.prompt).length).toBeLessThanOrEqual(800);
+        return new Response(JSON.stringify({ output: { task_id: providerJobId, task_status: 'PENDING' } }), { status: 200 });
+      }
+      if (String(url).includes('/tasks/')) {
+        expect(String(url).endsWith(`/tasks/${providerJobId}`)).toBe(true);
+        lookups++;
+        if (!disconnected) { disconnected = true; throw new TypeError('Synthetic connection lost after task acceptance'); }
+        return new Response(JSON.stringify({ output: { task_id: providerJobId, task_status: 'SUCCEEDED', task_metrics: { TOTAL: 1, SUCCEEDED: 1, FAILED: 0 }, results: [
+          { url: 'https://dashscope-result.oss-cn-beijing.aliyuncs.com/wanx-suite-test.png' },
+        ] }, usage: { image_count: 1 } }), { status: 200 });
+      }
+      expect(String(url)).toBe('https://dashscope-result.oss-cn-beijing.aliyuncs.com/wanx-suite-test.png');
+      return new Response(new Uint8Array(resultBytes), { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(resultBytes.length) } });
+    };
+    const prepareProvider = (input: Parameters<typeof prepareAiImageSuitePaidProviderExecution>[0]) => prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => settings,
+      loadInputBuffer: async input => { const bytes = input.storageKey ? stored.get(input.storageKey) : null; if (!bytes) throw new Error('Source not in trusted test storage'); return bytes; },
+      createWanxProvider: options => createDashScopeWanx21ImageEditProvider({ ...options, pollIntervalMs: 0, fetch: fetchProvider }),
+    });
+    // The Windows host and local PostgreSQL container may differ by a few seconds.
+    // Keep a real future lease and wait for natural expiry without changing either clock.
+    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, { executionLeaseMs: 10_000,
+      runtimeReady: async suite => aiImageSuiteProviderRuntimeMatches(suite, runtime),
+      getRuntimeEvidence: async () => runtime.capability!.evidenceLevel, outputStorageReady: async () => true,
+      getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'READY', reason: 'test grant' }), uploadBuffer,
+      executePaidProvider: (input, deps) => executeAiImageSuitePaidProvider(input, { ...deps, prepareProvider }),
+      recoverPaidProvider: (input, deps) => recoverAiImageSuitePaidProvider(input, { ...deps, prepareProvider }),
+    });
+    const firstSlot = await client.aiMediaSuiteSlot.findFirstOrThrow({ where: { suiteId: wanxSuiteId, status: 'QUEUED' }, include: { childWorkflow: { include: { jobs: true } } } });
+    const task = { suiteId: wanxSuiteId, slotId: firstSlot.id, workflowId: firstSlot.childWorkflowId!, jobId: firstSlot.childWorkflow!.jobs[0]!.id, attempt: 1 };
+    const initialClaim = await coordinator.revalidateAndClaim(task);
+    if (initialClaim.kind !== 'ready') throw new Error('Wanx suite did not claim its first queued child');
+    await expect(client.aiMediaSuiteSlot.update({ where: { id: task.slotId }, data: { executionClaimToken: digest('forbidden-live-replacement') } }))
+      .rejects.toThrow();
+    await expect(coordinator.execute(task, initialClaim)).resolves.toMatchObject({ kind: 'pending' });
+    expect(creates).toBe(1);
+    const accepted = await client.aiImageJob.findUniqueOrThrow({ where: { id: task.jobId }, include: { costReservation: true } });
+    expect(accepted).toMatchObject({ providerJobId, status: 'RUNNING', billedUnits: 0, actualCostCents: null,
+      costReservation: { currency: 'CNY', status: 'RESERVED', maximumCostMinor: 14 } });
+    const waiting = await client.aiMediaSuiteSlot.findUniqueOrThrow({ where: { id: task.slotId } });
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, waiting.executionLeaseExpiresAt!.getTime() - Date.now() + 50)));
+    settings.costPerImageCents = 99; // The confirmed task still settles its frozen 14-fen price.
+    const leaseChecks = await client.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+      WITH candidate AS (
+        SELECT slot AS old_slot,
+          jsonb_populate_record(NULL::ai_media_suite_slots, to_jsonb(slot) || jsonb_build_object(
+            'execution_claim_token', $2::text, 'execution_lease_expires_at', $3::timestamp, 'updated_at', $4::timestamp)) AS new_slot
+        FROM ai_media_suite_slots slot WHERE slot.id = $1
+      )
+      SELECT ai_media_wanx_suite_lease_takeover_allowed(candidate.old_slot, candidate.new_slot) AS allowed,
+        (candidate.old_slot).execution_lease_expires_at <= statement_timestamp() AS expired,
+        (candidate.new_slot).execution_lease_expires_at > statement_timestamp() AS future,
+        (candidate.new_slot).updated_at >= (candidate.old_slot).updated_at AS updated_forward,
+        (to_jsonb(candidate.new_slot) - ARRAY['execution_claim_token','execution_lease_expires_at','updated_at'])
+          = (to_jsonb(candidate.old_slot) - ARRAY['execution_claim_token','execution_lease_expires_at','updated_at']) AS frozen_equal,
+        ai_media_wanx_suite_runtime_valid(job.operation::text, job.operation_config_json,
+          job.estimated_cost_cents, suite.pricing_version, job.input_assets_json) AS runtime_valid,
+        job.provider_job_id IS NOT NULL AS accepted, suite.revision >= 5 AS dispatched
+      FROM candidate JOIN ai_media_suites suite ON suite.id = (candidate.old_slot).suite_id
+      JOIN ai_image_jobs job ON job.workflow_id = (candidate.old_slot).child_workflow_id AND job.workflow_attempt = (candidate.old_slot).attempt`,
+      task.slotId, digest('diagnostic-recovery-token'), new Date(Date.now() + 10_000), new Date());
+    expect(leaseChecks).toEqual([expect.objectContaining({ allowed: true, expired: true, future: true, updated_forward: true,
+      frozen_equal: true, runtime_valid: true, accepted: true, dispatched: true })]);
+    const recoveryClaim = await coordinator.revalidateAndClaim(task);
+    if (recoveryClaim.kind !== 'ready') throw new Error('Expired Wanx suite task did not acquire recovery');
+    expect(recoveryClaim.executionToken).not.toBe(initialClaim.executionToken);
+    await expect(coordinator.revalidateAndClaim(task)).resolves.toEqual({ kind: 'ignored' });
+    await expect(coordinator.execute(task, recoveryClaim)).resolves.toMatchObject({ kind: 'completed' });
+    const completed = await client.aiImageJob.findUniqueOrThrow({ where: { id: task.jobId }, include: { costReservation: { include: { settlements: true } }, assets: true } });
+    expect(completed).toMatchObject({ status: 'SUCCEEDED', providerJobId, billedUnits: 1, actualCostCents: 14, errorCode: null, errorMessage: null,
+      costReservation: { currency: 'CNY', status: 'SETTLED' } });
+    expect(completed.assets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'AI_PROVIDER_OUTPUT', width: 1024, height: 1024 }),
+      expect.objectContaining({ kind: 'AI_GENERATED', width: 900, height: 1200 }),
+    ]));
+    expect(completed.costReservation!.settlements.filter(row => row.kind === 'CHARGE')).toHaveLength(1);
+    expect(completed.costReservation!.settlements.find(row => row.kind === 'CHARGE')!.actualCostMinor).toBe(14);
+    await expect(coordinator.revalidateAndClaim(task)).resolves.toEqual({ kind: 'ignored' });
+    expect(creates).toBe(1);
+    expect(lookups).toBe(2);
+  }, 30_000);
+
   it('rejects a direct suite insert whose frozen source authority is false', async () => {
     await expect(client.aiMediaSuite.create({ data: {
       ownerUserId,
@@ -358,7 +597,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
   });
 
   it('serializes a manual slot edit against claiming the same approved version', async () => {
-    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client));
+    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), { sourcePreparation: false });
     const created = await planning.createRuleBased({
       ownerUserId,
       actorUserId: ownerUserId,
@@ -421,6 +660,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     });
     const racingPlanning = createAiMediaPlanningService(
       new PrismaAiMediaPlanningRepository(editDatabase.client),
+      { sourcePreparation: false },
     );
     const racingRepository = new PrismaAiImageSuiteRepository(claimDatabase.client);
     const editPromise = racingPlanning.updateSlotReferences({

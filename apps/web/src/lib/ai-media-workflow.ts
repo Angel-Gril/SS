@@ -1047,6 +1047,7 @@ export interface AiMediaSuitePreview {
   provider: string;
   model: string;
   pricingVersion: string;
+  currency: 'CNY' | 'USD';
   concurrencyLimit: number;
   itemCount: number;
   estimatedCostCents: number;
@@ -1133,6 +1134,7 @@ export interface AiMediaSuite {
   provider: string;
   model: string;
   pricingVersion: string;
+  currency: 'CNY' | 'USD';
   itemCount: number;
   estimatedCostCents: number;
   maximumCostCents: number;
@@ -1158,6 +1160,14 @@ const AI_MEDIA_SUITE_MAX_REFERENCES = 20;
 const AI_MEDIA_SUITE_MAX_OUTPUTS = 1;
 const AI_MEDIA_SUITE_HASH = /^[a-f0-9]{64}$/u;
 const AI_MEDIA_SUITE_PUBLIC_CODE = /^[A-Z][A-Z0-9_]{0,99}$/u;
+function suiteCurrency(value: unknown): 'CNY' | 'USD' | null {
+  return value === undefined ? 'USD' : value === 'CNY' || value === 'USD' ? value : null;
+}
+
+export function formatAiMediaSuiteCost(cents: number, currency: 'CNY' | 'USD'): string {
+  if (!Number.isSafeInteger(cents) || cents < 0 || !['CNY', 'USD'].includes(currency)) return '费用不可用';
+  return `${currency} ${(cents / 100).toFixed(2)}`;
+}
 const AI_MEDIA_SUITE_STATUSES: readonly AiMediaSuiteStatus[] = [
   'PLANNED', 'QUEUED', 'RUNNING', 'PARTIAL_FAILURE', 'FAILED',
   'SUCCEEDED', 'CANCEL_REQUESTED', 'CANCELLED',
@@ -1268,13 +1278,14 @@ export function normalizeAiMediaSuitePreview(value: unknown): AiMediaSuitePrevie
   const provider = planningText(root.provider, 100);
   const model = planningText(root.model, 200);
   const pricingVersion = planningText(root.pricingVersion, 200);
+  const currency = suiteCurrency(root.currency);
   const planRevision = suiteSafeInteger(root.planRevision, 1);
   const concurrencyLimit = suiteSafeInteger(root.concurrencyLimit, 1);
   const itemCount = suiteSafeInteger(root.itemCount, 1);
   const estimatedCostCents = suiteSafeInteger(root.estimatedCostCents);
   const maximumCostCents = suiteSafeInteger(root.maximumCostCents);
   const previewHash = planningText(root.previewHash, 64);
-  if (!version || !planId || !planVersionId || !provider || !model || !pricingVersion
+  if (!version || !planId || !planVersionId || !provider || !model || !pricingVersion || !currency
     || planRevision === null || concurrencyLimit === null || itemCount === null
     || estimatedCostCents === null || maximumCostCents === null
     || maximumCostCents < estimatedCostCents || !previewHash
@@ -1332,7 +1343,7 @@ export function normalizeAiMediaSuitePreview(value: unknown): AiMediaSuitePrevie
   slots.sort((left, right) => left.ordinal - right.ordinal);
   if (slots.some((slot, index) => slot.ordinal !== index)) return null;
   return {
-    version, planId, planVersionId, planRevision, provider, model, pricingVersion,
+    version, planId, planVersionId, planRevision, provider, model, pricingVersion, currency,
     concurrencyLimit, itemCount, estimatedCostCents, maximumCostCents, previewHash, slots,
   };
 }
@@ -1351,6 +1362,7 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
   const provider = planningText(root.provider, 100);
   const model = planningText(root.model, 200);
   const pricingVersion = planningText(root.pricingVersion, 100);
+  const currency = suiteCurrency(root.currency);
   const itemCount = suiteSafeInteger(root.itemCount, 1);
   const estimatedCostCents = suiteSafeInteger(root.estimatedCostCents);
   const maximumCostCents = suiteSafeInteger(root.maximumCostCents);
@@ -1361,7 +1373,7 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
   const completedAt = suiteDate(root.completedAt ?? null);
   const createdAt = suiteDate(root.createdAt);
   const updatedAt = suiteDate(root.updatedAt);
-  if (!id || !planId || !planVersionId || !provider || !model || !pricingVersion
+  if (!id || !planId || !planVersionId || !provider || !model || !pricingVersion || !currency
     || !AI_MEDIA_SUITE_STATUSES.includes(status as AiMediaSuiteStatus)
     || revision === null || previewHashValue === undefined
     || (previewHashValue !== null && !AI_MEDIA_SUITE_HASH.test(previewHashValue))
@@ -1564,6 +1576,7 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
     provider,
     model,
     pricingVersion,
+    currency,
     itemCount,
     estimatedCostCents,
     maximumCostCents,

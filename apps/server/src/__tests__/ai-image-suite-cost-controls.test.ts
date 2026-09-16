@@ -33,6 +33,18 @@ function database(input: {
 }
 
 describe('AI image suite paid cost controls', () => {
+  it('counts only the frozen CNY currency for both new reservations and dispatch exposure', async () => {
+    for (const requestedMaximumCostCents of [14, 0]) {
+      const tx = database();
+      await expect(enforceAiImageSuiteCostControlsInTransaction(tx, {
+        ownerUserId: 'owner-1', controls: { dailyLimit: 4, globalDailyBudgetCents: 100 },
+        requestedUnits: 1, requestedMaximumCostCents, currency: 'CNY',
+      } as any)).resolves.toBeNull();
+      expect(tx.aiCostSettlement.aggregate).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ reservation: { currency: 'CNY' } }) }));
+      expect(tx.aiCostReservation.aggregate).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ currency: 'CNY' }) }));
+    }
+  });
+
   it('admits one new retry only when active+billed units and maximum exposure both fit', async () => {
     const tx = database({
       activeUnits: 2,

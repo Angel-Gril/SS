@@ -253,8 +253,21 @@ const steps = [
     args: [
       '--test',
       'scripts/web-api-request-deadline.test.mjs',
+      'scripts/web-api-base.test.mjs',
       'scripts/web-dashboard-session.test.mjs',
       'scripts/web-api-503-response.test.mjs',
+    ],
+  },
+  {
+    name: 'Web system dialogs and current UI owner contracts',
+    command: 'node',
+    args: [
+      '--test',
+      'scripts/web-system-dialogs.test.mjs',
+      'scripts/web-system-dialog-state.test.mjs',
+      'scripts/web-admin-ai-prompt-settings-integration.test.mjs',
+      'scripts/web-order-label-print-history.test.mjs',
+      'scripts/web-source-collect-routing.test.mjs',
     ],
   },
   {

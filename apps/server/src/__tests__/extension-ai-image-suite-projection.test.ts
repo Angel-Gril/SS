@@ -243,6 +243,53 @@ function ruleBasedCompatibilityGroupState() {
 }
 
 describe('extension AI image suite projection', () => {
+  it('adds CNY only for the frozen CNY pricing version while preserving legacy USD wire fields', () => {
+    const project = (state: ReturnType<typeof approvedPlanState>) => projectExtensionAiImageSuite({
+      requested: binding,
+      state,
+      ownerUserId: 'owner-1',
+      scopes: ['listing:review', 'media:execute'],
+      trustedPreviewOrigins: ['https://erp.example'],
+    });
+    const legacy = project(approvedPlanState());
+    expect(legacy.plan?.preview).not.toHaveProperty('currency');
+    const state = approvedPlanState();
+    state.plan.preview.pricingVersion = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+    const cny = project(state);
+    expect(cny.plan?.preview).toMatchObject({
+      currency: 'CNY', pricingVersion: state.plan.preview.pricingVersion,
+      estimatedCostCents: 18, maximumCostCents: 24,
+    });
+    expect(cny.plan?.commands.START).toEqual({
+      expectedPreviewHash: 'a'.repeat(64),
+      acceptedPricingVersion: state.plan.preview.pricingVersion,
+      acceptedEstimatedCostCents: 18,
+      acceptedMaximumCostCents: 24,
+    });
+    const explicitUsd = approvedPlanState();
+    Object.assign(explicitUsd.plan.preview, { currency: 'USD' });
+    expect(JSON.stringify(project(explicitUsd))).toBe(JSON.stringify(legacy));
+  });
+
+  it('rejects conflicting or unknown preview currency instead of dropping it', () => {
+    for (const [pricingVersion, currency] of [
+      ['pricing-2026-07-24', 'CNY'],
+      ['pricing-2026-07-24', 'EUR'],
+      [`ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, 'USD'],
+      ['ai-image-suite-price-cny/v1:malformed', 'CNY'],
+    ]) {
+      const state = approvedPlanState();
+      Object.assign(state.plan.preview, { pricingVersion, currency });
+      expect(() => projectExtensionAiImageSuite({
+        requested: binding,
+        state,
+        ownerUserId: 'owner-1',
+        scopes: ['listing:review', 'media:execute'],
+        trustedPreviewOrigins: ['https://erp.example'],
+      })).toThrowError(expect.objectContaining({ code: 'STALE_CONTEXT' }));
+    }
+  });
+
   it('projects only safe approved-plan fields and START command confirmation data', () => {
     const result = projectExtensionAiImageSuite({
       requested: binding,

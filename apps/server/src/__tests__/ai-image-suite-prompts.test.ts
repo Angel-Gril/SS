@@ -202,6 +202,76 @@ const request = {
 };
 
 describe('AI image suite prompt freeze', () => {
+  it('uses an independent real Wanx template with all scoped facts under 800 characters', async () => {
+    const wanxAuthority = authority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', slots: [slot({
+      id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero', ownershipLevel: 'sku', ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'], factEvidenceIds: ['fact-color', 'fact-material'],
+    })] });
+    const repo = repository({ loadAuthority: vi.fn(async () => ({ kind: 'ready' as const, authority: wanxAuthority })) });
+    const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' });
+    const result = await createAiImageSuitePromptService({ repository: repo, templateResolver: registry }).freeze(request);
+    expect(result.templateKey).toBe('ai_media_suite_generation_wanx');
+    const committed = vi.mocked(repo.commitPromptSet).mock.calls[0]![0];
+    const prompt = committed.prompts[0]!;
+    expect(committed.compilerVersion).toBe('ai-image-suite-prompt-compiler-wanx/v1');
+    expect(prompt.resolvedNegativePrompt).toBe('');
+    expect(Array.from(prompt.resolvedPrompt).length).toBeLessThanOrEqual(800);
+    expect(prompt.resolvedPrompt).toContain('red');
+    expect(prompt.resolvedPrompt).toContain('steel');
+    expect(prompt.resolvedPrompt).toContain('不得');
+    expect(prompt.resolvedPrompt).not.toContain('/skus/sku-2/private');
+    expect(committed.templateSnapshot.templateKey).toBe('ai_media_suite_generation_wanx');
+  });
+
+  it('preserves Wanx administrator instructions and refuses oversized prompts before persistence', async () => {
+    const single = slot({ id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero',
+      ownershipLevel: 'sku', ownershipKey: 'sku-1', candidateIds: ['candidate-1'], factEvidenceIds: ['fact-color', 'fact-material'] });
+    const repo = repository({ loadAuthority: vi.fn(async () => ({ kind: 'ready' as const, authority: authority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', slots: [single] }) })) });
+    const resolver = templateResolver();
+    const original = resolver.resolveTemplateBatch.bind(resolver);
+    resolver.resolveTemplateBatch = vi.fn(async input => {
+      const batch = await original(input);
+      batch.items[0]!.resolvedPrompt = '管理员指定柔光棚拍';
+      return batch;
+    });
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: resolver }).freeze(request);
+    expect(vi.mocked(repo.commitPromptSet).mock.calls[0]![0].prompts[0]!.resolvedPrompt).toContain('管理员指定柔光棚拍');
+    vi.mocked(repo.commitPromptSet).mockClear();
+    resolver.resolveTemplateBatch = vi.fn(async input => {
+      const batch = await original(input);
+      batch.items[0]!.resolvedPrompt = '长'.repeat(801);
+      return batch;
+    });
+    await expect(createAiImageSuitePromptService({ repository: repo, templateResolver: resolver }).freeze(request)).rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_PROMPT_LIMIT_EXCEEDED', statusCode: 413 });
+    expect(repo.commitPromptSet).not.toHaveBeenCalled();
+  });
+
+  it('fits a normal capture fact set and every standard safety/acceptance rule without truncating facts', async () => {
+    const facts = [
+      { path: '/facts/title', value: 'Sanitized explicit-zero stock fixture', evidenceIds: ['title'] },
+      { path: '/facts/shopName', value: 'Sanitized supplier', evidenceIds: ['shop'] },
+      { path: '/facts/currency', value: 'CNY', evidenceIds: ['currency'] },
+      { path: '/facts/shippingCny', value: 0, evidenceIds: ['shipping'] },
+      { path: '/facts/shippingFree', value: true, evidenceIds: ['free'] },
+      { path: '/facts/minimumOrderQuantity', value: 1, evidenceIds: ['quantity'] },
+    ];
+    const planned = slot({ id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero',
+      ownershipLevel: 'sku', ownershipKey: 'sku-1', candidateIds: ['candidate-1'], factEvidenceIds: facts.flatMap(fact => fact.evidenceIds) });
+    planned.slotSnapshot.safetyConstraints = ['preserve_product_identity', 'use_verified_facts_only', 'do_not_invent_text_or_certifications', 'do_not_change_bundle_or_packaging'];
+    planned.slotSnapshot.acceptanceChecks = ['aspect_ratio_3_4', 'product_matches_references', 'no_unverified_claims', 'goal_sku_hero_is_visually_satisfied'];
+    planned.slotHash = hashAiMediaPlanningJson(planned.slotSnapshot);
+    const repo = repository({ loadAuthority: async () => ({ kind: 'ready', authority: authority({ provider: 'dashscope-wanx',
+      model: 'wanx2.1-imageedit', slots: [planned], planPayload: { compatibilityGroups: [], verifiedFacts: facts } }) }) });
+    const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' });
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: registry }).freeze(request);
+    const prompt = vi.mocked(repo.commitPromptSet).mock.calls[0]![0].prompts[0]!;
+    expect(Array.from(prompt.resolvedPrompt).length).toBeLessThanOrEqual(800);
+    for (const fact of facts) {
+      expect(prompt.resolvedPrompt).toContain(fact.path);
+      expect(prompt.resolvedPrompt).toContain(JSON.stringify(fact.value));
+    }
+  });
+
   it('pins one release, scopes facts, preserves slot reference order, and commits no transport secrets', async () => {
     const repo = repository();
     const resolver = templateResolver();

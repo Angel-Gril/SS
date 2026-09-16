@@ -7,6 +7,7 @@ import { getConfig } from '../config/system-config-schema.js';
 import { UploadLimiterUnavailableError, uploadLimiter } from '../lib/upload-limiter.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
+import { getAiImageOperationProviderRuntimeConfig } from '../services/ai-image-operation-runtime-config.js';
 import { AiImageJobError, createAiImageJob, findAiImageJobReplay, type AiImageJobRepository, type AiImageJobRecord } from '../services/ai-image-jobs.js';
 import {
   AiMediaWorkflowError,
@@ -362,7 +363,7 @@ interface AiImageRouteOptions {
   enqueueTranslation?: (jobId: string) => Promise<void>;
   enqueueEdit?: (jobId: string) => Promise<void>;
   authenticate?: (request: FastifyRequest, reply: any) => Promise<unknown>;
-  getSettings?: () => Promise<AiImageRouteSettings>;
+  getSettings?: (operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE') => Promise<AiImageRouteSettings>;
   resolveProviderCapability?: typeof resolveAiImageProviderCapability;
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
   getTranslationCategory?: (input: {
@@ -691,14 +692,15 @@ export function resolveAiImageToImageReadiness(
       testOnly: true,
     };
   }
-  if (!canRunAiImageProviderOperation({
+  const referenceContract = resolveAiImageEditProviderContract(provider, model, options.baseUrl || '');
+  if (!referenceContract || !canRunAiImageProviderOperation({
     capability,
     provider,
     model,
     baseUrl: options.baseUrl || '',
     operation: 'IMAGE_TO_IMAGE',
-    inputTransport: 'multipart',
-    resultMode: 'sync',
+    inputTransport: referenceContract.inputTransport,
+    resultMode: referenceContract.resultMode,
   })) {
     return {
       enabled: true,
@@ -1168,16 +1170,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const mediaContextService = options.mediaContextService || createAiMediaContextService(prisma);
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const authHook = options.authenticate || authenticate;
-  const getSettings = options.getSettings || (async () => {
-    const provider = await getConfig('ai_image_provider');
+  const getSettings = options.getSettings || (async (operation: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE' = 'TEXT_TO_IMAGE') => {
+    const runtime = await getAiImageOperationProviderRuntimeConfig(operation);
     return {
       enabled: await getConfig('ai_image_generation_enabled'),
-      provider,
-      baseUrl: await getConfig('ai_image_base_url'),
-      model: await getConfig('ai_image_model'),
+      provider: runtime.provider,
+      baseUrl: runtime.baseUrl,
+      model: runtime.model,
       dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
-      estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
-      ...(provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}),
+      estimatedCostCents: runtime.costPerImageCents,
+      currency: runtime.currency,
       globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
     };
   });
@@ -1499,7 +1501,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   });
 
   const generationQuoteForOwner = async (ownerUserId: string, input: { count: number; width: number; height: number }) => {
-    const settings = await getSettings();
+    const settings = await getSettings('TEXT_TO_IMAGE');
     if (!settings.enabled || settings.provider === 'disabled') throw new AiImageJobError('PROVIDER_DISABLED', 'AI image generation is disabled');
     if (!['fake', 'dashscope-wanx', 'openai-images', 'custom'].includes(settings.provider)) {
       throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image provider adapter is not enabled yet');
@@ -2014,8 +2016,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         }
-        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, parsed.data.width, parsed.data.height)) {
-          return unsupportedPaidEditCanvas(reply, parsed.data.width, parsed.data.height);
+        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, parsed.data.width, parsed.data.height, editSettings.model)) {
+          return unsupportedPaidEditCanvas(reply, parsed.data.width, parsed.data.height, editSettings.provider, editSettings.model);
         }
         let providerExecution: Record<string, unknown> = {};
         if (editSettings.provider !== 'fake') {
@@ -2025,6 +2027,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             baseUrl: editSettings.baseUrl,
             costPerImageCents: editSettings.estimatedCostCents,
             currency: editSettings.currency,
+            credentialRevision: editSettings.credentialRevision,
           }, {
             count: parsed.data.count,
             width: parsed.data.width,

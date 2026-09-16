@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import {
@@ -104,11 +106,33 @@ describe('AI media planning rule worker', () => {
   });
 
   it('persists through the rule repository without importing queues, providers, prompts or costs', async () => {
+    const sourceBuffer = await sharp({
+      create: { width: 900, height: 1200, channels: 3, background: '#cfdeed' },
+    }).png().toBuffer();
+    const sourceSha256 = createHash('sha256').update(sourceBuffer).digest('hex');
+    const resolved = resolveRuleBasedAiMediaPlanningInput(planningInput(), authority());
     const artifacts = buildRuleBasedAiMediaPlanningArtifacts(
-      resolveRuleBasedAiMediaPlanningInput(planningInput(), authority()),
+      { ...resolved, candidates: resolved.candidates.map((candidate) => ({ ...candidate, contentHash: sourceSha256 })) },
     );
     const repository = {
       loadRulePlanningAuthority: vi.fn().mockResolvedValue(authority()),
+      loadLatestSourceAuthority: vi.fn().mockResolvedValue({
+        snapshotId: 'snapshot-1', captureHash: authority().sourceCaptureHash,
+        profileHash: authority().sourceProfileHash, schemaVersion: authority().sourceSchemaVersion,
+      }),
+      findPlanningSourceAssets: vi.fn().mockResolvedValue([{
+        id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+        sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'main-1',
+        sourceUrl: 'https://source.example/main-1.png',
+        storageBackend: 'oss', storageKey: 'source/main-1.png', url: 'https://assets.example/main-1.png',
+        mimeType: 'image/png', width: 900, height: 1200, sizeBytes: sourceBuffer.length,
+        sha256: sourceSha256, sourceSha256,
+        metadata: {
+          lineageVersion: 'ai-media-source/v1', sourceCaptureHash: authority().sourceCaptureHash,
+          sourceUrl: 'https://source.example/main-1.png', sourceSha256,
+          sourceSizeBytes: sourceBuffer.length, sourceMimeType: 'image/png',
+        },
+      }]),
       createRulePlan: vi.fn().mockResolvedValue({
         kind: 'created',
         plan: { id: 'plan-1', revision: 1, reviewStatus: 'PENDING' },
@@ -352,7 +376,7 @@ describe('AI media planning rule worker', () => {
         profileHash: source.sourceProfileHash, schemaVersion: source.sourceSchemaVersion,
       }),
     };
-    const service = createAiMediaPlanningService(repository as never);
+    const service = createAiMediaPlanningService(repository as never, { sourcePreparation: false });
     const result = await service.createCurrentRuleBased({
       ownerUserId: 'owner-current',
       actorUserId: 'actor-current',
@@ -390,7 +414,7 @@ describe('AI media planning rule worker', () => {
         plan: { id: 'plan-product-only', revision: 1, reviewStatus: 'PENDING' },
       }),
     };
-    const service = createAiMediaPlanningService(repository as never);
+    const service = createAiMediaPlanningService(repository as never, { sourcePreparation: false });
     await service.createCurrentRuleBased({
       ownerUserId: 'owner-product-only',
       actorUserId: 'actor-product-only',

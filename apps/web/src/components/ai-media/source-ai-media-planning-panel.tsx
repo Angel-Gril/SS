@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
+import { useScopedSystemConfirmation } from '@/components/system-dialog-provider';
 import { SourceAiMediaSuitePanel } from './source-ai-media-suite-panel';
 import type {
   AiImageApplyResult,
@@ -326,6 +327,9 @@ export function SourceAiMediaPlanningPanel({
   const slotIntents = useRef(new Map<string, WorkflowSubmissionIntent>());
   const slotSavingRef = useRef(false);
   slotSavingRef.current = slotSaving;
+  const confirmSlotDiscard = useScopedSystemConfirmation(JSON.stringify([
+    targetId, slotDraft, slotDialogOpen, slotSaving, slotConflictRefreshing,
+  ]));
   const regenerationAllowed = !bundle || canRegenerateAiMediaPlan(bundle.plan);
   const approvalReady = bundle ? canApproveAiMediaPlan(bundle) : false;
   const currentPlanVersionId = bundle?.plan.currentVersionId || bundle?.currentVersion?.id || null;
@@ -577,9 +581,14 @@ export function SourceAiMediaPlanningPanel({
     setSlotDialogOpen(false);
   }
 
-  function closeSlotEditor() {
+  async function closeSlotEditor() {
     if (slotSaving || slotConflictRefreshing) return;
-    if (slotDraftDirty && !window.confirm('当前槽位参考图尚未保存，确认放弃这些修改？')) return;
+    if (slotDraftDirty && !await confirmSlotDiscard({
+      message: '当前槽位参考图尚未保存，确认放弃这些修改？',
+      confirmText: '放弃修改',
+      tone: 'destructive',
+    })) return;
+    if (slotSavingRef.current) return;
     discardSlotDraft();
   }
 

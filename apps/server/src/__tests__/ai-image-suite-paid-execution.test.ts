@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import {
   executeAiImageSuitePaidProvider,
+  recoverAiImageSuitePaidProvider,
   type ExecuteAiImageSuitePaidProviderDependencies,
   type ExecuteAiImageSuitePaidProviderInput,
 } from '../services/ai-image-suite-paid-execution.js';
@@ -115,6 +117,67 @@ function dependencies(
 }
 
 describe('AI image suite paid Provider dispatch boundary', () => {
+  it('recovers an accepted Wanx task through its original lookup and never submits or re-marks dispatch', async () => {
+    const request = input();
+    Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });
+    Object.assign(request.job, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'wanx-original' });
+    const execute = vi.fn();
+    const recover = vi.fn(async () => ({ status: 'SUCCEEDED' as const, providerJobId: 'wanx-original', providerStatus: 'SUCCEEDED',
+      image: { buffer: RAW_BUFFER, mimeType: 'image/png' }, actualCostCents: 8 }));
+    const deps = dependencies({
+      prepareProvider: async () => ({ evidenceLevel: 'sandbox-verified', providerRequest: { width: 1024, height: 1024 }, execute, recover }),
+      normalizeOutput: async () => normalizedOutput(), uploadBuffer: validUploads(),
+    });
+    await expect(recoverAiImageSuitePaidProvider(request, deps)).resolves.toBe('completed');
+    expect(recover).toHaveBeenCalledWith('wanx-original', expect.any(Function));
+    expect(execute).not.toHaveBeenCalled();
+    expect(deps.markProviderDispatchStarted).not.toHaveBeenCalled();
+    expect(deps.recordProviderAccepted).not.toHaveBeenCalled();
+    expect(deps.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps pending Wanx lookup outcomes uncharged without a new create request', async () => {
+    const request = input();
+    Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });
+    Object.assign(request.job, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'wanx-original' });
+    const execute = vi.fn();
+    const deps = dependencies({ prepareProvider: async () => ({ evidenceLevel: 'sandbox-verified', execute,
+      recover: async () => ({ status: 'PENDING', providerJobId: 'wanx-original', providerStatus: 'RUNNING' }),
+    }) });
+    await expect(recoverAiImageSuitePaidProvider(request, deps)).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RECOVERY_PENDING', providerJobId: 'wanx-original' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(deps.markProviderDispatchStarted).not.toHaveBeenCalled();
+    expect(deps.recordProviderResultEvidence).not.toHaveBeenCalled();
+  });
+
+  it('normalizes and archives Wanx square dimensions while settling only the frozen successful image price', async () => {
+    const source = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: 'red' } }).png().toBuffer();
+    const request = input();
+    Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', estimatedCostCents: 14, maximumCostCents: 14 });
+    Object.assign(request.job, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', estimatedCostCents: 14 });
+    request.maximumCostCents = 14;
+    const prepared = { ...preparedWithFetch(async () => successfulResult({
+      images: [{ buffer: source, mimeType: 'image/png' }], actualCostCents: 14,
+    })), providerRequest: { width: 1024, height: 1024 } };
+    const deps = dependencies({ prepareProvider: async () => prepared, uploadBuffer: validUploads() });
+    await expect(executeAiImageSuitePaidProvider(request, deps)).resolves.toBe('completed');
+    expect(deps.recordProviderOutput).toHaveBeenCalledWith(expect.objectContaining({ width: 1024, height: 1024 }));
+    expect(deps.complete).toHaveBeenCalledWith(expect.objectContaining({ actualCostCents: 14,
+      output: expect.objectContaining({ width: 900, height: 1200, mimeType: 'image/png' }) }));
+  });
+
+  it('does not record a successful-image charge when a Wanx response fails image validation', async () => {
+    const request = input();
+    Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });
+    Object.assign(request.job, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });
+    const deps = dependencies({ prepareProvider: async () => ({
+      ...preparedWithFetch(async () => successfulResult()), providerRequest: { width: 1024, height: 1024 },
+    }) });
+    await expect(executeAiImageSuitePaidProvider(request, deps)).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_INVALID_IMAGE' });
+    expect(deps.recordProviderResultEvidence).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
   it('does not mark or fetch when Provider preparation fails', async () => {
     const preparationError = new Error('reference bytes changed');
     const markProviderDispatchStarted = vi.fn(async () => true);

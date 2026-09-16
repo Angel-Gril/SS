@@ -14,13 +14,16 @@ const reviewedWanxEndpoint = createHash('sha256')
   .digest('hex');
 const reviewedPaidDerivedCapabilities = new Map([
   ['dashscope-wanx:wanx2.1-imageedit', {
-    operations: new Set(['FULL_EDIT', 'INPAINT']),
+    operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),
     inputTransport: 'base64',
     resultMode: 'async',
     maxReferences: 1,
     supportsMask: true,
     allowTextToImage: false,
+    // Each operation has independent historical QA02 transport evidence.
+    // This does not attest the current production UI or normal billing flow.
     sandboxEvidence: new Set([
+      `${reviewedWanxEndpoint}:IMAGE_TO_IMAGE:base64:async`,
       `${reviewedWanxEndpoint}:FULL_EDIT:base64:async`,
       `${reviewedWanxEndpoint}:INPAINT:base64:async`,
     ]),

@@ -1,4 +1,7 @@
 import { AiImageJobError } from './ai-image-job-error.js';
+import { createHash } from 'node:crypto';
+import { loadFrozenImageToImageInputs } from './ai-image-jobs.js';
+import { assertFrozenWanxImageToImageJob } from './ai-image-wanx-image-to-image.js';
 import {
   assertAiImageEditInputPolicy,
   loadAiImageEditInputs,
@@ -33,16 +36,18 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
   const getProviderConfig = options.getProviderConfig || getAiImageEditProviderRuntimeConfig;
   async function context(claim: AiProviderReconciliationClaim) {
     if (!isWanxEditReconciliationOperation(claim) || !repository.getClaimedEditJob
-      || !repository.recordRecoveredEditRaw || !repository.completeRecoveredEdit) {
+      || (claim.operation !== 'IMAGE_TO_IMAGE' && (!repository.recordRecoveredEditRaw || !repository.completeRecoveredEdit))) {
       throw new AiImageJobError('PROVIDER_LOOKUP_UNSUPPORTED', 'Revision-bound edit recovery is not installed');
     }
     const activeConfig = await getProviderConfig();
     const job = await repository.getClaimedEditJob(claim);
-    const config = bindAiImageProviderExecutionConfig(job.operationConfig?.providerRuntime, activeConfig, {
+    const config = bindAiImageProviderExecutionConfig(job.operation === 'IMAGE_TO_IMAGE'
+      ? job.operationConfig : job.operationConfig?.providerRuntime, activeConfig, {
       count: job.requestedImageCount, width: job.width, height: job.height,
       estimatedCostCents: job.estimatedCostCents,
     });
-    assertAiImageEditInputPolicy(job);
+    if (job.operation === 'IMAGE_TO_IMAGE') assertFrozenWanxImageToImageJob(job);
+    else assertAiImageEditInputPolicy(job);
     const contract = resolveAiImageEditProviderContract(job.provider, job.model, config.baseUrl);
     if (contract?.kind !== 'wanx21' || !config.apiKey.trim()) {
       throw new AiImageJobError('PROVIDER_RECONCILIATION_CONFIG_UNAVAILABLE', 'Original edit Provider configuration is unavailable');
@@ -81,6 +86,24 @@ export function createAiImageEditRecovery(options: AiImageEditRecoveryOptions) {
       const { job } = await context(claim);
       if (result.providerJobId !== claim.providerJobId) {
         throw new AiImageJobError('PROVIDER_COST_EVIDENCE_MISMATCH', 'Recovered output does not match the frozen task identity');
+      }
+      if (job.operation === 'IMAGE_TO_IMAGE') {
+        await loadFrozenImageToImageInputs(job, options.loadInputBuffer || loadAiImageEditInputBuffer);
+        await context(claim);
+        const sha256 = createHash('sha256').update(result.image.buffer).digest('hex');
+        const filename = `wanx-reference-${job.id}-${sha256.slice(0, 16)}.${result.image.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`;
+        const stored = await upload(result.image.buffer, filename, result.image.mimeType, {
+          category: 'ai-generated', ownerId: job.ownerUserId,
+          idempotencyKey: `${job.id}:provider-reconciliation:${sha256}`,
+        });
+        await context(claim);
+        await repository.completeRecovered({
+          claim, providerStatus: result.providerStatus, actualCostCents: calculateAiImageTaskCost(job, 1).actualCostCents,
+          asset: { ownerUserId: job.ownerUserId, jobId: job.id, url: stored.url, storageBackend: stored.backend,
+            storageKey: stored.key || stored.filename || null, mimeType: result.image.mimeType,
+            sizeBytes: result.image.buffer.length, sha256 },
+        });
+        return;
       }
       const inputs = await loadAiImageEditInputs(job, options.loadInputBuffer || loadAiImageEditInputBuffer);
       await context(claim);

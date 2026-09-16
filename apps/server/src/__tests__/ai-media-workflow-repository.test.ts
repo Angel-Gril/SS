@@ -147,6 +147,25 @@ function listingDraftImageToImageInput(overrides: Record<string, unknown> = {}) 
 }
 
 describe('Prisma AI media workflow repository recovery fence', () => {
+  it('persists the canonical single-reference Wanx prompt alongside the original user instructions', async () => {
+    const value = listingDraftImageToImageTransaction();
+    Object.assign(value.tx, { $queryRawUnsafe: vi.fn(async () => []),
+      aiCostSettlement: { aggregate: vi.fn(async () => ({ _sum: { actualCostMinor: 0 } })) } });
+    Object.assign(value.tx.aiCostReservation, { aggregate: vi.fn(async () => ({ _sum: { maximumCostMinor: 0 } })) });
+    const identity = { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+      costPerImageCents: 14, currency: 'CNY' as const,
+      credentialRevision: { recordId: 'synthetic-reference', revision: 1, updatedAt: '2026-09-16T00:00:00.000Z' } };
+    await new PrismaAiMediaWorkflowRepository(value.client as never).createImageToImage(listingDraftImageToImageInput({
+      provider: identity.provider, model: identity.model, estimatedCostCents: 14, globalDailyBudgetCents: 100,
+      prompt: '保留红色商品。', negativePrompt: '文字',
+      providerRuntimeContract: createAiImageProviderRuntimeContract(identity, { count: 1, width: 1024, height: 1024 }),
+    }));
+    expect(value.tx.aiImageJob.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      prompt: '保留红色商品。', negativePrompt: '文字', resolvedPrompt: '保留红色商品。\n避免：文字', resolvedNegativePrompt: '',
+      operationConfig: expect.objectContaining({ currency: 'CNY', credentialRevision: identity.credentialRevision }),
+    }) });
+  });
+
   const unresolvedQuotaFilter = expect.objectContaining({
     OR: expect.arrayContaining([
       expect.objectContaining({ status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } }),

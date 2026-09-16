@@ -4,6 +4,16 @@ const state = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
   rollout: { enabled: true, revision: 1, reason: 'tenant_allowed' },
 }));
+vi.mock('../lib/prisma.js', () => ({
+  prisma: {
+    systemConfig: {
+      findMany: vi.fn(async () => [...state.values].map(([key, value]) => ({
+        key, value: String(value), id: `synthetic-${key}`, revision: 1,
+        updatedAt: new Date('2026-09-16T00:00:00.000Z'),
+      }))),
+    },
+  },
+}));
 vi.mock('../lib/redis.js', () => ({ redisDisabled: true }));
 vi.mock('../config/system-config-schema.js', async (importOriginal) => ({
   ...await importOriginal<object>(),

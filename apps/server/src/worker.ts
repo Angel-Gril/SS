@@ -56,7 +56,7 @@ const standaloneSuiteRuntimeEvidence = async (suite: {
   maximumCostCents: number;
 }) => {
   const snapshot = createAiImageSuiteProviderRuntimeSnapshot(
-    await getAiImageProviderRuntimeConfig(),
+    await getAiImageProviderRuntimeConfig('IMAGE_TO_IMAGE'),
   );
   if (!snapshot.executionReady || !aiImageSuiteProviderRuntimeMatches(suite, snapshot)) return null;
   return snapshot.capability?.evidenceLevel === 'sandbox-verified'

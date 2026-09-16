@@ -651,6 +651,16 @@
       && value <= AI_IMAGE_SUITE_MAX_COST_CENTS;
   }
 
+  function exactSuitePriceKeys(value, keys) {
+    var item = record(value);
+    if (!item) return false;
+    var hasCurrency = Object.prototype.hasOwnProperty.call(item, 'currency');
+    var isCny = /^ai-image-suite-price-cny\/v1:[a-f0-9]{32}$/.test(item.pricingVersion);
+    if (!isCny && /^ai-image-suite-price-cny\//.test(item.pricingVersion)) return false;
+    return exactKeys(item, hasCurrency ? keys.concat('currency') : keys)
+      && (isCny ? item.currency === 'CNY' : !hasCurrency || item.currency === 'USD');
+  }
+
   function sha256(value) {
     return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   }
@@ -749,7 +759,7 @@
       || plan.revision !== authority.planRevision
       || plan.status !== 'APPROVED'
       || plan.skuKey !== authority.skuKey
-      || !exactKeys(preview, [
+      || !exactSuitePriceKeys(preview, [
         'hash', 'pricingVersion', 'itemCount', 'estimatedCostCents',
         'maximumCostCents', 'slots',
       ])

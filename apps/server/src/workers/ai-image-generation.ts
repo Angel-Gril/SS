@@ -30,6 +30,11 @@ import {
   type AiImageProvider,
 } from '../services/ai-image-jobs.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
+import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
+import { assertWanxImageToImageInput } from '../services/ai-image-wanx-image-to-image.js';
+import { isWanxHostedEdit } from '../services/ai-image-edit-provider-contract.js';
+import { getAiImageOperationProviderRuntimeConfig } from '../services/ai-image-operation-runtime-config.js';
+import { assertFrozenWanxImageToImageJob } from '../services/ai-image-wanx-image-to-image.js';
 
 const QUEUE_NAME = 'ai-image-generation';
 const fakePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=', 'base64');
@@ -89,20 +94,18 @@ export async function getAiImageDispatchAuthorization(
   };
 }
 
-export async function getAiImageProviderRuntimeConfig(): Promise<AiImageProviderRuntimeConfig> {
-  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
-    getConfig('ai_image_provider'), getConfig('ai_image_base_url'),
-    getConfig('ai_image_api_key'), getConfig('ai_image_model'),
-    getConfig('ai_image_generation_cost_cents'),
-  ]);
-  return { provider, baseUrl, apiKey, model, costPerImageCents,
-    ...(provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}) };
+export async function getAiImageProviderRuntimeConfig(
+  operation: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE' = 'TEXT_TO_IMAGE',
+): Promise<AiImageProviderRuntimeConfig> {
+  return getAiImageOperationProviderRuntimeConfig(operation);
 }
 
 export interface AiImageProviderResolverDependencies {
   resolveCapability?: typeof resolveAiImageProviderCapability;
   createOpenAiGenerationProvider?: typeof createOpenAiImagesProvider;
   createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
+  createWanxEditProvider?: typeof createDashScopeWanx21ImageEditProvider;
+  beforeProviderDispatch?: () => Promise<void>;
 }
 
 export function resolveAiImageProvider(
@@ -124,6 +127,31 @@ export function resolveAiImageProvider(
   }
   const options = { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, costPerImageCents: config.costPerImageCents, onProviderJobCreated };
   if (provider === 'dashscope-wanx') {
+    if (isWanxHostedEdit(provider, config.model)) {
+      if (!canRunAiImageProviderOperation({ capability, provider, model: config.model, baseUrl: config.baseUrl,
+        operation: 'IMAGE_TO_IMAGE', inputTransport: 'base64', resultMode: 'async' })) return createDisabledAiImageProvider();
+      const edit = (dependencies.createWanxEditProvider || createDashScopeWanx21ImageEditProvider)({
+        ...options, beforeProviderDispatch: dependencies.beforeProviderDispatch,
+      });
+      const assertReady = (request: Parameters<AiImageProvider['generate']>[0]) => {
+        if (request.operation !== 'IMAGE_TO_IMAGE') {
+          throw new AiImageJobError('UNSUPPORTED_OPERATION', 'Wanx reference worker only accepts IMAGE_TO_IMAGE');
+        }
+        return assertWanxImageToImageInput({ ...request, referenceCount: request.inputImages?.length || 0 });
+      };
+      return {
+        name: provider,
+        assertReady: (request) => { assertReady(request); },
+        async generate(request) {
+          const compiled = assertReady(request);
+          return edit.edit({
+            operation: 'IMAGE_TO_IMAGE', prompt: compiled.resolvedPrompt, negativePrompt: null,
+            width: request.width, height: request.height, model: request.model,
+            images: request.inputImages!, mask: null,
+          });
+        },
+      };
+    }
     if (!canRunAiImageProviderOperation({
       capability,
       provider,
@@ -326,7 +354,8 @@ export async function processAiImageQueueJob(
   let provider;
   let uploadBuffer: (...args: any[]) => Promise<any>;
   try {
-    providerConfig = await (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)();
+    const operation = persisted.operation === 'IMAGE_TO_IMAGE' ? 'IMAGE_TO_IMAGE' : 'TEXT_TO_IMAGE';
+    providerConfig = await (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)(operation);
     if (paidJob) {
       try {
         providerConfig = bindAiImageProviderExecutionConfig(
@@ -350,7 +379,26 @@ export async function processAiImageQueueJob(
     const onProviderJobCreated = repository.recordProviderJobId
       ? (providerJobId: string, providerAcceptedAt: Date) => repository.recordProviderJobId!(jobId, providerJobId, providerAcceptedAt)
       : undefined;
-    provider = (overrides.resolveProvider || resolveAiImageProvider)(persisted.provider, providerConfig, onProviderJobCreated);
+    const beforeProviderDispatch = operation === 'IMAGE_TO_IMAGE' && isWanxHostedEdit(persisted.provider, persisted.model)
+      ? async () => {
+        const [currentConfig, authorization, currentJob] = await Promise.all([
+          (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)(operation),
+          (overrides.getDispatchAuthorization || getAiImageDispatchAuthorization)(persisted.ownerUserId, operation),
+          repository.getById(jobId),
+        ]);
+        if (!authorization.enabled || !currentJob || currentJob.status !== 'RUNNING'
+          || currentJob.requestFingerprint !== persisted.requestFingerprint) {
+          throw new AiImageJobError('AI_IMAGE_DISPATCH_REVOKED', 'Reference generation authority changed before Provider dispatch');
+        }
+        assertFrozenWanxImageToImageJob(currentJob);
+        bindAiImageProviderExecutionConfig(persisted.operationConfig, currentConfig, {
+          count: persisted.requestedImageCount, width: persisted.width, height: persisted.height,
+          estimatedCostCents: persisted.estimatedCostCents,
+        });
+      } : undefined;
+    provider = beforeProviderDispatch
+      ? (overrides.resolveProvider || resolveAiImageProvider)(persisted.provider, providerConfig, onProviderJobCreated, { beforeProviderDispatch })
+      : (overrides.resolveProvider || resolveAiImageProvider)(persisted.provider, providerConfig, onProviderJobCreated);
     const storage = overrides.uploadBuffer ? null : await getStorageBackend();
     uploadBuffer = overrides.uploadBuffer || storage!.uploadBuffer.bind(storage);
   } catch (error) {

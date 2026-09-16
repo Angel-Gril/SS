@@ -17,7 +17,8 @@ import {
   type AiImageProviderRuntimeContract,
 } from './ai-image-provider-runtime-contract.js';
 import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
-import { assertWanxHostedEditPrompt } from './ai-image-edit-provider-contract.js';
+import { assertWanxHostedEditPrompt, isWanxHostedEdit } from './ai-image-edit-provider-contract.js';
+import { assertWanxImageToImageInput, WANX_IMAGE_TO_IMAGE_PROMPT_PROFILE } from './ai-image-wanx-image-to-image.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
@@ -126,6 +127,8 @@ export interface CreateAiMediaWorkflowInput {
   references?: Array<{ assetId: string }>;
   prompt: string;
   negativePrompt: string | null;
+  resolvedPrompt?: string;
+  resolvedNegativePrompt?: string;
   count: number;
   width: number;
   height: number;
@@ -570,6 +573,10 @@ export function createAiMediaWorkflowFingerprint(input: Omit<CreateAiMediaWorkfl
     model: execution.model,
     estimatedCostCents: execution.estimatedCostCents,
     providerRuntimeContract: execution.providerRuntimeContract,
+    ...(isWanxHostedEdit(execution.provider, execution.model) ? {
+      renderingProfile: WANX_IMAGE_TO_IMAGE_PROMPT_PROFILE,
+      ...assertWanxImageToImageInput({ ...input, referenceCount: references.length }),
+    } : {}),
     context: input.context,
   });
 }
@@ -642,6 +649,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         throw new AiMediaWorkflowError('INVALID_REQUEST', 'AI image generation daily limit is invalid');
       }
       const references = normalizeAiMediaWorkflowReferences(input);
+      if (isWanxHostedEdit(input.provider, input.model)) {
+        input = { ...input, ...assertWanxImageToImageInput({ ...input, referenceCount: references.length }) };
+      }
       const execution = normalizeAiMediaProviderExecutionConfig(input, {
         provider: AI_MEDIA_WORKFLOW_PROVIDER,
         model: AI_MEDIA_WORKFLOW_MODEL,

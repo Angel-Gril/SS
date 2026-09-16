@@ -547,7 +547,7 @@ export class PrismaAiProviderReconciliationRepository implements AiProviderRecon
   ) {
     await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const edit = 'rawAssetId' in input;
-      if (edit) await loadClaimedEdit(tx, input.claim);
+      if (edit || isWanxEditReconciliationOperation(input.claim)) await loadClaimedEdit(tx, input.claim);
       const job = await tx.aiImageJob.findUnique({
         where: { id: input.claim.jobId },
         include: {

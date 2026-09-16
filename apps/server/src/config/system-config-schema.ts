@@ -111,6 +111,8 @@ export const SystemConfigSchema = {
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),
   ai_image_generation_cost_cents: z.number().int().min(0).max(100000).default(0),
+  ai_image_text_to_image_model: z.string().max(500).default(''),
+  ai_image_text_to_image_cost_cents: z.number().int().min(0).max(100000).default(0),
   ai_image_prompt: z
     .string()
     .default(
@@ -443,7 +445,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_media_workflow_v2_rollout_policy: {
     label: 'AI 媒体工作流租户策略',
     group: 'feature',
-    description: 'JSON：{"revision":非负整数,"tenantIds":["owner-id"]}；默认不允许任何租户',
+    description: '默认按 tenantIds 精确放行；全量使用 {"revision":非负整数,"mode":"all","tenantIds":[]}，仍受总开关、身份、每日次数与预算限制',
   },
   feature_source_listing_web_media: {
     label: '来源商品 Web 工作台',
@@ -580,6 +582,16 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '生图单张费用（分）',
     group: 'ai',
     description: '填写已确认的单张价格；Wanx 使用人民币分（0.14元填14），其他现有通道沿用其报价币种。确认时冻结价格，成功按实际张数计费；0 禁止新付费任务',
+  },
+  ai_image_text_to_image_model: {
+    label: '独立文生图模型',
+    group: 'ai',
+    description: '留空继承生图模型；填写后仅文生图使用此模型，仍使用同一服务和密钥，参考图、全图编辑及局部重绘保持原模型',
+  },
+  ai_image_text_to_image_cost_cents: {
+    label: '独立文生图单张费用（分）',
+    group: 'ai',
+    description: '仅在独立文生图模型非空时使用；Wanx 使用人民币分，0 禁止新付费文生图，不回退到编辑单价',
   },
   ai_image_prompt: {
     label: '旧版生图提示词（兼容）',

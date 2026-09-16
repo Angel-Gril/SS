@@ -157,11 +157,11 @@ export type SynchronizeAiMediaTarget = (expectedTargetUpdatedAt?: string) => Pro
 
 export const AI_MEDIA_INTERACTIVE_DRAFT_DISCARD_MESSAGE = '当前 AI 图片编辑尚未保存，继续将放弃这些修改。';
 
-export function confirmAiMediaInteractiveDraftDiscard(
+export function confirmAiMediaInteractiveDraftDiscard<T extends boolean | Promise<boolean>>(
   dirty: boolean,
-  confirm: (message: string) => boolean,
-): boolean {
-  return !dirty || confirm(AI_MEDIA_INTERACTIVE_DRAFT_DISCARD_MESSAGE);
+  requestConfirmation: (message: string) => T,
+): true | T {
+  return !dirty || requestConfirmation(AI_MEDIA_INTERACTIVE_DRAFT_DISCARD_MESSAGE);
 }
 
 export async function executeWithBusyState<T>(

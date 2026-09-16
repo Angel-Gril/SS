@@ -4,6 +4,8 @@ import { connection } from '../lib/bullmq-connection.js';
 import { redis, redisDisabled } from '../lib/redis.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { AI_IMAGE_SUITE_MAX_CONCURRENCY } from '../services/ai-image-suite.js';
+import { hasAdmittedWanxAiImageSuiteOperation } from '../services/ai-image-suite-provider-runtime.js';
+import type { AiMediaCapabilityEvidence } from '../services/ai-image-provider-capabilities.js';
 import {
   AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS,
   clearAiImageSuiteWorkerHeartbeat,
@@ -52,7 +54,9 @@ export type AiImageSuiteGenerationExecutionClaim =
     kind: 'ready';
     provider: string;
     providerFacing: boolean;
-    evidenceLevel?: 'local-test' | 'sandbox-verified' | null;
+    evidenceLevel?: AiMediaCapabilityEvidence | null;
+    model?: string;
+    operationConfig?: unknown;
     executionToken: string;
   };
 
@@ -383,7 +387,8 @@ function runtimeFailure(
   claim: Extract<AiImageSuiteGenerationExecutionClaim, { kind: 'ready' }>,
   nodeEnv: string | undefined,
 ): AiImageSuiteGenerationRuntimeFailure | null {
-  if (claim.provider !== 'fake' && claim.evidenceLevel !== 'sandbox-verified') {
+  if (claim.provider !== 'fake' && claim.evidenceLevel !== 'sandbox-verified'
+    && !hasAdmittedWanxAiImageSuiteOperation(claim)) {
     return {
       code: 'AI_MEDIA_SUITE_PAID_PROVIDER_NOT_VERIFIED',
       message: 'Paid AI image suite generation requires sandbox-verified Provider evidence',

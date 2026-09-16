@@ -94,7 +94,7 @@ export function canRunAiImageProviderOperation(input: AiImageProviderAdmissionIn
       && (input.operation === 'TEXT_TO_IMAGE'
         ? input.inputTransport === 'none'
         : input.model === AI_IMAGE_WANX21_EDIT_MODEL
-          && ['FULL_EDIT', 'INPAINT'].includes(input.operation)
+          && ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(input.operation)
           && input.inputTransport === 'base64');
   }
   if (input.provider !== 'custom' || input.resultMode !== 'sync') return false;

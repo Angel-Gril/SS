@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp, { type Metadata } from 'sharp';
-import { getConfig } from '../config/system-config-schema.js';
+import { getAiImageOperationProviderRuntimeConfig } from './ai-image-operation-runtime-config.js';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import {
   createOpenAiImageEditProvider,
@@ -9,6 +9,11 @@ import {
   type OpenAiImageEditProvider,
 } from './ai-image-providers.js';
 import type { AiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import type { AiMediaCapabilityEvidence } from './ai-image-provider-capabilities.js';
+import { createDashScopeWanx21ImageEditProvider, type DashScopeWanx21ImageEditProvider } from './ai-image-wanx-edit-provider.js';
+import { assertWanxImageToImageInput } from './ai-image-wanx-image-to-image.js';
+import { AI_IMAGE_WANX21_EDIT_PROFILE, assertAiImageWanx21EditMedia } from './ai-image-wanx-edit-profile.js';
+import type { AiProviderTaskLookupResult } from './ai-provider-reconciliation.js';
 import {
   AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION,
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
@@ -16,8 +21,8 @@ import {
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
 } from './ai-image-suite-materialization.js';
 import {
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+  aiImageSuiteProviderRequestDimensions,
+  isWanxAiImageSuiteProvider,
   aiImageSuiteProviderRuntimeMatches,
   createAiImageSuiteProviderRuntimeSnapshot,
   type AiImageSuiteFrozenProviderIdentity,
@@ -29,6 +34,7 @@ import {
 import {
   AiImageProviderRuntimeContractError,
   assertAiImageProviderRuntimeContract,
+  bindAiImageProviderExecutionConfig,
 } from './ai-image-provider-runtime-contract.js';
 import type { AiImageProviderResult } from './ai-image-jobs.js';
 
@@ -80,11 +86,14 @@ export interface PrepareAiImageSuitePaidProviderInput {
     estimatedCostCents: number;
     inputAssets: unknown;
     operationConfig: unknown;
+    providerJobId?: string | null;
   };
 }
 
 export interface PreparedAiImageSuitePaidProviderExecution {
-  evidenceLevel: 'sandbox-verified';
+  evidenceLevel: AiMediaCapabilityEvidence;
+  providerRequest?: { width: number; height: number };
+  recover?(providerJobId: string, beforeTaskLookup: BeforeAiImageProviderDispatch): Promise<AiProviderTaskLookupResult>;
   execute(
     onProviderAccepted: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>,
     beforeProviderDispatch?: BeforeAiImageProviderDispatch,
@@ -96,17 +105,11 @@ interface Dependencies {
   resolveCapability?: (provider: string, model: string) => AiImageProviderCapability | null;
   loadInputBuffer?: typeof loadAiImageEditInputBuffer;
   createOpenAiProvider?: (options: Parameters<typeof createOpenAiImageEditProvider>[0]) => OpenAiImageEditProvider;
+  createWanxProvider?: (options: Parameters<typeof createDashScopeWanx21ImageEditProvider>[0]) => DashScopeWanx21ImageEditProvider;
 }
 
 async function defaultSettings(): Promise<AiImageSuiteProviderRuntimeSettings> {
-  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
-    getConfig('ai_image_provider'),
-    getConfig('ai_image_base_url'),
-    getConfig('ai_image_api_key'),
-    getConfig('ai_image_model'),
-    getConfig('ai_image_generation_cost_cents'),
-  ]);
-  return { provider, baseUrl, apiKey, model, costPerImageCents };
+  return getAiImageOperationProviderRuntimeConfig('IMAGE_TO_IMAGE');
 }
 
 function record(value: unknown): Record<string, any> | null {
@@ -165,6 +168,7 @@ function assertOperationConfig(
   const config = record(value);
   const request = record(config?.providerRequest);
   const finalOutput = record(config?.finalOutput);
+  const dimensions = aiImageSuiteProviderRequestDimensions(settings.provider, settings.model);
   if (!config
     || config.version !== AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION
     || config.outputProfile !== AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
@@ -172,8 +176,8 @@ function assertOperationConfig(
     || config.height !== AI_IMAGE_SUITE_OUTPUT_HEIGHT
     || !request
     || request.count !== 1
-    || request.width !== AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH
-    || request.height !== AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT
+    || request.width !== dimensions.width
+    || request.height !== dimensions.height
     || !finalOutput
     || finalOutput.profile !== AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
     || finalOutput.width !== AI_IMAGE_SUITE_OUTPUT_WIDTH
@@ -250,12 +254,29 @@ export async function prepareAiImageSuitePaidProviderExecution(
   input: PrepareAiImageSuitePaidProviderInput,
   dependencies: Dependencies = {},
 ): Promise<PreparedAiImageSuitePaidProviderExecution> {
-  const settings = await (dependencies.loadSettings || defaultSettings)();
+  const wanx = isWanxAiImageSuiteProvider(input.job.provider, input.job.model);
+  const frozenTaskId = input.job.providerJobId || null;
+  const loadBoundSettings = async () => {
+    const active = await (dependencies.loadSettings || defaultSettings)();
+    if (!wanx) return active;
+    if (active.currency !== 'CNY') {
+      throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_RUNTIME_CHANGED', 'Wanx suite currency changed');
+    }
+    try {
+      return bindAiImageProviderExecutionConfig(record(input.job.operationConfig)?.providerRuntime, active, {
+        count: 1, ...aiImageSuiteProviderRequestDimensions(input.job.provider, input.job.model),
+        estimatedCostCents: input.job.estimatedCostCents,
+      });
+    } catch {
+      throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_RUNTIME_CHANGED', 'Wanx suite runtime or credential revision changed');
+    }
+  };
+  const settings = await loadBoundSettings();
   const snapshot = createAiImageSuiteProviderRuntimeSnapshot(settings, {
     resolveCapability: dependencies.resolveCapability,
   });
   if (!snapshot.executionReady
-    || snapshot.capability?.evidenceLevel !== 'sandbox-verified'
+    || (!wanx && snapshot.capability?.evidenceLevel !== 'sandbox-verified')
     || !snapshot.providerRuntime) {
     throw new AiImageSuitePaidProviderError(
       'SUITE_PROVIDER_RUNTIME_UNAVAILABLE',
@@ -270,7 +291,7 @@ export async function prepareAiImageSuitePaidProviderExecution(
       'Active AI image suite Provider identity no longer matches the frozen suite',
     );
   }
-  if (!['openai-images', 'custom'].includes(settings.provider)) {
+  if (!wanx && !['openai-images', 'custom'].includes(settings.provider)) {
     throw new AiImageSuitePaidProviderError(
       'SUITE_PROVIDER_UNSUPPORTED',
       'Only an exact sandbox-verified OpenAI-compatible image edit adapter supports paid suites',
@@ -301,6 +322,10 @@ export async function prepareAiImageSuitePaidProviderExecution(
     input.job.inputAssets,
     input.suite.sourceCaptureSnapshotId,
   );
+  const dimensions = aiImageSuiteProviderRequestDimensions(settings.provider, settings.model);
+  const wanxPrompt = wanx ? assertWanxImageToImageInput({
+    count: 1, ...dimensions, referenceCount: assets.length, prompt, negativePrompt,
+  }) : null;
   if (assets.length > (snapshot.capability?.maxReferences || 0)) {
     throw new AiImageSuitePaidProviderError(
       'SUITE_PROVIDER_INPUT_INVALID',
@@ -327,24 +352,51 @@ export async function prepareAiImageSuitePaidProviderExecution(
     assets,
     dependencies.loadInputBuffer || loadAiImageEditInputBuffer,
   );
+  if (wanx) {
+    if (totalInputBytes > AI_IMAGE_WANX21_EDIT_PROFILE.maximumInputBytes) {
+      throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_INPUT_INVALID', 'Wanx suite reference exceeds the input byte limit');
+    }
+    assertAiImageWanx21EditMedia({ source: {
+      bytes: images[0]!.buffer, width: assets[0]!.width, height: assets[0]!.height,
+    } });
+  }
 
   return {
-    evidenceLevel: 'sandbox-verified',
+    evidenceLevel: snapshot.capability!.evidenceLevel,
+    ...(wanx ? { providerRequest: dimensions, async recover(providerJobId: string, beforeTaskLookup: BeforeAiImageProviderDispatch) {
+      if (!frozenTaskId || providerJobId !== frozenTaskId) {
+        throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_INPUT_MISMATCH', 'Recovery must query the original accepted suite task');
+      }
+      const active = await loadBoundSettings();
+      const provider = (dependencies.createWanxProvider || createDashScopeWanx21ImageEditProvider)({
+        ...active,
+        beforeTaskLookup: async () => { await loadBoundSettings(); await beforeTaskLookup(); },
+      });
+      return provider.poll(providerJobId);
+    } } : {}),
     async execute(onProviderAccepted, beforeProviderDispatch) {
-      const provider = (dependencies.createOpenAiProvider || createOpenAiImageEditProvider)({
-        baseUrl: settings.baseUrl,
-        apiKey: settings.apiKey,
-        model: settings.model,
-        costPerImageCents: settings.costPerImageCents,
+      if (frozenTaskId) {
+        throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_INPUT_MISMATCH', 'An accepted suite task may only be recovered, never submitted again');
+      }
+      const active = wanx ? await loadBoundSettings() : settings;
+      const createProvider = wanx
+        ? dependencies.createWanxProvider || createDashScopeWanx21ImageEditProvider
+        : dependencies.createOpenAiProvider || createOpenAiImageEditProvider;
+      const provider = createProvider({
+        baseUrl: active.baseUrl,
+        apiKey: active.apiKey,
+        model: active.model,
+        costPerImageCents: active.costPerImageCents,
         onProviderJobCreated: onProviderAccepted,
-        beforeProviderDispatch,
+        beforeProviderDispatch: wanx
+          ? async () => { await loadBoundSettings(); await beforeProviderDispatch?.(); }
+          : beforeProviderDispatch,
       });
       return provider.edit({
         operation: 'IMAGE_TO_IMAGE',
-        prompt,
-        negativePrompt,
-        width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
-        height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
+        prompt: wanxPrompt?.resolvedPrompt || prompt,
+        negativePrompt: wanxPrompt ? wanxPrompt.resolvedNegativePrompt : negativePrompt,
+        ...dimensions,
         model: settings.model,
         images,
         mask: null,

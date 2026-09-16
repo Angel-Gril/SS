@@ -32,25 +32,25 @@ const sourceUrl = 'https://source.example/product.png';
 let image: Buffer;
 let authority: AiImageSuiteReferenceAuthority;
 
-async function buildAuthority(overrides: Partial<AiImageSuiteReferenceAuthority> = {}) {
+async function buildAuthority(overrides: Partial<AiImageSuiteReferenceAuthority> = {}, unknownDimensions = false) {
   const capture = structuredClone(fixture.capture) as SourceProductCaptureV2;
   const media = capture.media[0]!;
   media.url = sourceUrl;
-  media.width = 4;
-  media.height = 3;
+  media.width = unknownDimensions ? null : 4;
+  media.height = unknownDimensions ? null : 3;
   media.mimeType = 'image/png';
   media.fieldEvidence.url = { ...media.fieldEvidence.url, value: sourceUrl };
   media.fieldEvidence.width = {
     ...media.fieldEvidence.width,
-    value: 4,
-    missingReason: null,
-    confidence: 1,
+    value: media.width,
+    missingReason: unknownDimensions ? 'not_observed' : null,
+    confidence: unknownDimensions ? 0 : 1,
   };
   media.fieldEvidence.height = {
     ...media.fieldEvidence.height,
-    value: 3,
-    missingReason: null,
-    confidence: 1,
+    value: media.height,
+    missingReason: unknownDimensions ? 'not_observed' : null,
+    confidence: unknownDimensions ? 0 : 1,
   };
   media.fieldEvidence.mimeType = {
     ...media.fieldEvidence.mimeType,
@@ -344,6 +344,24 @@ describe('AI image suite reference internalization', () => {
     expect(repo.createAsset).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('reuses planning-frozen original hashes and byte-observed metadata (capture dimensions absent: %s)', async (unknownDimensions) => {
+    authority = await buildAuthority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' }, unknownDimensions);
+    const reusable = asset({ storageBackend: 'oss', url: 'https://cdn.example.com/source.png' });
+    reusable.metadata = { ...reusable.metadata, lineageVersion: 'ai-media-planning-source/v1',
+      sourceSubjectId: authority.sourceSubjectId, sourceProfileHash: authority.sourceProfileHash,
+      sourceSchemaVersion: authority.sourceSchemaVersion, sourceUrl, canonicalSha256: reusable.sha256, pixelOrientationNormalized: true };
+    for (const slot of authority.slots) for (const reference of slot.referencesSnapshot as any[]) reference.source.contentHash = reusable.sourceSha256;
+    const repo = repository({ findReusableAssets: vi.fn(async () => [reusable]) });
+    const deps = dependencies(repo);
+    await expect(createAiImageSuiteReferenceService(deps).internalize(input)).resolves.toMatchObject({
+      bindings: [expect.objectContaining({ sourceSha256: reusable.sourceSha256, assetSha256: reusable.sha256 })],
+    });
+    expect(deps.download).not.toHaveBeenCalled();
+    expect(deps.getStorage).not.toHaveBeenCalled();
+    reusable.metadata.sourceProfileHash = 'f'.repeat(64);
+    await expect(createAiImageSuiteReferenceService(deps).internalize(input)).rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT' });
+  });
+
   it('redownloads and byte-validates a lineage-incomplete legacy source asset before reuse', async () => {
     const legacy = asset({
       sha256: createHash('sha256').update(image).digest('hex'),
@@ -460,8 +478,8 @@ describe('AI image suite reference internalization', () => {
     expect(repo.loadAuthority).not.toHaveBeenCalled();
   });
 
-  it('requires frozen source byte hashes before any paid-provider preparation', async () => {
-    authority = await buildAuthority({ provider: 'paid-provider', model: 'paid-model' });
+  it.each([['paid-provider', 'paid-model'], ['dashscope-wanx', 'wanx2.1-imageedit']])('requires frozen source byte hashes before %s preparation, including legacy null-hash plans', async (provider, model) => {
+    authority = await buildAuthority({ provider, model });
     const repo = repository();
     const deps = dependencies(repo);
 

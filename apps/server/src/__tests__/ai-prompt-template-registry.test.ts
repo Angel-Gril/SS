@@ -12,6 +12,7 @@ import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
   AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+  AI_MEDIA_SUITE_WANX_GENERATION_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
   LISTING_COPY_TITLE_TEMPLATE_KEY,
@@ -164,6 +165,7 @@ describe('AI prompt template registry', () => {
       KEY,
       AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
       AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      AI_MEDIA_SUITE_WANX_GENERATION_TEMPLATE_KEY,
       AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
       AI_MEDIA_INPAINT_TEMPLATE_KEY,
       LISTING_COPY_TITLE_TEMPLATE_KEY,
@@ -876,7 +878,7 @@ describe('AI prompt template registry', () => {
 
     await Promise.all([first.listTemplates(), second.listTemplates()]);
     const listed = await first.listTemplates();
-    expect(listed.items).toHaveLength(10);
+    expect(listed.items).toHaveLength(11);
     for (const template of listed.items) {
       expect(template.currentSequence).toBe(1);
       expect(template.revisions).toHaveLength(1);

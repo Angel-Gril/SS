@@ -12,6 +12,35 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+test('CNY quote remains bound to the frozen start pricing version and exact maximum', () => {
+  const { mapper: api } = loadApis();
+  const value = plain(projection({ suite: false }));
+  const version = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+  Object.assign(value.quote, { pricingVersion: version, currency: 'CNY' });
+  value.plan.startIntent.commandTemplate.acceptedPricingVersion = version;
+  const mapper = api.createMapper({ launchContext: launch(), projection: deepFreeze(value) });
+  const resolved = mapper.lookupStartIntent({ confirmed: true, maximumCostCents: 24 });
+  assert.equal(resolved.intent.commandTemplate.acceptedPricingVersion, version);
+  assert.deepEqual(plain(resolved.confirmation), { confirmed: true, maximumCostCents: 24 });
+  assert.equal(Object.hasOwn(resolved.intent.commandTemplate, 'currency'), false);
+});
+
+test('workspace rejects unknown, missing CNY, and conflicting quote currency', () => {
+  const { mapper: api } = loadApis();
+  for (const [pricingVersion, currency] of [
+    ['pricing-v1', 'CNY'], ['pricing-v1', 'JPY'], ['pricing-v1', null],
+    [`ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, 'USD'],
+    [`ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, undefined],
+  ]) {
+    const value = plain(projection({ suite: false }));
+    value.quote.pricingVersion = pricingVersion;
+    if (currency !== undefined) value.quote.currency = currency;
+    value.plan.startIntent.commandTemplate.acceptedPricingVersion = pricingVersion;
+    assert.throws(() => api.createMapper({ launchContext: launch(), projection: deepFreeze(value) }),
+      (error) => error?.code === 'SS_ERP_HOSTED_WORKSPACE_AUTHORITY_INVALID');
+  }
+});
+
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   Object.values(value).forEach(deepFreeze);

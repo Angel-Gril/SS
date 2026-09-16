@@ -33,6 +33,7 @@ import {
   type AiImageSuiteCandidateService,
 } from '../services/ai-image-suite-candidates.js';
 import { AiMediaApplicationMutationError } from '../services/ai-media-application-mutations.js';
+import * as capabilities from '../services/ai-image-provider-capabilities.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -76,6 +77,7 @@ function preview() {
           mimeType: 'image/png',
           role: 'product_main',
           skuKeys: ['sku-1'],
+          contentHash: null,
         },
       }],
       slotSnapshot: { prompt: 'must not leak' },
@@ -151,6 +153,45 @@ function serviceMock() {
     getActiveByPlan: vi.fn(async () => suite()),
   } as unknown as AiImageSuiteService;
 }
+
+it('exposes the frozen Wanx currency through preview and suite reads without relabeling legacy USD', async () => {
+  for (const wanx of [false, true]) {
+    const pricingVersion = wanx ? `ai-image-suite-price-cny/v1:${'a'.repeat(32)}` : 'ai-image-suite-price/v1:legacy';
+    const service = serviceMock();
+    vi.mocked(service.preview).mockResolvedValue({ ...preview(), pricingVersion });
+    vi.mocked(service.get).mockResolvedValue({ ...suite(), pricingVersion });
+    const { app } = await build({ service });
+    try {
+      const previewResponse = await app.inject({ method: 'POST', url: '/suites/preview', payload: { planId: 'plan-1' } });
+      expect(previewResponse.json().data.currency).toBe(wanx ? 'CNY' : 'USD');
+      const suiteResponse = await app.inject({ method: 'GET', url: '/suites/suite-1' });
+      expect(suiteResponse.json().data.currency).toBe(wanx ? 'CNY' : 'USD');
+    } finally { await app.close(); }
+  }
+});
+
+it('uses validated Wanx runtime readiness without fabricating sandbox evidence and still blocks unavailable runtime', async () => {
+  const wanxCapability = capabilities.resolveAiImageProviderCapability('dashscope-wanx', 'wanx2.1-imageedit')!;
+  const originalResolve = capabilities.resolveAiImageProviderCapability;
+  const spy = vi.spyOn(capabilities, 'resolveAiImageProviderCapability').mockImplementation((provider, model) =>
+    provider === 'dashscope-wanx' ? { ...wanxCapability, evidenceLevel: 'adapter-characterized', sandboxEvidence: [] } : originalResolve(provider, model));
+  try {
+    for (const runtimeReady of [true, false]) {
+      const service = serviceMock();
+      const { app } = await build({ service, production: true,
+        config: { ...providerConfig, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+          pricingVersion: `ai-image-suite-price-cny/v1:${'a'.repeat(32)}`, estimatedCostPerImageCents: 14, maximumCostPerImageCents: 14 },
+        runtimeReadiness: { queueReady: true, runtimeReady },
+      });
+      try {
+        const response = await app.inject({ method: 'POST', url: '/suites/claim', payload: { planId: 'plan-1', expectedPlanRevision: 3,
+          expectedPreviewHash: 'd'.repeat(64), idempotencyKey: 'wanx-claim-test-1' } });
+        expect(response.statusCode).toBe(runtimeReady ? 202 : 503);
+        if (!runtimeReady) expect(service.claim).not.toHaveBeenCalled();
+      } finally { await app.close(); }
+    }
+  } finally { spy.mockRestore(); }
+});
 
 function referenceServiceMock() {
   return {

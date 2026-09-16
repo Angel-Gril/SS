@@ -9,6 +9,7 @@ import { InMemoryAiPromptTemplateStore } from '../services/ai-prompt-templates.j
 import { AI_IMAGE_WANX21_EDIT_PROMPT_PROFILE } from '../services/ai-image-edit-prompt-contract.js';
 import type { AiImageJobRecord } from '../services/ai-image-jobs.js';
 import type { AiProviderReconciliationClaim } from '../services/ai-provider-reconciliation.js';
+import { compileWanxImageToImagePrompt } from '../services/ai-image-wanx-image-to-image.js';
 
 async function fixture() {
   const image = await sharp({ create: { width: 1024, height: 1024, channels: 4, background: '#eceff1' } }).png().toBuffer();
@@ -44,6 +45,26 @@ async function fixture() {
 }
 
 describe('edit recovery uses the confirmed task price', () => {
+  it('looks up and recovers an accepted IMAGE_TO_IMAGE through the original task without a POST', async () => {
+    const value = await fixture();
+    Object.assign(value.job, { operation: 'IMAGE_TO_IMAGE',
+      ...compileWanxImageToImagePrompt(value.job),
+      operationConfig: createAiImageProviderRuntimeContract(value.config, { count: 1, width: 1024, height: 1024 }) });
+    value.claim.operation = 'IMAGE_TO_IMAGE';
+    const poll = vi.fn(async () => value.output(99));
+    const edit = vi.fn();
+    const recovery = createAiImageEditRecovery({ repository: value.repository, ...value.storage,
+      getProviderConfig: async () => value.config, createProvider: (() => ({ poll, edit })) as any });
+    const result = await recovery.lookup(value.claim);
+    expect(result).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 14 });
+    await recovery.recover(value.claim, value.output(99));
+    expect(edit).not.toHaveBeenCalled();
+    expect(poll).toHaveBeenCalledExactlyOnceWith('task');
+    expect(value.repository.completeRecovered).toHaveBeenCalledWith(expect.objectContaining({ actualCostCents: 14 }));
+    expect(value.repository.completeRecoveredEdit).not.toHaveBeenCalled();
+    expect(value.repository.recordRecoveredEditRaw).not.toHaveBeenCalled();
+  });
+
   it.each([0, 99])('recovers a valid image at the frozen unit price despite Provider amount %s', async amount => {
     const value = await fixture();
     const recovery = createAiImageEditRecovery({ repository: value.repository, getProviderConfig: async () => value.config, ...value.storage });

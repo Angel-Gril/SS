@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createExtensionHostedAiImagePolicyEvaluator,
 } from '../services/extension-hosted-ai-image-policy.js';
+import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
+import { getAiImageSuiteDispatchAuthorization } from '../services/ai-image-suite-dispatch-authorization.js';
 
 const identity = Object.freeze({
   ownerUserId: 'owner-1',
@@ -32,7 +34,7 @@ function workbenchDecision(overrides: Record<string, unknown> = {}) {
 function dependencies() {
   return {
     loadHostedFeatureEnabled: vi.fn(async () => true as unknown),
-    loadDispatchAuthorization: vi.fn(async (): Promise<unknown> => dispatchAuthorization()),
+    loadDispatchAuthorization: vi.fn(async (_ownerUserId: string): Promise<unknown> => dispatchAuthorization()),
     featureFlags: {
       evaluate: vi.fn(async (): Promise<unknown> => workbenchDecision()),
     },
@@ -40,6 +42,44 @@ function dependencies() {
 }
 
 describe('extension hosted AI image policy', () => {
+  it('accepts explicit all-tenant rollout through the actual dispatch authorization owner', async () => {
+    const options = dependencies();
+    const allowlisted = await createExtensionHostedAiImagePolicyEvaluator(options)(identity);
+    options.loadDispatchAuthorization.mockImplementation(ownerUserId => getAiImageSuiteDispatchAuthorization(ownerUserId, {
+      loadGenerationEnabled: async () => true,
+      loadSuiteEnabled: async () => true,
+      loadWebMediaEnabled: async () => true,
+      loadRollout: owner => getAiMediaRolloutDecision(owner, (async (key: string) => key === 'feature_ai_media_workflow_v2'
+        ? true : JSON.stringify({ revision: 9, mode: 'all', tenantIds: [] })) as never),
+    }));
+    const evaluate = createExtensionHostedAiImagePolicyEvaluator(options);
+    const global = await evaluate(identity);
+    expect(global).toMatchObject({ enabled: true, ...identity });
+    expect(global.revision).not.toBe(allowlisted.revision);
+    expect((await evaluate(identity)).revision).toBe(global.revision);
+  });
+
+  it.each([
+    { enabled: false, reasonCode: 'tenant_allowed' },
+    { enabled: false, reasonCode: 'all_tenants' },
+    { enabled: true, reasonCode: 'tenant_not_allowed' },
+    { enabled: true, reasonCode: 'master_off' },
+    { enabled: true, reasonCode: 'global' },
+    { enabled: true, reasonCode: 'all_tenants ' },
+  ])('rejects a contradictory or unknown dispatch result: $enabled / $reasonCode', async candidate => {
+    const options = dependencies();
+    options.loadDispatchAuthorization.mockResolvedValue(dispatchAuthorization(candidate));
+    await expect(createExtensionHostedAiImagePolicyEvaluator(options)(identity)).resolves.toMatchObject({ enabled: false, ...identity });
+  });
+
+  it.each(['hosted', 'workbench'] as const)('keeps the %s gate authoritative when all tenants are allowed', async gate => {
+    const options = dependencies();
+    options.loadDispatchAuthorization.mockResolvedValue(dispatchAuthorization({ reasonCode: 'all_tenants' }));
+    if (gate === 'hosted') options.loadHostedFeatureEnabled.mockResolvedValue(false);
+    else options.featureFlags.evaluate.mockResolvedValue(workbenchDecision({ enabled: false, reason: 'policy_off' }));
+    await expect(createExtensionHostedAiImagePolicyEvaluator(options)(identity)).resolves.toMatchObject({ enabled: false, ...identity });
+  });
+
   it('enables only the exact owner, shop, and device after every constituent allows it', async () => {
     const options = dependencies();
     const evaluate = createExtensionHostedAiImagePolicyEvaluator(options);

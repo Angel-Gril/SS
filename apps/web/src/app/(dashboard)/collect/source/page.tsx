@@ -35,7 +35,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
 import { SourceListingWorkbench } from '@/components/source-listing/source-listing-workbench';
-import { useSystemDialog } from '@/components/system-dialog-provider';
+import { useScopedSystemConfirmation, useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
@@ -1267,9 +1267,12 @@ function SourceDetailContent({
   onAiMediaInteractiveDraftDirtyChange: (dirty: boolean, discard?: () => void) => void;
   onDiscardAiMediaInteractiveDraft: () => void;
 }) {
-  function selectSection(section: DetailSection) {
+  const confirmSectionDiscard = useScopedSystemConfirmation(JSON.stringify([item.id, item.updatedAt, activeSection]));
+  async function selectSection(section: DetailSection) {
     if (section === activeSection) return;
-    if (!confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => window.confirm(message))) return;
+    if (!await confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => confirmSectionDiscard({
+      message, confirmText: '放弃修改', tone: 'destructive',
+    }))) return;
     onDiscardAiMediaInteractiveDraft();
     onSectionChange(section);
   }
@@ -3135,6 +3138,7 @@ function SourceCollectPageContent() {
   const [platform, setPlatform] = useState<PlatformFilter>('all');
   const [error, setError] = useState('');
   const [detailItem, setDetailItem] = useState<SourceCollectItem | null>(null);
+  const confirmDetailDiscard = useScopedSystemConfirmation(JSON.stringify([detailItem?.id, detailItem?.updatedAt]));
   const [activeDetailSection, setActiveDetailSection] = useState<DetailSection>('overview');
   const [aiMediaInteractiveDraftDirty, setAiMediaInteractiveDraftDirty] = useState(false);
   const aiMediaInteractiveDraftDiscardRef = useRef<(() => void) | null>(null);
@@ -3222,8 +3226,10 @@ function SourceCollectPageContent() {
     }, {});
   }, [items]);
 
-  function closeDetail() {
-    if (!confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => window.confirm(message))) return;
+  async function closeDetail() {
+    if (!await confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => confirmDetailDiscard({
+      message, confirmText: '放弃修改', tone: 'destructive',
+    }))) return;
     discardAiMediaInteractiveDraft();
     setDetailItem(null);
   }

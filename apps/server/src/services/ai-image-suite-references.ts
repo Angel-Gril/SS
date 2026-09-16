@@ -18,6 +18,7 @@ import {
   type DownloadPublicImageOptions,
 } from './source-public-image-download.js';
 import { buildSourceProductProfileFromCapture } from './source-product-profile.js';
+import { AI_MEDIA_PLANNING_SOURCE_VERSION } from './ai-media-planning-sources.js';
 
 export const AI_IMAGE_SUITE_REFERENCE_SET_VERSION = 'ai-image-suite-reference-set/v1';
 export const AI_IMAGE_SUITE_REFERENCE_MAX_COUNT = 25;
@@ -538,13 +539,17 @@ function resolveCaptureMedia(
   }
   const media = matches[0]!;
   const mediaSkuKeys = [...media.skuKeys].sort((left, right) => left.localeCompare(right));
+  // Missing capture metadata may be filled only by the bytes frozen before
+  // planning. Reuse/download validation below still proves these exact values.
+  const metadataMatches = (captured: unknown, frozen: unknown) => captured === frozen
+    || (captured == null && frozen != null && reference.source.contentHash != null);
   if (media.kind !== 'image'
     || media.disposition !== 'accepted'
     || !media.url
     || media.url !== reference.source.url
-    || media.width !== reference.source.width
-    || media.height !== reference.source.height
-    || normalizeMime(media.mimeType) !== reference.source.mimeType
+    || !metadataMatches(media.width, reference.source.width)
+    || !metadataMatches(media.height, reference.source.height)
+    || !metadataMatches(normalizeMime(media.mimeType), reference.source.mimeType)
     || media.role !== reference.source.role
     || !sameStringSet(mediaSkuKeys, reference.source.skuKeys)) {
     fail('AI_MEDIA_SUITE_REFERENCE_SOURCE_CHANGED', 409, 'Frozen source media no longer matches capture authority');
@@ -692,7 +697,17 @@ function assertReusableAssetIdentity(
   const assetMimeType = normalizeMime(asset.mimeType);
   const expectedSourceMimeType = sourceMimeType || reference.source.mimeType || assetMimeType;
   const canonicalMimeType = expectedSourceMimeType === 'image/png' ? 'image/png' : 'image/jpeg';
-  const complete = asset.metadata?.lineageVersion === AI_IMAGE_SUITE_REFERENCE_SET_VERSION
+  const planningSource = asset.metadata?.lineageVersion === AI_MEDIA_PLANNING_SOURCE_VERSION;
+  if (planningSource && (asset.metadata?.sourceSubjectId !== authority.sourceSubjectId
+    || asset.metadata?.sourceCaptureHash !== authority.sourceCaptureHash
+    || asset.metadata?.sourceProfileHash !== authority.sourceProfileHash
+    || asset.metadata?.sourceSchemaVersion !== authority.sourceSchemaVersion
+    || asset.metadata?.sourceUrl !== reference.source.url
+    || asset.metadata?.canonicalSha256 !== assetSha256
+    || asset.metadata?.pixelOrientationNormalized !== true)) {
+    fail('AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT', 409, 'Planning source provenance does not match the frozen suite');
+  }
+  const complete = (asset.metadata?.lineageVersion === AI_IMAGE_SUITE_REFERENCE_SET_VERSION || planningSource)
     && Boolean(sourceSha256 && sourceSizeBytes && sourceMimeType);
   if (asset.ownerUserId !== authority.ownerUserId
     || asset.kind !== 'SOURCE_ORIGINAL'

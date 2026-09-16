@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { useScopedSystemConfirmation } from '@/components/system-dialog-provider';
 
 interface PromptRevision {
   id: string;
@@ -227,6 +228,10 @@ export function AiPromptTemplateEditor() {
   const canPublish = selectedRevision?.status === 'DRAFT'
     && testResult?.revisionId === selectedRevision.id
     && testResult.checksum === selectedRevision.checksum;
+  const confirmDraftAction = useScopedSystemConfirmation(JSON.stringify([
+    selectedKey, selectedRevisionId, selectedTemplate?.currentSequence,
+    promptTemplate, negativePromptTemplate, note, busy,
+  ]));
 
   useEffect(() => {
     void loadTemplates();
@@ -311,8 +316,12 @@ export function AiPromptTemplateEditor() {
     setTestResult(null);
   }
 
-  function confirmDiscardDraft(): boolean {
-    return !hasUnsavedDraft || window.confirm('当前修订尚未保存，确认放弃这些修改？');
+  async function confirmDiscardDraft(): Promise<boolean> {
+    return !hasUnsavedDraft || await confirmDraftAction({
+      message: '当前修订尚未保存，确认放弃这些修改？',
+      confirmText: '放弃修改',
+      tone: 'destructive',
+    });
   }
 
   async function saveRevision() {
@@ -425,8 +434,8 @@ export function AiPromptTemplateEditor() {
   }
 
   async function rollbackRevision(revision: PromptRevision) {
-    if (!selectedTemplate) return;
-    if (!window.confirm('确认回滚到所选历史版本？历史记录不会被覆盖。')) return;
+    if (!selectedTemplate || isBusy) return;
+    if (!await confirmDraftAction({ message: '确认回滚到所选历史版本？历史记录不会被覆盖。', confirmText: '确认回滚', tone: 'destructive' })) return;
     setBusy('rollback');
     try {
       const response = await api.post(
@@ -486,8 +495,8 @@ export function AiPromptTemplateEditor() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => {
-              if (confirmDiscardDraft()) {
+            onClick={async () => {
+              if (await confirmDiscardDraft()) {
                 startNewRevision(selectedRevision || selectedTemplate?.activeRevision);
               }
             }}
@@ -508,10 +517,11 @@ export function AiPromptTemplateEditor() {
             <span className="font-medium">模板选择</span>
             <select
               value={selectedTemplate?.key || selectedKey}
-              onChange={(event) => {
-                if (!confirmDiscardDraft()) return;
-                setSelectedKey(event.target.value);
-                const next = data?.items.find((item) => item.key === event.target.value);
+              onChange={async (event) => {
+                const nextKey = event.target.value;
+                if (!await confirmDiscardDraft()) return;
+                setSelectedKey(nextKey);
+                const next = data?.items.find((item) => item.key === nextKey);
                 resetSampleValues(next);
                 startNewRevision(next?.activeRevision);
               }}
@@ -682,8 +692,8 @@ export function AiPromptTemplateEditor() {
               <div key={revision.id} className="space-y-2 rounded-md border bg-background p-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (confirmDiscardDraft()) selectRevision(revision);
+                  onClick={async () => {
+                    if (await confirmDiscardDraft()) selectRevision(revision);
                   }}
                   disabled={isBusy}
                   aria-current={active ? 'true' : undefined}

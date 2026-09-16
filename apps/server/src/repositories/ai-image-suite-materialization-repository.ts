@@ -29,16 +29,18 @@ import {
   type MaterializeAiImageSuiteInput,
 } from '../services/ai-image-suite-materialization.js';
 import {
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+  aiImageSuiteQuoteCurrency,
+  isWanxAiImageSuiteProvider,
   aiImageSuiteProviderRuntimeMatches,
   type AiImageSuiteProviderRuntimeSnapshot,
 } from '../services/ai-image-suite-provider-runtime.js';
 import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-suite-output-normalizer.js';
 import type { AiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { assertWanxImageToImageInput } from '../services/ai-image-wanx-image-to-image.js';
 import {
   AI_IMAGE_SUITE_PROMPT_SET_VERSION,
   AI_IMAGE_SUITE_SLOT_PROMPT_VERSION,
+  AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION,
 } from '../services/ai-image-suite-prompts.js';
 import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 
@@ -322,7 +324,8 @@ function promptRowValid(prompt: any, promptSet: any, slot: any, ordinal: number)
     || String(prompt.policyVersion) !== String(promptSet.policyVersion)
     || String(prompt.policyHash) !== String(promptSet.policyHash)
     || !exact(prompt.resolvedPrompt, 64_000)
-    || !exact(prompt.resolvedNegativePrompt, 16_000)
+    || !(exact(prompt.resolvedNegativePrompt, 16_000)
+      || (prompt.compilerVersion === AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION && prompt.resolvedNegativePrompt === ''))
     || !sha256(prompt.bindingHash)
     || !sha256(prompt.variablesHash)
     || !sha256(prompt.compiledPromptHash)
@@ -518,6 +521,12 @@ function prepareSlots(
     }
     const prompt = promptBySlot.get(String(slot.id));
     if (!prompt) return null;
+    if (isWanxAiImageSuiteProvider(String(suite.provider), String(suite.model))) {
+      try {
+        assertWanxImageToImageInput({ count: 1, width: providerRuntime?.width || 0, height: providerRuntime?.height || 0,
+          referenceCount: references.length, prompt: prompt.resolvedPrompt, negativePrompt: prompt.resolvedNegativePrompt });
+      } catch { return null; }
+    }
     const commonOperationConfig = {
       outputProfile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
       width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
@@ -538,8 +547,8 @@ function prepareSlots(
           providerRuntime,
           providerRequest: {
             count: 1,
-            width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
-            height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
+            width: providerRuntime.width,
+            height: providerRuntime.height,
           },
           finalOutput: {
             profile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
@@ -912,7 +921,7 @@ async function createChildGraph(
     provider: String(suite.provider),
     model: String(suite.model),
     operation: 'IMAGE_TO_IMAGE',
-    currency: 'USD',
+    currency: aiImageSuiteQuoteCurrency(String(suite.pricingVersion)),
     roundingMode: 'HALF_UP',
     estimatedCostMinor: Number(slot.estimatedCostCents),
     maximumCostMinor: Number(slot.maximumCostCents),
@@ -1030,6 +1039,7 @@ implements AiImageSuiteMaterializationRepository {
           controls,
           requestedUnits: Number(suite.itemCount),
           requestedMaximumCostCents: Number(suite.maximumCostCents),
+          currency: aiImageSuiteQuoteCurrency(String(suite.pricingVersion)),
         });
         if (costControlFailure) return costControlFailure;
       }

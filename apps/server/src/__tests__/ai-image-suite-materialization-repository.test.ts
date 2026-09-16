@@ -799,6 +799,29 @@ describe('Prisma AI image suite materialization repository', () => {
     });
   });
 
+  it('materializes Wanx children with the frozen square request and CNY reservation', async () => {
+    const fixture = clientFixture({ paid: true });
+    const runtime: any = paidProviderRuntime();
+    const pricingVersion = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+    Object.assign(fixture.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', pricingVersion, estimatedCostCents: 14, maximumCostCents: 14 });
+    Object.assign(fixture.slot, { estimatedCostCents: 14, maximumCostCents: 14 });
+    Object.assign(fixture.promptSet, { provider: fixture.suite.provider, model: fixture.suite.model });
+    Object.assign(runtime.providerConfig, { provider: fixture.suite.provider, model: fixture.suite.model, pricingVersion,
+      estimatedCostPerImageCents: 14, maximumCostPerImageCents: 14 });
+    Object.assign(runtime.providerRuntime, { provider: fixture.suite.provider, model: fixture.suite.model,
+      contractVersion: 'ai-image-provider-runtime/v3', currency: 'CNY', height: 1024, unitCostCents: 14, maximumCostCents: 14,
+      credentialRevision: { recordId: 'wanx-key', revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' } });
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls: async () => ({ dailyLimit: 5, globalDailyBudgetCents: 100 }), getProviderRuntime: async () => runtime,
+    });
+    await expect(repository.materialize(input)).resolves.toMatchObject({ kind: 'committed' });
+    expect(fixture.tx.aiImageJob.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      estimatedCostCents: 14, operationConfig: expect.objectContaining({ providerRequest: { count: 1, width: 1024, height: 1024 } }),
+    }) });
+    expect(fixture.tx.aiCostReservation.create).toHaveBeenCalledWith({ data: expect.objectContaining({ currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14 }) });
+    expect(fixture.tx.aiCostSettlement.aggregate).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ reservation: { currency: 'CNY' } }) }));
+  });
+
   it('fails paid materialization closed before policy or writes when runtime evidence is unavailable', async () => {
     const fixture = clientFixture({ paid: true });
     const getCostControls = vi.fn(async () => ({ dailyLimit: 5, globalDailyBudgetCents: 100 }));

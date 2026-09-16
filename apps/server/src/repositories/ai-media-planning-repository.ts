@@ -8,6 +8,13 @@ import {
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
 import {
+  AI_MEDIA_PLANNING_SOURCE_MAX_CANDIDATES,
+  AiMediaPlanningSourceError,
+  type AiMediaPlanningSourceAsset,
+  type AiMediaPlanningSourceAssetCreateInput,
+  type AiMediaPlanningSourceScope,
+} from '../services/ai-media-planning-sources.js';
+import {
   AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
   buildManualAiMediaSlotVersionArtifacts,
   hashAiMediaPlanningJson,
@@ -107,6 +114,22 @@ function planRecord(row: any): AiMediaPlanRecord {
 
 function isUniqueConstraintError(error: unknown): boolean {
   return String((error as { code?: unknown } | null)?.code || '') === 'P2002';
+}
+
+function planningSourceAssetRecord(row: any): AiMediaPlanningSourceAsset {
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata as Record<string, unknown>
+    : null;
+  return {
+    id: row.id, ownerUserId: row.ownerUserId, kind: row.kind,
+    sourceCaptureSnapshotId: row.sourceCaptureSnapshotId,
+    sourceMediaKey: row.sourceMediaKey, sourceUrl: row.sourceUrl,
+    url: row.url, storageBackend: row.storageBackend, storageKey: row.storageKey,
+    mimeType: row.mimeType, sizeBytes: row.sizeBytes, width: row.width, height: row.height,
+    sha256: row.sha256,
+    sourceSha256: typeof metadata?.sourceSha256 === 'string' ? metadata.sourceSha256 : null,
+    metadata,
+  };
 }
 
 function eventPayload<T extends Record<string, unknown>>(payload: T) {
@@ -641,6 +664,85 @@ async function updateSlotReferencesInTransaction(
 
 export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  async findPlanningSourceAssets(input: {
+    ownerUserId: string;
+    sourceCaptureSnapshotId: string;
+    sourceMediaKeys: string[];
+  }): Promise<AiMediaPlanningSourceAsset[]> {
+    if (input.sourceMediaKeys.length > AI_MEDIA_PLANNING_SOURCE_MAX_CANDIDATES) {
+      throw new AiMediaPlanningSourceError(
+        'AI_MEDIA_PLANNING_SOURCE_LIMIT_EXCEEDED', 413, 'Planning source lookup exceeds the candidate limit',
+      );
+    }
+    if (input.sourceMediaKeys.length === 0) return [];
+    const rows = await this.prisma.mediaAsset.findMany({
+      where: {
+        ownerUserId: input.ownerUserId,
+        sourceCaptureSnapshotId: input.sourceCaptureSnapshotId,
+        sourceCaptureSnapshot: { subject: { ownerUserId: input.ownerUserId } },
+        sourceMediaKey: { in: input.sourceMediaKeys },
+        kind: 'SOURCE_ORIGINAL', aiImageJobId: null,
+        storageBackend: { in: ['local', 'oss'] },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: AI_MEDIA_PLANNING_SOURCE_MAX_CANDIDATES * 2,
+    });
+    return rows.map(planningSourceAssetRecord);
+  }
+
+  async createPlanningSourceAsset(input: {
+    scope: AiMediaPlanningSourceScope;
+    asset: AiMediaPlanningSourceAssetCreateInput;
+  }): Promise<AiMediaPlanningSourceAsset | null> {
+    const { scope, asset } = input;
+    if (scope.ownerUserId !== asset.ownerUserId
+      || scope.sourceCaptureSnapshotId !== asset.sourceCaptureSnapshotId
+      || asset.metadata.sourceCaptureHash !== scope.sourceCaptureHash
+      || asset.metadata.sourceProfileHash !== scope.sourceProfileHash
+      || asset.metadata.sourceSha256 !== asset.sourceSha256) {
+      throw new AiMediaPlanningSourceError(
+        'AI_MEDIA_PLANNING_SOURCE_ASSET_CONFLICT', 409, 'Planning source asset has conflicting ownership or provenance',
+      );
+    }
+    const { sourceSha256: _sourceSha256, ...data } = asset;
+    const where = {
+      ownerUserId: scope.ownerUserId,
+      sourceCaptureSnapshotId: scope.sourceCaptureSnapshotId,
+      sourceMediaKey: asset.sourceMediaKey,
+      storageBackend: asset.storageBackend,
+      kind: 'SOURCE_ORIGINAL' as const,
+      aiImageJobId: null,
+    };
+    const checkWinner = (row: any) => {
+      if (!row) return null;
+      const winner = planningSourceAssetRecord(row);
+      if (winner.sourceUrl !== asset.sourceUrl || winner.sha256 !== asset.sha256
+        || winner.sourceSha256 !== asset.sourceSha256 || winner.sizeBytes !== asset.sizeBytes
+        || winner.mimeType !== asset.mimeType || winner.width !== asset.width || winner.height !== asset.height) {
+        throw new AiMediaPlanningSourceError(
+          'AI_MEDIA_PLANNING_SOURCE_ASSET_CONFLICT', 409, 'Concurrent source bytes differ from the frozen asset',
+        );
+      }
+      return winner;
+    };
+    try {
+      return await runAiMediaSerializableTransaction(this.prisma, async (tx: any) => {
+        if (!sameSourceAuthority(await loadLatestOwnedSourceAuthority(tx, scope), scope)) return null;
+        const existing = await tx.mediaAsset.findFirst({ where });
+        if (existing) return checkWinner(existing);
+        return planningSourceAssetRecord(await tx.mediaAsset.create({ data: data as never }));
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      return runAiMediaSerializableTransaction(this.prisma, async (tx: any) => {
+        if (!sameSourceAuthority(await loadLatestOwnedSourceAuthority(tx, scope), scope)) return null;
+        const winner = checkWinner(await tx.mediaAsset.findFirst({ where }));
+        if (!winner) throw error;
+        return winner;
+      });
+    }
+  }
 
   async resolveCurrentRulePlanningTarget(input: {
     ownerUserId: string;

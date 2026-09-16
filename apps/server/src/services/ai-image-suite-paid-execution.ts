@@ -11,6 +11,7 @@ import {
 import type {
   AiImageSuiteDispatchAuthorization,
 } from './ai-image-suite-dispatch-authorization.js';
+import { isWanxAiImageSuiteProvider } from './ai-image-suite-provider-runtime.js';
 
 export type AiImageSuitePaidExecutionErrorCode =
   | 'AI_MEDIA_SUITE_DISPATCH_REVOKED'
@@ -179,6 +180,7 @@ async function persistOutputs(
     ExecuteAiImageSuitePaidProviderDependencies<unknown>,
     'assertClaim' | 'uploadBuffer' | 'recordProviderOutput'
   >,
+  providerRequest = { width: 1024, height: 1536 },
 ) {
   const rawSha256 = createHash('sha256').update(raw.buffer).digest('hex');
   await dependencies.assertClaim();
@@ -196,8 +198,8 @@ async function persistOutputs(
   const rawAsset = storedAsset(rawStored, {
     mimeType: raw.mimeType,
     sizeBytes: raw.buffer.length,
-    width: 1024,
-    height: 1536,
+    width: providerRequest.width,
+    height: providerRequest.height,
     sha256: rawSha256,
     metadata: {
       version: 'ai-image-suite-provider-output/v1',
@@ -246,7 +248,7 @@ export async function executeAiImageSuitePaidProvider<T>(
   )({ suite: input.suite, job: input.job });
   await dependencies.assertClaim();
 
-  let providerJobId: string | null = null;
+  let providerJobId: string | null = exactProviderJobId(input.job.providerJobId);
   let providerAcceptedAt: Date | null = null;
   let providerResultReceived = false;
   let knownActualCostCents: number | null = null;
@@ -321,6 +323,15 @@ export async function executeAiImageSuitePaidProvider<T>(
         'AI image suite Provider cost exceeds the frozen reservation',
       );
     }
+    const raw = result.images[0];
+    const normalizeOutput = dependencies.normalizeOutput || normalizeAiImageSuiteProviderOutput;
+    // Wanx quotes charge successful validated images; old USD suite evidence
+    // ordering remains unchanged for its historical operation profile.
+    let normalized: NormalizedAiImageSuiteProviderOutput | undefined;
+    if (prepared.providerRequest) {
+      await dependencies.assertClaim();
+      normalized = await normalizeOutput({ buffer: raw.buffer, mimeType: raw.mimeType, providerRequest: prepared.providerRequest });
+    }
     knownActualCostCents = actualCostCents;
     const providerResultReceivedAt = now();
     knownProviderResultReceivedAt = providerResultReceivedAt;
@@ -329,16 +340,13 @@ export async function executeAiImageSuitePaidProvider<T>(
       actualCostCents,
       providerResultReceivedAt,
     });
-    const raw = result.images[0];
     await dependencies.assertClaim();
-    const normalized = await (
-      dependencies.normalizeOutput || normalizeAiImageSuiteProviderOutput
-    )({ buffer: raw.buffer, mimeType: raw.mimeType });
+    normalized ||= await normalizeOutput({ buffer: raw.buffer, mimeType: raw.mimeType });
     const output = await persistOutputs(input, raw, normalized, {
       providerJobId,
       actualCostCents,
       providerResultReceivedAt,
-    }, dependencies);
+    }, dependencies, prepared.providerRequest);
     await dependencies.assertClaim();
     return await dependencies.complete({
       providerJobId,
@@ -356,4 +364,38 @@ export async function executeAiImageSuitePaidProvider<T>(
       providerResultReceivedAt: knownProviderResultReceivedAt,
     });
   }
+}
+
+/** Reuse only the accepted task. This path never invokes the Provider create method. */
+export async function recoverAiImageSuitePaidProvider<T>(
+  input: ExecuteAiImageSuitePaidProviderInput,
+  dependencies: ExecuteAiImageSuitePaidProviderDependencies<T>,
+): Promise<T> {
+  const taskId = exactProviderJobId(input.job.providerJobId);
+  if (!taskId || !isWanxAiImageSuiteProvider(input.job.provider, input.job.model)) {
+    throw Object.assign(new Error('Suite recovery requires its original accepted Wanx task'), { code: 'SUITE_PROVIDER_RECOVERY_UNSUPPORTED' });
+  }
+  const prepared = await (dependencies.prepareProvider || prepareAiImageSuitePaidProviderExecution)({ suite: input.suite, job: input.job });
+  if (!prepared.recover) {
+    throw Object.assign(new Error('Suite Provider has no read-only task recovery'), { code: 'SUITE_PROVIDER_RECOVERY_UNSUPPORTED' });
+  }
+  return executeAiImageSuitePaidProvider(input, {
+    ...dependencies,
+    prepareProvider: async () => ({
+      ...prepared,
+      async execute() {
+        const result = await prepared.recover!(taskId, dependencies.assertClaim);
+        if (result.providerJobId !== taskId) {
+          throw Object.assign(new Error('Suite lookup returned a different task'), { code: 'SUITE_PROVIDER_RESULT_INVALID', providerJobId: taskId });
+        }
+        if (result.status !== 'SUCCEEDED') {
+          throw Object.assign(new Error(result.status === 'PENDING' ? 'Suite Provider task is still pending' : result.errorMessage), {
+            code: result.status === 'PENDING' ? 'SUITE_PROVIDER_RECOVERY_PENDING' : 'SUITE_PROVIDER_RECOVERY_NO_OUTPUT',
+            providerJobId: taskId,
+          });
+        }
+        return { providerJobId: taskId, images: [result.image], actualCostCents: result.actualCostCents };
+      },
+    }),
+  });
 }

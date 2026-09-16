@@ -21,6 +21,7 @@ const DISPATCH_REASON_CODES = new Set([
   'source_web_media_off',
   'suite_off',
   'tenant_allowed',
+  'all_tenants',
   'tenant_not_allowed',
 ]);
 const WORKBENCH_REASONS = new Set([
@@ -131,7 +132,7 @@ function dispatchDecision(
     && reason.length > 0
     && reason.length <= 500;
   if (typeof enabled !== 'boolean' || !validReasonCode || !validReason
-    || enabled !== (reasonCode === 'tenant_allowed')) {
+    || enabled !== (reasonCode === 'tenant_allowed' || reasonCode === 'all_tenants')) {
     return { enabled: false, revisionPart: 'dispatch:invalid' };
   }
   return {

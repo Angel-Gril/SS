@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_SUITE_GENERATION_QUEUE_JOB_OPTIONS,
   AiImageSuiteGenerationWorkerError,
@@ -47,6 +48,31 @@ afterEach(() => {
 });
 
 describe('AI image suite generation queue contract', () => {
+  it('admits Wanx only with the frozen CNY single-reference request contract', async () => {
+    const providerRuntime = createAiImageProviderRuntimeContract({
+      provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+      costPerImageCents: 14, currency: 'CNY',
+      credentialRevision: { recordId: 'wanx-key', revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' },
+    }, { count: 1, width: 1024, height: 1024 });
+    for (const changed of [false, true]) {
+      const dependency = coordinator({ revalidateAndClaim: vi.fn(async () => ({
+        kind: 'ready', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerFacing: true,
+        evidenceLevel: 'adapter-characterized', executionToken: 'claim-wanx',
+        operationConfig: { version: 'ai-image-suite-child-operation/v2', providerRuntime,
+          providerRequest: { count: 1, width: 1024, height: changed ? 1536 : 1024 } },
+      } as any)) });
+      const operation = processAiImageSuiteGenerationQueueJob(payload(), { coordinator: dependency,
+        acquireLease: async () => true, releaseLease: async () => undefined, nodeEnv: 'production' });
+      if (changed) {
+        await expect(operation).rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_PAID_PROVIDER_NOT_VERIFIED' });
+        expect(dependency.execute).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).resolves.toBe('completed');
+        expect(dependency.execute).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
   it('uses one deterministic queue id and strips all non-contract fields from queue data', async () => {
     const queue = { add: vi.fn(async () => undefined) };
     const input = { ...payload(), prompt: 'must-not-enter-redis', ownerUserId: 'must-not-enter-redis' };

@@ -3,6 +3,7 @@ import Fastify, { type FastifyRequest } from 'fastify';
 import { getAiImageEditProviderRuntimeConfig } from '../workers/ai-image-edit.js';
 import { getStrictConfigSnapshot, setConfig } from '../config/system-config-schema.js';
 import { aiImageRoutes } from '../routes/ai-images.js';
+import { getAiImageOperationProviderRuntimeConfig } from '../services/ai-image-operation-runtime-config.js';
 
 const db = vi.hoisted(() => ({ findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() }));
 vi.mock('../lib/prisma.js', () => ({ prisma: { systemConfig: db } }));
@@ -50,6 +51,48 @@ describe('hosted edit credential snapshot', () => {
     expect(db.findMany).toHaveBeenCalledOnce();
     expect(db.findUnique).not.toHaveBeenCalled();
     expect(JSON.stringify(config.credentialRevision)).not.toContain(values.ai_image_api_key);
+  });
+
+  it('selects the text model and its own price without changing any edit operation', async () => {
+    db.findMany.mockResolvedValue([
+      ...rows,
+      { key: 'ai_image_text_to_image_model', value: 'wanx2.1-t2i-turbo' },
+      { key: 'ai_image_text_to_image_cost_cents', value: '5' },
+    ]);
+    const text = await getAiImageOperationProviderRuntimeConfig('TEXT_TO_IMAGE');
+    expect(text).toMatchObject({ provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', costPerImageCents: 5, currency: 'CNY' });
+    expect(db.findMany).toHaveBeenCalledOnce();
+    expect(db.findUnique).not.toHaveBeenCalled();
+    for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const) {
+      expect(await getAiImageOperationProviderRuntimeConfig(operation)).toMatchObject({
+        model: 'wanx2.1-imageedit', costPerImageCents: 7,
+        credentialRevision: { recordId: 'record-ai_image_api_key', revision: 3 },
+      });
+    }
+  });
+
+  it('does not charge the edit price when the text override has no positive price', async () => {
+    db.findMany.mockResolvedValue([...rows, { key: 'ai_image_text_to_image_model', value: 'wanx2.1-t2i-turbo' }]);
+    expect(await getAiImageOperationProviderRuntimeConfig('TEXT_TO_IMAGE')).toMatchObject({
+      model: 'wanx2.1-t2i-turbo', costPerImageCents: 0,
+    });
+  });
+
+  it('preserves legacy model and price when no text model override was configured', async () => {
+    db.findMany.mockResolvedValue([...rows, { key: 'ai_image_text_to_image_cost_cents', value: '5' }]);
+    expect(await getAiImageOperationProviderRuntimeConfig('TEXT_TO_IMAGE')).toMatchObject({
+      model: 'wanx2.1-imageedit', costPerImageCents: 7,
+    });
+  });
+
+  it('a corrupt text-only price cannot disable correctly configured edit operations', async () => {
+    db.findMany.mockResolvedValue([
+      ...rows,
+      { key: 'ai_image_text_to_image_model', value: 'wanx2.1-t2i-turbo' },
+      { key: 'ai_image_text_to_image_cost_cents', value: 'invalid-price' },
+    ]);
+    await expect(getAiImageOperationProviderRuntimeConfig('TEXT_TO_IMAGE')).rejects.toThrow();
+    expect(await getAiImageOperationProviderRuntimeConfig('INPAINT')).toMatchObject({ model: 'wanx2.1-imageedit', costPerImageCents: 7 });
   });
 
   it('exposes requested revision metadata without changing the existing values-only snapshot contract', async () => {

@@ -570,8 +570,13 @@ assert.doesNotMatch(
 );
 assert.match(
   attributeEditor,
-  /const editorLocked = listingWorkflowLoading \|\| workspaceLoading \|\| !!busyAction;[\s\S]*disabled=\{readOnly \|\| editorLocked\}/,
-  'attribute controls should prevent edits while a revision-changing mutation is in flight',
+  /const editorLocked = disabled \|\| listingWorkflowLoading \|\| workspaceLoading \|\| !!busyAction;[\s\S]*disabled=\{readOnly \|\| editorLocked\}/,
+  'attribute controls should honor the parent lock, read-only fields and revision-changing mutations',
+);
+assert.match(
+  attributeEditor,
+  /const readOnly = field\.editorMode === 'READ_ONLY' \|\| field\.editorMode === 'MEDIA_WORKBENCH';/,
+  'attributes owned by read-only or media workflows must remain locked in the generic editor',
 );
 const saveAttribute = attributeEditor.match(/async function saveAttribute[\s\S]*?\n  async function applyAttributeSuggestion/)?.[0] || '';
 for (const token of ['expectedRevision: context.revision', 'changes: [change]', 'skuKey', 'evidence', 'applyListingWorkflowDraft', 'refreshAttributeWorkspace']) {

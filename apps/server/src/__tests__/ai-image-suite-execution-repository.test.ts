@@ -4,6 +4,7 @@ import {
   PrismaAiImageSuiteGenerationCoordinator,
 } from '../repositories/ai-image-suite-execution-repository.js';
 import type { AiImageSuiteGenerationQueuePayload } from '../workers/ai-image-suite-generation.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 const FINGERPRINT = 'a'.repeat(64);
 
@@ -328,6 +329,7 @@ function finishFixture() {
   };
   return {
     operations,
+    suite, slot, workflow,
     reservation,
     job,
     tx,
@@ -339,6 +341,60 @@ function finishFixture() {
 }
 
 describe('AI image suite execution repository paid safety', () => {
+  it('bounds an injected execution lease without extending the production maximum', () => {
+    expect(() => new PrismaAiImageSuiteGenerationCoordinator({} as any, { executionLeaseMs: 999 } as any)).toThrow(/lease/u);
+    expect(() => new PrismaAiImageSuiteGenerationCoordinator({} as any, { executionLeaseMs: 120001 } as any)).toThrow(/lease/u);
+  });
+  it('fences an expired Wanx claim and recovers its original task without reopening dispatch', async () => {
+    const payload = { suiteId: 'suite-1', slotId: 'slot-1', workflowId: 'workflow-1', jobId: 'job-1', attempt: 1 };
+    const fixture = finishFixture();
+    const { suite, slot, workflow, job, reservation } = fixture;
+    const runtime = createAiImageProviderRuntimeContract({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY',
+      credentialRevision: { recordId: 'wanx-key', revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' },
+    }, { count: 1, width: 1024, height: 1024 });
+    Object.assign(suite, { provider: runtime.provider, model: runtime.model, sourceCaptureSnapshotId: 'snapshot-1',
+      pricingVersion: `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, estimatedCostCents: 14, maximumCostCents: 14 });
+    const prompt = { id: 'prompt-1', bindingHash: 'b'.repeat(64), slotId: slot.id, suiteId: suite.id, ownerUserId: 'owner-1',
+      ordinal: 0, slotKey: slot.slotKey, resolvedPrompt: '保留完整商品并生成清晰主图', resolvedNegativePrompt: '',
+      templateKey: 'suite-wanx', templateReleaseId: 'release-1', templateChecksum: 'd'.repeat(64), templateSnapshot: {} };
+    const asset = { id: 'asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: 'snapshot-1',
+      sha256: 'e'.repeat(64), mimeType: 'image/png', width: 1024, height: 1024, storageBackend: 'local', storageKey: 'qa.png', sizeBytes: 1024 };
+    Object.assign(slot, { estimatedCostCents: 14, maximumCostCents: 14, prompt,
+      executionClaimToken: '1'.repeat(64), executionLeaseExpiresAt: new Date(Date.now() - 1000) });
+    Object.assign(workflow, { operation: 'IMAGE_TO_IMAGE', inputs: [{ assetId: asset.id, role: 'REFERENCE', ordinal: 0,
+      assetSha256: asset.sha256, mimeType: asset.mimeType, width: asset.width, height: asset.height, asset }] });
+    Object.assign(job, { provider: runtime.provider, model: runtime.model, estimatedCostCents: 14, width: 900, height: 1200, maxAttempts: 1,
+      providerDispatchedAt: new Date(Date.now() - 30_000), providerJobId: 'wanx-original',
+      prompt: prompt.resolvedPrompt, resolvedPrompt: prompt.resolvedPrompt, negativePrompt: '', resolvedNegativePrompt: '',
+      templateKey: prompt.templateKey, templateReleaseId: prompt.templateReleaseId, templateChecksum: prompt.templateChecksum, templateSnapshot: {},
+      inputAssets: [{ ...asset, assetId: asset.id, role: 'REFERENCE', ordinal: 0 }],
+      operationConfig: { version: 'ai-image-suite-child-operation/v2', width: 900, height: 1200,
+        outputProfile: 'ozon-suite-3x4-900x1200/v1', slotPromptId: prompt.id, promptBindingHash: prompt.bindingHash,
+        providerRuntime: runtime, providerRequest: { count: 1, width: 1024, height: 1024 },
+        finalOutput: { profile: 'ozon-suite-3x4-900x1200/v1', width: 900, height: 1200, fit: 'contain', background: '#ffffff', format: 'png', normalizerVersion: 'ai-image-suite-output-normalizer/v1' } } });
+    Object.assign(reservation, { provider: runtime.provider, model: runtime.model, currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14 });
+    const executePaidProvider = vi.fn();
+    const recoverPaidProvider = vi.fn(async () => []);
+    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(fixture.prisma as any, {
+      runtimeReady: async () => false, outputStorageReady: async () => true,
+      uploadBuffer: vi.fn(), executePaidProvider, recoverPaidProvider,
+    } as any);
+    const claimed = await coordinator.revalidateAndClaim(payload);
+    expect(claimed).toMatchObject({ kind: 'ready', providerFacing: false, executionToken: expect.stringMatching(/^recover:/u) });
+    expect(slot.executionClaimToken).not.toBe('1'.repeat(64));
+    expect(slot.executionLeaseExpiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect((job as any).providerReconciliationAttemptCount || 0).toBe(0);
+    expect(fixture.tx.aiMediaWorkflowEvent.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({ eventType: 'PROVIDER_RECOVERY_CLAIMED' })],
+    }));
+    await expect(coordinator.revalidateAndClaim(payload)).resolves.toEqual({ kind: 'ignored' });
+    await expect(coordinator.execute(payload, claimed as any)).resolves.toMatchObject({ kind: 'completed' });
+    expect(recoverPaidProvider).toHaveBeenCalledWith(expect.objectContaining({ job: expect.objectContaining({ providerJobId: 'wanx-original' }) }), expect.any(Object));
+    expect(executePaidProvider).not.toHaveBeenCalled();
+    expect(reservation.status).toBe('RESERVED');
+  });
+
   it.each([
     ['non-zero actual cost', { actualCostCents: 9 }],
     ['billed unit', { billedUnits: 1 }],

@@ -49,6 +49,20 @@ export function apiUrl(path: string): string {
   return `${getApiBase()}${path}`;
 }
 
+function apiRequestUrl(path: string): string {
+  const base = getApiBase();
+  if (typeof window !== 'undefined') {
+    const { origin } = window.location;
+    // Use the existing regional Web proxy only for browser transport. Published
+    // URLs and extension pairing still use getApiBase()/apiUrl() unchanged.
+    if ((origin === 'https://app.ss-erp.com' && base === 'https://ss-erp.com')
+      || (origin === 'https://app.ss-erp.cn' && base === 'https://ss-erp.cn')) {
+      return `${origin}${path}`;
+    }
+  }
+  return `${base}${path}`;
+}
+
 export type ApiResponseCode = number | string;
 
 export interface ApiResponse<T = unknown> {
@@ -151,7 +165,7 @@ export async function apiFetch<T = unknown>(
   if (options.body) headers.set('Content-Type', 'application/json');
 
   return withApiRequestDeadline(options, async (signal) => {
-    const res = await fetch(apiUrl(path), {
+    const res = await fetch(apiRequestUrl(path), {
       ...requestOptions,
       signal,
       headers,
@@ -199,7 +213,7 @@ export async function apiDownload(
 ): Promise<{ ok: true } | { ok: false; msg: string }> {
   const headers = new Headers(options.headers);
 
-  const res = await fetch(apiUrl(path), {
+  const res = await fetch(apiRequestUrl(path), {
     ...options,
     headers,
     credentials: 'include',

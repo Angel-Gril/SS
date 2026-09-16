@@ -45,6 +45,38 @@ const exactCapability = (evidenceLevel: AiImageProviderCapability['evidenceLevel
 }) satisfies AiImageProviderCapability;
 
 describe('AI image suite Provider runtime snapshot', () => {
+  const wanxSettings = (overrides: Record<string, unknown> = {}) => settings({
+    provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY',
+    credentialRevision: { recordId: 'wanx-key', revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' },
+    ...overrides,
+  });
+
+  it('admits the registered Wanx single-reference asynchronous transport and freezes CNY plus its credential revision', () => {
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(wanxSettings(), { nodeEnv: 'production' });
+    expect(snapshot).toMatchObject({
+      configured: true, executionReady: true, testOnly: false, reasonCode: 'READY',
+      capability: { inputTransport: 'base64', resultMode: 'async', maxReferences: 1 },
+      providerRuntime: { contractVersion: 'ai-image-provider-runtime/v3', currency: 'CNY',
+        width: 1024, height: 1024, imageCount: 1, unitCostCents: 14, maximumCostCents: 14,
+        credentialRevision: { recordId: 'wanx-key', revision: 4 } },
+      providerConfig: { pricingVersion: expect.stringMatching(/^ai-image-suite-price-cny\/v1:/u) },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('secret-key-must-not-leak');
+  });
+
+  it('rejects invalid Wanx currency, absent revisions, custom endpoints and changed frozen identity', () => {
+    for (const change of [{ currency: 'USD' }, { credentialRevision: undefined }, { baseUrl: 'https://relay.example/api/v1' }]) {
+      expect(createAiImageSuiteProviderRuntimeSnapshot(wanxSettings(change)).executionReady).toBe(false);
+    }
+    const initial = createAiImageSuiteProviderRuntimeSnapshot(wanxSettings());
+    const rotated = createAiImageSuiteProviderRuntimeSnapshot(wanxSettings({
+      credentialRevision: { recordId: 'wanx-key', revision: 5, updatedAt: '2026-09-16T01:00:00.000Z' },
+    }));
+    expect(initial.providerConfig).not.toBeNull();
+    expect(rotated.providerConfig?.providerConfigHash).not.toBe(initial.providerConfig?.providerConfigHash);
+  });
+
   it('preserves the stable provider-free identity and blocks fake in production', () => {
     const expected = createHash('sha256').update(JSON.stringify({
       version: 'ai-image-suite-runtime/v1',

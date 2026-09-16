@@ -45,6 +45,7 @@ try {
     'src/__tests__/ai-image-suite.postgres.integration.test.ts',
     'src/__tests__/ai-image-suite-execution.postgres.integration.test.ts',
     'src/__tests__/ai-image-suite-paid-execution.postgres.integration.test.ts',
+    'src/__tests__/ai-image-suite-wanx-migration.postgres.integration.test.ts',
     'src/__tests__/ai-image-output-ownership.postgres.integration.test.ts',
     'src/__tests__/ai-media-application-mutations.postgres.integration.test.ts',
     'src/__tests__/ai-media-listing-draft-application.postgres.integration.test.ts',

@@ -43,6 +43,7 @@ import {
   buildAiMediaSuiteSlotReviewRequest,
   clearWorkflowSubmissionIntent,
   formatAiMediaPlanningGoal,
+  formatAiMediaSuiteCost,
   formatAiMediaPlanningIdentity,
   formatAiMediaPlanningSlotKey,
   loadWorkflowSubmissionIntent,
@@ -165,8 +166,8 @@ function normalizeApplyResult(value: unknown, targetId: string): AiImageApplyRes
   };
 }
 
-function formatCost(cents: number) {
-  return `${new Intl.NumberFormat('zh-CN').format(cents)} 分`;
+function formatCost(cents: number, currency: 'CNY' | 'USD' = 'USD') {
+  return formatAiMediaSuiteCost(cents, currency);
 }
 
 function progressPercent(suite: AiMediaSuite) {
@@ -997,13 +998,13 @@ export function SourceAiMediaSuitePanel({
         <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">槽位</div><div className="mt-1 font-medium">{preview.itemCount} 张</div></div>
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">并发</div><div className="mt-1 font-medium">{preview.concurrencyLimit}</div></div>
-          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">预计成本</div><div className="mt-1 font-medium">{formatCost(preview.estimatedCostCents)}</div></div>
-          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">最高成本</div><div className="mt-1 font-medium">{formatCost(preview.maximumCostCents)}</div></div>
+          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">预计成本</div><div className="mt-1 font-medium">{formatCost(preview.estimatedCostCents, preview.currency)}</div></div>
+          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">最高成本</div><div className="mt-1 font-medium">{formatCost(preview.maximumCostCents, preview.currency)}</div></div>
         </div>
         <details className="border">
           <summary className="cursor-pointer px-3 py-2 text-sm font-medium">生成槽位明细</summary>
           <div className="max-h-72 space-y-1 overflow-auto border-t px-3 py-3">
-            {preview.slots.map((slot) => <div key={slot.slotKey} className="grid min-w-0 gap-1 border-b py-2 text-xs last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"><div className="min-w-0"><div className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</div><div className="break-all font-mono text-[11px] text-muted-foreground">{formatAiMediaPlanningSlotKey(slot.slotKey)}</div></div><span className="text-muted-foreground">{slot.references.length} 张参考图 · 上限 {formatCost(slot.maximumCostCents)}</span></div>)}
+            {preview.slots.map((slot) => <div key={slot.slotKey} className="grid min-w-0 gap-1 border-b py-2 text-xs last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"><div className="min-w-0"><div className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</div><div className="break-all font-mono text-[11px] text-muted-foreground">{formatAiMediaPlanningSlotKey(slot.slotKey)}</div></div><span className="text-muted-foreground">{slot.references.length} 张参考图 · 上限 {formatCost(slot.maximumCostCents, preview.currency)}</span></div>)}
           </div>
         </details>
         <Button type="button" size="sm" onClick={() => setConfirmOpen(true)} disabled={!actions.canClaim || mutationBusy}><Play className="h-3.5 w-3.5" />确认生成套图</Button>
@@ -1025,7 +1026,7 @@ export function SourceAiMediaSuitePanel({
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">进度</div><div className="mt-1 font-medium">{suite.counts.succeeded + suite.counts.failed + suite.counts.cancelled} / {suite.itemCount}</div></div>
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">成功</div><div className="mt-1 font-medium">{suite.counts.succeeded}</div></div>
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">失败</div><div className="mt-1 font-medium">{suite.counts.failed}</div></div>
-          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">最高成本</div><div className="mt-1 font-medium">{formatCost(suite.maximumCostCents)}</div></div>
+          <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">最高成本</div><div className="mt-1 font-medium">{formatCost(suite.maximumCostCents, suite.currency)}</div></div>
         </div>
         <div className="h-1.5 w-full overflow-hidden bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="套图生成进度"><div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} /></div>
         {suite.counts.succeeded ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2 text-xs">
@@ -1078,7 +1079,7 @@ export function SourceAiMediaSuitePanel({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认生成套图</DialogTitle>
-            <DialogDescription>将创建 {preview?.itemCount || 0} 个槽位任务，最高成本 {formatCost(preview?.maximumCostCents || 0)}，并发上限 {preview?.concurrencyLimit || 0}。</DialogDescription>
+            <DialogDescription>将创建 {preview?.itemCount || 0} 个槽位任务，最高成本 {formatCost(preview?.maximumCostCents || 0, preview?.currency || 'USD')}，并发上限 {preview?.concurrencyLimit || 0}。</DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 text-sm sm:grid-cols-2"><div className="border px-3 py-2"><div className="text-xs text-muted-foreground">Provider</div><div className="mt-1 break-all">{preview?.provider || '-'}</div></div><div className="border px-3 py-2"><div className="text-xs text-muted-foreground">模型</div><div className="mt-1 break-all">{preview?.model || '-'}</div></div></div>
           <DialogFooter>

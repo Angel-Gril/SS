@@ -22,6 +22,8 @@ import {
   AI_IMAGE_EDIT_PROVIDER,
 } from '../services/ai-image-provider-capabilities.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import { isWanxHostedEdit } from '../services/ai-image-edit-provider-contract.js';
+import { assertWanxImageToImageInput } from '../services/ai-image-wanx-image-to-image.js';
 import {
   AI_IMAGE_EDIT_MAX_INPUT_BYTES,
   AI_IMAGE_EDIT_POLICY_VERSION,
@@ -632,6 +634,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         model: execution.model,
         prompt: input.prompt,
         negativePrompt: input.negativePrompt,
+        ...(isWanxHostedEdit(execution.provider, execution.model)
+          ? assertWanxImageToImageInput({ ...input, referenceCount: references.length }) : {}),
         requestedImageCount: input.count,
         width: input.width,
         height: input.height,

@@ -10,6 +10,7 @@ import {
   buildAiMediaSuiteSlotApplyRequest,
   buildAiMediaSuiteSlotReviewRequest,
   formatAiMediaPlanningGoal,
+  formatAiMediaSuiteCost,
   normalizeAiMediaSuite,
   normalizeAiMediaSuitePreview,
   normalizeAiMediaSuiteReadiness,
@@ -179,6 +180,17 @@ const readiness = normalizeAiMediaSuiteReadiness(readinessPayload);
 const preview = normalizeAiMediaSuitePreview(previewPayload);
 assert.ok(readiness);
 assert.ok(preview);
+assert.equal(preview.currency, 'USD', 'legacy suite quotes retain their historical currency');
+assert.equal(normalizeAiMediaSuitePreview({ ...previewPayload, currency: 'CNY' })?.currency, 'CNY');
+assert.equal(normalizeAiMediaSuite({ ...suitePayload(), currency: 'CNY' })?.currency, 'CNY');
+assert.equal(normalizeAiMediaSuite(suitePayload())?.currency, 'USD');
+for (const currency of ['EUR', '', null, 14]) {
+  assert.equal(normalizeAiMediaSuitePreview({ ...previewPayload, currency }), null);
+  assert.equal(normalizeAiMediaSuite({ ...suitePayload(), currency }), null);
+}
+assert.equal(formatAiMediaSuiteCost(14, 'CNY'), 'CNY 0.14');
+assert.equal(formatAiMediaSuiteCost(14, 'USD'), 'USD 0.14');
+assert.equal(formatAiMediaSuiteCost(-1, 'CNY'), '费用不可用');
 assert.equal(readiness.testOnly, true);
 assert.equal(preview.itemCount, 1);
 assert.equal(normalizeAiMediaSuiteReadiness({ ...readinessPayload, storage: undefined }), null);

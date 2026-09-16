@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { resolveAiImageProviderCapability, type AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 import type {
   OpenAiImageEditProviderOptions,
@@ -183,6 +183,38 @@ function paidDependencies(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AI image suite paid Provider preparation', () => {
+  it('uses Wanx single-reference transport and read-only recovery with the frozen quote', async () => {
+    const source = await sharp({ create: { width: 512, height: 512, channels: 3, background: 'white' } }).png().toBuffer();
+    const activeSettings = settings({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY',
+      credentialRevision: { recordId: 'wanx-credential', revision: 4, updatedAt: '2026-09-16T00:00:00.000Z' } });
+    const input = validInput(activeSettings, resolveAiImageProviderCapability(activeSettings.provider, activeSettings.model)!);
+    (input.job.operationConfig as any).providerRequest = { count: 1, width: 1024, height: 1024 };
+    input.job.inputAssets = [frozenAsset({ width: 512, height: 512, sizeBytes: source.length,
+      sha256: createHash('sha256').update(source).digest('hex') })];
+    const edit = vi.fn(async () => ({ images: [{ buffer: source, mimeType: 'image/png' }], providerJobId: 'wanx-task-original', actualCostCents: 14 }));
+    const poll = vi.fn(async () => ({ status: 'PENDING', providerJobId: 'wanx-task-original', providerStatus: 'RUNNING' }));
+    const createWanxProvider = vi.fn(() => ({ name: 'dashscope-wanx21-image-edit', edit, poll }));
+    const createOpenAiProvider = vi.fn();
+    const deps = {
+      loadSettings: async () => ({ ...activeSettings, costPerImageCents: 99 }),
+      loadInputBuffer: async () => source, createWanxProvider, createOpenAiProvider,
+    };
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, deps as any);
+    await prepared.execute(async () => undefined);
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+    expect(createWanxProvider).toHaveBeenCalledWith(expect.objectContaining({ costPerImageCents: 14 }));
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({ operation: 'IMAGE_TO_IMAGE', width: 1024, height: 1024,
+      prompt: expect.stringContaining('避免：text, watermark'), negativePrompt: '', images: [{ buffer: source, mimeType: 'image/png' }] }));
+    const recoveryPrepared = await prepareAiImageSuitePaidProviderExecution({ ...input, job: { ...input.job, providerJobId: 'wanx-task-original' } }, deps as any);
+    await expect(recoveryPrepared.execute(async () => undefined)).rejects.toMatchObject({ code: 'SUITE_PROVIDER_INPUT_MISMATCH' });
+    await expect(recoveryPrepared.recover!('wanx-task-original', async () => undefined)).resolves.toMatchObject({ status: 'PENDING' });
+    expect(poll).toHaveBeenCalledWith('wanx-task-original');
+    expect(edit).toHaveBeenCalledTimes(1);
+    await expect(recoveryPrepared.recover!('different-task', async () => undefined)).rejects.toMatchObject({ code: 'SUITE_PROVIDER_INPUT_MISMATCH' });
+    expect(poll).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps adapter-characterized evidence dark', async () => {
     const createOpenAiProvider = vi.fn();
     await expect(prepareAiImageSuitePaidProviderExecution(validInput(), paidDependencies({

@@ -470,7 +470,7 @@ function actualMutationChain(options) {
     },
     fetchImpl: async (url, init) => {
       const path = new URL(url).pathname;
-      requestLog.push({ path, method: init.method });
+      requestLog.push({ path, method: init.method, body: init.body ? JSON.parse(init.body) : null });
       if (init.method === 'GET'
         && path === '/api/extension-device/source-workbench/ai-image-suite') {
         return fetchJson({ code: 1, data: options.projection });
@@ -534,6 +534,14 @@ function actualMutationChain(options) {
         && options.failAt === 'execute-code-zero') {
         return fetchJson({ code: 0, errorCode: 'command_rejected' }, 409);
       }
+      if (path === '/api/extension-device/media-workflows/execute' && options.succeedExecution) {
+        return fetchJson({ code: 1, data: {
+          replay: false,
+          receipt: { id: 'receipt-1', status: 'SUCCEEDED', result: {
+            action: 'START', suiteId: 'suite-1', status: 'QUEUED', revision: 1, replayed: false,
+          } },
+        } });
+      }
       if (path === ASSIGNMENT_PATH && options.failAt === 'assignment') {
         return new Promise((_resolve, reject) => {
           init.signal.addEventListener('abort', () => reject(new Error('assignment aborted')), {
@@ -573,6 +581,42 @@ assert.doesNotMatch(
 );
 
 const test = harness();
+{
+  const raw = projectionFixture();
+  const version = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+  Object.assign(raw.plan.preview, { pricingVersion: version, currency: 'CNY' });
+  raw.plan.commands.START.acceptedPricingVersion = version;
+  const cny = actualMutationChain({ projection: raw, succeedExecution: true });
+  const loaded = await cny.client.loadSuite(binding());
+  assert.equal(loaded.quote.currency, 'CNY');
+  await rejectsCode(cny.client.executeIntent(loaded.plan.startIntent, {
+    confirmed: true, maximumCostCents: 12, currency: 'USD',
+  }), 'SS_ERP_HOSTED_WORKBENCH_COST_CONFIRMATION_REQUIRED');
+  const started = await cny.client.executeIntent(loaded.plan.startIntent, {
+    confirmed: true, maximumCostCents: 12,
+  });
+  assert.equal(started.action, 'START');
+  const serializedWrites = JSON.stringify(cny.requestLog.filter(row => row.method === 'POST'));
+  assert.equal(serializedWrites.includes('"currency"'), false, 'START must keep the server-frozen price command shape');
+  assert.equal(serializedWrites.includes(version), true);
+}
+for (const [pricingVersion, currency] of [
+  ['pricing-v1', 'CNY'], ['pricing-v1', 'EUR'],
+  [`ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, 'USD'],
+  [`ai-image-suite-price-cny/v1:${'c'.repeat(32)}`, 'CNY'],
+]) {
+  const tampered = harness({
+    adapterFactory() {
+      const base = adapterApi.createAdapter({ intentContract: listingContract });
+      return { project(raw) {
+        const projected = plain(base.project(raw));
+        Object.assign(projected.quote, { pricingVersion, currency });
+        return deepFreeze(projected);
+      } };
+    },
+  });
+  await rejectsCode(tampered.client.loadSuite(binding()), 'SS_ERP_HOSTED_WORKBENCH_SUITE_RESPONSE_INVALID');
+}
 const sourceBinding = binding();
 const modeLock = await test.client.getModeLock(sourceBinding);
 assert.deepEqual(plain(modeLock), {

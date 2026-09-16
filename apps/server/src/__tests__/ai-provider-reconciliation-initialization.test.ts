@@ -33,7 +33,7 @@ describe('AI Provider reconciliation initialization', () => {
     }) }));
   });
 
-  it.each(['FULL_EDIT', 'INPAINT'] as const)('queues an accepted revision-bound Wanx %s without starting another attempt', async (operation) => {
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)('queues an accepted revision-bound Wanx %s without starting another attempt', async (operation) => {
     const dispatchedAt = new Date('2026-09-09T10:00:00.000Z');
     const runtime = createAiImageProviderRuntimeContract({
       provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
@@ -43,7 +43,7 @@ describe('AI Provider reconciliation initialization', () => {
     const { repository, updateMany } = transactionClient({
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'RUNNING',
       operation, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'wanx-task-1',
-      operationConfig: { providerRuntime: runtime }, width: 1024, height: 1024, requestedImageCount: 1,
+      operationConfig: operation === 'IMAGE_TO_IMAGE' ? runtime : { providerRuntime: runtime }, width: 1024, height: 1024, requestedImageCount: 1,
       estimatedCostCents: 7, providerDispatchedAt: dispatchedAt, workflowId: null, attemptCount: 1,
       providerReconciliationStatus: 'NOT_REQUIRED', providerReconciliationRevision: 0,
     });

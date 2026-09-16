@@ -16,6 +16,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
 import { confirmAiImageMaskDraftDiscard } from '@/lib/ai-image-mask';
+import { useScopedSystemConfirmation } from '@/components/system-dialog-provider';
 import { SourceAiMediaPlanningPanel } from './source-ai-media-planning-panel';
 import {
   SourceAiImageMaskEditor,
@@ -421,9 +422,10 @@ export function SourceAiMediaPanel({
   const planningDraftDirtyRef = useRef(false);
   const interactiveDraftDirtyRef = useRef(false);
   const slotDraftDiscardRef = useRef<(() => void) | null>(null);
-  const maskHistoryGuardRef = useRef<{ token: string | null; suppressNextPop: boolean }>({
+  const maskHistoryGuardRef = useRef<{ token: string | null; suppressNextPop: boolean; confirming: boolean }>({
     token: null,
     suppressNextPop: false,
+    confirming: false,
   });
   const onMaskDraftDirtyChangeRef = useRef(onMaskDraftDirtyChange);
   onMaskDraftDirtyChangeRef.current = onMaskDraftDirtyChange;
@@ -432,6 +434,10 @@ export function SourceAiMediaPanel({
   const fullEditIntentStorageKey = intentStorageKey(target.id, 'full-edit');
   const inpaintIntentStorageKey = intentStorageKey(target.id, 'inpaint');
   const targetContextIdentity = aiMediaTargetIdentity(target);
+  const confirmInteractiveDiscard = useScopedSystemConfirmation(JSON.stringify([
+    targetContextIdentity, context?.snapshot.id, operation, selectedKey,
+    candidateSource?.sourceMediaKey, maskResetNonce,
+  ]));
   targetIdRef.current = target.id;
   targetRef.current = target;
   targetUpdatedAtRef.current = target.type === 'collect' ? target.updatedAt || null : null;
@@ -670,9 +676,10 @@ export function SourceAiMediaPanel({
         const discardDirtyMask = snapshotChanged
           && maskDirtyRef.current
           && request.interactive
-          && confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(
-            `采集快照已更新。${message}`,
-          ));
+          && await confirmAiImageMaskDraftDiscard(true, (message) => confirmInteractiveDiscard({
+            message: `采集快照已更新。${message}`, confirmText: '丢弃遮罩', tone: 'destructive',
+          }));
+        if (!requestStillCurrent()) return;
         if (snapshotChanged && maskDirtyRef.current && !discardDirtyMask) {
           setError('采集快照已更新，当前遮罩草稿已保留。请先提交或丢弃草稿，再刷新最新快照。');
         } else {
@@ -692,7 +699,10 @@ export function SourceAiMediaPanel({
       } else if (contextResult.msg?.includes('disabled') || contextResult.msg?.includes('未启用')) {
         const discardDirtyMask = maskDirtyRef.current
           && request.interactive
-          && confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(message));
+          && await confirmAiImageMaskDraftDiscard(true, (message) => confirmInteractiveDiscard({
+            message, confirmText: '丢弃遮罩', tone: 'destructive',
+          }));
+        if (!requestStillCurrent()) return;
         if (maskDirtyRef.current && !discardDirtyMask) {
           setError('AI 图片工作流状态已变化，当前遮罩草稿已保留。请先提交或丢弃草稿，再刷新。');
         } else {
@@ -795,7 +805,7 @@ export function SourceAiMediaPanel({
     } catch (caught) {
       if (requestStillCurrent()) setError(caught instanceof Error ? caught.message : '网络错误，请重试');
     }
-  }, [readApplicationLedger, readListingDraftApplicationLedger, reconcileApplicationTargetVersion, updateMaskDirty]);
+  }, [confirmInteractiveDiscard, readApplicationLedger, readListingDraftApplicationLedger, reconcileApplicationTargetVersion, updateMaskDirty]);
 
   const loadCoordinatorRef = useRef<ReturnType<typeof createLatestLoadCoordinator> | null>(null);
   if (!loadCoordinatorRef.current) {
@@ -991,7 +1001,7 @@ export function SourceAiMediaPanel({
     return () => window.removeEventListener('beforeunload', warn);
   }, [aiMediaInteractiveDraftDirty]);
   useEffect(() => {
-    const handlePopState = () => {
+    const handlePopState = async () => {
       const guard = maskHistoryGuardRef.current;
       if (guard.suppressNextPop) {
         guard.suppressNextPop = false;
@@ -1003,13 +1013,23 @@ export function SourceAiMediaPanel({
         return;
       }
       if (!interactiveDraftDirtyRef.current || !guard.token) return;
-      if (!confirmAiMediaInteractiveDraftDiscard(true, (message) => window.confirm(message))) {
-        window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
-        return;
+      const requestedToken = guard.token;
+      // Restore the guard before awaiting the modal so a second Back cannot bypass it.
+      window.history.pushState(maskHistoryState(requestedToken), '', window.location.href);
+      if (guard.confirming) return;
+      guard.confirming = true;
+      try {
+        if (!await confirmAiMediaInteractiveDraftDiscard(true, (message) => confirmInteractiveDiscard({
+          message, confirmText: '放弃修改并返回', tone: 'destructive',
+        }))) return;
+        if (guard.token !== requestedToken
+          || window.history.state?.[AI_MASK_HISTORY_GUARD_KEY] !== requestedToken) return;
+        guard.token = null;
+        discardInteractiveDrafts();
+        window.setTimeout(() => window.history.go(-2), 0);
+      } finally {
+        guard.confirming = false;
       }
-      guard.token = null;
-      discardInteractiveDrafts();
-      window.setTimeout(() => window.history.back(), 0);
     };
     window.addEventListener('popstate', handlePopState);
     return () => {
@@ -1024,7 +1044,7 @@ export function SourceAiMediaPanel({
       guard.suppressNextPop = false;
       if (shouldRemoveGuard) window.history.back();
     };
-  }, [discardInteractiveDrafts]);
+  }, [confirmInteractiveDiscard, discardInteractiveDrafts]);
   const currentReadiness = operationReadiness(operation);
   const readinessNotices = useMemo(
     () => listAiMediaReadinessNotices({ disabled, capabilities }),
@@ -1120,12 +1140,14 @@ export function SourceAiMediaPanel({
   }
 
   function confirmMaskDraftDiscard() {
-    return confirmAiImageMaskDraftDiscard(maskDirty, (message) => window.confirm(message));
+    return confirmAiImageMaskDraftDiscard(maskDirty, (message) => confirmInteractiveDiscard({
+      message, confirmText: '丢弃遮罩', tone: 'destructive',
+    }));
   }
 
-  function selectOperation(next: AiMediaOperation) {
+  async function selectOperation(next: AiMediaOperation) {
     if (next === operation) return;
-    if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
+    if (operation === 'INPAINT' && !await confirmMaskDraftDiscard()) return;
     if (operation === 'INPAINT') {
       updateMaskDirty(false);
       setMaskReady(false);
@@ -1135,9 +1157,9 @@ export function SourceAiMediaPanel({
     setOperation(next);
   }
 
-  function selectSource(nextSourceMediaKey: string) {
+  async function selectSource(nextSourceMediaKey: string) {
     if (!candidateSource && nextSourceMediaKey === selectedKey) return;
-    if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
+    if (operation === 'INPAINT' && !await confirmMaskDraftDiscard()) return;
     if (operation === 'INPAINT') {
       updateMaskDirty(false);
       setMaskReady(false);
@@ -1147,7 +1169,7 @@ export function SourceAiMediaPanel({
     setSelectedKey(nextSourceMediaKey);
   }
 
-  function selectCandidateSource(
+  async function selectCandidateSource(
     workflow: AiMediaWorkflow,
     output: NonNullable<AiMediaWorkflowJob['assets']>[number],
     nextOperation: 'FULL_EDIT' | 'INPAINT',
@@ -1159,7 +1181,7 @@ export function SourceAiMediaPanel({
       || !output.editReady
       || output.sourceCaptureSnapshotId !== context.snapshot.id
     ) return;
-    if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
+    if (operation === 'INPAINT' && !await confirmMaskDraftDiscard()) return;
     updateMaskDirty(false);
     setMaskReady(false);
     setMaskResetNonce((current) => current + 1);

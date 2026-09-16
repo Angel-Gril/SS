@@ -26,6 +26,7 @@ import {
   createAiImageProviderRuntimeContract,
 } from '../services/ai-image-provider-runtime-contract.js';
 import { createAiMediaWorkflowService } from '../services/ai-media-workflows.js';
+import { processAiImageQueueJob, resolveAiImageProvider } from '../workers/ai-image-generation.js';
 import {
   processAiImageEditQueueJob,
   resolveAiImageEditProvider,
@@ -284,6 +285,65 @@ describe.skipIf(!enabled)('paid edit dispatch fence PostgreSQL evidence', () => 
       loadEditInputBuffer: target.loadInputBuffer, uploadBuffer: target.uploadBuffer, limit: 1, ...overrides,
     });
   }
+
+  it('recovers a normal single-reference Wanx task through GET and settles its confirmed CNY price exactly once', async () => {
+    const source = await fixture('FULL_EDIT', 'wanx', { currency: 'CNY', costPerImageCents: 14, useDefaultRegistry: true });
+    const created = await source.workflowService.createImageToImage({
+      ownerUserId: source.ownerUserId, actorUserId: source.ownerUserId, sourceAssetId: source.sourceAssetId,
+      prompt: '保留商品，在桌面上展示。', negativePrompt: '文字、标志', count: 1, width: WIDTH, height: HEIGHT,
+      dailyLimit: 20, estimatedCostCents: 14, globalDailyBudgetCents: 1_000_000,
+      provider: source.activeRuntime.provider, model: source.activeRuntime.model,
+      providerRuntimeContract: createAiImageProviderRuntimeContract(source.activeRuntime, { count: 1, width: WIDTH, height: HEIGHT }),
+      idempotencyKey: `reference-${source.jobId}`, context: source.creationInput.context,
+    });
+    const taskId = `reference-${created.jobId}`;
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ output: { task_id: taskId, task_status: 'PENDING' } }))
+      .mockRejectedValueOnce(new Error('Synthetic reference poll interruption'))
+      .mockResolvedValueOnce(wanxSuccess(taskId))
+      .mockResolvedValueOnce(new Response(new Uint8Array(source.candidate), { headers: { 'content-type': 'image/png' } }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(processAiImageQueueJob(created.jobId, 1, {
+      repository: source.repository, getProviderConfig: async () => source.activeRuntime,
+      getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'fixture', reason: 'synthetic authorization' }),
+      loadInputBuffer: source.loadInputBuffer, uploadBuffer: source.uploadBuffer,
+      resolveProvider: (provider, config, accepted, dependencies) => resolveAiImageProvider(provider, config, accepted, {
+        ...dependencies, createWanxEditProvider: options => createDashScopeWanx21ImageEditProvider({ ...options, timeoutMs: 10_000, pollIntervalMs: 0 }),
+      }),
+    })).rejects.toThrow('Synthetic reference poll interruption');
+    expect(await database.aiImageJob.findUniqueOrThrow({ where: { id: created.jobId } })).toMatchObject({
+      operation: 'IMAGE_TO_IMAGE', status: 'FAILED', providerJobId: taskId, providerReconciliationStatus: 'PENDING', attemptCount: 1,
+      resolvedPrompt: '保留商品，在桌面上展示。\n避免：文字、标志', resolvedNegativePrompt: '',
+    });
+    const recover = () => runAiProviderReconciliationTick({
+      repository: recoveryRepository(created.jobId), getEditProviderConfig: async () => source.activeRuntime,
+      loadEditInputBuffer: source.loadInputBuffer, uploadBuffer: source.uploadBuffer, limit: 1,
+    });
+    const recovered = await recover();
+    const diagnostics = await database.aiImageJob.findUniqueOrThrow({ where: { id: created.jobId }, select: {
+      providerReconciliationStatus: true, providerReconciliationLastErrorCode: true, providerReconciliationLastErrorMessage: true,
+    } });
+    expect(recovered, JSON.stringify(diagnostics)).toMatchObject({ claimed: 1, recovered: 1, manualReview: 0 });
+    expect(await recover()).toMatchObject({ claimed: 0, recovered: 0 });
+    const [job, workflow, reservation, assets] = await Promise.all([
+      database.aiImageJob.findUniqueOrThrow({ where: { id: created.jobId } }),
+      database.aiMediaWorkflow.findUniqueOrThrow({ where: { id: created.workflow.id } }),
+      database.aiCostReservation.findUniqueOrThrow({ where: { jobId: created.jobId }, include: { settlements: true } }),
+      database.mediaAsset.findMany({ where: { aiImageJobId: created.jobId } }),
+    ]);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', operation: 'IMAGE_TO_IMAGE', attemptCount: 1, actualCostCents: 14, billedUnits: 1 });
+    expect(workflow).toMatchObject({ currentAttempt: 1, status: 'SUCCEEDED', reviewStatus: 'PENDING', selectedOutputAssetId: null });
+    expect(reservation).toMatchObject({ currency: 'CNY', status: 'SETTLED' });
+    expect(reservation.settlements).toHaveLength(2);
+    expect(reservation.settlements.filter(row => row.kind === 'RECONCILIATION_REQUIRED')).toEqual([
+      expect.objectContaining({ actualCostMinor: null, billedUnits: 0 }),
+    ]);
+    expect(reservation.settlements.filter(row => row.kind !== 'RECONCILIATION_REQUIRED')).toEqual([
+      expect.objectContaining({ kind: 'RECONCILED_CHARGE', actualCostMinor: 14, billedUnits: 1 }),
+    ]);
+    expect(assets).toEqual([expect.objectContaining({ kind: 'AI_GENERATED' })]);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
 
   async function interruptedWanx(operation: 'FULL_EDIT' | 'INPAINT' = 'FULL_EDIT') {
     const target = await fixture(operation, 'wanx');

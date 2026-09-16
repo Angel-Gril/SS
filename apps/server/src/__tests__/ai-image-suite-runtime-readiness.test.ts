@@ -8,6 +8,14 @@ import {
 } from '../services/ai-image-suite-runtime-readiness.js';
 
 describe('AI image suite runtime readiness', () => {
+  it('does not treat an old paid-only worker as ready for the Wanx suite protocol', async () => {
+    const values = new Map([['health:ai-image-suite-generation-worker:v2', 'old-worker-token']]);
+    const redis = { ping: async () => 'PONG', get: async (key: string) => values.get(key) || null };
+    await expect(probeAiImageSuiteRuntime({ redis, queueAvailable: true })).resolves.toEqual({ queueReady: true, workerReady: false });
+    values.set('health:ai-image-suite-generation-worker:v3', 'wanx-worker-token');
+    await expect(probeAiImageSuiteRuntime({ redis, queueAvailable: true })).resolves.toEqual({ queueReady: true, workerReady: true });
+  });
+
   it('fails closed when the queue is not installed without touching Redis', async () => {
     const redis = { ping: vi.fn(), get: vi.fn() };
 

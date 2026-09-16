@@ -44,7 +44,7 @@ function repository(claims: AiProviderReconciliationClaim[] = [claim()]) {
 }
 
 describe('AI Provider result reconciliation', () => {
-  it.each(['FULL_EDIT', 'INPAINT'] as const)('routes Wanx %s to the edit artifact owner, never the translation persistence path', async (operation) => {
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)('routes Wanx %s to the operation recovery owner, never the translation persistence path', async (operation) => {
     const accepted = claim({ operation, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', estimatedCostCents: 7 });
     const repo = repository([accepted]);
     const recovered = {

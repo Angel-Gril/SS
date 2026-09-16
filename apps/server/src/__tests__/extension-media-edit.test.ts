@@ -1,7 +1,9 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionMediaEditRoutes } from '../routes/extension-media-edit.js';
+import { resolveAiImageEditReadiness, resolveAiImageToImageReadiness } from '../routes/ai-images.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import { resolveExtensionMediaStandaloneReadiness } from '../services/extension-media-workflow-launch.js';
 
 function enabledDecision() {
   return {
@@ -23,6 +25,27 @@ const basePayload = {
   sourceMediaKey: 'media-main-1',
 };
 
+const wanxSettings = {
+  generationEnabled: true,
+  imageToImageEnabled: false,
+  fullEditEnabled: true,
+  inpaintEnabled: true,
+  provider: 'dashscope-wanx',
+  model: 'wanx2.1-imageedit',
+  baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+  costPerImageCents: 14,
+  globalDailyBudgetCents: 100,
+};
+
+function normalWanxReadiness(settings: Partial<typeof wanxSettings> = {}) {
+  return resolveExtensionMediaStandaloneReadiness('INPAINT', { ...wanxSettings, ...settings }, {
+    production: true,
+    storageReadiness: { ready: true, backend: 'local', reason: 'owned test storage' },
+    resolveImageToImageReadiness: resolveAiImageToImageReadiness,
+    resolveAiImageEditReadiness,
+  });
+}
+
 async function setup(input: {
   enabled?: boolean;
   aiMediaEnabled?: boolean;
@@ -30,6 +53,7 @@ async function setup(input: {
   allowedShopIds?: string[];
   rateAllowed?: boolean;
   production?: boolean;
+  readiness?: ReturnType<typeof normalWanxReadiness>;
   sourceMediaKeys?: string[];
   sourceAsset?: Partial<{
     id: string;
@@ -81,7 +105,7 @@ async function setup(input: {
     reason: input.aiMediaEnabled === false ? 'tenant_not_allowed' : 'tenant_allowed',
     revision: 7,
   }));
-  const getReadiness = vi.fn(async () => ({
+  const getReadiness = vi.fn(async () => input.readiness ?? ({
     enabled: input.enabled !== false,
     ready: input.enabled !== false,
     reasonCode: input.enabled === false ? 'AI_MEDIA_OPERATION_DISABLED' : 'READY',
@@ -299,7 +323,120 @@ describe('extension media edit routes', () => {
     }
   });
 
-  it('fails closed in production even when injected readiness reports ready', async () => {
+  it('admits a production edit source through the normal Wanx INPAINT readiness owner', async () => {
+    const readiness = normalWanxReadiness();
+    expect(readiness).toMatchObject({ enabled: true, ready: true, testOnly: false });
+    const state = await setup({ production: true, readiness });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: basePayload,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.sourceAsset.id).toBe('source-asset-1');
+      expect(state.getReadiness).toHaveBeenCalledTimes(1);
+      expect(state.getMediaWorkflowDecision).toHaveBeenCalledWith('owner-1');
+      expect(state.evaluate).toHaveBeenCalledWith('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+        ownerUserId: 'owner-1', shopId: 'shop-1', deviceSessionId: 'session-1',
+      });
+      expect(state.internalizeSource).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1', listingWorkflowId: 'listing-1',
+        sourceMediaKey: 'media-main-1', revision: 11, draftVersion: 7, role: 'EDIT',
+      });
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('admits production masks while preserving owner replay status and source binding', async () => {
+    const state = await setup({ production: true, readiness: normalWanxReadiness() });
+    const mask = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(24, 1),
+    ]);
+    try {
+      for (const replayed of [false, true]) {
+        if (replayed) {
+          const previous = await state.createMask.mock.results[0]!.value;
+          state.createMask.mockResolvedValueOnce({ ...previous, replayed: true });
+        }
+        const response = await state.app.inject({
+          method: 'POST',
+          url: '/api/extension-device/source-workbench/media-edit-mask',
+          payload: {
+            ...basePayload,
+            maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+            maskDataUrl: `data:image/png;base64,${mask.toString('base64')}`,
+          },
+        });
+        expect(response.statusCode).toBe(replayed ? 200 : 201);
+        expect(response.json()).toMatchObject({
+          code: 1, replayed,
+          data: { sourceAssetId: 'source-asset-1', maskAssetId: 'mask-asset-1' },
+        });
+      }
+      expect(state.getReadiness).toHaveBeenCalledTimes(2);
+      expect(state.checkMaskRequestRate).toHaveBeenCalledTimes(2);
+      expect(state.createMask).toHaveBeenLastCalledWith(expect.objectContaining({
+        ownerUserId: 'owner-1', actorUserId: 'owner-1',
+        contextId: 'listing-1', contextDraftRevision: 11, contextDraftVersion: 7,
+        sourceAssetId: 'source-asset-1', maskBuffer: mask,
+      }));
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it.each([
+    ['unknown Provider', { provider: 'unknown' }],
+    ['unknown model', { model: 'unknown' }],
+    ['text-only model', { model: 'wanx2.1-t2i-turbo' }],
+    ['unregistered endpoint', { baseUrl: 'https://unregistered.example.test/api/v1' }],
+    ['test-only capability', { testOnly: true }],
+    ['missing price', { costPerImageCents: 0 }],
+    ['missing daily budget', { globalDailyBudgetCents: 0 }],
+  ])('rejects a ready claim with %s in production before parsing or storage', async (_name, change) => {
+    const state = await setup({ production: true, readiness: { ...normalWanxReadiness(), ...change } });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-mask',
+        payload: { invalid: true },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: 0, errorCode: 'media_edit_provider_not_ready' });
+      expect(state.getReadiness).toHaveBeenCalledTimes(1);
+      expect(state.checkMaskRequestRate).not.toHaveBeenCalled();
+      expect(state.loadContext).not.toHaveBeenCalled();
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+      expect(state.createMask).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('requires INPAINT readiness even when the same Provider allows full-image editing', async () => {
+    const settings = { ...wanxSettings, inpaintEnabled: false };
+    expect(resolveAiImageEditReadiness('FULL_EDIT', {
+      ...settings, estimatedCostCents: settings.costPerImageCents,
+    }, { production: true })).toMatchObject({ ready: true });
+    const state = await setup({ production: true, readiness: normalWanxReadiness(settings) });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: basePayload,
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ errorCode: 'AI_MEDIA_OPERATION_DISABLED' });
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('fails closed for test-only readiness in production before rate or storage work', async () => {
     const state = await setup({ production: true });
     try {
       const response = await state.app.inject({
@@ -313,7 +450,7 @@ describe('extension media edit routes', () => {
         errorCode: 'media_edit_provider_not_ready',
       });
       expect(state.evaluate).not.toHaveBeenCalled();
-      expect(state.getReadiness).not.toHaveBeenCalled();
+      expect(state.getReadiness).toHaveBeenCalledTimes(1);
       expect(state.checkMaskRequestRate).not.toHaveBeenCalled();
       expect(state.loadContext).not.toHaveBeenCalled();
       expect(state.internalizeSource).not.toHaveBeenCalled();
@@ -346,11 +483,86 @@ describe('extension media edit routes', () => {
       }
       expect(state.authenticateDevice).toHaveBeenCalledTimes(2);
       expect(state.evaluate).not.toHaveBeenCalled();
-      expect(state.getReadiness).not.toHaveBeenCalled();
+      expect(state.getReadiness).toHaveBeenCalledTimes(2);
       expect(state.checkMaskRequestRate).not.toHaveBeenCalled();
       expect(state.loadContext).not.toHaveBeenCalled();
       expect(state.internalizeSource).not.toHaveBeenCalled();
       expect(state.createMask).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('retains mask body limits after the production Provider is admitted', async () => {
+    const state = await setup({ production: true, readiness: normalWanxReadiness() });
+    try {
+      const malformed = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-mask',
+        payload: { invalid: true },
+      });
+      expect(malformed.statusCode).toBe(400);
+      const oversized = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-mask',
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify({ maskDataUrl: 'x'.repeat(30 * 1024 * 1024 + 1) }),
+      });
+      expect(oversized.statusCode).toBe(413);
+      expect(state.loadContext).not.toHaveBeenCalled();
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+      expect(state.createMask).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it.each([
+    { label: 'scope', options: { scopes: ['listing:review'] }, status: 403, code: 'command_scope_denied' },
+    { label: 'shop', options: { allowedShopIds: ['other-shop'] }, status: 403, code: 'command_shop_denied' },
+    { label: 'tenant', options: { aiMediaEnabled: false }, status: 503, code: 'media_edit_disabled' },
+    { label: 'feature flags', options: { enabled: false }, status: 503, code: 'media_edit_disabled' },
+    { label: 'rate', options: { rateAllowed: false }, status: 429, code: 'media_edit_rate_limited' },
+    { label: 'source membership', options: { sourceMediaKeys: ['other-media'] }, status: 409, code: 'media_edit_context_stale' },
+  ])('retains the $label boundary after production Provider admission', async ({ options, status, code }) => {
+    const state = await setup({ ...options, production: true, readiness: normalWanxReadiness() });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-mask',
+        payload: {
+          ...basePayload,
+          maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+          maskDataUrl: `data:image/png;base64,${Buffer.alloc(32, 1).toString('base64')}`,
+        },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ errorCode: code });
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+      expect(state.createMask).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('rejects a substituted device actor before reading Provider settings', async () => {
+    const state = await setup({ production: true, readiness: normalWanxReadiness() });
+    state.authenticateDevice.mockImplementationOnce(async (request) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1', actorUserId: 'another-owner', sessionId: 'session-1',
+        scopes: ['media:execute'], allowedShopIds: ['shop-1'],
+      };
+    });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: basePayload,
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ errorCode: 'invalid_device_context' });
+      expect(state.getReadiness).not.toHaveBeenCalled();
+      expect(state.internalizeSource).not.toHaveBeenCalled();
     } finally {
       await state.app.close();
     }

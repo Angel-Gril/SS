@@ -52,6 +52,32 @@ function expectNormalizerError(code: string) {
 }
 
 describe('AI image suite output normalizer', () => {
+  it('contains an explicitly bound Wanx square in 900x1200 without cropping or stretching the product', async () => {
+    const result = await normalizeAiImageSuiteProviderOutput({
+      buffer: await providerPng(1024, 1024), mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1024 },
+    } as any);
+    const decoded = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    expect(decoded.info).toMatchObject({ width: 900, height: 1200, channels: 3 });
+    for (const x of [0, 450, 899]) {
+      expect(pixelAt(decoded.data, 900, 3, x, 149)).toEqual([255, 255, 255]);
+      expect(pixelAt(decoded.data, 900, 3, x, 150)).toEqual([214, 38, 55]);
+      expect(pixelAt(decoded.data, 900, 3, x, 1049)).toEqual([214, 38, 55]);
+      expect(pixelAt(decoded.data, 900, 3, x, 1050)).toEqual([255, 255, 255]);
+    }
+  });
+
+  it('does not accept square output under a portrait request or an arbitrary new Provider size', async () => {
+    await expect(normalizeAiImageSuiteProviderOutput({
+      buffer: await providerPng(1024, 1024), mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1536 },
+    } as any)).rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'));
+    await expect(normalizeAiImageSuiteProviderOutput({
+      buffer: await providerPng(512, 512), mimeType: 'image/png',
+      providerRequest: { width: 512, height: 512 },
+    } as any)).rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'));
+  });
+
   it('deterministically contains a 1024x1536 Provider image in a 900x1200 white PNG', async () => {
     const source = await providerPng();
 

@@ -10,7 +10,7 @@ export function isWanxEditReconciliationOperation(input: {
   provider: string; model: string; operation?: string;
 }): boolean {
   return requiresAiImageProviderCredentialRevision(input.provider, input.model)
-    && (input.operation === 'FULL_EDIT' || input.operation === 'INPAINT');
+    && ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(String(input.operation));
 }
 
 export function hasWanxEditReconciliationContract(job: Pick<AiImageJobRecord,
@@ -18,7 +18,8 @@ export function hasWanxEditReconciliationContract(job: Pick<AiImageJobRecord,
 >): boolean {
   if (!isWanxEditReconciliationOperation(job)) return false;
   try {
-    const runtime = parseAiImageProviderRuntimeContract(job.operationConfig?.providerRuntime);
+    const runtime = parseAiImageProviderRuntimeContract(job.operation === 'IMAGE_TO_IMAGE'
+      ? job.operationConfig : job.operationConfig?.providerRuntime);
     return runtime.provider === job.provider && runtime.model === job.model
       && runtime.width === job.width && runtime.height === job.height
       && runtime.imageCount === 1 && job.requestedImageCount === 1

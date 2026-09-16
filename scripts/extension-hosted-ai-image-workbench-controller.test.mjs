@@ -1099,7 +1099,7 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   const chooseRetry = findAction(test.nodes.hostedSlotList, 'retry', 'slot-2');
   assert.equal(chooseRetry.textContent, '选择重试');
   chooseRetry.dispatch('click');
-  assert.match(test.nodes.hostedCostConfirmationLabel.textContent, /¥0\.12/u);
+  assert.match(test.nodes.hostedCostConfirmationLabel.textContent, /USD 0\.12/u);
   assert.equal(test.calls.some((row) => row[0] === 'execute'), false);
   test.nodes.hostedCostConfirmation.checked = true;
   test.nodes.hostedCostConfirmation.dispatch('change');
@@ -1393,6 +1393,39 @@ for (const workspaceCase of [
   assert.equal(test.consumerDisposes(), 1);
   assert.equal(test.controller.isAvailable(), false);
   assert.equal(test.controller.isActive(), false);
+}
+
+for (const currency of ['USD', 'CNY']) {
+  const value = JSON.parse(JSON.stringify(projection({ suite: false })));
+  if (currency === 'CNY') {
+    value.quote.currency = 'CNY';
+    value.quote.pricingVersion = `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`;
+    value.plan.startIntent.commandTemplate.acceptedPricingVersion = value.quote.pricingVersion;
+  }
+  const test = harness({ projection: deepFreeze(value) });
+  await test.controller.refresh();
+  activate(test);
+  await settle(20);
+  assert.equal(test.nodes.hostedEstimatedCost.textContent, currency + ' 0.18');
+  assert.equal(test.nodes.hostedMaximumCost.textContent, currency + ' 0.24');
+  assert.ok(test.nodes.hostedCostConfirmationLabel.textContent.endsWith(currency + ' 0.24'));
+  assert.ok(test.nodes.hostedSlotList.children[0].children[0].children[1].textContent.endsWith(currency + ' 0.08'));
+  assert.ok(test.nodes.hostedSlotList.children[1].children[0].children[1].textContent.endsWith(currency + ' 0.12'));
+  assert.equal(test.calls.some(row => row[0] === 'execute'), false);
+}
+
+{
+  const value = JSON.parse(JSON.stringify(projection({
+    suiteStatus: 'FAILED', slots: [{ status: 'PLANNED' }, { status: 'FAILED', retry: true }],
+  })));
+  Object.assign(value.quote, { currency: 'CNY', pricingVersion: `ai-image-suite-price-cny/v1:${'c'.repeat(32)}` });
+  const test = harness({ projection: deepFreeze(value) });
+  await test.controller.refresh();
+  activate(test);
+  await settle(20);
+  findAction(test.nodes.hostedSlotList, 'retry', 'slot-2').dispatch('click');
+  assert.match(test.nodes.hostedCostConfirmationLabel.textContent, /CNY 0\.12/u);
+  assert.equal(test.calls.some(row => row[0] === 'execute'), false);
 }
 
 console.log('extension hosted AI image workbench controller tests passed');

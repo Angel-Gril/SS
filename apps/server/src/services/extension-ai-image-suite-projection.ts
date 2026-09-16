@@ -2,6 +2,7 @@ import {
   EXTENSION_AI_IMAGE_SUITE_MAX_COST_CENTS,
   hashExtensionAiImageSuiteContext,
 } from './extension-ai-image-suite.js';
+import { aiImageSuiteQuoteCurrency } from './ai-image-suite-provider-runtime.js';
 
 export const EXTENSION_AI_IMAGE_SUITE_PROJECTION_VERSION =
   'extension-ai-image-suite-projection/v1' as const;
@@ -292,6 +293,13 @@ function approvedPlanProjection(planValue: unknown, binding: ExtensionAiImageSui
   }
   const hash = sha256(preview.previewHash, 'previewHash');
   const pricingVersion = identifier(preview.pricingVersion, 'pricingVersion', 100);
+  const currency = aiImageSuiteQuoteCurrency(pricingVersion);
+  if ((Object.hasOwn(preview, 'currency') && preview.currency !== currency)
+    || (pricingVersion.startsWith('ai-image-suite-price-cny/') && currency !== 'CNY')) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Approved plan currency does not match its pricing version',
+    );
+  }
   const itemCount = positiveInteger(preview.itemCount, 'itemCount');
   const estimatedCostCents = boundedCost(preview.estimatedCostCents, 'estimatedCostCents');
   const maximumCostCents = boundedCost(preview.maximumCostCents, 'maximumCostCents');
@@ -318,6 +326,7 @@ function approvedPlanProjection(planValue: unknown, binding: ExtensionAiImageSui
     preview: {
       hash,
       pricingVersion,
+      ...(currency === 'CNY' ? { currency } : {}),
       itemCount,
       estimatedCostCents,
       maximumCostCents,

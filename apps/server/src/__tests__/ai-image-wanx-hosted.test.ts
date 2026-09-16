@@ -91,13 +91,14 @@ describe('Wanx hosted edit entry', () => {
     }));
   });
 
-  it('enables the reviewed official edit transport without inheriting other operations', () => {
+  it('enables the independently reviewed reference and edit operations without inheriting text generation', () => {
     expect(resolveAiImageProviderCapability(config.provider, config.model)).toMatchObject({
-      model: config.model, operations: ['FULL_EDIT', 'INPAINT'],
+      model: config.model, operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
       inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'sandbox-verified',
     });
     expect(supportsAiMediaOperation(config.provider, config.model, 'TEXT_TO_IMAGE')).toBe(false);
-    expect(supportsAiMediaOperation(config.provider, config.model, 'IMAGE_TO_IMAGE', 1)).toBe(false);
+    expect(supportsAiMediaOperation(config.provider, config.model, 'IMAGE_TO_IMAGE', 1)).toBe(true);
+    expect(supportsAiMediaOperation(config.provider, config.model, 'IMAGE_TO_IMAGE', 2)).toBe(false);
   });
 
   it.each(['FULL_EDIT', 'INPAINT'] as const)('uses the real registry to make official %s ready and select its worker adapter', (operation) => {

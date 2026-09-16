@@ -58,10 +58,10 @@ export class AiMediaCapabilityError extends Error {
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
   {
     provider: 'dashscope-wanx', model: AI_IMAGE_WANX21_EDIT_MODEL,
-    operations: ['FULL_EDIT', 'INPAINT'], maxReferences: 1, supportsMask: true,
+    operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'], maxReferences: 1, supportsMask: true,
     inputTransport: 'base64', resultMode: 'async', evidenceLevel: 'sandbox-verified',
-    evidence: 'official Beijing Wanx full-edit and inpaint create/poll/download transport verified; color fidelity and supplier bill settlement are separate from normal dispatch readiness',
-    sandboxEvidence: (['FULL_EDIT', 'INPAINT'] as const).map<AiMediaSandboxEvidence>((operation) => ({
+    evidence: 'official Beijing Wanx single-reference IMAGE_TO_IMAGE, full-edit and inpaint create/poll/download transports independently verified; each request accepts one reference; supplier settlement is separate from normal dispatch readiness',
+    sandboxEvidence: (['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const).map<AiMediaSandboxEvidence>((operation) => ({
       endpointSha256: aiImageProviderEndpointSha256('dashscope-wanx', AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE),
       operation, inputTransport: 'base64', resultMode: 'async',
     })),

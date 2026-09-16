@@ -36,6 +36,16 @@
       && Object.keys(item).sort().join(',') === keys.slice().sort().join(',');
   }
 
+  function exactPriceKeys(value, keys) {
+    var item = record(value);
+    if (!item) return false;
+    var hasCurrency = Object.prototype.hasOwnProperty.call(item, 'currency');
+    var isCny = /^ai-image-suite-price-cny\/v1:[a-f0-9]{32}$/.test(item.pricingVersion);
+    if (!isCny && /^ai-image-suite-price-cny\//.test(item.pricingVersion)) return false;
+    return exactKeys(item, hasCurrency ? keys.concat('currency') : keys)
+      && (isCny ? item.currency === 'CNY' : !hasCurrency || item.currency === 'USD');
+  }
+
   function text(value, maximum) {
     return typeof value === 'string' && value.length > 0 && value.length <= maximum;
   }
@@ -149,7 +159,7 @@
       || plan.revision !== authority.planRevision
       || plan.status !== 'APPROVED'
       || plan.skuKey !== authority.skuKey
-      || !exactKeys(preview, [
+      || !exactPriceKeys(preview, [
         'hash', 'pricingVersion', 'itemCount', 'estimatedCostCents',
         'maximumCostCents', 'slots',
       ])
@@ -534,6 +544,8 @@
       applyPolicy: clone(rawProjection.applyPolicy),
       quote: preview ? {
         pricingVersion: preview.pricingVersion,
+        ...(Object.prototype.hasOwnProperty.call(preview, 'currency')
+          ? { currency: preview.currency } : {}),
         itemCount: preview.itemCount,
         estimatedCostCents: preview.estimatedCostCents,
         maximumCostCents: preview.maximumCostCents,

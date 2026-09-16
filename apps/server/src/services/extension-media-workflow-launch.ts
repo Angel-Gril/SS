@@ -873,7 +873,7 @@ function normalizedProviderText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function resolveStandaloneProviderConfig(input: {
+export function resolveStandaloneProviderConfig(input: {
   readiness: ExtensionMediaStandaloneReadiness;
   operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
   production: boolean;

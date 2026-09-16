@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
 import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
+import type {
+  AiMediaPlanningSourceAssetCreateInput,
+  AiMediaPlanningSourceScope,
+} from '../services/ai-media-planning-sources.js';
 
 function candidateEvidenceId(snapshotId: string, candidateId: string) {
   const path = `/media/${encodeURIComponent(candidateId)}`;
@@ -126,6 +130,88 @@ function sourceClient(plan: any, latest = {
 }
 
 describe('Prisma AI media planning repository boundaries', () => {
+  function sourceAssetInput(): { scope: AiMediaPlanningSourceScope; asset: AiMediaPlanningSourceAssetCreateInput } {
+    const scope = {
+      ownerUserId: 'owner-1', sourceSubjectId: 'subject-1', sourceCaptureSnapshotId: 'snapshot-1',
+      sourceCaptureHash: 'a'.repeat(64), sourceProfileHash: 'b'.repeat(64),
+      sourceSchemaVersion: 'source-product-capture-v2', contextType: 'collect' as const, contextId: 'goods-1',
+    };
+    return { scope, asset: {
+      ownerUserId: scope.ownerUserId, kind: 'SOURCE_ORIGINAL',
+      sourceCaptureSnapshotId: scope.sourceCaptureSnapshotId, sourceMediaKey: 'media-1',
+      sourceUrl: 'https://source.example/media-1.jpg', url: 'https://assets.example/media-1.jpg',
+      storageBackend: 'oss', storageKey: 'raw/media-1.jpg', mimeType: 'image/jpeg',
+      sizeBytes: 100, width: 512, height: 512, sha256: 'c'.repeat(64), sourceSha256: 'd'.repeat(64),
+      metadata: { sourceCaptureHash: scope.sourceCaptureHash, sourceProfileHash: scope.sourceProfileHash,
+        sourceSha256: 'd'.repeat(64), sourceSizeBytes: 120 },
+    } };
+  }
+
+  it('queries only selected source assets with matching owner and snapshot ownership', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const repository = new PrismaAiMediaPlanningRepository({ mediaAsset: { findMany } } as never);
+    await repository.findPlanningSourceAssets({
+      ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKeys: ['media-1'],
+    });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1',
+      sourceCaptureSnapshot: { subject: { ownerUserId: 'owner-1' } },
+      sourceMediaKey: { in: ['media-1'] }, kind: 'SOURCE_ORIGINAL', aiImageJobId: null,
+      storageBackend: { in: ['local', 'oss'] },
+    } }));
+    await expect(repository.findPlanningSourceAssets({
+      ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1',
+      sourceMediaKeys: Array.from({ length: 26 }, (_, index) => `media-${index}`),
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_PLANNING_SOURCE_LIMIT_EXCEEDED' });
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists raw hashes in server metadata and keeps normalized hashes in the asset column', async () => {
+    const client = sourceClient(null);
+    client.mediaAsset = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn(async ({ data }: any) => ({ id: 'source-1', ...data })),
+    };
+    client.$transaction.mockImplementation(async (action: (tx: any) => Promise<unknown>) => action(client));
+    const input = sourceAssetInput();
+    const result = await new PrismaAiMediaPlanningRepository(client).createPlanningSourceAsset(input);
+    expect(result).toMatchObject({ id: 'source-1', sha256: 'c'.repeat(64), sourceSha256: 'd'.repeat(64) });
+    const data = client.mediaAsset.create.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty('sourceSha256');
+    expect(data.metadata.sourceSha256).toBe(input.asset.sourceSha256);
+    expect(client.$transaction).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+      isolationLevel: 'Serializable',
+    }));
+  });
+
+  it('rechecks the current source inside the asset transaction and refuses a stale snapshot', async () => {
+    const client = sourceClient(null, {
+      id: 'snapshot-new', captureHash: 'a'.repeat(64), profileHash: 'b'.repeat(64),
+      schemaVersion: 'source-product-capture-v2',
+    });
+    client.mediaAsset = { findFirst: vi.fn(), create: vi.fn() };
+    client.$transaction.mockImplementation(async (action: (tx: any) => Promise<unknown>) => action(client));
+    const result = await new PrismaAiMediaPlanningRepository(client).createPlanningSourceAsset(sourceAssetInput());
+    expect(result).toBeNull();
+    expect(client.mediaAsset.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects concurrent source bytes that differ from the already frozen asset', async () => {
+    const input = sourceAssetInput();
+    const client = sourceClient(null);
+    client.mediaAsset = {
+      findFirst: vi.fn().mockResolvedValue({ id: 'winner', ...input.asset, metadata: {
+        ...input.asset.metadata, sourceSha256: 'e'.repeat(64),
+      } }),
+      create: vi.fn(),
+    };
+    client.$transaction.mockImplementation(async (action: (tx: any) => Promise<unknown>) => action(client));
+    await expect(new PrismaAiMediaPlanningRepository(client).createPlanningSourceAsset(input)).rejects.toMatchObject({
+      code: 'AI_MEDIA_PLANNING_SOURCE_ASSET_CONFLICT', statusCode: 409,
+    });
+    expect(client.mediaAsset.create).not.toHaveBeenCalled();
+  });
+
   it('resolves product-only captures to the shared stable SKU identity', async () => {
     const findFirst = vi.fn(async () => ({
       sourceCaptureSubject: {

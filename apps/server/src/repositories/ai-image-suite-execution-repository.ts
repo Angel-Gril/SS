@@ -42,12 +42,14 @@ import {
 import {
   AiImageSuitePaidExecutionError,
   executeAiImageSuitePaidProvider,
+  recoverAiImageSuitePaidProvider,
   type AiImageSuitePaidStoredAsset,
 } from '../services/ai-image-suite-paid-execution.js';
 import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-suite-output-normalizer.js';
 import {
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
-  AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+  aiImageSuiteProviderRequestDimensions,
+  aiImageSuiteQuoteCurrency,
+  hasAdmittedWanxAiImageSuiteOperation,
 } from '../services/ai-image-suite-provider-runtime.js';
 import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 import type {
@@ -57,12 +59,14 @@ import type {
   AiImageSuiteGenerationRuntimeFailure,
 } from '../workers/ai-image-suite-generation.js';
 import sharp from 'sharp';
+import type { AiMediaCapabilityEvidence } from '../services/ai-image-provider-capabilities.js';
 
 export const AI_IMAGE_SUITE_EXECUTION_EVENT_VERSION = 'ai-image-suite-execution-event/v1';
 
 const materializedEventType = 'CHILDREN_MATERIALIZED';
 const AI_IMAGE_SUITE_EXECUTION_LEASE_MS = 2 * 60 * 1_000;
-const AI_IMAGE_SUITE_EXECUTION_HEARTBEAT_MS = Math.floor(AI_IMAGE_SUITE_EXECUTION_LEASE_MS / 3);
+const WANX_SUITE_RECOVERY_MAX_AGE_MS = 15 * 60_000;
+const WANX_SUITE_RECOVERY_MAX_LOOKUPS = 10;
 const executionStatuses = new Set<AiImageSuiteExecutionStatus>([
   'PLANNED',
   'QUEUED',
@@ -125,10 +129,11 @@ export interface AiImageSuiteExecutionRepositoryOptions {
 }
 
 export interface AiImageSuiteGenerationCoordinatorOptions {
+  executionLeaseMs?: number;
   runtimeReady?: AiImageSuiteExecutionRepositoryOptions['runtimeReady'];
   getRuntimeEvidence?: (
     suite: Parameters<NonNullable<AiImageSuiteExecutionRepositoryOptions['runtimeReady']>>[0],
-  ) => Promise<'local-test' | 'sandbox-verified' | null>;
+  ) => Promise<AiMediaCapabilityEvidence | null>;
   outputStorageReady?: () => Promise<boolean>;
   getDispatchAuthorization?: (ownerUserId: string) => Promise<{
     enabled: boolean;
@@ -143,6 +148,7 @@ export interface AiImageSuiteGenerationCoordinatorOptions {
   ) => Promise<{ url: string; backend: string; filename?: string; key?: string }>;
   createFakeImage?: () => Promise<{ buffer: Buffer; mimeType: 'image/png'; filename: string }>;
   executePaidProvider?: typeof executeAiImageSuitePaidProvider;
+  recoverPaidProvider?: typeof recoverAiImageSuitePaidProvider;
 }
 
 function cleanDiagnostic(value: unknown, fallback: string): string {
@@ -384,6 +390,7 @@ function paidCostReservationsAreDispatchable(suite: any): boolean {
       || reservation.provider !== suite.provider
       || reservation.model !== suite.model
       || reservation.operation !== 'IMAGE_TO_IMAGE'
+      || String(reservation.currency || 'USD') !== aiImageSuiteQuoteCurrency(String(suite.pricingVersion))
       || String(reservation.requestFingerprint) !== String(job.requestFingerprint)
       || !Number.isSafeInteger(estimated)
       || estimated < 1
@@ -608,6 +615,7 @@ export class PrismaAiImageSuiteExecutionRepository implements AiImageSuiteExecut
             controls,
             requestedUnits: 0,
             requestedMaximumCostCents: 0,
+            currency: aiImageSuiteQuoteCurrency(String(suite.pricingVersion)),
           });
           if (costControlFailure) return costControlFailure;
         }
@@ -837,6 +845,7 @@ export class PrismaAiImageSuiteExecutionRepository implements AiImageSuiteExecut
             controls,
             requestedUnits: Number(previous.requestedImageCount || 1),
             requestedMaximumCostCents: Number(previous.costReservation.maximumCostMinor),
+            currency: aiImageSuiteQuoteCurrency(String(suite.pricingVersion)),
           });
           if (costControlFailure) return costControlFailure;
         }
@@ -1043,7 +1052,8 @@ async function loadExecutionGraph(
           },
           jobs: {
             orderBy: { workflowAttempt: 'asc' },
-            include: { costReservation: true, assets: true },
+            include: { costReservation: true, assets: true,
+              workflowEvents: { where: { eventType: 'PROVIDER_RECOVERY_CLAIMED' }, select: { id: true }, take: WANX_SUITE_RECOVERY_MAX_LOOKUPS } },
           },
         },
       },
@@ -1138,14 +1148,19 @@ function frozenOperationContractValid(graph: LoadedExecutionGraph): boolean {
   if (graph.suite.provider === 'fake') {
     return config.version === AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION;
   }
+  const dimensions = aiImageSuiteProviderRequestDimensions(String(graph.suite.provider), String(graph.suite.model));
+  if (graph.suite.provider === 'dashscope-wanx'
+    && (!hasAdmittedWanxAiImageSuiteOperation(graph.job)
+      || graph.reservation.currency !== 'CNY'
+      || aiImageSuiteQuoteCurrency(String(graph.suite.pricingVersion)) !== 'CNY')) return false;
   return Boolean(
     config.version === AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION
     && config.providerRuntime
     && typeof config.providerRuntime === 'object'
     && !Array.isArray(config.providerRuntime)
     && config.providerRequest?.count === 1
-    && config.providerRequest?.width === AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH
-    && config.providerRequest?.height === AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT
+    && config.providerRequest?.width === dimensions.width
+    && config.providerRequest?.height === dimensions.height
     && config.finalOutput?.profile === AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
     && config.finalOutput?.width === AI_IMAGE_SUITE_OUTPUT_WIDTH
     && config.finalOutput?.height === AI_IMAGE_SUITE_OUTPUT_HEIGHT
@@ -1310,6 +1325,7 @@ async function appendWorkflowExecutionEvent(
   graph: LoadedExecutionGraph,
   eventType: string,
   payload: Record<string, unknown>,
+  uniqueClaim?: string,
 ) {
   const attempt = Number(graph.job.workflowAttempt);
   if (!Number.isSafeInteger(attempt) || attempt < 1) {
@@ -1322,7 +1338,9 @@ async function appendWorkflowExecutionEvent(
       ownerUserId: graph.suite.ownerUserId,
       actorUserId: graph.job.actorUserId || graph.suite.actorUserId,
       jobId: graph.job.id,
-      eventKey: `${graph.workflow.id}:${eventType}:${graph.job.id}:${attempt}`,
+      eventKey: uniqueClaim
+        ? `${graph.workflow.id}:${eventType}:${hashAiMediaPlanningJson({ jobId: graph.job.id, attempt, uniqueClaim })}`
+        : `${graph.workflow.id}:${eventType}:${graph.job.id}:${attempt}`,
       eventType,
       payload,
       payloadHash: hashAiMediaPlanningJson(payload),
@@ -1418,7 +1436,7 @@ async function createDefaultFakeImage() {
 async function resolveCoordinatorRuntimeEvidence(
   options: AiImageSuiteGenerationCoordinatorOptions,
   suite: any,
-): Promise<'local-test' | 'sandbox-verified' | null> {
+): Promise<AiMediaCapabilityEvidence | null> {
   if (options.getRuntimeEvidence) return options.getRuntimeEvidence(suite);
   const runtimeReady = options.runtimeReady || (async (candidate: any) => (
     process.env.NODE_ENV !== 'production'
@@ -1435,10 +1453,17 @@ async function resolveCoordinatorRuntimeEvidence(
 
 export class PrismaAiImageSuiteGenerationCoordinator
 implements AiImageSuiteGenerationCoordinator {
+  private readonly executionLeaseMs: number;
   constructor(
     private readonly prisma: PrismaClient,
     private readonly options: AiImageSuiteGenerationCoordinatorOptions = {},
-  ) {}
+  ) {
+    const leaseMs = options.executionLeaseMs ?? AI_IMAGE_SUITE_EXECUTION_LEASE_MS;
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1000 || leaseMs > AI_IMAGE_SUITE_EXECUTION_LEASE_MS) {
+      throw new RangeError('Suite execution lease must be 1000..120000 milliseconds');
+    }
+    this.executionLeaseMs = leaseMs;
+  }
 
   async revalidateAndClaim(
     payload: AiImageSuiteGenerationQueuePayload,
@@ -1458,6 +1483,13 @@ implements AiImageSuiteGenerationCoordinator {
     if (graph.job.status === 'RUNNING') {
       const claimToken = activeClaimToken(graph);
       if (!claimToken || !claimIsExpired(graph)) return { kind: 'ignored' };
+      if (hasAdmittedWanxAiImageSuiteOperation(graph.job) && graph.job.providerJobId
+        && this.wanxRecoveryWindowOpen(graph)) {
+        const recoveryToken = await this.claimWanxRecovery(payload, claimToken);
+        if (!recoveryToken) return { kind: 'ignored' };
+        return { kind: 'ready', provider: String(graph.suite.provider), providerFacing: false,
+          executionToken: `recover:${recoveryToken}` };
+      }
       return {
         kind: 'ready',
         provider: String(graph.suite.provider),
@@ -1475,6 +1507,8 @@ implements AiImageSuiteGenerationCoordinator {
       provider: String(started.suite.provider),
       providerFacing: true,
       evidenceLevel,
+      ...(started.suite.provider === 'dashscope-wanx'
+        ? { model: String(started.job.model), operationConfig: started.job.operationConfig } : {}),
       executionToken: `execute:${claimToken}`,
     };
   }
@@ -1490,6 +1524,8 @@ implements AiImageSuiteGenerationCoordinator {
     if (!initial
       || !frozenExecutionAuthorityValid(initial)
       || activeClaimToken(initial) !== token) return { kind: 'ignored' as const };
+    const recoveryOnly = mode === 'recover' && hasAdmittedWanxAiImageSuiteOperation(initial.job)
+      && Boolean(initial.job.providerJobId) && !claimIsExpired(initial);
     if (mode === 'cancel') {
       const frontier = await this.finish(payload, 'CANCELLED', {
         code: 'SUITE_CANCELLED',
@@ -1497,7 +1533,7 @@ implements AiImageSuiteGenerationCoordinator {
       }, token, true);
       return { kind: 'completed' as const, frontier };
     }
-    if (mode === 'recover') {
+    if (mode === 'recover' && !recoveryOnly) {
       const paid = initial.suite.provider !== 'fake';
       const code = paid && initial.job.providerJobId
         ? 'PROVIDER_RECOVERY_REQUIRED'
@@ -1512,10 +1548,10 @@ implements AiImageSuiteGenerationCoordinator {
       }, token, true);
       return { kind: 'completed' as const, frontier };
     }
-    if (mode !== 'execute' || initial.job.status !== 'RUNNING' || initial.slot.status !== 'RUNNING') {
+    if ((!recoveryOnly && mode !== 'execute') || initial.job.status !== 'RUNNING' || initial.slot.status !== 'RUNNING') {
       return { kind: 'ignored' as const };
     }
-    if (this.options.getDispatchAuthorization) {
+    if (!recoveryOnly && this.options.getDispatchAuthorization) {
       const authorization = await this.options.getDispatchAuthorization(
         String(initial.suite.ownerUserId),
       );
@@ -1534,7 +1570,7 @@ implements AiImageSuiteGenerationCoordinator {
       && Number(candidate.estimatedCostCents) === 0
       && Number(candidate.maximumCostCents) === 0
     ));
-    if (!await runtimeReady(initial.suite)) {
+    if (!recoveryOnly && !await runtimeReady(initial.suite)) {
       const frontier = await this.finish(payload, 'FAILED', {
         code: 'PROVIDER_CONFIG_CHANGED',
         message: 'AI media suite Provider configuration changed before dispatch',
@@ -1577,7 +1613,8 @@ implements AiImageSuiteGenerationCoordinator {
       return { kind: 'completed' as const, frontier };
     }
 
-    if (claim.evidenceLevel !== 'sandbox-verified') {
+    if (!recoveryOnly && claim.evidenceLevel !== 'sandbox-verified'
+      && !hasAdmittedWanxAiImageSuiteOperation(initial.job)) {
       const frontier = await this.finish(payload, 'FAILED', {
         code: 'AI_MEDIA_SUITE_PAID_PROVIDER_NOT_VERIFIED',
         message: 'Paid AI image suite generation requires sandbox-verified Provider evidence',
@@ -1595,7 +1632,7 @@ implements AiImageSuiteGenerationCoordinator {
         .finally(() => { heartbeatInFlight = null; });
     };
     if (!await this.renewExecutionClaim(payload, token)) return { kind: 'ignored' as const };
-    const heartbeatTimer = setInterval(heartbeat, AI_IMAGE_SUITE_EXECUTION_HEARTBEAT_MS);
+    const heartbeatTimer = setInterval(heartbeat, Math.floor(this.executionLeaseMs / 3));
     heartbeatTimer.unref();
     try {
       if (!this.options.outputStorageReady || !await this.options.outputStorageReady()) {
@@ -1607,7 +1644,9 @@ implements AiImageSuiteGenerationCoordinator {
       }
       const storage = this.options.uploadBuffer ? null : await getStorageBackend();
       const upload = this.options.uploadBuffer || storage!.uploadBuffer.bind(storage);
-      const executePaidProvider = this.options.executePaidProvider || executeAiImageSuitePaidProvider;
+      const executePaidProvider = recoveryOnly
+        ? this.options.recoverPaidProvider || recoverAiImageSuitePaidProvider
+        : this.options.executePaidProvider || executeAiImageSuitePaidProvider;
       const completed = await executePaidProvider({
         ownerUserId: String(initial.suite.ownerUserId),
         jobId: String(initial.job.id),
@@ -1686,12 +1725,68 @@ implements AiImageSuiteGenerationCoordinator {
         || !await this.executionClaimIsActive(payload, token)) {
         return { kind: 'ignored' as const };
       }
+      if (!failure.providerResultReceived && failure.providerJobId
+        && !['SUITE_PROVIDER_RECOVERY_NO_OUTPUT', 'SUITE_PROVIDER_RUNTIME_CHANGED', 'SUITE_PROVIDER_INPUT_INVALID',
+          'SUITE_PROVIDER_INPUT_MISMATCH', 'INVALID_MEDIA_INPUT', 'INVALID_PROVIDER_RESULT'].includes(failure.code)
+        && await this.deferWanxRecovery(payload, token, failure)) {
+        return { kind: 'pending' as const, frontier: [] };
+      }
       const frontier = await this.finish(payload, 'FAILED', failure, token);
       return { kind: 'completed' as const, frontier };
     } finally {
       clearInterval(heartbeatTimer);
       if (heartbeatInFlight) await heartbeatInFlight;
     }
+  }
+
+  private wanxRecoveryWindowOpen(graph: LoadedExecutionGraph): boolean {
+    const dispatchedAt = graph.job.providerDispatchedAt;
+    const attempts = Array.isArray(graph.job.workflowEvents) ? graph.job.workflowEvents.length : 0;
+    return dispatchedAt instanceof Date && Number.isFinite(dispatchedAt.getTime())
+      && dispatchedAt.getTime() <= Date.now()
+      && dispatchedAt.getTime() + WANX_SUITE_RECOVERY_MAX_AGE_MS > Date.now()
+      && Number.isSafeInteger(attempts) && attempts >= 0 && attempts < WANX_SUITE_RECOVERY_MAX_LOOKUPS;
+  }
+
+  private async claimWanxRecovery(payload: AiImageSuiteGenerationQueuePayload, previousToken: string): Promise<string | null> {
+    return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      const graph = await loadExecutionGraph(tx, payload);
+      if (!graph || !frozenExecutionAuthorityValid(graph) || activeClaimToken(graph) !== previousToken
+        || !claimIsExpired(graph) || !hasAdmittedWanxAiImageSuiteOperation(graph.job)
+        || !graph.job.providerJobId || !this.wanxRecoveryWindowOpen(graph)
+        || graph.job.status !== 'RUNNING' || graph.slot.status !== 'RUNNING') return null;
+      const now = new Date();
+      const token = createHash('sha256').update(randomUUID()).digest('hex');
+      const changed = await tx.aiMediaSuiteSlot.updateMany({ where: { id: graph.slot.id, suiteId: graph.suite.id,
+        ownerUserId: graph.suite.ownerUserId, executionClaimToken: previousToken, executionLeaseExpiresAt: { lte: now }, status: 'RUNNING' },
+      data: { executionClaimToken: token, executionLeaseExpiresAt: new Date(now.getTime() + this.executionLeaseMs), updatedAt: now } });
+      if (changed.count !== 1) return null;
+      await appendWorkflowExecutionEvent(tx, graph, 'PROVIDER_RECOVERY_CLAIMED', {
+        providerJobId: graph.job.providerJobId,
+      }, token);
+      return token;
+    });
+  }
+
+  private async deferWanxRecovery(payload: AiImageSuiteGenerationQueuePayload, token: string, failure: AiImageSuiteExecutionFailure): Promise<boolean> {
+    return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      const graph = await loadExecutionGraph(tx, payload);
+      if (!graph || !frozenExecutionAuthorityValid(graph) || activeClaimToken(graph) !== token
+        || claimIsExpired(graph) || !hasAdmittedWanxAiImageSuiteOperation(graph.job)
+        || graph.job.providerJobId !== failure.providerJobId || !this.wanxRecoveryWindowOpen(graph)
+        || graph.job.status !== 'RUNNING' || graph.slot.status !== 'RUNNING') return false;
+      const now = new Date();
+      const changed = await tx.aiMediaSuiteSlot.updateMany({ where: { id: graph.slot.id, ownerUserId: graph.suite.ownerUserId,
+        executionClaimToken: token, executionLeaseExpiresAt: { gt: now }, status: 'RUNNING' },
+      data: { executionLeaseExpiresAt: new Date(Math.max(now.getTime() + this.executionLeaseMs, graph.slot.executionLeaseExpiresAt.getTime() + 1)) } });
+      if (changed.count !== 1) return false;
+      await appendWorkflowExecutionEvent(tx, graph, 'PROVIDER_RECOVERY_PENDING', {
+        providerJobId: failure.providerJobId, reasonCode: failure.code.slice(0, 100),
+      });
+      // Retain the reservation and own suite lease; the generic image reconciliation
+      // worker must not claim a suite child or run its separate completion pipeline.
+      return true;
+    });
   }
 
   private async executionClaimIsActive(
@@ -1732,7 +1827,7 @@ implements AiImageSuiteGenerationCoordinator {
           status: { in: ['RUNNING', 'CANCEL_REQUESTED'] },
         },
         data: {
-          executionLeaseExpiresAt: new Date(now.getTime() + AI_IMAGE_SUITE_EXECUTION_LEASE_MS),
+          executionLeaseExpiresAt: new Date(now.getTime() + this.executionLeaseMs),
         },
       });
       return changed.count === 1;
@@ -1771,7 +1866,7 @@ implements AiImageSuiteGenerationCoordinator {
           status: 'RUNNING',
         },
         data: {
-          executionLeaseExpiresAt: new Date(now.getTime() + AI_IMAGE_SUITE_EXECUTION_LEASE_MS),
+          executionLeaseExpiresAt: new Date(now.getTime() + this.executionLeaseMs),
         },
       });
       const jobChanged = await tx.aiImageJob.updateMany({
@@ -2204,7 +2299,7 @@ implements AiImageSuiteGenerationCoordinator {
       const claimToken = createHash('sha256')
         .update(`${graph.suite.id}\0${graph.slot.id}\0${graph.job.id}\0${randomUUID()}`)
         .digest('hex');
-      const executionLeaseExpiresAt = new Date(now.getTime() + AI_IMAGE_SUITE_EXECUTION_LEASE_MS);
+      const executionLeaseExpiresAt = new Date(now.getTime() + this.executionLeaseMs);
       const jobChanged = await tx.aiImageJob.updateMany({
         where: { id: graph.job.id, status: 'QUEUED' },
         data: {

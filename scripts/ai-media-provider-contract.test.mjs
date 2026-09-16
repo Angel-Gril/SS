@@ -117,15 +117,18 @@ for (const evidenceLevel of [undefined, 'local-test', 'unknown']) {
 const wanxEndpoint = createHash('sha256').update('https://dashscope.aliyuncs.com/api/v1').digest('hex');
 const verifiedWanx = {
   ...wanxCapability,
+  operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
   evidenceLevel: 'sandbox-verified',
   evidence: 'Official Beijing create/poll/download transport verified; visual quality and supplier settlement remain separate.',
-  sandboxEvidence: ['FULL_EDIT', 'INPAINT'].map((operation) => ({
+  sandboxEvidence: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].map((operation) => ({
     endpointSha256: wanxEndpoint, operation, inputTransport: 'base64', resultMode: 'async',
   })),
 };
 const reviewedVerifiedWanx = {
   ...reviewedWanx,
+  operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),
   sandboxEvidence: new Set([
+    `${wanxEndpoint}:IMAGE_TO_IMAGE:base64:async`,
     `${wanxEndpoint}:FULL_EDIT:base64:async`,
     `${wanxEndpoint}:INPAINT:base64:async`,
   ]),
@@ -135,7 +138,13 @@ for (const [label, changed] of [
   ['lost classification', { evidenceLevel: 'adapter-characterized' }],
   ['missing operation evidence', { sandboxEvidence: verifiedWanx.sandboxEvidence.slice(0, 1) }],
   ['duplicate evidence', { sandboxEvidence: [...verifiedWanx.sandboxEvidence, verifiedWanx.sandboxEvidence[0]] }],
-  ['unknown operation', { operations: ['FULL_EDIT', 'INPAINT', 'IMAGE_TO_IMAGE'] }],
+  ['missing independent image-to-image evidence', {
+    sandboxEvidence: verifiedWanx.sandboxEvidence.filter((evidence) => evidence.operation !== 'IMAGE_TO_IMAGE'),
+  }],
+  ['text evidence substituted for image-to-image', { sandboxEvidence: verifiedWanx.sandboxEvidence.map((evidence) => (
+    evidence.operation === 'IMAGE_TO_IMAGE' ? { ...evidence, operation: 'TEXT_TO_IMAGE', inputTransport: 'none' } : evidence
+  )) }],
+  ['unknown operation', { operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'IMAGE_TRANSLATE'] }],
   ['text inheritance', { operations: ['TEXT_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] }],
   ['different domain', { sandboxEvidence: verifiedWanx.sandboxEvidence.map((evidence) => ({
     ...evidence,

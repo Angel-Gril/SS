@@ -27,13 +27,22 @@ import {
   AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH,
   compareAiMediaPlanningStrings,
 } from './ai-media-planning-contract.js';
+import {
+  AI_MEDIA_PLANNING_SOURCE_MAX_CANDIDATES,
+  AiMediaPlanningSourceError,
+  prepareAiMediaPlanningSources,
+  type AiMediaPlanningSourceDependencies,
+  type AiMediaPlanningSourceErrorCode,
+  type AiMediaPlanningSourceRepository,
+  type PreparedAiMediaPlanningSource,
+} from './ai-media-planning-sources.js';
 
 export const AI_MEDIA_RULE_PLANNER_VERSION = 'ai-media-rule-planner/v1';
 export const AI_MEDIA_PLANNING_INPUT_VERSION = 'ai-media-planning-input/v1';
 export const AI_MEDIA_PLANNING_PROVENANCE_VERSION = 'ai-media-planning-provenance/v1';
 export const AI_MEDIA_PLANNING_MAX_JSON_BYTES = 1024 * 1024;
 export const AI_MEDIA_PLANNING_MAX_SELECTED_SKUS = 50;
-export const AI_MEDIA_PLANNING_MAX_CANDIDATES = 25;
+export const AI_MEDIA_PLANNING_MAX_CANDIDATES = AI_MEDIA_PLANNING_SOURCE_MAX_CANDIDATES;
 export const AI_MEDIA_PLANNING_MAX_VERIFIED_FACTS = 32;
 export const AI_MEDIA_PLAN_VERSION_PAGE_DEFAULT = 10;
 export const AI_MEDIA_PLAN_VERSION_PAGE_MAX = 20;
@@ -267,7 +276,7 @@ export type UpdateAiMediaPlanSlotReferencesResult = {
   createdVersionId: string | null;
 };
 
-export interface AiMediaPlanningRepository {
+export interface AiMediaPlanningRepository extends AiMediaPlanningSourceRepository {
   resolveCurrentRulePlanningTarget(input: {
     ownerUserId: string;
     context: { type: 'collect'; id: string };
@@ -305,6 +314,7 @@ export interface AiMediaPlanningRepository {
 }
 
 export type AiMediaPlanningErrorCode =
+  | AiMediaPlanningSourceErrorCode
   | 'AI_MEDIA_WORKFLOW_DISABLED'
   | 'SOURCE_LISTING_WEB_MEDIA_DISABLED'
   | 'AI_MEDIA_PLANNING_NOT_FOUND'
@@ -758,6 +768,7 @@ function verifiedFactsFromCapture(
 export function resolveRuleBasedAiMediaPlanningInput(
   rawInput: CreateRuleBasedAiMediaPlanningInput,
   authority: AiMediaPlanningAuthority,
+  preparedSources?: PreparedAiMediaPlanningSource[],
 ): ResolvedRuleBasedAiMediaPlanningInput {
   const input = normalizeCreateInput(rawInput);
   if (authority.capture.captureVersion !== 'source-product-capture-v2') {
@@ -800,15 +811,44 @@ export function resolveRuleBasedAiMediaPlanningInput(
       }
       return media;
     });
+  const preparedByKey = new Map<string, PreparedAiMediaPlanningSource>();
+  if (preparedSources !== undefined) {
+    if (!Array.isArray(preparedSources) || preparedSources.length !== selectedMedia.length) {
+      throw new TypeError('AI media planning source preparation does not cover the selected candidates');
+    }
+    for (const source of preparedSources) {
+      const media = selectedMedia.find((candidate) => candidate.key === source.sourceMediaKey);
+      if (!media || preparedByKey.has(source.sourceMediaKey)
+        || source.ownerUserId !== input.ownerUserId
+        || source.sourceSubjectId !== input.sourceSubjectId
+        || source.sourceCaptureSnapshotId !== input.sourceCaptureSnapshotId
+        || source.sourceCaptureHash !== authority.sourceCaptureHash
+        || source.sourceProfileHash !== authority.sourceProfileHash
+        || source.sourceSchemaVersion !== authority.sourceSchemaVersion
+        || source.contextType !== input.context.type || source.contextId !== input.context.id
+        || source.sourceUrl !== media.url
+        || !Number.isSafeInteger(source.width) || source.width < 1
+        || !Number.isSafeInteger(source.height) || source.height < 1
+        || !/^image\/(jpeg|png|webp|gif|avif|tiff)$/u.test(source.sourceMimeType)
+        || (media.width != null && media.width !== source.width)
+        || (media.height != null && media.height !== source.height)
+        || (media.mimeType != null && media.mimeType.split(';')[0]!.trim().toLowerCase() !== source.sourceMimeType)) {
+        throw new TypeError('AI media planning prepared source does not match the capture authority');
+      }
+      preparedByKey.set(source.sourceMediaKey, {
+        ...source, sourceSha256: sha256(source.sourceSha256, 'sourceSha256'),
+      });
+    }
+  }
   const candidates: ImageCurationCandidate[] = selectedMedia.map((media) => ({
     id: media.key,
     url: media.url,
-    width: media.width,
-    height: media.height,
-    mimeType: media.mimeType,
+    width: media.width ?? preparedByKey.get(media.key)?.width ?? null,
+    height: media.height ?? preparedByKey.get(media.key)?.height ?? null,
+    mimeType: media.mimeType ?? preparedByKey.get(media.key)?.sourceMimeType ?? null,
     role: media.role,
     skuKeys: media.skuKeys.filter((skuKey) => selectedSkuSet.has(skuKey)),
-    contentHash: null,
+    contentHash: preparedByKey.get(media.key)?.sourceSha256 || null,
   }));
   return jsonClone({
     ...input,
@@ -946,11 +986,22 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
 
 function inputError(error: unknown): never {
   if (error instanceof AiMediaPlanningError) throw error;
+  if (error instanceof AiMediaPlanningSourceError) {
+    throw new AiMediaPlanningError(error.code, error.message, error.statusCode);
+  }
   const message = error instanceof Error ? error.message : 'AI media planning input is invalid';
   throw new AiMediaPlanningError('AI_MEDIA_PLANNING_INVALID_INPUT', message, 400);
 }
 
-export function createAiMediaPlanningService(repository: AiMediaPlanningRepository) {
+export interface AiMediaPlanningServiceOptions {
+  /** Internal legacy replay only. HTTP and extension callers cannot choose this option. */
+  sourcePreparation?: AiMediaPlanningSourceDependencies | false;
+}
+
+export function createAiMediaPlanningService(
+  repository: AiMediaPlanningRepository,
+  options: AiMediaPlanningServiceOptions = {},
+) {
   const createRuleBased = async (input: CreateRuleBasedAiMediaPlanningInput) => {
       let normalized: CreateRuleBasedAiMediaPlanningInput;
       let artifacts: RuleBasedAiMediaPlanningArtifacts;
@@ -968,8 +1019,24 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
         );
       }
       try {
+        const resolved = resolveRuleBasedAiMediaPlanningInput(normalized, authority);
+        const prepared = options.sourcePreparation === false ? undefined : await prepareAiMediaPlanningSources(
+          repository,
+          {
+            ownerUserId: resolved.ownerUserId,
+            sourceSubjectId: resolved.sourceSubjectId,
+            sourceCaptureSnapshotId: resolved.sourceCaptureSnapshotId,
+            sourceCaptureHash: resolved.sourceCaptureHash,
+            sourceProfileHash: resolved.sourceProfileHash,
+            sourceSchemaVersion: resolved.sourceSchemaVersion,
+            contextType: resolved.context.type,
+            contextId: resolved.context.id,
+          },
+          resolved.candidates,
+          options.sourcePreparation,
+        );
         artifacts = buildRuleBasedAiMediaPlanningArtifacts(
-          resolveRuleBasedAiMediaPlanningInput(normalized, authority),
+          prepared === undefined ? resolved : resolveRuleBasedAiMediaPlanningInput(normalized, authority, prepared),
         );
       } catch (error) {
         return inputError(error);

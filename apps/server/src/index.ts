@@ -275,6 +275,7 @@ import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-t
 import { resolveTrustedAiImageTranslationCategory } from './services/ai-image-translation-glossary.js';
 import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
 import { getAiImageEditProviderRuntimeConfig } from './services/ai-image-edit-runtime-config.js';
+import { getAiImageOperationProviderRuntimeConfig } from './services/ai-image-operation-runtime-config.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
 import { createAiImageEditMask } from './services/ai-image-edit.js';
 import type { AiImageProviderRuntimeContract } from './services/ai-image-provider-runtime-contract.js';
@@ -1041,20 +1042,9 @@ const getAiImageSuiteCostControls = async () => {
   return { dailyLimit, globalDailyBudgetCents };
 };
 const getAiImageSuiteProviderRuntime = async () => {
-  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
-    getConfig('ai_image_provider'),
-    getConfig('ai_image_base_url'),
-    getConfig('ai_image_api_key'),
-    getConfig('ai_image_model'),
-    getConfig('ai_image_generation_cost_cents'),
-  ]);
-  return createAiImageSuiteProviderRuntimeSnapshot({
-    provider,
-    baseUrl,
-    apiKey,
-    model,
-    costPerImageCents,
-  });
+  return createAiImageSuiteProviderRuntimeSnapshot(
+    await getAiImageOperationProviderRuntimeConfig('IMAGE_TO_IMAGE'),
+  );
 };
 const requireAiImageSuiteProviderRuntime = async () => {
   const snapshot = await getAiImageSuiteProviderRuntime();
@@ -1086,11 +1076,7 @@ const aiImageSuiteRuntimeEvidence = async (suite: AiImageSuiteRuntimeIdentity) =
   if (!aiImageSuiteGenerationQueue) return null;
   const snapshot = await getAiImageSuiteProviderRuntime();
   if (!snapshot.executionReady || !aiImageSuiteProviderRuntimeMatches(suite, snapshot)) return null;
-  return snapshot.capability?.evidenceLevel === 'sandbox-verified'
-    ? 'sandbox-verified' as const
-    : snapshot.capability?.evidenceLevel === 'local-test'
-      ? 'local-test' as const
-      : null;
+  return snapshot.capability?.evidenceLevel ?? null;
 };
 const aiImageSuiteRuntimeReady = async (suite: AiImageSuiteRuntimeIdentity) => (
   Boolean(await aiImageSuiteRuntimeEvidence(suite))

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
-  AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION,
+  aiImageSuitePromptCompilerVersion,
+  AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION,
   AI_IMAGE_SUITE_PROMPT_SET_VERSION,
   AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
   AI_IMAGE_SUITE_SLOT_PROMPT_VERSION,
@@ -474,7 +475,8 @@ function persistedSlotValid(row: any, set: any, payload: any, ordinal: number): 
     || String(row.templateSnapshotHash) !== String(set.templateSnapshotHash)
     || hashAiMediaPlanningJson(row.variablesSnapshot) !== String(row.variablesHash)
     || !exact(row.resolvedPrompt, 64_000)
-    || !exact(row.resolvedNegativePrompt, 16_000)
+    || !(exact(row.resolvedNegativePrompt, 16_000)
+      || (row.compilerVersion === AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION && row.resolvedNegativePrompt === ''))
     || hashAiMediaPlanningJson({
       resolvedPrompt: String(row.resolvedPrompt),
       resolvedNegativePrompt: String(row.resolvedNegativePrompt),
@@ -639,7 +641,7 @@ function promptCore(prompt: FrozenAiImageSuiteSlotPrompt) {
 
 function commitInputValid(input: CommitAiImageSuitePromptSetInput): boolean {
   if (input.promptSetVersion !== AI_IMAGE_SUITE_PROMPT_SET_VERSION
-    || input.compilerVersion !== AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION
+    || input.compilerVersion !== aiImageSuitePromptCompilerVersion(input.provider, input.model)
     || input.policyVersion !== AI_IMAGE_SUITE_SLOT_POLICY_VERSION
     || input.expectedRevision !== 2
     || !exact(input.operationKey, 128)

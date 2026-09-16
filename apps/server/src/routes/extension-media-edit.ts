@@ -1,7 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { SourceWorkflowFeatureFlagEvaluator } from '../services/source-workflow-feature-flags.js';
-import type { ExtensionMediaTranslationLaunchContext } from '../services/extension-media-workflow-launch.js';
+import {
+  ExtensionMediaWorkflowLaunchError,
+  resolveStandaloneProviderConfig,
+  type ExtensionMediaTranslationLaunchContext,
+} from '../services/extension-media-workflow-launch.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 import type { CreateAiImageEditMaskInput } from '../services/ai-image-edit.js';
 import {
@@ -36,12 +40,7 @@ interface ExtensionMediaEditAsset {
   height: number;
 }
 
-interface ExtensionMediaEditReadiness {
-  enabled: boolean;
-  ready: boolean;
-  reasonCode: string;
-  reason: string;
-}
+type ExtensionMediaEditReadiness = Parameters<typeof resolveStandaloneProviderConfig>[0]['readiness'];
 
 interface ExtensionMediaEditMaskResult {
   replayed: boolean;
@@ -165,23 +164,37 @@ function exactContext(
     && context.sourceMediaKeys.includes(request.sourceMediaKey));
 }
 
+async function checkProviderAvailability(options: ExtensionMediaEditRoutesOptions, reply: FastifyReply): Promise<boolean> {
+  try {
+    const readiness = await options.getReadiness();
+    if (!readiness.enabled || !readiness.ready) {
+      sendError(reply, 503, readiness.reasonCode || 'media_edit_unavailable', readiness.reason);
+      return false;
+    }
+    resolveStandaloneProviderConfig({
+      readiness,
+      operation: 'INPAINT',
+      production: options.production ?? process.env.NODE_ENV === 'production',
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ExtensionMediaWorkflowLaunchError) {
+      sendError(reply, 503, 'media_edit_provider_not_ready', '扩展媒体编辑供应商配置或局部重绘能力尚未就绪');
+    } else {
+      sendError(reply, 503, 'media_edit_capability_unavailable', '媒体编辑策略暂不可用');
+    }
+    return false;
+  }
+}
+
 async function checkAvailability(
   options: ExtensionMediaEditRoutesOptions,
   device: ExtensionMediaEditDevice,
   shopId: string,
   reply: FastifyReply,
 ): Promise<boolean> {
-  if (options.production ?? process.env.NODE_ENV === 'production') {
-    sendError(
-      reply,
-      503,
-      'media_edit_provider_not_ready',
-      '扩展媒体编辑尚未通过生产 Provider 门禁',
-    );
-    return false;
-  }
   try {
-    const [extensionDecision, workflowDecision, webDecision, readiness] = await Promise.all([
+    const [extensionDecision, workflowDecision, webDecision] = await Promise.all([
       options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
         ownerUserId: device.ownerUserId,
         shopId,
@@ -193,14 +206,9 @@ async function checkAvailability(
           ownerUserId: device.ownerUserId,
         }),
       options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: device.ownerUserId }),
-      options.getReadiness(),
     ]);
     if (!extensionDecision.enabled || !workflowDecision.enabled || !webDecision.enabled) {
       sendError(reply, 503, 'media_edit_disabled', '扩展媒体编辑尚未开放');
-      return false;
-    }
-    if (!readiness.enabled || !readiness.ready) {
-      sendError(reply, 503, readiness.reasonCode || 'media_edit_unavailable', readiness.reason);
       return false;
     }
     return true;
@@ -261,14 +269,8 @@ export async function extensionMediaEditRoutes(
     if (!device.scopes.includes('media:execute')) {
       return sendError(reply, 403, 'command_scope_denied', '设备无权创建媒体任务');
     }
-    if (options.production ?? process.env.NODE_ENV === 'production') {
-      return sendError(
-        reply,
-        503,
-        'media_edit_provider_not_ready',
-        '扩展媒体编辑尚未通过生产 Provider 门禁',
-      );
-    }
+    // Reject unavailable or test-only Providers before processing a potentially large mask body.
+    if (!await checkProviderAvailability(options, reply)) return;
     if (!checkRate) return;
     let rateCheck: Awaited<ReturnType<typeof options.checkMaskRequestRate>>;
     try {
