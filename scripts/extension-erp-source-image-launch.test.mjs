@@ -78,3 +78,53 @@ test('missing pairing, missing scopes and unconfigured origins fail closed witho
     const f=fixture();mutate(f);await assert.rejects(async()=>f.run());assert.equal(f.calls.length,0);
   }
 });
+
+test('ERP_SOURCE launch consumes its one-time grant through the real device transport', async () => {
+  const transportContext = vm.createContext({
+    URL, AbortController, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+    Blob, FormData, setTimeout, clearTimeout,
+  });
+  vm.runInContext(readFileSync(new URL('../extensions/ss-erp/shared/erp-adapter/source-workflow-device-session.js', import.meta.url), 'utf8'), transportContext);
+  const consumePath = '/api/extension-device/erp-launch-grants/consume';
+  for (const mode of ['WORKBENCH', 'IMAGE_TO_IMAGE', 'INPAINT']) {
+    const f = fixture(), requests = [];
+    f.data.mode = mode;
+    f.data.sourceMediaKeys = mode === 'WORKBENCH' ? [] : ['white-cup'];
+    const transport = transportContext.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+      credentials: {
+        async beginOperation() {
+          return { state: 'paired', epoch: 0, baseUrl: 'https://ss-erp.com',
+            deploymentId: 'deployment-a', deviceId: 'device-a', ownerUserId: 'owner-a',
+            sessionId: 'device-a', scopes: ['listing:review', 'media:execute'],
+            accessToken: 'synthetic-device-token', expiresAt: '2030-01-01T00:00:00.000Z' };
+        },
+        async isOperationCurrent() { return true; },
+        async clearIfCurrent() { return true; },
+      },
+      async fetchImpl(url, init) {
+        requests.push({ url, init });
+        return { status: 200, ok: true, headers: { get() { return null; } }, body: null,
+          async text() { return JSON.stringify({ code: 1, data: f.data }); } };
+      },
+    });
+    f.options.consumeGrant = async launchToken => {
+      const result = await transport.post(consumePath, { launchToken }, { requiredScope: 'media:execute' });
+      assert.equal(result.state, 'response');
+      return result.body.data;
+    };
+    const opened = await f.run();
+    assert.equal(opened.state, mode === 'WORKBENCH' ? 'workbench_opened' : 'editor_opened');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, 'https://ss-erp.com' + consumePath);
+    assert.equal(requests[0].init.method, 'POST');
+    assert.equal(requests[0].init.credentials, 'omit');
+    assert.equal(requests[0].init.redirect, 'error');
+    assert.deepEqual(JSON.parse(requests[0].init.body), { launchToken: message.launchToken });
+    for (const rejected of [consumePath + '/', consumePath + '?again=1', consumePath + '#fragment',
+      '/api/extension-device/erp-launch-grants/issue', 'https://ss-erp.com' + consumePath]) {
+      await assert.rejects(transport.post(rejected, { launchToken: message.launchToken }), /source workbench path is invalid/u);
+    }
+    await assert.rejects(transport.get(consumePath), /source workbench path is invalid/u);
+    assert.equal(requests.length, 1, 'rejected path variants must not reach the network');
+  }
+});

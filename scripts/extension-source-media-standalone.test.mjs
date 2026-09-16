@@ -296,6 +296,143 @@ assert.equal(typeof api?.createClient, 'function');
 }
 
 {
+  // Exercise the real client -> worker -> coordinator boundary. A successful
+  // command receipt includes action/replayed; those are not editor session fields.
+  const workerPath = 'extensions/ss-erp/background/service-worker.js';
+  const workerSource = fs.readFileSync(workerPath, 'utf8');
+  const workerFunctions = [
+    ['function sourceWorkflowHandoffText', 'function sourceWorkflowPlatform'],
+    ['async function executeSourceMediaCreateWorkflow', 'function getSourceMediaEditorContract'],
+    ['async function sourceMediaMaskSha256', 'async function cancelSourceMediaEditor'],
+  ].map(([start, end]) => {
+    const startIndex = workerSource.indexOf(start);
+    const endIndex = workerSource.indexOf(end, startIndex);
+    assert.ok(startIndex >= 0 && endIndex > startIndex);
+    return workerSource.slice(startIndex, endIndex);
+  }).join('\n');
+
+  for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+    for (const status of ['QUEUED', 'RUNNING', 'SUCCEEDED']) {
+      const requests = [];
+      const stored = {};
+      const returnedReplay = status === 'SUCCEEDED';
+      const commandResult = {
+        workflowId: 'workflow-1', action: 'CREATE_WORKFLOW', operation,
+        status, revision: 2, replayed: returnedReplay,
+      };
+      const client = api.createClient({
+        transport: {
+          async get() { throw new Error('unexpected GET'); },
+          async post(path, body) {
+            requests.push({ path, body: plain(body) });
+            if (path.endsWith('/media-edit-mask')) {
+              return { state: 'response', status: 201, body: { code: 1, replayed: false, data: {
+                contractVersion: 'extension-media-edit-mask/v1',
+                sourceMediaKey: 'main-image', sourceAssetId: 'source-asset-1',
+                maskAssetId: 'mask-asset-1', url: 'https://images.example/mask.png',
+                mimeType: 'image/png', width: 1024, height: 1024,
+                maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+                editPixelCount: 100, preservedPixelCount: 1048476, featheredPixelCount: 0,
+              } } };
+            }
+            if (path.endsWith('/command-grants')) {
+              return { state: 'response', status: 201,
+                body: { code: 1, data: { grantToken: 'g'.repeat(64) } } };
+            }
+            assert.equal(path, '/api/extension-device/media-workflows/execute');
+            assert.equal(body.command.operation, operation);
+            return { state: 'response', status: 200, body: { code: 1, data: {
+              replay: returnedReplay,
+              receipt: { id: 'receipt-1', status: 'SUCCEEDED', result: commandResult },
+            } } };
+          },
+        },
+      });
+      let coordinator;
+      const context = {
+        URL, TextEncoder, Uint8Array, crypto: webcrypto,
+        chrome: { tabs: { async sendMessage() {} } },
+        getSourceMediaEditorCoordinator: () => coordinator,
+        loadFrozenSourceMediaEditorAuthority: async () => ({
+          client,
+          prepared: {
+            maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1', maxMaskBytes: 20 * 1024 * 1024,
+            sourceAsset: { id: 'source-asset-1', width: 1024, height: 1024 },
+          },
+        }),
+      };
+      context.globalThis = context;
+      for (const name of [
+        'erp-source-image-launch', 'source-media-editor-session', 'source-media-editor-coordinator',
+      ]) {
+        const path = `extensions/ss-erp/shared/erp-adapter/${name}.js`;
+        vm.runInNewContext(fs.readFileSync(path, 'utf8'), context, { filename: path });
+      }
+      vm.runInNewContext(workerFunctions, context, { filename: workerPath });
+      const contract = context.SS_ERP_SOURCE_MEDIA_EDITOR_SESSION;
+      assert.equal(contract.normalizeCompletion(commandResult), undefined,
+        'the persisted session must keep rejecting unprojected command fields');
+      const coordinatorOptions = {
+        contract,
+        storage: {
+          async get(keys) { return Object.fromEntries(keys.map(key => [key, stored[key]])); },
+          async set(values) { Object.assign(stored, plain(values)); },
+        },
+        windows: { async create() { return { id: 20, tabs: [{ id: 30 }] }; } },
+        tabs: { async query() { return [{ id: 30 }]; }, async update() {} },
+        runtime: { getURL: path => `chrome-extension://extension-id/${path}` },
+        crypto: webcrypto, storageKey: 'test:media-editor-sessions', limit: 10,
+        ttlMs: 30 * 60 * 1000, submitLeaseMs: 5 * 60 * 1000,
+        minimumSubmitRemainingMs: 4 * 60 * 1000,
+      };
+      coordinator = context.SS_ERP_SOURCE_MEDIA_EDITOR_COORDINATOR.createCoordinator(coordinatorOptions);
+      await coordinator.open({
+        platform: '1688', sourceProductId: 'source-1', snapshotId: 'snapshot-1',
+        supplyGoodsId: 'goods-1', shopId: 'shop-1', listingWorkflowId: 'listing-1',
+        revision: 7, draftVersion: 3, operation, sourceMediaKeys: ['main-image'], sourceTabId: 9,
+        preparedSource: operation === 'INPAINT' ? {
+          sourceMediaKey: 'main-image', sourceAssetId: 'source-asset-1', mimeType: 'image/png',
+          width: 1024, height: 1024, maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+          maxMaskBytes: 20 * 1024 * 1024,
+        } : null,
+        erpSourceAuthority: {
+          provenance: 'ERP_SOURCE', ownerUserId: 'owner-1', deviceSessionId: 'device-1',
+          apiOrigin: 'https://ss-erp.com', webOrigin: 'https://app.ss-erp.com',
+          grantSha256: 'b'.repeat(64),
+        },
+      });
+      const [nonce] = Object.keys(stored[coordinatorOptions.storageKey]);
+      const sender = { tab: { id: 30 }, frameId: 0, documentId: 'editor-document-1' };
+      assert.ok(await coordinator.claim(nonce, sender));
+      const message = {
+        type: 'ss-erp:source-listing-workbench-media-editor-submit',
+        nonce, operation, prompt: 'Preserve the product on a clean background', negativePrompt: '',
+        ...(operation === 'INPAINT' ? { maskDataUrl: 'data:image/png;base64,iVBORw0KGgo=' } : {}),
+      };
+      const expectedCompletion = { workflowId: 'workflow-1', operation, status, revision: 2 };
+      const completed = await context.submitSourceMediaEditor(message, sender);
+      assert.deepEqual(plain(completed), {
+        state: 'completed', replay: returnedReplay, result: expectedCompletion,
+      });
+      const persisted = await coordinator.read(nonce);
+      assert.deepEqual(plain(persisted.completion), expectedCompletion);
+      assert.equal(persisted.erpSourceAuthority.provenance, 'ERP_SOURCE');
+      const expectedPaths = [
+        ...(operation === 'INPAINT' ? ['/api/extension-device/source-workbench/media-edit-mask'] : []),
+        '/api/extension-device/command-grants', '/api/extension-device/media-workflows/execute',
+      ];
+      assert.deepEqual(requests.map(request => request.path), expectedPaths);
+
+      coordinator = context.SS_ERP_SOURCE_MEDIA_EDITOR_COORDINATOR.createCoordinator(coordinatorOptions);
+      const replayed = await context.submitSourceMediaEditor(message, sender);
+      assert.deepEqual(plain(replayed), { state: 'completed', replay: true, result: expectedCompletion });
+      assert.equal(requests.length, expectedPaths.length,
+        'a restarted editor must reuse its persisted completion without another command or mask POST');
+    }
+  }
+}
+
+{
   const viewPath = 'extensions/ss-erp/content/source-listing-workbench.js';
   const viewSource = fs.readFileSync(viewPath, 'utf8');
   class TestNode {

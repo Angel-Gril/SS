@@ -3413,9 +3413,15 @@ async function submitSourceMediaEditor(message, sender) {
         maskAssetId,
         attemptId: session.nonce,
       });
+      const completion = created.result.result;
       return {
         replay: created.result.replay === true,
-        result: created.result.result,
+        result: {
+          workflowId: completion.workflowId,
+          operation: completion.operation,
+          status: completion.status,
+          revision: completion.revision,
+        },
       };
     },
   );

@@ -129,6 +129,7 @@
     var path = requiredText(value, 'path');
     var commandPaths = new Set([
       '/api/extension-device/command-grants',
+      '/api/extension-device/erp-launch-grants/consume',
       '/api/extension-device/media-workflows/execute',
       MEDIA_EDIT_SOURCE_PATH,
       MEDIA_EDIT_MASK_PATH,
