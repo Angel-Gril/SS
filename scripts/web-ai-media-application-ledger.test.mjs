@@ -454,7 +454,7 @@ assert.doesNotMatch(panel, /jobs\/\$\{job\.id\}\/apply/u);
 assert.match(panel, /replaceConfirmed/u);
 assert.match(panel, /targetIdRef\.current !== requestTargetId/u);
 assert.match(panel, /aiMediaTargetApplicationsPath\(requestTargetId/u);
-assert.match(panel, /applicationPageGenerationRef\.current \+= 1;\s*setApplicationLoadingMore\(false\);\s*applicationLastReadAtRef\.current = Date\.now\(\);\s*const ledger = await readApplicationLedger\(request\.targetId\)/u);
+assert.match(panel, /applicationPageGenerationRef\.current \+= 1;\s*setApplicationLoadingMore\(false\);\s*applicationLastReadAtRef\.current = Date\.now\(\);\s*const ledger = await readApplicationLedger\(request\.targetId, \{ signal: request\.signal \}\)/u);
 assert.match(panel, /applicationHistoryItems = applicationLedger[\s\S]*applicationLedger\.frontier/u);
 assert.doesNotMatch(panel, /applicationAnchorWorkflowIdRef/u);
 assert.match(panel, /runMediaMutation\(\(\) => api\.post<unknown>\(/u);
