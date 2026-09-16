@@ -325,9 +325,329 @@ function verifyErpSource(root, executionCommit, targetCommit) {
   });
 }
 
+function jsonPointer(value, pointer, code) {
+  requireThat(typeof pointer === 'string' && pointer.length <= 2048
+    && (pointer === '' || pointer.startsWith('/')), code);
+  if (pointer === '') return value;
+  const parts = pointer.slice(1).split('/');
+  requireThat(parts.length <= 32, code);
+  for (const part of parts) {
+    requireThat(!/~(?![01])/u.test(part), code);
+    const key = part.replace(/~1/gu, '/').replace(/~0/gu, '~');
+    requireThat(key && !['__proto__', 'prototype', 'constructor'].includes(key)
+      && value !== null && typeof value === 'object' && Object.hasOwn(value, key)
+      && (!Array.isArray(value) || /^(0|[1-9]\d*)$/u.test(key)), code);
+    value = value[key];
+  }
+  return value;
+}
+
+function pointedOriginal(reader, reference, code) {
+  exactKeys(reference, ['path', 'sha256', 'pointer'], code);
+  return jsonPointer(reader.json({ path: reference.path, sha256: reference.sha256 }, code,
+    { nativeCompact: true }), reference.pointer, code);
+}
+
+// source-listing-workflow-prisma.ts hashes draft payloads with localeCompare,
+// whereas ai-media-planning.ts uses code-point ordering for application states.
+function sourceDraftPayloadJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(sourceDraftPayloadJson).join(',')}]`;
+  return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${sourceDraftPayloadJson(item)}`).join(',')}}`;
+}
+
+function workflowEventPayloadHash(event, operation, code) {
+  // Most workflow writers hash JSON.stringify in the construction order below.
+  // JSONB loses that order; reconstruct only the typed original keys, never
+  // rewrite the original payload/hash or accept arbitrary claimed hash recipes.
+  const keys = {
+    CREATED: operation === 'IMAGE_TO_IMAGE' ? ['operation', 'attempt', 'referenceCount']
+      : ['operation', 'attempt', 'sourceAssetId', 'maskAssetId', 'maskSemantics'],
+    JOB_STARTED: ['attempt'],
+    PROVIDER_DISPATCH_STARTED: ['providerDispatchedAt'],
+    PROVIDER_SUBMITTED: ['providerJobId', 'providerAcceptedAt'],
+    PROVIDER_OUTPUT_PERSISTED: ['outputAssetId', 'sha256'],
+    JOB_SUCCEEDED: ['outputAssetIds'],
+    REVIEW_APPROVED: ['note', ...(Object.hasOwn(event.payload, 'operationKey') ? ['operationKey'] : [])],
+    LISTING_DRAFT_APPLIED: ['version', 'applicationId', 'kind', 'rollbackOfId', 'operationKey', 'mode',
+      'targetType', 'targetId', 'targetSequence', 'targetRevision', 'targetDraftVersion', 'contextSkuKey', 'contextSlotKey'],
+  }[event.eventType];
+  requireThat(Array.isArray(keys), code);
+  exactKeys(event.payload, keys, code);
+  requireThat(keys.every(key => key === 'outputAssetIds'
+    ? Array.isArray(event.payload[key]) && event.payload[key].length === 1 && event.payload[key].every(boundedText)
+    : event.payload[key] === null || ['string', 'number', 'boolean'].includes(typeof event.payload[key])), code);
+  const payload = event.payload;
+  if (event.eventType === 'CREATED') requireThat(payload.operation === operation && payload.attempt === 1
+    && (operation === 'IMAGE_TO_IMAGE' ? payload.referenceCount === 1
+      : boundedText(payload.sourceAssetId) && boundedText(payload.maskAssetId)
+        && payload.maskSemantics === 'WHITE_EDIT_BLACK_PRESERVE_V1'), code);
+  if (event.eventType === 'JOB_STARTED') requireThat(payload.attempt === 1, code);
+  if (event.eventType === 'PROVIDER_DISPATCH_STARTED') canonicalTimestamp(payload.providerDispatchedAt, code);
+  if (event.eventType === 'PROVIDER_SUBMITTED') {
+    requireThat(boundedText(payload.providerJobId), code); canonicalTimestamp(payload.providerAcceptedAt, code);
+  }
+  if (event.eventType === 'REVIEW_APPROVED') requireThat((payload.note === null
+    || typeof payload.note === 'string' && payload.note.length <= 2000)
+    && (!Object.hasOwn(payload, 'operationKey') || boundedText(payload.operationKey)), code);
+  const typed = Object.fromEntries(keys.map(key => [key, event.payload[key]]));
+  return sha256(event.eventType === 'LISTING_DRAFT_APPLIED' ? sortedJson(typed) : JSON.stringify(typed));
+}
+
+function verifyDraftNormalErp(reader, input, manifest, root, now) {
+  const code = 'QA04_ERP_INVALID', refs = input.normalErp, operation = manifest.operation;
+  requireThat(['IMAGE_TO_IMAGE', 'INPAINT'].includes(operation), code);
+  exactKeys(manifest, ['schemaVersion', 'kind', 'operation', 'pointers', 'source', 'browser', 'interactions',
+    ...(operation === 'INPAINT' ? ['mask'] : [])], code);
+  requireThat(manifest.schemaVersion === 1, code);
+  exactKeys(manifest.pointers, ['generated', 'applied', 'restored', 'controllerStatus'], code);
+  const stages = Object.fromEntries(['generated', 'applied', 'restored'].map(phase => [phase,
+    jsonPointer(reader.json(refs[phase], code, { nativeCompact: true }), manifest.pointers[phase], code)]));
+  const controller = jsonPointer(reader.json(refs.controllerStatus, code, { nativeCompact: true }), manifest.pointers.controllerStatus, code);
+  const browser = pointedOriginal(reader, manifest.browser, code), actions = pointedOriginal(reader, manifest.interactions, code);
+  const image = pngEvidence(reader, refs.image, code), source = pngEvidence(reader, manifest.source, code);
+  const mask = operation === 'INPAINT' ? pngEvidence(reader, manifest.mask, code) : null;
+  // Normal generation can persist null dimension columns. The decoded bytes,
+  // still pinned by DB SHA/MIME/size, supply dimensions without rewriting a row.
+  const storedImageMatches = (decoded, row) => requireThat(decoded.sha256 === row.sha256 && decoded.bytes === row.sizeBytes
+    && decoded.mimeType === row.mimeType && (row.width == null || row.width === decoded.width)
+    && (row.height == null || row.height === decoded.height), code);
+  requireThat(image.width === 1024 && image.height === 1024, code);
+  const single = rows => { requireThat(Array.isArray(rows) && rows.length === 1 && isRecord(rows[0]), code); return rows[0]; };
+  const owned = (row, owner) => requireThat(isRecord(row) && boundedText(row.id) && row.ownerUserId === owner, code);
+  const fields = (row, names) => Object.fromEntries(names.map(name => [name, row[name]]));
+  const generated = stages.generated, applied = stages.applied, restored = stages.restored;
+  requireThat(isRecord(generated) && isCommit(generated.gitCommit)
+    && generated.gitCommit === input.targetGitCommit, 'QA04_ERP_SOURCE_CHANGED');
+  const owner = generated.ownerUserId, flow = generated.workflow, job = single(generated.jobs);
+  requireThat(boundedText(owner) && isRecord(flow), code);
+  const offline = reader.json(input.offline.receipt, 'QA04_OFFLINE_INVALID');
+  requireThat(canonicalTimestamp(job.startedAt, code) >= canonicalTimestamp(offline.completedAt, 'QA04_OFFLINE_INVALID'),
+    'QA04_ERP_SOURCE_CHANGED');
+  const finalOutput = single(generated.outputs?.filter(row => row.kind === 'AI_GENERATED'));
+  const inputSource = single(generated.inputs?.filter(row => row.role === 'REFERENCE'));
+  const inputMask = mask ? single(generated.inputs?.filter(row => row.role === 'MASK')) : null;
+  const mutation = single(applied?.applications);
+  const runtime = Object.hasOwn(job.operationConfig || {}, 'providerRuntime') ? job.operationConfig.providerRuntime : job.operationConfig;
+  requireThat(isRecord(runtime), code);
+  exactKeys(runtime, ['contractVersion', 'provider', 'model', 'baseUrlSha256', 'currency', 'unitCostCents', 'imageCount',
+    'width', 'height', 'maximumCostCents', 'credentialRevision'], code);
+  exactKeys(runtime.credentialRevision, ['recordId', 'revision', 'updatedAt'], code);
+  requireThat(runtime.contractVersion === 'ai-image-provider-runtime/v3' && runtime.provider === 'dashscope-wanx'
+    && runtime.model === 'wanx2.1-imageedit' && runtime.currency === 'CNY' && runtime.unitCostCents === 14
+    && runtime.maximumCostCents === 14 && runtime.imageCount === 1 && runtime.width === 1024 && runtime.height === 1024
+    && runtime.baseUrlSha256 === sha256('https://dashscope.aliyuncs.com/api/v1')
+    && boundedText(runtime.credentialRevision.recordId) && positiveInteger(runtime.credentialRevision.revision), code);
+  requireThat(canonicalTimestamp(runtime.credentialRevision.updatedAt, code) <= canonicalTimestamp(job.startedAt, code), code);
+  const jobCore = ['id', 'ownerUserId', 'actorUserId', 'workflowId', 'workflowAttempt', 'executionMode', 'operation',
+    'provider', 'model', 'status', 'attemptCount', 'requestedImageCount', 'width', 'height', 'estimatedCostCents',
+    'actualCostCents', 'billedUnits', 'requestFingerprint', 'operationConfig', 'providerJobId',
+    'providerReconciliationStatus', 'startedAt', 'providerDispatchedAt', 'completedAt'];
+  const flowCore = ['id', 'ownerUserId', 'actorUserId', 'operation', 'status', 'currentAttempt', 'idempotencyKey',
+    'contextType', 'contextId', 'contextSkuKey', 'contextSlotKey', 'contextDraftRevision', 'contextDraftVersion'];
+  const assetCore = ['id', 'ownerUserId', 'aiImageJobId', 'sourceCaptureSnapshotId', 'kind', 'sha256', 'width', 'height', 'mimeType', 'sizeBytes', 'storageBackend'];
+  const assetsIdentity = values => values.map(row => fields(row, assetCore)).sort((left, right) => left.id.localeCompare(right.id));
+  const inputsIdentity = values => values.map(row => ({ ...fields(row, ['id', 'ownerUserId', 'workflowId', 'assetId', 'role', 'ordinal', 'assetSha256']),
+    asset: fields(row.asset, assetCore) })).sort((left, right) => left.id.localeCompare(right.id));
+  const expectedTypes = ['CREATED', 'JOB_STARTED', 'PROVIDER_DISPATCH_STARTED', 'PROVIDER_SUBMITTED',
+    ...(mask ? ['PROVIDER_OUTPUT_PERSISTED'] : []), 'JOB_SUCCEEDED'];
+  let previousTime = canonicalTimestamp(job.completedAt, code);
+  requireThat(canonicalTimestamp(job.startedAt, code) < previousTime
+    && canonicalTimestamp(job.providerDispatchedAt, code) >= Date.parse(job.startedAt)
+    && Date.parse(job.providerDispatchedAt) <= previousTime, code);
+  const acceptedJob = restored.jobs?.[0];
+  for (const phase of ['generated', 'applied', 'restored']) {
+    const value = stages[phase], first = phase === 'generated';
+    exactKeys(value, ['schemaVersion', 'kind', 'gitCommit', 'region', 'phase', 'at', 'ownerUserId', 'actorUserId',
+      'workflow', 'jobs', 'inputs', 'outputs', 'reservations', 'settlements', 'draft', 'applications', 'events'], code);
+    requireThat(value.schemaVersion === 1 && value.kind === 'NORMAL_IMAGE_DRAFT_DATABASE_SNAPSHOT'
+      && value.phase === phase && value.gitCommit === input.targetGitCommit && value.region === 'COM'
+      && value.ownerUserId === owner && value.actorUserId === owner, code);
+    const at = canonicalTimestamp(value.at, code);
+    requireThat(at >= previousTime && at <= Date.parse(now), code); previousTime = at;
+    const currentJob = single(value.jobs), workflow = value.workflow, draft = value.draft;
+    owned(workflow, owner); owned(currentJob, owner); owned(draft, owner);
+    requireThat(equal(fields(currentJob, jobCore), fields(job, jobCore)) && equal(fields(workflow, flowCore), fields(flow, flowCore))
+      && currentJob.actorUserId === owner && currentJob.workflowId === flow.id && currentJob.workflowAttempt === 1
+      && currentJob.executionMode === 'ERP_HOSTED' && currentJob.operation === operation && currentJob.status === 'SUCCEEDED'
+      && currentJob.provider === runtime.provider && currentJob.model === runtime.model && currentJob.attemptCount === 1
+      && currentJob.providerReconciliationStatus === 'NOT_REQUIRED' && boundedText(currentJob.providerJobId)
+      && isSha256(currentJob.requestFingerprint) && currentJob.requestedImageCount === 1
+      && currentJob.width === 1024 && currentJob.height === 1024 && currentJob.estimatedCostCents === 14
+      && currentJob.actualCostCents === 14 && currentJob.billedUnits === 1, code);
+    requireThat(workflow.actorUserId === owner && workflow.operation === operation && workflow.status === 'SUCCEEDED'
+      && workflow.currentAttempt === 1 && boundedText(workflow.idempotencyKey) && workflow.contextType === 'listing-draft'
+      && workflow.contextId === draft.workflowId && boundedText(workflow.contextSlotKey)
+      && (workflow.contextSkuKey === null || boundedText(workflow.contextSkuKey))
+      && workflow.contextDraftRevision === generated.draft.revision && workflow.contextDraftVersion === generated.draft.draftVersion
+      && workflow.reviewStatus === (first ? 'PENDING' : 'APPROVED') && positiveInteger(workflow.revision)
+      && workflow.selectedOutputAssetId === (first ? null : finalOutput.id)
+      && workflow.reviewedByUserId === (first ? null : owner), code);
+    requireThat(first ? currentJob.appliedAt === null && currentJob.appliedMode === null && currentJob.applyTargetType === null
+      && currentJob.applyTargetId === null && workflow.reviewedAt === null
+      : currentJob.appliedMode === 'append' && currentJob.applyTargetType === 'listing-draft' && currentJob.applyTargetId === draft.workflowId
+        && equal(fields(currentJob, ['appliedAt', 'appliedMode', 'applyTargetType', 'applyTargetId']),
+          fields(acceptedJob, ['appliedAt', 'appliedMode', 'applyTargetType', 'applyTargetId']))
+        && canonicalTimestamp(workflow.reviewedAt, code) <= canonicalTimestamp(currentJob.appliedAt, code)
+        && Date.parse(currentJob.appliedAt) <= at, code);
+    requireThat(Array.isArray(value.inputs) && value.inputs.length === (mask ? 2 : 1)
+      && new Set(value.inputs.map(row => row.id)).size === value.inputs.length
+      && equal(inputsIdentity(value.inputs), inputsIdentity(generated.inputs)), code);
+    for (const row of value.inputs) {
+      owned(row, owner); owned(row.asset, owner);
+      const expected = row.role === 'REFERENCE' ? source : row.role === 'MASK' ? mask : null;
+      requireThat(expected && row.workflowId === flow.id && row.assetId === row.asset.id && row.ordinal === 0
+        && row.assetSha256 === expected.sha256 && row.asset.sourceCaptureSnapshotId === draft.sourceCaptureSnapshotId, code);
+      storedImageMatches(expected, row.asset);
+    }
+    requireThat(Array.isArray(value.outputs) && value.outputs.length === (mask ? 2 : 1)
+      && new Set(value.outputs.map(row => row.id)).size === value.outputs.length
+      && new Set([...value.inputs.map(row => row.assetId), ...value.outputs.map(row => row.id)]).size === value.inputs.length + value.outputs.length
+      && value.outputs.filter(row => row.kind === 'AI_GENERATED').length === 1
+      && value.outputs.filter(row => row.kind === 'AI_PROVIDER_OUTPUT').length === (mask ? 1 : 0)
+      && equal(assetsIdentity(value.outputs), assetsIdentity(generated.outputs)), code);
+    for (const row of value.outputs) {
+      owned(row, owner);
+      requireThat(row.aiImageJobId === job.id && row.storageBackend === 'oss' && isSha256(row.sha256)
+        && positiveInteger(row.sizeBytes) && row.mimeType === 'image/png'
+        && (row.width == null || row.width === 1024) && (row.height == null || row.height === 1024), code);
+    }
+    storedImageMatches(image, finalOutput);
+    requireThat(finalOutput.sourceCaptureSnapshotId === draft.sourceCaptureSnapshotId, code);
+    const reservation = single(value.reservations), charge = single(value.settlements);
+    owned(reservation, owner); owned(charge, owner);
+    requireThat(reservation.actorUserId === owner && reservation.jobId === job.id && reservation.workflowId === flow.id
+      && reservation.operation === operation && reservation.provider === runtime.provider && reservation.model === runtime.model
+      && reservation.currency === 'CNY' && reservation.status === 'SETTLED' && reservation.estimatedCostMinor === 14
+      && reservation.maximumCostMinor === 14 && isSha256(reservation.requestFingerprint)
+      && charge.actorUserId === owner && charge.reservationId === reservation.id && charge.kind === 'CHARGE'
+      && charge.actualCostMinor === 14 && charge.billedUnits === 1 && isSha256(charge.requestFingerprint)
+      && equal(value.reservations, generated.reservations) && equal(value.settlements, generated.settlements), code);
+    const payload = draft.payload;
+    requireThat(isRecord(payload) && draft.actorUserId === owner && isSha256(draft.payloadHash)
+      && sha256(sourceDraftPayloadJson(payload)) === draft.payloadHash && payload.id === draft.workflowId && payload.ownerUserId === owner
+      && payload.shopId === draft.shopId && draft.shopId === generated.draft.shopId
+      && boundedText(payload.supplyGoodsId) && payload.supplyGoodsId === generated.draft.payload.supplyGoodsId
+      && boundedText(draft.sourceCaptureSnapshotId) && payload.sourceCaptureSnapshotId === draft.sourceCaptureSnapshotId
+      && payload.sourceCaptureSnapshotId === generated.draft.sourceCaptureSnapshotId
+      && positiveInteger(draft.revision) && positiveInteger(draft.draftVersion)
+      && payload.revision === draft.revision && payload.draftVersion === draft.draftVersion
+      && Array.isArray(payload.selectedSkuKeys) && payload.selectedSkuKeys.length > 0
+      && payload.selectedSkuKeys.every(boundedText) && equal(payload.selectedSkuKeys, draft.selectedSkuKeys)
+      && equal(draft.selectedSkuKeys, generated.draft.selectedSkuKeys)
+      && (workflow.contextSkuKey === null || payload.selectedSkuKeys.includes(workflow.contextSkuKey))
+      && Array.isArray(payload.media?.assignments) && payload.media.assignments.length <= 500, code);
+    requireThat(Array.isArray(value.applications) && value.applications.length === (first ? 0 : 1)
+      && (first || equal(value.applications, applied.applications) && equal(value.draft, applied.draft)
+        && equal(value.workflow, applied.workflow)), code);
+    requireThat(Array.isArray(value.events) && value.events.length === expectedTypes.length + (first ? 0 : 2)
+      && new Set(value.events.map(row => row.id)).size === value.events.length
+      && new Set(value.events.map(row => row.eventKey)).size === value.events.length
+      && equal(value.events.map(row => row.eventType).sort(), [...expectedTypes, ...(first ? [] : ['REVIEW_APPROVED', 'LISTING_DRAFT_APPLIED'])].sort()), code);
+    for (const event of value.events) {
+      owned(event, owner);
+      requireThat(event.workflowId === flow.id && (event.actorUserId === null || event.actorUserId === owner)
+        && (event.jobId === null || event.jobId === job.id) && boundedText(event.eventKey)
+        && isRecord(event.payload) && isSha256(event.payloadHash) && workflowEventPayloadHash(event, operation, code) === event.payloadHash
+        && canonicalTimestamp(event.createdAt, code) <= at, code);
+      if (event.eventType === 'PROVIDER_SUBMITTED') requireThat(event.payload.providerJobId === job.providerJobId, code);
+      if (event.eventType === 'JOB_SUCCEEDED') requireThat(equal(event.payload.outputAssetIds, [finalOutput.id]), code);
+      if (event.eventType === 'PROVIDER_OUTPUT_PERSISTED') {
+        const raw = single(value.outputs.filter(row => row.kind === 'AI_PROVIDER_OUTPUT'));
+        requireThat(event.payload.outputAssetId === raw.id && event.payload.sha256 === raw.sha256, code);
+      }
+    }
+    requireThat(generated.events.every(event => value.events.some(row => equal(row, event))), code);
+  }
+  const beforeDraft = generated.draft, afterDraft = applied.draft;
+  owned(mutation, owner);
+  requireThat(mutation.actorUserId === owner && mutation.workflowId === flow.id && mutation.jobId === job.id
+    && mutation.assetId === finalOutput.id && mutation.sourceCaptureSnapshotId === beforeDraft.sourceCaptureSnapshotId
+    && mutation.operation === operation && mutation.kind === 'APPLY' && mutation.revision === 1
+    && mutation.rollbackOfId === null && mutation.rolledBackBy === null && mutation.targetId === beforeDraft.workflowId
+    && positiveInteger(mutation.targetSequence) && mutation.mode === 'APPEND' && mutation.replaceConfirmed === false
+    && mutation.contextSkuKey === flow.contextSkuKey && mutation.contextSlotKey === flow.contextSlotKey
+    && mutation.contextDraftRevision === flow.contextDraftRevision && mutation.contextDraftVersion === flow.contextDraftVersion
+    && boundedText(mutation.operationKey) && mutation.operationKey.length >= 8 && isSha256(mutation.requestFingerprint)
+    && mutation.workflowRevisionBefore === generated.workflow.revision + 1
+    && mutation.workflowRevisionAfter === mutation.workflowRevisionBefore + 1 && applied.workflow.revision === mutation.workflowRevisionAfter
+    && mutation.targetRevisionBefore === beforeDraft.revision && mutation.targetDraftVersionBefore === beforeDraft.draftVersion
+    && mutation.targetRevisionAfter === beforeDraft.revision + 1 && mutation.targetDraftVersionAfter === beforeDraft.draftVersion + 1
+    && mutation.targetRevisionAfter === afterDraft.revision && mutation.targetDraftVersionAfter === afterDraft.draftVersion, code);
+  requireThat(canonicalTimestamp(mutation.createdAt, code) >= Date.parse(job.completedAt)
+    && Date.parse(mutation.createdAt) <= Date.parse(applied.at), code);
+  const assignment = { scope: flow.contextSkuKey === null ? 'PRODUCT' : 'SKU', ...(flow.contextSkuKey === null ? {} : { skuKey: flow.contextSkuKey }),
+    slotKey: flow.contextSlotKey, assetId: finalOutput.id, source: operation === 'INPAINT' ? 'EDITED' : 'GENERATED' };
+  requireThat(equal(mutation.beforeState, { version: 'ai-media-listing-draft-assignment/v1', assignment: null })
+    && equal(mutation.afterState, { version: 'ai-media-listing-draft-assignment/v1', assignment })
+    && sha256(sortedJson(mutation.beforeState)) === mutation.beforeStateHash && sha256(sortedJson(mutation.afterState)) === mutation.afterStateHash
+    && !beforeDraft.payload.media.assignments.some(row => row.slotKey === flow.contextSlotKey && (row.skuKey || null) === flow.contextSkuKey)
+    && equal(afterDraft.payload.media.assignments, [...beforeDraft.payload.media.assignments, assignment]), code);
+  const review = single(applied.events.filter(row => row.eventType === 'REVIEW_APPROVED'));
+  const applicationEvent = single(applied.events.filter(row => row.eventType === 'LISTING_DRAFT_APPLIED'));
+  requireThat(review.actorUserId === owner && review.assetId === finalOutput.id && applicationEvent.actorUserId === owner
+    && applicationEvent.jobId === job.id && applicationEvent.assetId === finalOutput.id
+    && applicationEvent.payload.applicationId === mutation.id && applicationEvent.payload.operationKey === mutation.operationKey
+    && applicationEvent.payload.targetId === beforeDraft.workflowId && applicationEvent.payload.targetRevision === afterDraft.revision
+    && applicationEvent.payload.targetDraftVersion === afterDraft.draftVersion && applicationEvent.payload.contextSkuKey === flow.contextSkuKey
+    && applicationEvent.payload.contextSlotKey === flow.contextSlotKey && applicationEvent.payload.mode === 'append'
+    && applicationEvent.payload.version === 'ai-media-listing-draft-application/v1' && applicationEvent.payload.kind === 'APPLY'
+    && applicationEvent.payload.rollbackOfId === null && applicationEvent.payload.targetType === 'listing-draft'
+    && applicationEvent.payload.targetSequence === mutation.targetSequence, code);
+  requireThat(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
+    && controller.action === 'restore' && controller.phase === 'restored' && controller.commit === input.targetGitCommit
+    && controller.ownerSha256 === sha256(owner) && controller.currency === 'CNY' && controller.unitCostCents === 14
+    && controller.maximumTaskCostCents === 14 && controller.workflowEnabled === false && controller.sharedDailyBudgetModified === false
+    && controller.userDailyLimitModified === false && controller.legacyTextAiModified === false
+    && equal(controller.pending, { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 })
+    && isSha256(controller.backupSha256) && positiveInteger(controller.credentialRevisionBefore)
+    && positiveInteger(controller.credentialRevisionAfter) && controller.credentialRevisionAfter > controller.credentialRevisionBefore
+    && controller.candidate?.gitCommit === input.targetGitCommit && controller.candidate.offlineSha256 === input.offline.receipt.sha256
+    && ['releaseEvidenceSha256', 'signatureSha256', 'vpsSha256'].every(key => isSha256(controller.candidate[key])), code);
+  const restoredAt = canonicalTimestamp(controller.restoredAt, code);
+  requireThat(restoredAt >= Date.parse(applied.at) && restoredAt <= Date.parse(restored.at), code);
+  requireThat(browser?.schemaVersion === 1 && browser.kind === 'NORMAL_IMAGE_DRAFT_BROWSER_EXECUTION'
+    && browser.gitCommit === input.targetGitCommit && browser.ownerUserId === owner && browser.operation === operation
+    && browser.workflowId === flow.id && browser.jobId === job.id && browser.outputAssetId === finalOutput.id
+    && browser.sourceSha256 === source.sha256 && browser.outputSha256 === image.sha256 && browser.realSignedInAccount === true
+    && browser.ownedTargetsClosed === true && browser.originalBrowserPreserved === true
+    && browser.isolation?.kind === 'DEDICATED_QA_PROFILE' && isSha256(browser.isolation.profileSha256)
+    && Number.isSafeInteger(browser.isolation.debuggingPort) && browser.isolation.debuggingPort > 0 && browser.isolation.debuggingPort <= 65535
+    && Number.isSafeInteger(browser.isolation.protectedDebuggingPort) && browser.isolation.protectedDebuggingPort > 0
+    && browser.isolation.protectedDebuggingPort <= 65535 && browser.isolation.debuggingPort !== browser.isolation.protectedDebuggingPort, code);
+  const browserStarted = canonicalTimestamp(browser.startedAt, code), completedAt = canonicalTimestamp(browser.completedAt, code);
+  requireThat(browserStarted <= Date.parse(job.startedAt) && completedAt >= Date.parse(restored.at) && completedAt <= Date.parse(now), code);
+  exactKeys(actions, ['schemaVersion', 'kind', 'gitCommit', 'ownerUserId', 'operation', 'creates', 'reviews', 'applications'], code);
+  requireThat(actions.schemaVersion === 1 && actions.kind === 'NORMAL_IMAGE_DRAFT_UI_INTERACTIONS'
+    && actions.gitCommit === input.targetGitCommit && actions.ownerUserId === owner && actions.operation === operation, code);
+  const createAction = single(actions.creates), reviewAction = single(actions.reviews), applyAction = single(actions.applications);
+  for (const action of [createAction, reviewAction, applyAction]) {
+    const at = canonicalTimestamp(action.at, code);
+    requireThat(at >= browserStarted && at <= completedAt && action.workflowId === flow.id, code);
+  }
+  requireThat(createAction.operation === operation && createAction.jobId === job.id && createAction.sourceAssetId === inputSource.assetId
+    && createAction.maskAssetId === (inputMask?.assetId || null) && createAction.idempotencyKey === flow.idempotencyKey
+    && Date.parse(createAction.at) <= Date.parse(generated.at)
+    && reviewAction.outputAssetId === finalOutput.id && reviewAction.decision === 'APPROVE'
+    && reviewAction.expectedRevision === generated.workflow.revision && Date.parse(reviewAction.at) >= Date.parse(generated.at)
+    && applyAction.outputAssetId === finalOutput.id && applyAction.jobId === job.id && applyAction.applicationId === mutation.id
+    && applyAction.mode === 'append' && applyAction.operationKey === mutation.operationKey
+    && applyAction.expectedWorkflowRevision === mutation.workflowRevisionBefore
+    && applyAction.expectedTargetRevision === mutation.targetRevisionBefore && applyAction.expectedTargetDraftVersion === mutation.targetDraftVersionBefore
+    && Date.parse(applyAction.at) >= Date.parse(reviewAction.at) && Date.parse(applyAction.at) <= Date.parse(applied.at), code);
+  const sourceBridge = verifyErpSource(root, generated.gitCommit, input.targetGitCommit);
+  return { executionCommit: generated.gitCommit, completedAt: browser.completedAt, operation,
+    provider: runtime.provider, model: runtime.model, currency: 'CNY', unitCostMinor: 14,
+    successfulImages: 1, actualCostMinor: 14, chargeCount: 1, applicationCount: 1, originalImagePreserved: true,
+    configurationRestored: true, image, sourceBridge, targetUiProductionVerified: false,
+    evidence: Object.fromEntries(Object.entries(refs).map(([key, ref]) => [`${key}Sha256`, ref.sha256])) };
+}
+
 function verifyNormalErp(reader, input, root, now) {
   return scoped('QA04_ERP_INVALID', () => {
     const code = 'QA04_ERP_INVALID', refs = input.normalErp, acceptance = reader.json(refs.acceptance, code);
+    if (acceptance.kind === 'NORMAL_IMAGE_DRAFT_FLOW_INPUTS') return verifyDraftNormalErp(reader, input, acceptance, root, now);
     const generated = reader.json(refs.generated, code), applied = reader.json(refs.applied, code), restored = reader.json(refs.restored, code);
     const controller = reader.json(refs.controllerStatus, code, { nativeCompact: true }), image = pngEvidence(reader, refs.image, code);
     requireThat(acceptance.schemaVersion === 1 && acceptance.kind === 'NORMAL_IMAGE_REAL_FLOW_ACCEPTANCE'

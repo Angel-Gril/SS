@@ -47,6 +47,7 @@
 - 新增兼容迁移 `20260917021000_allow_settled_ai_listing_draft_applications`，只替换原应用 INSERT 校验函数，保留独立 source、actor、slot、immutable 触发器及所有旧迁移。真实隔离 PostgreSQL 先证实旧函数拒绝已结算 Wanx（23514），再验证新函数允许真实费用链的申请、幂等回放和撤销；16 条旧 fixture 审计记录的数量与内容摘要完全不变。部署需应用第 150 个迁移；应用回滚须保留兼容的新约束函数，以免拒绝已存在真实记录。
 - 根 Agent 的当前组合验证为后端七文件 250 项、Web/MV3 与正式证据合同 58 项通过，均零失败。各 owner 的真实 PostgreSQL 14 项、类型和定向 lint 已通过；正式最终源码的完整 native offline 仍需重新取得。原生 Worker 文件直接使用根 ESLint 会报既有的 150 条 browser-global/unused 诊断，改动前后逐条规则/消息一致；新源码使用项目现有门禁及定向语法/合同验证，不修改无关旧诊断。
 - 新源码会使用已批准的一张 I2I，在 COM 自有账号、真实精确槽位完成生成、审核、APPEND 和配置恢复，再生成对应源码的正式 QA04。私有 bootstrap 只允许该 case，不能全量 enable；配置 CAS/加密备份、未决任务保留凭据、丢回执恢复、预算和其它模式保留已经真实隔离 PostgreSQL 验证。签名候选可先用于专用本地 QA，证据明确区别于官网发布；官网分发仍在正式验收和区域暗态检查后执行。既有两张不重复生成，总体仍最多六张/CNY 1。
+- 正式 QA04 producer 新增 `NORMAL_IMAGE_DRAFT_FLOW_INPUTS` 变体，通过 JSON pointer 读取真实 I2I/INPAINT 的数据库阶段、UI、浏览器和 bootstrap 恢复原件；从任务、输入/输出、唯一费用、审核事件、APPEND 审计及草稿版本推导结果，不接受调用者 PASS。任务必须在本次 offline 完成后开始，且执行源码与目标提交相同。实际 PNG 解码验证尺寸，保留正常 I2I 输出的空尺寸列；按真实事件 owner 的字段顺序校验 JSONB payload/hash，审核事件的空 jobId 也保持原样。原 FULL_EDIT 分支与正式消费者形状不变，根 Agent 最终 27 项 producer 回归、语法和 lint 通过。
 
 ## 正常流程真实验收与应用部署
 

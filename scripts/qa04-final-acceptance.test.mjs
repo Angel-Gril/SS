@@ -18,6 +18,9 @@ const json = value => `${JSON.stringify(value, null, 2)}\n`;
 const sortedJson = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
   : Array.isArray(value) ? `[${value.map(sortedJson).join(',')}]`
     : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${sortedJson(value[key])}`).join(',')}}`;
+const sourceDraftJson = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+  : Array.isArray(value) ? `[${value.map(sourceDraftJson).join(',')}]`
+    : `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${sourceDraftJson(item)}`).join(',')}}`;
 const identity = 'b'.repeat(64);
 const operations = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
 const profiles = ['OZON_PORTRAIT_SINGLE_V1', 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1', 'DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1', 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1'];
@@ -220,6 +223,287 @@ function fixture(t) {
   return { root, repositoryRoot, evidenceRoot, inputPath, input, put, get, change, save, verify, git, targetGitCommit, erpCommit };
 }
 
+// New normal-ERP variant contract. These are synthetic Prisma-shaped records,
+// not producer summaries: no caller-supplied PASS or count can replace them.
+function draftFlowFixture(t, operation = 'IMAGE_TO_IMAGE') {
+  const f = fixture(t), commit = f.targetGitCommit, ownerUserId = 'private-owner', workflowId = 'private-workflow';
+  const jobId = 'private-job', outputId = 'private-output', sourceId = 'private-source', draftId = 'private-draft';
+  const snapshotId = 'private-snapshot', shopId = 'private-shop', skuKey = null, slotKey = 'product:hero';
+  const source = f.input.technical.find(row => row.operation === operation).source;
+  const output = f.put('draft-output.png', png(1024, 1024, 49));
+  const asset = (id, ref, kind) => ({ id, ownerUserId, sourceCaptureSnapshotId: snapshotId, kind,
+    sha256: ref.sha256, width: 1024, height: 1024, mimeType: 'image/png', sizeBytes: readFileSync(ref.path).length, storageBackend: 'oss' });
+  const sourceAsset = asset(sourceId, source, 'SOURCE_ORIGINAL');
+  const outputAsset = { ...asset(outputId, output, 'AI_GENERATED'), aiImageJobId: jobId,
+    ...(operation === 'IMAGE_TO_IMAGE' ? { width: null, height: null } : {}) };
+  const inputs = [{ id: 'input-source', workflowId, ownerUserId, assetId: sourceId, role: 'REFERENCE', ordinal: 0, assetSha256: source.sha256, asset: sourceAsset }];
+  const mask = operation === 'INPAINT' ? f.input.technical.find(row => row.operation === operation).mask : null;
+  if (mask) inputs.push({ id: 'input-mask', workflowId, ownerUserId, assetId: 'private-mask', role: 'MASK', ordinal: 0,
+    assetSha256: mask.sha256, asset: asset('private-mask', mask, 'MASK') });
+  const runtime = { contractVersion: 'ai-image-provider-runtime/v3', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+    baseUrlSha256: hash('https://dashscope.aliyuncs.com/api/v1'), currency: 'CNY', unitCostCents: 14, imageCount: 1,
+    width: 1024, height: 1024, maximumCostCents: 14,
+    credentialRevision: { recordId: 'private-credential-record', revision: 9, updatedAt: '2026-09-16T10:25:00.000Z' } };
+  const job = { id: jobId, ownerUserId, actorUserId: ownerUserId, workflowId, workflowAttempt: 1, executionMode: 'ERP_HOSTED', operation,
+    provider: runtime.provider, model: runtime.model, status: 'SUCCEEDED', attemptCount: 1, requestedImageCount: 1,
+    width: 1024, height: 1024, estimatedCostCents: 14, actualCostCents: 14, billedUnits: 1,
+    requestFingerprint: hash('job-request'), operationConfig: operation === 'IMAGE_TO_IMAGE' ? runtime : { providerRuntime: runtime },
+    providerJobId: 'private-provider-job', providerReconciliationStatus: 'NOT_REQUIRED',
+    startedAt: '2026-09-16T10:30:00.000Z', providerDispatchedAt: '2026-09-16T10:30:01.000Z', completedAt: '2026-09-16T10:31:00.000Z',
+    appliedAt: null, appliedMode: null, applyTargetType: null, applyTargetId: null };
+  const workflow = { id: workflowId, ownerUserId, actorUserId: ownerUserId, operation, status: 'SUCCEEDED', currentAttempt: 1,
+    revision: 3, reviewStatus: 'PENDING', selectedOutputAssetId: null, reviewedByUserId: null, reviewedAt: null,
+    idempotencyKey: 'private-create-key', contextType: 'listing-draft', contextId: draftId,
+    contextSkuKey: skuKey, contextSlotKey: slotKey, contextDraftRevision: 1, contextDraftVersion: 1 };
+  const reservation = { id: 'private-reservation', ownerUserId, actorUserId: ownerUserId, jobId, workflowId, operation,
+    provider: runtime.provider, model: runtime.model, status: 'SETTLED', currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14,
+    requestFingerprint: hash('reservation-request'), providerRequestId: job.providerJobId, settledAt: job.completedAt };
+  const settlement = { id: 'private-settlement', reservationId: reservation.id, ownerUserId, actorUserId: ownerUserId,
+    kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1, requestFingerprint: hash('settlement-request'), createdAt: job.completedAt };
+  const assignment = { scope: 'PRODUCT', slotKey, assetId: outputId, source: operation === 'INPAINT' ? 'EDITED' : 'GENERATED' };
+  const beforeState = { version: 'ai-media-listing-draft-assignment/v1', assignment: null };
+  const afterState = { version: beforeState.version, assignment };
+  const application = { id: 'private-application', ownerUserId, actorUserId: ownerUserId, workflowId, jobId, assetId: outputId,
+    sourceCaptureSnapshotId: snapshotId, operation, kind: 'APPLY', revision: 1, rollbackOfId: null, rolledBackBy: null,
+    targetId: draftId, targetSequence: 1, mode: 'APPEND', replaceConfirmed: false, contextSkuKey: skuKey, contextSlotKey: slotKey,
+    contextDraftRevision: 1, contextDraftVersion: 1, operationKey: 'private-apply-key', requestFingerprint: hash('application-request'),
+    workflowRevisionBefore: 4, workflowRevisionAfter: 5, targetRevisionBefore: 1, targetDraftVersionBefore: 1,
+    targetRevisionAfter: 2, targetDraftVersionAfter: 2, beforeState, beforeStateHash: hash(sortedJson(beforeState)),
+    afterState, afterStateHash: hash(sortedJson(afterState)), createdAt: '2026-09-16T10:33:30.000Z' };
+  const baseTypes = ['CREATED', 'JOB_STARTED', 'PROVIDER_DISPATCH_STARTED', 'PROVIDER_SUBMITTED',
+    ...(operation === 'INPAINT' ? ['PROVIDER_OUTPUT_PERSISTED'] : []), 'JOB_SUCCEEDED'];
+  const event = (eventType, at) => {
+    const payload = eventType === 'LISTING_DRAFT_APPLIED' ? { version: 'ai-media-listing-draft-application/v1', applicationId: application.id,
+      kind: 'APPLY', rollbackOfId: null, operationKey: application.operationKey, mode: 'append', targetType: 'listing-draft',
+      targetId: draftId, targetSequence: 1, targetRevision: 2, targetDraftVersion: 2, contextSkuKey: skuKey, contextSlotKey: slotKey }
+      : eventType === 'PROVIDER_SUBMITTED' ? { providerJobId: job.providerJobId, providerAcceptedAt: '2026-09-16T10:30:02.000Z' }
+        : eventType === 'JOB_SUCCEEDED' ? { outputAssetIds: [outputId] }
+          : eventType === 'PROVIDER_OUTPUT_PERSISTED' ? { outputAssetId: 'private-raw', sha256: hash('raw-provider-output') }
+            : eventType === 'JOB_STARTED' ? { attempt: 1 }
+              : eventType === 'PROVIDER_DISPATCH_STARTED' ? { providerDispatchedAt: job.providerDispatchedAt }
+                : eventType === 'REVIEW_APPROVED' ? { note: null }
+                  : operation === 'IMAGE_TO_IMAGE' ? { operation, attempt: 1, referenceCount: 1 }
+                    : { operation, attempt: 1, sourceAssetId: sourceId, maskAssetId: 'private-mask', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' };
+    return { id: 'event-' + eventType, workflowId, ownerUserId, actorUserId: ownerUserId,
+      jobId: eventType === 'REVIEW_APPROVED' ? null : jobId,
+      assetId: ['REVIEW_APPROVED', 'LISTING_DRAFT_APPLIED'].includes(eventType) ? outputId : null,
+      eventKey: 'event-key-' + eventType, eventType,
+      // JSONB does not retain the writer's key insertion order. Worker/media
+      // events hash that original order; listing application events canonicalize.
+      payload: Object.fromEntries(Object.entries(payload).reverse()),
+      payloadHash: hash(eventType === 'LISTING_DRAFT_APPLIED' ? sortedJson(payload) : JSON.stringify(payload)), createdAt: at };
+  };
+  const baseEvents = baseTypes.map(type => event(type, job.completedAt));
+  const references = {};
+  for (const phase of ['generated', 'applied', 'restored']) {
+    const first = phase === 'generated';
+    const payload = { id: draftId, ownerUserId, shopId, supplyGoodsId: 'private-goods', sourceCaptureSnapshotId: snapshotId,
+      revision: first ? 1 : 2, draftVersion: first ? 1 : 2, selectedSkuKeys: ['__ss_erp_product_only__'], media: { assignments: first ? [] : [assignment] } };
+    const draft = { id: first ? 'private-draft-version-1' : 'private-draft-version-2', workflowId: draftId, ownerUserId,
+      actorUserId: ownerUserId, shopId, sourceCaptureSnapshotId: snapshotId, revision: payload.revision, draftVersion: payload.draftVersion,
+      selectedSkuKeys: payload.selectedSkuKeys, payload, payloadHash: hash(sourceDraftJson(payload)) };
+    const snapshot = { schemaVersion: 1, kind: 'NORMAL_IMAGE_DRAFT_DATABASE_SNAPSHOT', gitCommit: commit, region: 'COM', phase,
+      at: `2026-09-16T10:${first ? '32' : phase === 'applied' ? '34' : '36'}:00.000Z`, ownerUserId, actorUserId: ownerUserId,
+      workflow: first ? workflow : { ...workflow, revision: 5, reviewStatus: 'APPROVED', selectedOutputAssetId: outputId,
+        reviewedByUserId: ownerUserId, reviewedAt: '2026-09-16T10:33:00.000Z' },
+      jobs: [first ? job : { ...job, appliedAt: application.createdAt, appliedMode: 'append', applyTargetType: 'listing-draft', applyTargetId: draftId }],
+      inputs, outputs: [outputAsset, ...(operation === 'INPAINT' ? [{ ...outputAsset, id: 'private-raw', kind: 'AI_PROVIDER_OUTPUT', sha256: hash('raw-provider-output') }] : [])],
+      reservations: [reservation], settlements: [settlement], draft, applications: first ? [] : [application],
+      events: first ? baseEvents : [...baseEvents, event('REVIEW_APPROVED', '2026-09-16T10:33:00.000Z'), event('LISTING_DRAFT_APPLIED', application.createdAt)] };
+    references[phase] = f.put(`draft-${phase}.json`, { snapshot });
+  }
+  const qualification = { schemaVersion: 1, kind: 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT', action: 'restore', phase: 'restored', commit,
+    ownerSha256: hash(ownerUserId), currency: 'CNY', unitCostCents: 14, maximumTaskCostCents: 14, workflowEnabled: false,
+    sharedDailyBudgetModified: false, userDailyLimitModified: false, legacyTextAiModified: false,
+    pending: { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 }, backupSha256: hash('encrypted-backup'),
+    credentialRevisionBefore: 8, credentialRevisionAfter: 10, restoredAt: '2026-09-16T10:35:00.000Z',
+    candidate: { gitCommit: commit, offlineSha256: f.input.offline.receipt.sha256,
+      releaseEvidenceSha256: hash('candidate'), signatureSha256: hash('signature'), vpsSha256: hash('vps') } };
+  const controllerStatus = f.put('draft-controller.json', { result: { qualification } });
+  const browser = f.put('draft-browser.json', { browser: { schemaVersion: 1, kind: 'NORMAL_IMAGE_DRAFT_BROWSER_EXECUTION',
+    gitCommit: commit, ownerUserId, operation, workflowId, jobId, outputAssetId: outputId, sourceSha256: source.sha256, outputSha256: output.sha256,
+    startedAt: '2026-09-16T10:28:00.000Z', completedAt: '2026-09-16T10:37:00.000Z', realSignedInAccount: true,
+    isolation: { kind: 'DEDICATED_QA_PROFILE', profileSha256: hash('qa-profile'), debuggingPort: 9444, protectedDebuggingPort: 9222 },
+    ownedTargetsClosed: true, originalBrowserPreserved: true } });
+  const interactions = f.put('draft-interactions.json', { actions: { schemaVersion: 1, kind: 'NORMAL_IMAGE_DRAFT_UI_INTERACTIONS', gitCommit: commit, ownerUserId, operation,
+    creates: [{ at: '2026-09-16T10:29:00.000Z', workflowId, jobId, operation, sourceAssetId: sourceId, maskAssetId: mask ? 'private-mask' : null,
+      idempotencyKey: workflow.idempotencyKey }],
+    reviews: [{ at: '2026-09-16T10:33:00.000Z', workflowId, outputAssetId: outputId, decision: 'APPROVE', expectedRevision: 3 }],
+    applications: [{ at: '2026-09-16T10:33:30.000Z', workflowId, jobId, outputAssetId: outputId, applicationId: application.id,
+      mode: 'append', operationKey: application.operationKey, expectedWorkflowRevision: 4, expectedTargetRevision: 1, expectedTargetDraftVersion: 1 }] } });
+  const acceptance = f.put('draft-flow-inputs.json', { schemaVersion: 1, kind: 'NORMAL_IMAGE_DRAFT_FLOW_INPUTS', operation,
+    pointers: { generated: '/snapshot', applied: '/snapshot', restored: '/snapshot', controllerStatus: '/result/qualification' },
+    source, ...(mask ? { mask } : {}), browser: { ...browser, pointer: '/browser' }, interactions: { ...interactions, pointer: '/actions' } });
+  f.input.normalErp = { acceptance, ...references, controllerStatus, image: output };
+  const changeMapped = (name, mutate) => {
+    const ref = name === 'browser' ? browser : interactions;
+    f.change(ref, mutate);
+    f.change(f.input.normalErp.acceptance, value => { value[name].sha256 = ref.sha256; });
+  };
+  return { ...f, browser, interactions, operation, changeMapped };
+}
+
+for (const operation of ['IMAGE_TO_IMAGE', 'INPAINT']) {
+  test(`derives current-code ${operation} draft acceptance from original records and pointer bindings`, t => {
+    const f = draftFlowFixture(t, operation), result = f.verify();
+    assert.equal(result.report.decision, 'PASS');
+    assert.equal(result.report.provenance.normalErp.operation, operation);
+    assert.equal(result.report.provenance.normalErp.executionCommit, f.targetGitCommit);
+    assert.equal(result.report.provenance.normalErp.actualCostMinor, 14);
+    assert.equal(result.report.provenance.normalErp.applicationCount, 1);
+    assert.equal(result.report.provenance.normalErp.configurationRestored, true);
+    assert.equal(result.report.provenance.normalErp.image.width, 1024);
+    if (operation === 'IMAGE_TO_IMAGE') assert.equal(f.get(f.input.normalErp.generated).snapshot.outputs[0].width, null,
+      'actual nullable DB dimensions must not be filled in by the producer');
+    assert.equal(result.report.provenance.fullProductionMv3Verified, false);
+    assert.doesNotMatch(JSON.stringify(result.report), /private-owner|private-workflow|private-job|private-credential/u);
+  });
+}
+
+test('rejects reused asset identities even when every pointed stage and action agrees', t => {
+  const f = draftFlowFixture(t);
+  for (const phase of ['generated', 'applied', 'restored']) f.change(f.input.normalErp[phase], value => {
+    const row = value.snapshot.inputs[0]; row.assetId = 'private-output'; row.asset.id = 'private-output';
+  });
+  f.changeMapped('interactions', value => { value.actions.creates[0].sourceAssetId = 'private-output'; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+});
+
+test('preserves prior draft assignments while adding only the approved empty slot', t => {
+  const f = draftFlowFixture(t), prior = { scope: 'PRODUCT', slotKey: 'product:detail-1', assetId: 'prior-source-asset', source: 'SOURCE' };
+  for (const phase of ['generated', 'applied', 'restored']) f.change(f.input.normalErp[phase], value => {
+    value.snapshot.draft.payload.media.assignments.unshift(prior);
+    value.snapshot.draft.payloadHash = hash(sourceDraftJson(value.snapshot.draft.payload));
+  });
+  assert.equal(f.verify().report.provenance.normalErp.originalImagePreserved, true);
+  for (const phase of ['applied', 'restored']) f.change(f.input.normalErp[phase], value => {
+    value.snapshot.draft.payload.media.assignments.shift();
+    value.snapshot.draft.payloadHash = hash(sourceDraftJson(value.snapshot.draft.payload));
+  });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+});
+
+test('requires provider and output audit payloads to identify the same single job result', t => {
+  const f = draftFlowFixture(t);
+  for (const phase of ['generated', 'applied', 'restored']) f.change(f.input.normalErp[phase], value => {
+    const event = value.snapshot.events.find(row => row.eventType === 'JOB_SUCCEEDED');
+    event.payload.outputAssetIds = ['another-output']; event.payloadHash = hash(sortedJson(event.payload));
+  });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+});
+
+test('refuses nested payload values outside the actual flat workflow-event contract', t => {
+  const f = draftFlowFixture(t);
+  for (const phase of ['applied', 'restored']) f.change(f.input.normalErp[phase], value => {
+    const event = value.snapshot.events.find(row => row.eventType === 'REVIEW_APPROVED');
+    event.payload = { note: { a: 1, b: 2 } }; event.payloadHash = hash(JSON.stringify(event.payload));
+  });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+});
+
+test('requires raw current-code ERP records rather than a completion flag or an old commit', t => {
+  const f = draftFlowFixture(t), ref = f.input.normalErp.acceptance, original = readFileSync(ref.path);
+  f.change(ref, value => { value.status = 'PASS'; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+  Object.assign(ref, f.put(path.basename(ref.path), original));
+  for (const phase of ['generated', 'applied', 'restored']) f.change(f.input.normalErp[phase], value => { value.snapshot.gitCommit = f.erpCommit; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
+test('rejects an old execution merely reread and labelled with the current commit', t => {
+  const f = draftFlowFixture(t);
+  const makeHistorical = value => {
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === 'string' && item.startsWith('2026-09-16T10:')) value[key] = item.replace('2026-09-16', '2026-09-15');
+      else if (item && typeof item === 'object') makeHistorical(item);
+    }
+  };
+  for (const field of ['generated', 'applied', 'restored', 'controllerStatus']) f.change(f.input.normalErp[field], makeHistorical);
+  f.changeMapped('browser', makeHistorical); f.changeMapped('interactions', makeHistorical);
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
+test('rejects tampered draft workflow, owner, frozen price, charge or application facts', t => {
+  const f = draftFlowFixture(t), refs = f.input.normalErp;
+  const original = Object.fromEntries(['generated', 'applied', 'restored'].map(phase => [phase, readFileSync(refs[phase].path)]));
+  for (const [phase, mutate] of [
+    ['generated', value => { value.jobs[0].provider = 'fake'; }],
+    ['generated', value => { value.ownerUserId = 'another-owner'; }],
+    ['generated', value => { const config = value.jobs[0].operationConfig; (config.providerRuntime || config).unitCostCents = 1; }],
+    ['generated', value => { value.reservations.push(value.reservations[0]); }],
+    ['generated', value => { value.settlements.push(value.settlements[0]); }],
+    ['generated', value => { value.settlements[0].kind = 'RELEASE'; }],
+    ['generated', value => { value.settlements[0].actualCostMinor = 0; }],
+    ['generated', value => { value.jobs[0].attemptCount = 2; }],
+    ['generated', value => { value.outputs[0].ownerUserId = 'foreign-output-owner'; }],
+    ['generated', value => { value.outputs[0].width = 1000; }],
+    ['applied', value => { value.workflow.selectedOutputAssetId = 'another-output'; }],
+    ['applied', value => { value.applications[0].mode = 'REPLACE'; }],
+    ['applied', value => { value.applications[0].targetRevisionAfter += 1; }],
+    ['applied', value => { value.draft.payload.media.assignments = []; value.draft.payloadHash = hash(sourceDraftJson(value.draft.payload)); }],
+    ['restored', value => { value.applications = []; }],
+    ['restored', value => { value.at = '2026-09-16T10:31:00.000Z'; }],
+  ]) {
+    f.change(refs[phase], value => mutate(value.snapshot));
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    for (const name of Object.keys(original)) Object.assign(refs[name], f.put(path.basename(refs[name].path), original[name]));
+  }
+});
+
+test('requires bound single UI actions and a closed dedicated browser on the same owner and output', t => {
+  const f = draftFlowFixture(t);
+  const original = { browser: readFileSync(f.browser.path), interactions: readFileSync(f.interactions.path) };
+  for (const [name, mutate] of [
+    ['interactions', value => { value.actions.creates.push(value.actions.creates[0]); }],
+    ['interactions', value => { value.actions.reviews[0].decision = 'REJECT'; }],
+    ['interactions', value => { value.actions.applications[0].operationKey = 'another-key'; }],
+    ['interactions', value => { value.actions.creates[0].sourceAssetId = 'another-source'; }],
+    ['browser', value => { value.browser.ownerUserId = 'another-owner'; }],
+    ['browser', value => { value.browser.outputSha256 = hash('another-image'); }],
+    ['browser', value => { value.browser.ownedTargetsClosed = false; }],
+    ['browser', value => { value.browser.originalBrowserPreserved = false; }],
+    ['browser', value => { value.browser.isolation.debuggingPort = value.browser.isolation.protectedDebuggingPort; }],
+  ]) {
+    f.changeMapped(name, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    const ref = name === 'browser' ? f.browser : f.interactions;
+    Object.assign(ref, f.put(path.basename(ref.path), original[name]));
+    f.change(f.input.normalErp.acceptance, value => { value[name].sha256 = ref.sha256; });
+  }
+});
+
+test('requires an exact bootstrap restoration and its verified candidate/offline bindings', t => {
+  const f = draftFlowFixture(t), ref = f.input.normalErp.controllerStatus, original = readFileSync(ref.path);
+  for (const mutate of [
+    value => { value.pending.suites = 1; }, value => { value.workflowEnabled = true; },
+    value => { value.userDailyLimitModified = true; }, value => { value.legacyTextAiModified = true; },
+    value => { value.credentialRevisionAfter = value.credentialRevisionBefore; },
+    value => { value.candidate.offlineSha256 = hash('other-offline'); },
+    value => { value.candidate.gitCommit = f.erpCommit; }, value => { value.ownerSha256 = hash('other-owner'); },
+  ]) {
+    f.change(ref, value => mutate(value.result.qualification));
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    Object.assign(ref, f.put(path.basename(ref.path), original));
+  }
+  f.change(ref, value => { value.result.restoredEditUnitCostMinor = 99; });
+  assert.equal(f.verify().report.provenance.normalErp.unitCostMinor, 14, 'execution price must not be inferred from restored config');
+});
+
+test('validates original-byte hashes and strict pointers for the new draft evidence', t => {
+  const f = draftFlowFixture(t, 'INPAINT'), ref = f.input.normalErp.acceptance, original = readFileSync(ref.path);
+  for (const mutate of [
+    value => { value.pointers.generated = '/missing'; }, value => { value.pointers.generated = '/__proto__'; },
+    value => { value.pointers.generated = '/snapshot/~2'; }, value => { delete value.mask; },
+    value => { value.mask = value.source; }, value => { value.operation = 'TEXT_TO_IMAGE'; },
+  ]) {
+    f.change(ref, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    Object.assign(ref, f.put(path.basename(ref.path), original));
+  }
+  writeFileSync(f.browser.path, json({ browser: { realSignedInAccount: true } }));
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ARTIFACT_CHANGED');
+});
+
 test('derives formal fields only from complete original evidence and preserves limited historical claims', t => {
   const f = fixture(t), result = f.verify();
   assert.equal(result.report.kind, 'QA04_FINAL_ACCEPTANCE');
@@ -363,7 +647,8 @@ test('refuses to hide quality counterexamples or relabel them as positive eviden
 });
 
 test('writes only a new private artifact and is accepted by the unchanged formal consumer', async t => {
-  const f = fixture(t), outputPath = path.join(f.evidenceRoot, 'final.json');
+  for (const f of [fixture(t), draftFlowFixture(t)]) {
+  const outputPath = path.join(f.evidenceRoot, 'final.json');
   assert.equal(typeof subject.writeQa04FinalAcceptance, 'function', 'durable formal producer must exist');
   const result = subject.writeQa04FinalAcceptance({ inputPath: f.inputPath, inputSha256: f.save(), repositoryRoot: f.repositoryRoot, now: NOW, outputPath });
   assert.equal(hash(readFileSync(outputPath)), result.outputSha256);
@@ -385,6 +670,7 @@ test('writes only a new private artifact and is accepted by the unchanged formal
   const changed = { ...result.report, gates: [...result.report.gates].reverse() };
   const incorrect = f.put('wrong-order.json', changed);
   assert.throws(() => consumer(incorrect.path, incorrect.sha256, f.repositoryRoot, f.targetGitCommit), /QA04_ACCEPTANCE_INVALID/u);
+  }
 });
 
 test('CLI does not expose supplied bytes or create an output when arguments are invalid', () => {
