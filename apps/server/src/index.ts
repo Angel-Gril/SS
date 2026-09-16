@@ -113,6 +113,9 @@ import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/
 import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
 import { createOzonPublisherEntrypointRolloutService } from './services/ozon-publisher-entrypoint-rollout.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
+import { extensionErpSourceLaunchRoutes } from './routes/extension-erp-source-launch.js';
+import { createExtensionErpSourceLaunchService, createRedisErpSourceLaunchGrantStore } from './services/extension-erp-source-launch.js';
+import { authenticate } from './lib/auth.js';
 import { extensionDeviceBrowserOneClickRoutes } from './routes/extension-device-browser-one-click.js';
 import {
   createSourceWorkflowCommandResolver,
@@ -393,7 +396,7 @@ import { createLogisticsScopeBootstrapService } from './services/logistics-scope
 import {
   createPrismaLogisticsScopeBootstrapRepository,
 } from './services/logistics-scope-bootstrap-prisma.js';
-import { getRuntimeConfig } from './adapters/runtime-config.js';
+import { getRuntimeConfig, getRuntimeMode } from './adapters/runtime-config.js';
 
 import { isAllowedCorsOrigin } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
@@ -2339,6 +2342,36 @@ if (isExtensionDeviceAuthEnabled()) {
         : { authorized: false as const, assetId: null };
     },
     getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
+  });
+  await app.register(extensionErpSourceLaunchRoutes, {
+    prefix: '/api/extension-device',
+    authenticateAccount: authenticate,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review', 'media:execute'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    service: createExtensionErpSourceLaunchService({
+      store: createRedisErpSourceLaunchGrantStore({ redis, enabled: !redisDisabled }),
+      apiOrigin: new URL(process.env.EXTENSION_RELEASE_EXPECTED_API_ORIGIN || getRuntimeConfig().localBaseUrl).origin,
+      deploymentId: extensionDeviceAuthConfig.deploymentId,
+      allowInsecureLocal: getRuntimeMode() === 'local',
+      loadDevice: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+      loadShop: loadExtensionCommandShop,
+      loadDraft: loadExtensionByokWorkbenchDraft,
+      loadMediaContext: loadExtensionMediaTranslationContext,
+      isEnabled: async (input) => {
+        const [extension, webMedia, workflow] = await Promise.all([
+          sourceWorkflowFeatureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', input),
+          sourceWorkflowFeatureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', input),
+          getAiMediaRolloutDecision(input.ownerUserId),
+        ]);
+        if (!extension.enabled || !webMedia.enabled || !workflow.enabled) return false;
+        if (input.mode === 'WORKBENCH') return (await evaluateExtensionHostedAiImagePolicy(input)).enabled;
+        const readiness = await getExtensionStandaloneReadiness(input.mode);
+        return readiness.enabled && readiness.ready;
+      },
+    }),
   });
   await app.register(extensionByokExecutionIntentRoutes, {
     prefix: '/api/extension-device/byok-media',

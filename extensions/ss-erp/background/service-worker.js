@@ -1,5 +1,6 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
 try { importScripts('../shared/contracts/ai-image-workbench-v1.js'); } catch (e) { console.warn('[SS ERP] AI image workbench contract load error:', e); }
+try { importScripts('../shared/erp-adapter/erp-source-image-launch.js'); } catch (e) { console.warn('[SS ERP] ERP source image launcher load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-authorization.js'); } catch (e) { console.warn('[SS ERP] runtime message authorization load error:', e); }
 try { importScripts('../shared/byok/profile-schema.js'); } catch (e) { console.warn('[SS ERP] BYOK profile schema load error:', e); }
@@ -1680,7 +1681,14 @@ function getHostedAiImageSuiteRuntimeDispatcher() {
   }
   hostedAiImageSuiteRuntimeDispatcher = api.createDispatcher({
     messageTypes: authorization.MESSAGE_TYPES.HOSTED_WORKBENCH,
-    getClient(sender, binding) {
+    async getClient(sender, binding) {
+      const session = await getByokWorkbenchSessionManager().claim(sender);
+      const context = session.context;
+      if (context.sourceCaptureSnapshotId !== binding.snapshotId || context.supplyGoodsId !== binding.supplyGoodsId
+        || context.shopId !== binding.shopId || context.workflowId !== binding.listingWorkflowId
+        || context.draftRevision !== binding.draftRevision || context.draftVersion !== binding.draftVersion) {
+        throw Object.assign(new Error('Hosted workbench context changed'), { code: 'SS_ERP_HOSTED_WORKBENCH_CONTEXT_STALE' });
+      }
       return getHostedAiImageSuiteClientRegistry().getClient(sender, binding);
     },
   });
@@ -2007,6 +2015,10 @@ function getByokWorkbenchSessionManager() {
     tabs: chrome.tabs,
     runtime: chrome.runtime,
     now: () => Date.now(),
+    verifyErpSourceAuthority: async (authority) => {
+      await assertErpSourceDeviceAuthority(authority);
+      return true;
+    },
     onDiscardedResult: (resultId) => {
       try { byokGeneratedResultVault?.release(resultId); } catch (_error) {}
       try { byokGeneratedAssetIngestClient?.discardResult(resultId); } catch (_error) {}
@@ -2808,6 +2820,69 @@ async function openAuthoritativeSourceAiWorkbench(message, sender) {
   }
 }
 
+let erpSourceImageLauncher = null;
+function getErpSourceImageLauncher() {
+  if (erpSourceImageLauncher) return erpSourceImageLauncher;
+  const api = globalThis.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  if (!api || typeof api.createLauncher !== 'function') throw new Error('ERP 图片扩展入口不可用');
+  erpSourceImageLauncher = api.createLauncher({
+    runtimeId: chrome.runtime.id,
+    apiOrigin: packagedErpDeviceBaseUrl(),
+    erpOrigins: [defaults.erpBaseUrl, defaults.erpAdminBaseUrl].filter(Boolean).map(value => new URL(value).origin),
+    readDevice: () => readExtensionDeviceStatus(true),
+    isSenderCurrent: async (source) => {
+      try {
+        const response = await chrome.tabs.sendMessage(source.tabId, { type: 'ss-erp:erp-source-launch-current' },
+          { frameId: 0, documentId: source.documentId });
+        return response?.ok === true && response.origin === source.origin;
+      } catch { return false; }
+    },
+    consumeGrant: async (launchToken) => {
+      const response = await getByokDeviceTransport().post('/api/extension-device/erp-launch-grants/consume',
+        { launchToken }, { requiredScope: 'media:execute' });
+      if (response?.state !== 'response' || response.body?.code !== 1 || !response.body.data) {
+        const code = /^ERP_LAUNCH_[A-Z_]{1,80}$/.test(response?.body?.errorCode || '')
+          ? response.body.errorCode : 'ERP_SOURCE_LAUNCH_UNAVAILABLE';
+        throw Object.assign(new Error(code), { code });
+      }
+      return response.body.data;
+    },
+    resolveWorkbench: (request) => getByokWorkbenchLaunchClient().resolve(request),
+    openWorkbench: (request) => getByokWorkbenchSessionManager().open(request),
+    openEditor: openErpSourceMediaEditor,
+  });
+  return erpSourceImageLauncher;
+}
+
+async function assertErpSourceDeviceAuthority(value) {
+  const api = globalThis.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
+  const authority = api && typeof api.normalizeAuthority === 'function' ? api.normalizeAuthority(value) : null;
+  const device = await readExtensionDeviceStatus(true);
+  if (!authority || device.state !== 'paired' || device.ownerUserId !== authority.ownerUserId
+    || device.sessionId !== authority.deviceSessionId || device.endpoint !== authority.apiOrigin
+    || authority.apiOrigin !== packagedErpDeviceBaseUrl()
+    || !['listing:review', 'media:execute'].every(scope => device.scopes.includes(scope))) {
+    throw new Error('ERP 图片编辑授权已变化，请从当前账号重新打开');
+  }
+}
+
+async function openErpSourceMediaEditor(input) {
+  const grant = input.grant;
+  const binding = grant.launchRequest;
+  const session = {
+    platform: binding.sourcePlatform, sourceProductId: binding.sourceProductId,
+    snapshotId: binding.sourceCaptureSnapshotId, supplyGoodsId: binding.supplyGoodsId,
+    shopId: binding.shopId, listingWorkflowId: binding.workflowId,
+    revision: binding.draftRevision, draftVersion: binding.draftVersion,
+    operation: grant.mode, sourceMediaKeys: [...grant.sourceMediaKeys],
+    sourceTabId: input.sourceTabId, erpSourceAuthority: input.erpSourceAuthority,
+  };
+  const authority = await loadFrozenSourceMediaEditorAuthority(session, true);
+  return getSourceMediaEditorCoordinator().open({ ...session,
+    preparedSource: authority.prepared ? sourceMediaEditorPreparedSnapshot(authority.prepared) : null });
+}
+
 async function loadAuthoritativeSourceAiImageSuiteProjection(message) {
   const sourceProductId = sourceWorkflowHandoffText(message?.sourceProductId, 200);
   const platform = sourceWorkflowPlatform(message?.platform);
@@ -3172,16 +3247,17 @@ async function openSourceMediaEditor(request) {
   });
 }
 
-async function loadFrozenSourceMediaEditorAuthority(session) {
-  const handoff = await readPersistedSourceWorkflowHandoff(
-    session.platform,
-    session.sourceProductId,
-  );
-  if (!handoff || handoff.sourceProductId !== session.sourceProductId
-    || handoff.platform !== session.platform
-    || handoff.snapshotId !== session.snapshotId
-    || handoff.supplyGoodsId !== session.supplyGoodsId) {
-    throw new Error('ERP 局部重绘上下文已变化，请从商品页重新发起');
+async function loadFrozenSourceMediaEditorAuthority(session, preparingErpSource = false) {
+  if (session.erpSourceAuthority) {
+    await assertErpSourceDeviceAuthority(session.erpSourceAuthority);
+  } else {
+    if (preparingErpSource) throw new Error('ERP 图片编辑授权不可用');
+    const handoff = await readPersistedSourceWorkflowHandoff(session.platform, session.sourceProductId);
+    if (!handoff || handoff.sourceProductId !== session.sourceProductId
+      || handoff.platform !== session.platform || handoff.snapshotId !== session.snapshotId
+      || handoff.supplyGoodsId !== session.supplyGoodsId) {
+      throw new Error('ERP 局部重绘上下文已变化，请从商品页重新发起');
+    }
   }
   const client = getSourceListingWorkflowClient();
   const current = await client.getStatus({
@@ -3223,9 +3299,10 @@ async function loadFrozenSourceMediaEditorAuthority(session) {
       sourceMediaKey: session.sourceMediaKeys[0],
     })
     : null;
-  if (!sameSourceMediaEditorPreparedSource(session.preparedSource, prepared)) {
+  if (!preparingErpSource && !sameSourceMediaEditorPreparedSource(session.preparedSource, prepared)) {
     throw new Error('局部重绘来源图片已变化，请从商品页重新发起');
   }
+  if (session.erpSourceAuthority) await assertErpSourceDeviceAuthority(session.erpSourceAuthority);
   return { client, listing, launch, prepared };
 }
 
@@ -5977,6 +6054,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'ss-erp:erp-source-image-open') {
+    Promise.resolve().then(() => getErpSourceImageLauncher().open(message, sender)).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      const errorCode = /^ERP_(?:SOURCE_LAUNCH|LAUNCH)_[A-Z_]{1,80}$/.test(error?.code || '')
+        ? error.code : 'ERP_SOURCE_LAUNCH_UNAVAILABLE';
+      sendResponse({ ok: false, errorCode, error: '扩展启动授权不可用，请核对当前配对账号与草稿后重新打开' });
+    });
+    return true;
+  }
   if (message.type === SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE) {
     Promise.resolve(openAuthoritativeSourceAiWorkbench(message, sender)).then((result) => {
       sendResponse({ ok: true, result });

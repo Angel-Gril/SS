@@ -101,6 +101,20 @@
 - 全仓 lint、类型和受影响定向验证通过；整合 preflight 的全部静态合同通过，后端为 6232 passed / 313 条条件跳过，唯一失败是旧 dispatch 测试仍仅模拟 `getConfig`，新严格快照读到了默认配置。测试已改为在数据库边界提供同一配置，保留真实快照 parser，相关 26 项通过。失败日志保留；最终 clean 提交的原生九项 offline 仍须完整实跑，不能以定向补验替代。
 - 正常线上新源码实测、正式 QA04 和区域发布仍待完成。上述本地结果不表示已全量启用；本轮截至此检查点新增 Provider 请求、费用、Ozon 写入、生产配置修改及部署均为零。私有证据集中在 `completion-20260916`，不进入 Git。
 
+### 自有草稿的扩展入口与套图目标补齐
+
+- `290853b6336e97b5f0649073df31377920e0e584` 已推送，最终原生九项 offline 于 `2026-09-16T13:25:05.298Z` 全部通过；它仍只是该源码的离线证据。本轮尚未制作/签名候选、部署或发出真实生图请求。
+- 实测入口复核发现两项此前本地链路没有覆盖的缺口：现有 MV3 来源工作台依赖真实 marketplace 原生采集 handoff，ERP 自有 QA 来源/草稿没有可信启动入口；`HOSTED_WORKBENCH_CREATE_PLAN` 没有透传 `galleryGoals`，默认是 hero 加七个 gallery 槽位。Web 两槽计划不会自动成为当前 device/draft 的 hosted plan，不能直接写绑定记录、伪造采集 handoff 或手改计划/hash 来完成验收。
+- 当前请求明确要求从 ERP 自有 QA 来源/草稿完成真实扩展写入，并批准只生成两个套图槽位，因此补齐正常产品入口后再冻结候选。ERP 启动只接受已配对设备和服务端核验的自有草稿，复用现有 owner/shop/device、版本、feature、报价与 command-grant；明确区别 ERP 来源与原生 marketplace 采集，启动本身不发 Provider 请求或 Ozon 写入。
+- owner 分工：可信 ERP launch 由独立启动 owner、必要薄后台/bridge/route 和 Web 来源草稿按钮负责；套图目标由 hosted plan 合同、客户端、服务端 plan binding/idempotency 和真实工作台控件负责。`galleryGoals` 使用现有规划 owner 的枚举；省略时保留旧默认，显式 scene 由 owner 生成 hero+scene，不允许调用者直接指定费用或篡改冻结计划。已有活跃计划不静默替换，同一幂等键的不同目标应拒绝。
+- 两项按 T2 先 RED→GREEN，并补真实组件/DOM 的 T3 验证。完成后只在新冻结源码上重新取得所需发布证据；`290853b6` 的 PASS 保留原适用范围，不用于未验证的新接口。六张、CNY 1、固定 QA 白杯原图、CNY 14 分成功张数计费及无 Ozon 商品写入的已批准范围保持。
+- 套图目标已贯通普通控件、runtime/client、HTTP 和 hosted planning。后端 153 项、真实 PostgreSQL 16 项、八个扩展脚本通过；实际 hosted→planning 创建 hero+scene，重复回放保持一个计划，改变目标、换客户端 key 或恢复默认均返回冲突，不新增计划、版本或费用。旧 plan-binding PostgreSQL fixture 缺少原本必需的创建审计，已在同一事务补齐，未改数据库约束或业务 owner。
+- 根 Agent 的最终 DOM 验证绑定实际 HTML/CSS/controller/client，四场景通过：scene 单选真实上行、请求等待期间锁定、读取到真实形状的权威计划/两槽/runtime 后继续锁定、390px 无横向溢出。边界是本地合成 HTTP 数据，一次本地建计划 POST，零 Provider/生产请求；不替代线上验收。早期 checkbox 值断言、错误合成 slot key 及不足以区别未知状态的断言均保留并注明纠正，最终证据只用 `gallery-goals-browser/receipt.json`（SHA-256 `53972ad4a18af53f1d30c40260dcd78e28d1da864ab7cf5bdc38419342b1b548`）。自建浏览器上下文和三个 fixture server 均已清理。
+- ERP 来源启动已接通：账号认证端签发 120 秒随机 ticket，device 端核对同一 owner/actor/session/deployment、有效店铺、当前草稿/采集版本、feature 和 scope 后，使用 Redis 原子 CAS 单次消费。默认关闭、Noop Redis、非法 origin、发表态草稿和过期/重复票据均拒绝。页面不传账号 JWT 或自定 owner/role；后台保留明确 `ERP_SOURCE` 来源，复用正常工作台和编辑器的 tab/document session、报价和 command-grant，不制造 marketplace 采集回执。
+- 后端 owner 为 `extension-erp-source-launch.ts` service/route；后台 owner 为 `shared/erp-adapter/erp-source-image-launch.js`，主 worker、会话、页面 bridge 和 message policy 仅作接线；Web 由 `extension-erp-source-launch.ts` 消费者协调器及来源草稿组件的可见入口负责。空 BYOK profile/key 不阻止正常 ERP 托管。独立复核发现并关闭同 owner 重配新设备后仍复用旧 ERP 工作台的问题，旧 device authority 被拒绝，清理重入没有死锁。
+- 最终定向证据：后端 grant 17 项、独立真实 Redis CAS/TTL/限额三项通过；根 Agent 组合验证为后端十文件 178 项，以及新 MV3/Web 25 项通过。新增三份扩展合同和 Web 启动合同已注册 preflight。Web 设备核验、账号 ticket 请求、扩展打开分别有 8/15/30 秒期限，无自动重发；当前 scope、草稿切换、未保存图片/遮罩和卸载会取消旧请求。
+- Web 的六项真实组件 DOM 验证通过，使用实际来源工作台、API、启动协调器和页面 bridge，仅替换本地网络/扩展响应及两个无关子面板。无商业发布资料的已保存 PRODUCT_ONLY 草稿可打开工作台；明确选择原图后可进入 INPAINT；等待、未保存修改及移动端行为正确，票据未进入 DOM/URL/storage。私有回执 `erp-launch-web/receipt.json` SHA-256 为 `826770e2b97b1787569d9c659d277a25f99ee044bfc1f4a6e9cf40b81e5b95a5`，两个本地 ticket 均仅消费一次，自建 context/server 已清理。以上不是生产 MV3 或新增图片验收，真实六张仍等待修复后的最终候选。
+
 ## 本地交付与 Owner
 
 ### 按顺序完善：先处理图片质量（2026-09-15）

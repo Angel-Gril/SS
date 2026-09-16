@@ -100,6 +100,8 @@ const IDS = [
   'hostedControlPanel', 'workspaceConnectionBadge', 'hostedStateBadge', 'hostedStatus',
   'hostedPlanSummary', 'hostedReviewSummary', 'hostedSuiteSummary',
   'hostedCreatePlanButton', 'hostedApprovePlanButton', 'hostedRejectPlanButton',
+  'hostedGalleryGoals', 'hostedGalleryGoalsHint',
+  ...['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster'].map((goal) => `hostedGalleryGoal-${goal}`),
   'hostedQuotePanel', 'hostedPricingVersion', 'hostedQuoteItems', 'hostedEstimatedCost',
   'hostedMaximumCost', 'hostedCostConfirmation', 'hostedCostConfirmationLabel',
   'hostedStartButton', 'hostedContinueButton', 'hostedCancelButton', 'hostedSlotList',
@@ -334,6 +336,9 @@ function harness(options = {}) {
   nodes.hostedPreviewPanel.hidden = true;
   nodes.resultPanel.hidden = true;
   nodes.editResultPanel.hidden = true;
+  for (const goal of ['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']) {
+    nodes[`hostedGalleryGoal-${goal}`].checked = true;
+  }
   const document = new FakeDocument(nodes);
   const windowTarget = new FakeTarget();
   const calls = [];
@@ -550,6 +555,7 @@ function harness(options = {}) {
       },
     },
     SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_CLIENT: {
+      GALLERY_GOALS: Object.freeze(['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']),
       createClient() { calls.push(['create-runtime-client']); return runtimeClient; },
     },
     SS_ERP_HOSTED_AI_IMAGE_SUITE_CANDIDATE_PREVIEW_CONSUMER: {
@@ -979,6 +985,38 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   assert.equal(approval[1].decision, 'APPROVE');
   assert.equal(approval[1].expectedRevision, 3);
   assert.equal(test.workspaceEvents.some((row) => row[0] === 'bootstrap'), true);
+}
+
+{
+  const test = harness({ plan: planResponse(null), projection: emptyProjection() });
+  await test.controller.refresh();
+  activate(test);
+  await settle(30);
+  for (const goal of ['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']) {
+    test.nodes[`hostedGalleryGoal-${goal}`].checked = false;
+  }
+  test.nodes['hostedGalleryGoal-scene'].dispatch('change');
+  assert.equal(test.nodes.hostedCreatePlanButton.disabled, true, 'an empty target selection cannot create a plan');
+  test.nodes['hostedGalleryGoal-scene'].checked = true;
+  test.nodes['hostedGalleryGoal-scene'].dispatch('change');
+  assert.equal(test.nodes.hostedCreatePlanButton.disabled, false);
+  test.nodes.hostedCreatePlanButton.dispatch('click');
+  await settle(40);
+  const created = test.calls.find((row) => row[0] === 'create-plan')[1];
+  assert.deepEqual([...created.galleryGoals], ['scene']);
+  assert.equal(test.nodes.hostedGalleryGoals.disabled, true, 'the submitted target selection stays frozen until authority resolves it');
+  test.nodes['hostedGalleryGoal-detail'].checked = true;
+  test.nodes['hostedGalleryGoal-detail'].dispatch('change');
+  test.nodes.hostedCreatePlanButton.dispatch('click');
+  await settle(40);
+  const retried = test.calls.filter((row) => row[0] === 'create-plan').at(-1)[1];
+  assert.equal(retried.idempotencyKey, created.idempotencyKey);
+  assert.deepEqual([...retried.galleryGoals], ['scene']);
+  assert.equal(test.calls.some((row) => row[0] === 'execute'), false, 'plan selection never starts generation');
+  test.setPlan(planResponse('PENDING'));
+  await test.controller.refresh();
+  assert.equal(test.nodes.hostedGalleryGoals.disabled, true);
+  assert.equal(test.nodes.hostedCreatePlanButton.disabled, true, 'an active plan cannot be replaced by goal selection');
 }
 
 {

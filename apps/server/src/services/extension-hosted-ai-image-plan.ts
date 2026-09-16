@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { SourceListingWorkflowStage } from 'shared';
-import type {
-  AiMediaPlanRecord,
-  AiMediaPlanVersionRecord,
-  CreateRuleBasedAiMediaPlanningInput,
-  ReviewAiMediaPlanInput,
+import {
+  AI_MEDIA_GALLERY_GOALS,
+  AiMediaPlanningError,
+  type AiMediaGalleryGoal,
+  type AiMediaPlanRecord,
+  type AiMediaPlanVersionRecord,
+  type CreateRuleBasedAiMediaPlanningInput,
+  type ReviewAiMediaPlanInput,
 } from './ai-media-planning.js';
 
 export const EXTENSION_HOSTED_AI_IMAGE_PLAN_VERSION =
@@ -31,6 +34,7 @@ export type ExtensionHostedAiImagePlanErrorCode =
   | 'HOSTED_AI_IMAGE_PLAN_POLICY_DISABLED'
   | 'HOSTED_AI_IMAGE_PLAN_POLICY_UNAVAILABLE'
   | 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'
+  | 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT'
   | 'HOSTED_AI_IMAGE_PLAN_SKU_AMBIGUOUS'
   | 'HOSTED_AI_IMAGE_PLAN_NOT_FOUND';
 
@@ -149,6 +153,7 @@ interface BoundRequest {
 
 interface CreateRequest extends BoundRequest {
   idempotencyKey: string;
+  galleryGoals?: AiMediaGalleryGoal[];
 }
 
 interface GetRequest extends BoundRequest {
@@ -191,6 +196,16 @@ function positiveInteger(value: unknown, name: string): number {
     return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, `${name} is invalid`);
   }
   return Number(value);
+}
+
+function normalizeGalleryGoals(value: unknown): AiMediaGalleryGoal[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length < 1 || value.length > AI_MEDIA_GALLERY_GOALS.length
+    || value.some((goal) => !AI_MEDIA_GALLERY_GOALS.includes(goal))
+    || new Set(value).size !== value.length) {
+    return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, 'galleryGoals is invalid');
+  }
+  return [...value] as AiMediaGalleryGoal[];
 }
 
 function normalizeIdentity(value: ExtensionHostedAiImagePlanIdentity) {
@@ -591,6 +606,7 @@ export function createExtensionHostedAiImagePlanService(
 
   return {
     async create(request: CreateRequest) {
+      const galleryGoals = normalizeGalleryGoals(request.galleryGoals);
       const authorized = await authorize(request);
       const clientKey = identifier(request.idempotencyKey, 'idempotencyKey', 128);
       if (clientKey.length < 8) {
@@ -614,6 +630,18 @@ export function createExtensionHostedAiImagePlanService(
         }),
         selectedSkuKeys: authorized.selectedSkuKeys,
         candidateMediaKeys: authorized.candidateMediaKeys,
+        ...(galleryGoals === undefined ? {} : { galleryGoals }),
+      }).catch((cause: unknown) => {
+        // Keep the authority-derived initial-plan key stable: changed goals must
+        // conflict with its frozen request fingerprint, never create a new plan.
+        if (cause instanceof AiMediaPlanningError
+          && cause.code === 'AI_MEDIA_PLANNING_IDEMPOTENCY_CONFLICT') {
+          return error(
+            'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT', 409,
+            'This listing draft already has a plan with a different frozen request',
+          );
+        }
+        throw cause;
       });
       const expectedBinding = expectedBindingRecord(authorized, created.plan.id);
       const bound = await options.bindings.bind(expectedBinding);

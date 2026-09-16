@@ -33,6 +33,7 @@
   ]);
 
   var ERP_BRIDGE_TYPES = setOf([
+    'ss-erp:erp-source-image-open',
     'ss-erp:ping',
     'ss-erp:extension-device-status',
     'ss-erp:extension-device-claim',
@@ -382,6 +383,7 @@
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
     var kind = senderKind(sender, runtimeId);
+    if (messageType === 'ss-erp:erp-source-image-open') return kind === 'erp';
     if (kind === 'media_editor') return SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'media_confirm') return SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType);
     if (kind === 'settings') return !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)

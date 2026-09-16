@@ -6,6 +6,8 @@
   var INTENT_VERSION = 'extension-ai-image-suite-intent-witness/v1';
   var MAX_COST_CENTS = 10000000;
   var MAX_ASSIGNMENT_ORDINAL = 499;
+  // Wire values mirror the ai-media-planning owner; contract tests enforce parity.
+  var GALLERY_GOALS = Object.freeze(['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']);
   var BINDING_KEYS = Object.freeze([
     'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
     'draftRevision', 'draftVersion',
@@ -168,6 +170,14 @@
   function sameBinding(left, right) {
     return Boolean(left && right)
       && BINDING_KEYS.every(function (key) { return left[key] === right[key]; });
+  }
+
+  function normalizeGalleryGoals(value, code) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length < 1 || value.length > GALLERY_GOALS.length
+      || value.some(function (goal) { return !GALLERY_GOALS.includes(goal); })
+      || new Set(value).size !== value.length) fail(code);
+    return value.slice();
   }
 
   function suiteCommand(value, action, outerSlotId, decision, code) {
@@ -466,7 +476,10 @@
     });
 
     handlers[messageTypes.CREATE_PLAN] = guarded(async function (context) {
-      var input = payload(context, ['binding', 'idempotencyKey']);
+      var keys = ['binding', 'idempotencyKey'];
+      if (record(context.payload) && Object.prototype.hasOwnProperty.call(context.payload, 'galleryGoals')) keys.push('galleryGoals');
+      var input = payload(context, keys);
+      var galleryGoals = normalizeGalleryGoals(input.galleryGoals, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
       var pinnedBinding = normalizeBinding(
         input.binding,
         'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID',
@@ -481,6 +494,7 @@
       return publicOutput(await client.createPlan(deepFreeze({
         binding: clone(pinnedBinding),
         idempotencyKey: idempotencyKey,
+        ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
       })));
     });
 
@@ -655,6 +669,7 @@
   global.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_DISPATCHER = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     MESSAGE_TYPE_NAMES: MESSAGE_TYPE_NAMES,
+    GALLERY_GOALS: GALLERY_GOALS,
     createDispatcher: createDispatcher,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

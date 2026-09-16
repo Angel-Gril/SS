@@ -528,7 +528,10 @@
 
   function normalizeSession(value, current, ttlMs) {
     try {
-      if (!exactKeys(value, SESSION_KEYS) || value.contractVersion !== CONTRACT_VERSION) return null;
+      var hasErpAuthority = isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'erpSourceAuthority');
+      if (!exactKeys(value, hasErpAuthority ? SESSION_KEYS.concat(['erpSourceAuthority']) : SESSION_KEYS)
+        || value.contractVersion !== CONTRACT_VERSION) return null;
+      var erpAuthority = hasErpAuthority ? normalizeErpSourceAuthority(value.erpSourceAuthority) : undefined;
       var createdAt = Number(value.createdAt);
       var expiresAt = Number(value.expiresAt);
       if (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(expiresAt)
@@ -563,10 +566,25 @@
         result: result,
         createdAt: createdAt,
         expiresAt: expiresAt,
+        ...(hasErpAuthority ? { erpSourceAuthority: erpAuthority } : {}),
       });
     } catch {
       return null;
     }
+  }
+
+  function normalizeErpSourceAuthority(value) {
+    var api = global.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
+    var authority = api && typeof api.normalizeAuthority === 'function' ? api.normalizeAuthority(value) : null;
+    if (!authority) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID');
+    return authority;
+  }
+
+  function sameErpSourceAuthority(left, right) {
+    if (left === undefined || right === undefined) return left === right;
+    return ['provenance', 'ownerUserId', 'deviceSessionId', 'apiOrigin', 'webOrigin'].every(function (key) {
+      return left[key] === right[key];
+    });
   }
 
   function normalizeDocumentFence(value, session) {
@@ -631,6 +649,15 @@
       var next = queue.then(operation, operation);
       queue = next.catch(function () {});
       return next;
+    }
+
+    async function verifyErpAuthority(authority) {
+      if (authority === undefined) return;
+      try {
+        if (typeof options.verifyErpSourceAuthority === 'function'
+          && await options.verifyErpSourceAuthority(authority) === true) return;
+      } catch {}
+      throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_AUTHORITY_STALE');
     }
 
     function currentMillis() {
@@ -767,6 +794,11 @@
 
     async function mutateForSender(sender, operation, mutationOptions) {
       var identity = senderIdentity(sender);
+      // Credential refresh can clear Provider state through this same manager.
+      // Resolve live ERP authority before acquiring the serial storage queue.
+      var observed = await loadState(currentMillis());
+      var observedAuthority = observed.records[String(identity.tabId)]?.erpSourceAuthority;
+      await verifyErpAuthority(observedAuthority);
       return enqueue(async function () {
         var current = currentMillis();
         var state = await loadState(current);
@@ -777,6 +809,9 @@
         if (!session) {
           await storeState(records, fences);
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_NOT_FOUND');
+        }
+        if (JSON.stringify(session.erpSourceAuthority) !== JSON.stringify(observedAuthority)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_AUTHORITY_STALE');
         }
         if (session.workbenchDocumentId !== null
           && session.workbenchDocumentId !== identity.documentId) {
@@ -860,9 +895,10 @@
       }
     }
 
-    function exactLaunchMatch(session, context, sourceTabId, sourceDocumentId) {
+    function exactLaunchMatch(session, context, sourceTabId, sourceDocumentId, erpAuthority) {
       return session.sourceTabId === sourceTabId
         && session.sourceDocumentId === sourceDocumentId
+        && sameErpSourceAuthority(session.erpSourceAuthority, erpAuthority)
         && sameContext(session.context, context);
     }
 
@@ -878,6 +914,9 @@
 
     async function open(value) {
       var context = normalizeContext(value && value.context);
+      var erpAuthority = value && value.erpSourceAuthority !== undefined
+        ? normalizeErpSourceAuthority(value.erpSourceAuthority) : undefined;
+      await verifyErpAuthority(erpAuthority);
       var sourceTabId = tabId(
         value && value.sourceTabId,
         'SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID',
@@ -898,14 +937,15 @@
         var originalFences = { ...fences };
         var matching = Object.values(records)
           .filter(function (session) {
-            return exactLaunchMatch(session, context, sourceTabId, sourceDocumentId);
+            return exactLaunchMatch(session, context, sourceTabId, sourceDocumentId, erpAuthority);
           })
           .sort(function (left, right) {
             return right.createdAt - left.createdAt
               || right.workbenchTabId - left.workbenchTabId;
           })[0] || null;
         if (matching && await focusExisting(matching, launchUrl, workbenchUrl)) {
-          records[String(matching.workbenchTabId)] = renewLease(matching, current);
+          records[String(matching.workbenchTabId)] = renewLease({ ...matching,
+            ...(erpAuthority ? { erpSourceAuthority: erpAuthority } : {}) }, current);
           await storeState(records, fences);
           return Object.freeze({ state: 'workbench_focused', tabId: matching.workbenchTabId });
         }
@@ -954,7 +994,9 @@
               result: null,
               createdAt: current,
               expiresAt: current + ttlMs,
+              ...(erpAuthority ? { erpSourceAuthority: erpAuthority } : {}),
             };
+          if (erpAuthority) nextSession.erpSourceAuthority = erpAuthority;
           records[String(workbenchTabId)] = nextSession;
           await storeState(records, fences);
           await tabs.update(workbenchTabId, { url: workbenchUrl, active: true });

@@ -66,8 +66,14 @@
     });
 
     // 接收 background 主动推的事件（如 popup/侧栏触发的采集完成通知），转发到 ERP 页面
-    chrome.runtime.onMessage.addListener(function (msg) {
+    chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       if (!msg || !msg.type) return;
+      if (msg.type === 'ss-erp:erp-source-launch-current') {
+        if (sender && sender.id === chrome.runtime.id && typeof sendResponse === 'function') {
+          sendResponse({ ok: true, origin: window.location.origin });
+        }
+        return;
+      }
       if (msg.type === 'ss-erp:collect-completed') {
         window.postMessage({
           direction: DIRECTION_FROM_EXT,

@@ -15,6 +15,10 @@ import {
   type CreateRuleBasedAiMediaPlanningInput,
 } from '../services/ai-media-planning.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
+import {
+  createExtensionHostedAiImagePlanService,
+  type ExtensionHostedAiImagePlanBindingRecord,
+} from '../services/extension-hosted-ai-image-plan.js';
 
 const sourceCaptureFixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
@@ -173,6 +177,55 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
       idempotencyKey: `cross-owner-${suffix}`,
     }))).rejects.toMatchObject({ code: 'AI_MEDIA_PLANNING_CONTEXT_CHANGED' });
     expect(await client.aiMediaPlan.count({ where: { ownerUserId: otherOwnerUserId } })).toBe(0);
+  });
+
+  it('creates one hosted hero-and-scene plan and rejects target changes without new plans or costs', async () => {
+    const binding = {
+      snapshotId, supplyGoodsId: goodsId, shopId: `hosted_shop_${suffix}`,
+      listingWorkflowId: `hosted_listing_${suffix}`, draftRevision: 11, draftVersion: 7,
+    };
+    const identity = { ownerUserId, actorUserId: ownerUserId, deviceSessionId: `hosted_device_${suffix}` };
+    let bound: ExtensionHostedAiImagePlanBindingRecord | null = null;
+    let bindCalls = 0;
+    const hosted = createExtensionHostedAiImagePlanService({
+      planning: service,
+      bindings: {
+        async bind(record) { bindCalls += 1; bound = record; return { kind: 'bound', record }; },
+        async get() { return bound; },
+        async find() { return bound; },
+      },
+      async loadAuthority() {
+        return {
+          ...binding, ownerUserId, sourceSubjectId: subjectId, sourceCaptureCurrent: true,
+          workflowStatus: 'ACTIVE', draftStage: 'MEDIA_REVIEW', selectedSkuKeys: [selectedSkuKey],
+          capturedSkuKeys: capture.skus.map((sku) => sku.key), candidateMediaKeys: [selectedMediaKey],
+        };
+      },
+      async evaluatePolicy(request) { return { ...request, enabled: true, revision: 1 }; },
+    });
+    const request = { identity, binding, idempotencyKey: `hosted_scene_${suffix}`, galleryGoals: ['scene'] as ['scene'] };
+    const created = await hosted.create(request);
+    const planId = created.data.plan!.id;
+    const before = await client.aiMediaPlan.findUniqueOrThrow({ where: { id: planId }, include: { currentVersion: true } });
+    expect(created.data.plan!.currentVersion!.slots.map((slot) => slot.goal)).toEqual(['sku_hero', 'scene']);
+    expect(before.currentVersion!.inputSnapshot).toMatchObject({ galleryGoals: ['scene'] });
+    await expect(hosted.create(request)).resolves.toMatchObject({ replayed: true, data: { plan: { id: planId } } });
+    for (const idempotencyKey of [request.idempotencyKey, `hosted_changed_key_${suffix}`]) {
+      await expect(hosted.create({ ...request, idempotencyKey, galleryGoals: ['detail'] })).rejects.toMatchObject({
+        code: 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT', statusCode: 409,
+      });
+    }
+    await expect(hosted.create({ identity, binding, idempotencyKey: request.idempotencyKey })).rejects.toMatchObject({
+      code: 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT', statusCode: 409,
+    });
+    expect(bindCalls).toBe(2);
+    await expect(hosted.getCurrent({ identity, binding })).resolves.toMatchObject({ data: { plan: { id: planId } } });
+    const after = await client.aiMediaPlan.findUniqueOrThrow({ where: { id: planId }, include: { currentVersion: true } });
+    expect(after).toEqual(before);
+    expect(await client.aiMediaPlan.count({ where: { ownerUserId, idempotencyKey: before.idempotencyKey } })).toBe(1);
+    expect(await client.aiMediaPlanningRun.count({ where: { planId } })).toBe(1);
+    expect(await client.aiMediaPlanVersion.count({ where: { planId } })).toBe(1);
+    expect(await client.aiCostReservation.count({ where: { ownerUserId } })).toBe(0);
   });
 
   it('rejects SKU and media keys that are not bound to the authoritative snapshot', async () => {

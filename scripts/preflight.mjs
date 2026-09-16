@@ -606,6 +606,17 @@ const steps = [
     args: ['scripts/extension-byok-workbench-media-channel.test.mjs'],
   },
   {
+    name: 'extension ERP source launch, bridge and session contracts',
+    command: 'node',
+    args: ['--test', 'scripts/extension-erp-source-image-launch.test.mjs',
+      'scripts/extension-erp-source-bridge.test.mjs', 'scripts/extension-erp-source-session.test.mjs'],
+  },
+  {
+    name: 'Web ERP source image launch contract',
+    command: 'node',
+    args: ['--test', 'scripts/web-extension-erp-source-launch.test.mjs'],
+  },
+  {
     name: 'extension BYOK shared Provider semaphore contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-provider-semaphore.test.mjs'],

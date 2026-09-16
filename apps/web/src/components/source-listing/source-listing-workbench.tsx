@@ -36,7 +36,14 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, getApiBase } from '@/lib/api';
+import { sendToExtension } from '@/lib/extension-device-bridge';
+import {
+  createErpSourceImageLauncher,
+  ErpSourceImageLaunchError,
+  type ErpSourceImageEditorMode,
+  type ErpSourceImageLaunchMode,
+} from '@/lib/extension-erp-source-launch';
 import {
   buildOzonListingPricingV1,
   buildSourceListingHandoffSearchParams,
@@ -388,6 +395,11 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const [aiMediaScopeKey, setAiMediaScopeKey] = useState('');
   const [aiMediaMaskDraftDirty, setAiMediaMaskDraftDirty] = useState(false);
   const [aiMediaMutationBusy, setAiMediaMutationBusy] = useState(false);
+  const [erpSourceMediaKey, setErpSourceMediaKey] = useState('');
+  const [erpSourceSkuKey, setErpSourceSkuKey] = useState('');
+  const [erpSourceEditorMode, setErpSourceEditorMode] = useState<ErpSourceImageEditorMode>('IMAGE_TO_IMAGE');
+  const [erpSourceLaunchAction, setErpSourceLaunchAction] = useState<ErpSourceImageLaunchMode | null>(null);
+  const [erpSourceLaunchNotice, setErpSourceLaunchNotice] = useState('');
   const [shops, setShops] = useState<OzonShopOption[]>([]);
   const [shopId, setShopId] = useState('');
   const [draft, setDraft] = useState<OzonListingDraft | null>(null);
@@ -430,6 +442,12 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const handledHandoffIdentityRef = useRef(activeHandoffIdentity(handoff));
   const aiMediaMutationLockRef = useRef(createMediaMutationLock());
   const aiMediaMaskDraftDirtyRef = useRef(aiMediaMaskDraftDirty);
+  const erpSourceLaunchEpochRef = useRef(0);
+  const erpSourceLauncher = useMemo(() => createErpSourceImageLauncher({
+    getApiOrigin: getApiBase,
+    sendToExtension,
+    createGrant: (body, options) => api.post('/api/extension-device/erp-launch-grants', body, options),
+  }), []);
   const runAiMediaMutation = useCallback<RunMediaMutation>(
     (action) => executeLockedMediaMutation(aiMediaMutationLockRef.current, setAiMediaMutationBusy, action),
     [],
@@ -841,6 +859,66 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const acceptedMedia = useMemo(() => (
     capture?.media.items.filter((item) => item.kind === 'image' && item.disposition === 'accepted' && mediaUrl(item)) || []
   ), [capture]);
+  const erpSourceImage = acceptedMedia.find((media) => media.key === erpSourceMediaKey) || null;
+  const erpSourcePreferredSku = draft?.selectedSkuKeys.includes(erpSourceSkuKey) ? erpSourceSkuKey
+    : draft?.selectedSkuKeys.length === 1 ? draft.selectedSkuKeys[0]! : null;
+  const erpSourceDirty = aiMediaMaskDraftDirty || Object.keys(mediaSelections).length > 0;
+  const erpSourceReady = Boolean(draft && draft.runState === 'ACTIVE' && capture
+    && capture.snapshotId === draft.sourceCaptureSnapshotId && capture.supplyGoodsId === draft.supplyGoodsId
+    && !draftLoading && !captureLoading && !busyAction && !aiMediaMutationBusy);
+
+  useLayoutEffect(() => {
+    const current = activeHandoffRef.current;
+    const changed = erpSourceLauncher.updateScope(draft ? {
+      epoch: handoffEpochRef.current,
+      snapshotId: draft.sourceCaptureSnapshotId,
+      supplyGoodsId: draft.supplyGoodsId,
+      shopId: draft.shopId,
+      listingWorkflowId: draft.id,
+      draftRevision: draft.revision,
+      draftVersion: draft.draftVersion,
+      selectedSkuKeys: draft.selectedSkuKeys,
+      availableSourceMediaKeys: acceptedMedia.map((media) => media.key),
+      sourceMediaKey: erpSourceImage?.key || null,
+      preferredSkuKey: erpSourcePreferredSku,
+      editorMode: erpSourceEditorMode,
+      dirty: erpSourceDirty,
+      ready: erpSourceReady && current.workflowId === draft.id
+        && current.snapshotId === draft.sourceCaptureSnapshotId && current.supplyGoodsId === draft.supplyGoodsId,
+    } : null);
+    if (changed) {
+      erpSourceLaunchEpochRef.current += 1;
+      setErpSourceLaunchAction(null);
+      setErpSourceLaunchNotice('');
+    }
+  }, [acceptedMedia, activeHandoff, draft, erpSourceDirty, erpSourceEditorMode,
+    erpSourceImage, erpSourceLauncher, erpSourcePreferredSku, erpSourceReady,
+    handoff.snapshotId, handoff.snapshotVersion, handoff.supplyGoodsId, handoff.workflowId]);
+
+  useLayoutEffect(() => () => {
+    erpSourceLaunchEpochRef.current += 1;
+    erpSourceLauncher.clear();
+  }, [erpSourceLauncher]);
+
+  async function openErpSourceImage(mode: ErpSourceImageLaunchMode) {
+    if (erpSourceLauncher.isBusy()) return;
+    const epoch = ++erpSourceLaunchEpochRef.current;
+    setErpSourceLaunchAction(mode);
+    setErpSourceLaunchNotice('正在连接扩展…');
+    try {
+      const result = await erpSourceLauncher.open(mode);
+      if (epoch !== erpSourceLaunchEpochRef.current) return;
+      setErpSourceLaunchNotice(result.state === 'choice_required'
+        ? '请选择具体 SKU 后再打开扩展工作台。'
+        : result.state === 'editor_opened' ? '已打开扩展图片编辑器。' : '已打开扩展图片工作台。');
+    } catch (error) {
+      if (epoch !== erpSourceLaunchEpochRef.current) return;
+      setErpSourceLaunchNotice(error instanceof ErpSourceImageLaunchError
+        ? error.message : '扩展暂时无法打开，请检查连接后重试。');
+    } finally {
+      if (epoch === erpSourceLaunchEpochRef.current) setErpSourceLaunchAction(null);
+    }
+  }
   const selectedCandidate = categoryData?.candidates.find((candidate) => `${candidate.categoryId}:${candidate.typeId}` === categoryKey) || null;
   const publishReady = isDraftReadyForImmutablePublish(draft);
   const aiCopyFactsReady = Boolean(draft?.category)
@@ -1823,6 +1901,65 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
               </div>
             ) : null}
           </div>
+
+          <section className="space-y-3 border p-3" aria-label="扩展图片工具">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-medium">扩展图片工作台</div>
+                <div className="text-xs text-muted-foreground">使用当前已保存草稿创建套图，或编辑选中的来源原图。</div>
+              </div>
+              <Button type="button" size="sm" variant="outline" data-testid="erp-source-open-workbench"
+                disabled={!erpSourceReady || erpSourceDirty || Boolean(erpSourceLaunchAction)}
+                onClick={() => void openErpSourceImage('WORKBENCH')}>
+                {erpSourceLaunchAction === 'WORKBENCH' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                打开扩展图片工作台
+              </Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="min-w-0 space-y-1 text-xs">
+                <span>目标 SKU</span>
+                <select aria-label="扩展图片目标 SKU" value={erpSourcePreferredSku || ''}
+                  disabled={Boolean(erpSourceLaunchAction)} onChange={(event) => setErpSourceSkuKey(event.target.value)}
+                  className="h-9 w-full border bg-background px-2 text-sm">
+                  <option value="">请选择 SKU</option>
+                  {draft.selectedSkuKeys.map((key) => <option key={key} value={key}>
+                    {key === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY ? '商品级（无 SKU）'
+                      : capture?.skus.items.find((sku) => sku.key === key)?.specText || key}
+                  </option>)}
+                </select>
+              </label>
+              <label className="min-w-0 space-y-1 text-xs">
+                <span>来源原图</span>
+                <select aria-label="扩展编辑原图" value={erpSourceImage?.key || ''}
+                  disabled={Boolean(erpSourceLaunchAction)} onChange={(event) => setErpSourceMediaKey(event.target.value)}
+                  className="h-9 w-full border bg-background px-2 text-sm">
+                  <option value="">请选择来源原图</option>
+                  {acceptedMedia.map((media) => <option key={media.key} value={media.key}>来源图片 {media.ordinal + 1} · {media.key}</option>)}
+                </select>
+              </label>
+              <label className="min-w-0 space-y-1 text-xs">
+                <span>编辑方式</span>
+                <select aria-label="扩展图片编辑方式" value={erpSourceEditorMode}
+                  disabled={Boolean(erpSourceLaunchAction)} onChange={(event) => setErpSourceEditorMode(event.target.value as ErpSourceImageEditorMode)}
+                  className="h-9 w-full border bg-background px-2 text-sm">
+                  <option value="IMAGE_TO_IMAGE">参考改图</option>
+                  <option value="FULL_EDIT">全图编辑</option>
+                  <option value="INPAINT">局部重绘</option>
+                </select>
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {erpSourceImage ? <img src={mediaUrl(erpSourceImage)} alt="当前扩展编辑原图" className="h-12 w-12 border object-contain" /> : null}
+              <Button type="button" size="sm" data-testid="erp-source-edit-image"
+                disabled={!erpSourceReady || erpSourceDirty || !erpSourceImage || Boolean(erpSourceLaunchAction)}
+                onClick={() => void openErpSourceImage(erpSourceEditorMode)}>
+                {erpSourceLaunchAction && erpSourceLaunchAction !== 'WORKBENCH' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                编辑图片
+              </Button>
+              {erpSourceDirty ? <span className="text-xs text-muted-foreground">请先保存或放弃图片选择和遮罩草稿。</span> : null}
+              {erpSourceLaunchNotice ? <span role="status" aria-live="polite" className="text-sm text-muted-foreground">{erpSourceLaunchNotice}</span> : null}
+            </div>
+          </section>
 
           {capture ? (
             <div className="space-y-3 border p-3">

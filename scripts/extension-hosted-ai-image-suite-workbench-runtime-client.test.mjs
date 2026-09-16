@@ -247,6 +247,21 @@ async function rejectsCode(value, code, predicate) {
 }
 
 const api = loadApi();
+{
+  const selected = harness(api);
+  const galleryGoals = ['scene'];
+  await selected.client.createPlan({ binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals });
+  assert.deepEqual(plain(selected.calls[0].payload.galleryGoals), ['scene']);
+  galleryGoals.push('detail');
+  assert.deepEqual(plain(selected.calls[0].payload.galleryGoals), ['scene']);
+  assert.equal(Object.isFrozen(selected.calls[0].payload.galleryGoals), true);
+  for (const invalid of [null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
+    assert.throws(() => selected.client.createPlan({
+      binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals: invalid,
+    }), { code: 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID' });
+  }
+  assert.equal(selected.calls.length, 1);
+}
 assert.equal(
   api.CONTRACT_VERSION,
   'extension-hosted-ai-image-suite-workbench-runtime-client/v1',

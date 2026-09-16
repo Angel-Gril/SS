@@ -605,6 +605,37 @@ body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-err
   overflow-wrap: anywhere;
 }
 
+.hosted-gallery-goals {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.hosted-gallery-goals legend {
+  padding-inline: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hosted-gallery-goals p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hosted-gallery-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-block: 9px;
+}
+
+.hosted-gallery-options label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
 .hosted-plan-actions,
 .hosted-suite-actions {
   display: flex;

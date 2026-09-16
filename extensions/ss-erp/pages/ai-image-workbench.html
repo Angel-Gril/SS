@@ -458,6 +458,21 @@
           <div><dt>任务</dt><dd id="hostedSuiteSummary">尚未启动</dd></div>
         </dl>
 
+        <fieldset id="hostedGalleryGoals" class="hosted-gallery-goals" aria-describedby="hostedGalleryGoalsHint" disabled>
+          <legend>套图内容</legend>
+          <p>主图自动包含，请选择需要的附图。</p>
+          <div class="hosted-gallery-options">
+            <label><input id="hostedGalleryGoal-scene" type="checkbox" checked /> 场景</label>
+            <label><input id="hostedGalleryGoal-detail" type="checkbox" checked /> 细节</label>
+            <label><input id="hostedGalleryGoal-function" type="checkbox" checked /> 功能</label>
+            <label><input id="hostedGalleryGoal-fitment" type="checkbox" checked /> 适配</label>
+            <label><input id="hostedGalleryGoal-spec" type="checkbox" checked /> 规格</label>
+            <label><input id="hostedGalleryGoal-package" type="checkbox" checked /> 包装</label>
+            <label><input id="hostedGalleryGoal-poster" type="checkbox" checked /> 海报</label>
+          </div>
+          <p id="hostedGalleryGoalsHint" role="status" aria-live="polite">最终张数与费用以 ERP 报价为准。</p>
+        </fieldset>
+
         <div class="hosted-plan-actions" role="group" aria-label="托管计划操作">
           <button id="hostedCreatePlanButton" class="button button-secondary" type="button" disabled>
             创建计划

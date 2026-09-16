@@ -12,6 +12,8 @@
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
   var MAX_COST_CENTS = 10000000;
   var MAX_ASSIGNMENT_ORDINAL = 499;
+  // Wire values mirror the ai-media-planning owner; contract tests enforce parity.
+  var GALLERY_GOALS = Object.freeze(['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']);
   var BINDING_KEYS = Object.freeze([
     'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
     'draftRevision', 'draftVersion',
@@ -150,6 +152,14 @@
   function sameBinding(left, right) {
     return Boolean(left && right)
       && BINDING_KEYS.every(function (key) { return left[key] === right[key]; });
+  }
+
+  function normalizeGalleryGoals(value, code) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length < 1 || value.length > GALLERY_GOALS.length
+      || value.some(function (goal) { return !GALLERY_GOALS.includes(goal); })
+      || new Set(value).size !== value.length) fail(code);
+    return value.slice();
   }
 
   function normalizeSuiteCommand(value, action, outerSlotId, decision, code) {
@@ -635,12 +645,18 @@
 
       createPlan: function (value) {
         var code = 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
-        if (!exactKeys(value, ['binding', 'idempotencyKey'])) fail(code);
+        var keys = ['binding', 'idempotencyKey'];
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'galleryGoals')) keys.push('galleryGoals');
+        if (!exactKeys(value, keys)) fail(code);
+        var galleryGoals = normalizeGalleryGoals(value.galleryGoals, code);
         var binding = pin(value.binding);
         var idempotencyKey = identifier(value.idempotencyKey, 8, 128, code);
         return send(
           MESSAGE_TYPES.CREATE_PLAN,
-          { binding: clone(binding), idempotencyKey: idempotencyKey },
+          {
+            binding: clone(binding), idempotencyKey: idempotencyKey,
+            ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
+          },
           function (data) { return normalizePlanData(data, binding); },
         );
       },
@@ -779,6 +795,7 @@
     CONTRACT_VERSION: CONTRACT_VERSION,
     DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
     BINDING_KEYS: BINDING_KEYS,
+    GALLERY_GOALS: GALLERY_GOALS,
     MESSAGE_TYPES: MESSAGE_TYPES,
     createClient: createClient,
   });

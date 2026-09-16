@@ -109,8 +109,14 @@
       'preparedSource', 'sourceTabId', 'editorTabId', 'editorDocumentId',
       'maskCheckpoint', 'completion', 'createdAt', 'expiresAt', 'submitLeaseExpiresAt',
       'completedAt',
+      'erpSourceAuthority',
     ]);
     if (Object.keys(value).some(function (key) { return !allowed.has(key); })) return null;
+    var hasErpAuthority = Object.prototype.hasOwnProperty.call(value, 'erpSourceAuthority');
+    var erpApi = root.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
+    var erpSourceAuthority = hasErpAuthority && erpApi && typeof erpApi.normalizeAuthority === 'function'
+      ? erpApi.normalizeAuthority(value.erpSourceAuthority) : null;
+    if (hasErpAuthority && !erpSourceAuthority) return null;
     var now = Number.isSafeInteger(options && options.now) ? options.now : Date.now();
     var maximumLifetimeMs = positiveInteger(options && options.maximumLifetimeMs);
     var maximumSubmitLeaseMs = positiveInteger(options && options.maximumSubmitLeaseMs);
@@ -201,6 +207,7 @@
       expiresAt: expiresAt,
       submitLeaseExpiresAt: submitLeaseExpiresAt,
       completedAt: completedAt,
+      ...(hasErpAuthority ? { erpSourceAuthority: erpSourceAuthority } : {}),
     };
   }
 

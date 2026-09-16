@@ -86,19 +86,27 @@ async function seedAuthority(client: PrismaClient, label: string) {
 
   const planIds = [`${prefix}_plan_1`, `${prefix}_plan_2`, `${prefix}_plan_3`];
   for (const [index, planId] of planIds.entries()) {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "ai_media_plans"
-        ("id", "owner_user_id", "actor_user_id", "source_subject_id", "context_type",
-         "context_id", "idempotency_key", "request_fingerprint", "created_at", "updated_at")
-       VALUES ($1, $2, $2, $3, 'collect', $4, $5, $6, $7, $7)`,
-      planId,
-      ownerUserId,
-      sourceSubjectId,
-      supplyGoodsId,
-      `${prefix}_plan_key_${index + 1}`,
-      createHash('sha256').update(`${prefix}:plan:${index + 1}`).digest('hex'),
-      now,
-    );
+    await client.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "ai_media_plans"
+          ("id", "owner_user_id", "actor_user_id", "source_subject_id", "context_type",
+           "context_id", "idempotency_key", "request_fingerprint", "created_at", "updated_at")
+         VALUES ($1, $2, $2, $3, 'collect', $4, $5, $6, $7, $7)`,
+        planId,
+        ownerUserId,
+        sourceSubjectId,
+        supplyGoodsId,
+        `${prefix}_plan_key_${index + 1}`,
+        createHash('sha256').update(`${prefix}:plan:${index + 1}`).digest('hex'),
+        now,
+      );
+      const payload = { fixture: 'hosted-binding-integration' };
+      await tx.aiMediaPlanEvent.create({ data: {
+        planId, ownerUserId, actorUserId: ownerUserId, revision: 1,
+        eventKey: `${planId}:created`, eventType: 'PLAN_CREATED', payload,
+        payloadHash: createHash('sha256').update(JSON.stringify(payload)).digest('hex'),
+      } });
+    });
   }
 
   return {

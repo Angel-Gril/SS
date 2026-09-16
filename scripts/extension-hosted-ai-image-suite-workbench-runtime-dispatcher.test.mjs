@@ -224,6 +224,26 @@ async function rejects(handler, context, code) {
 }
 
 const api = loadApi();
+{
+  const selected = fixture(api);
+  const galleryGoals = ['scene'];
+  const result = await selected.dispatcher.handlers[MESSAGE_TYPES.CREATE_PLAN]({
+    payload: { binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals }, sender: selected.sender,
+  });
+  assert.equal(result.ok, true);
+  const forwarded = selected.calls.find((row) => row[0] === 'createPlan')[1];
+  assert.deepEqual(plain(forwarded.galleryGoals), ['scene']);
+  galleryGoals.push('detail');
+  assert.deepEqual(plain(forwarded.galleryGoals), ['scene']);
+  assert.equal(Object.isFrozen(forwarded.galleryGoals), true);
+  for (const invalid of [null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
+    await rejects(selected.dispatcher.handlers[MESSAGE_TYPES.CREATE_PLAN], {
+      payload: { binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals: invalid },
+      sender: selected.sender,
+    }, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
+  }
+  assert.equal(selected.calls.filter((row) => row[0] === 'createPlan').length, 1);
+}
 assert.equal(
   api.CONTRACT_VERSION,
   'extension-hosted-ai-image-suite-workbench-runtime-dispatcher/v1',

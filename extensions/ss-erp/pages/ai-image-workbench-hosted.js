@@ -16,6 +16,8 @@
   var LAUNCH_CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
   var MAX_ASSIGNMENT_ORDINAL = 499;
   var MAX_COST_CENTS = 10000000;
+  var GALLERY_GOALS = global.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_CLIENT
+    && global.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_CLIENT.GALLERY_GOALS || Object.freeze([]);
   var LAUNCH_KEYS = Object.freeze([
     'contractVersion', 'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId',
     'supplyGoodsId', 'shopId', 'workflowId', 'draftRevision', 'draftVersion',
@@ -58,6 +60,7 @@
     preview: null,
     pendingRetrySlotId: null,
     createOperation: null,
+    galleryGoals: GALLERY_GOALS.slice(),
     assignmentOperation: null,
     hostedDispatchLocked: false,
     modeLockState: null,
@@ -233,6 +236,9 @@
     reviewSummary: byId('hostedReviewSummary'),
     suiteSummary: byId('hostedSuiteSummary'),
     createPlanButton: byId('hostedCreatePlanButton'),
+    galleryGoals: byId('hostedGalleryGoals'),
+    galleryGoalsHint: byId('hostedGalleryGoalsHint'),
+    galleryGoalInputs: GALLERY_GOALS.map(function (goal) { return byId('hostedGalleryGoal-' + goal); }),
     approvePlanButton: byId('hostedApprovePlanButton'),
     rejectPlanButton: byId('hostedRejectPlanButton'),
     quotePanel: byId('hostedQuotePanel'),
@@ -537,7 +543,22 @@
       : '尚未启动托管任务。';
 
     var controlsEnabled = canOperate();
-    nodes.createPlanButton.disabled = !controlsEnabled || Boolean(plan);
+    var goalsLocked = Boolean(plan || state.createOperation);
+    nodes.galleryGoals.disabled = !controlsEnabled || goalsLocked;
+    var displayedGoals = plan && plan.currentVersion && Array.isArray(plan.currentVersion.slots)
+      ? GALLERY_GOALS.filter(function (goal) {
+        return plan.currentVersion.slots.some(function (slot) { return slot.goal === goal; });
+      }) : state.galleryGoals;
+    nodes.galleryGoalInputs.forEach(function (input, index) {
+      input.disabled = nodes.galleryGoals.disabled;
+      input.checked = displayedGoals.includes(GALLERY_GOALS[index]);
+    });
+    nodes.galleryGoalsHint.textContent = plan
+      ? '本次目标已固定，张数与费用请查看 ERP 报价。'
+      : state.createOperation ? '已提交本次目标，正在核对 ERP 中的计划。'
+        : state.galleryGoals.length === 0 ? '请至少选择一种附图。'
+          : '最终张数与费用以 ERP 报价为准。';
+    nodes.createPlanButton.disabled = !controlsEnabled || Boolean(plan) || state.galleryGoals.length === 0;
     var reviewable = Boolean(plan && plan.reviewStatus === 'PENDING');
     nodes.approvePlanButton.disabled = !controlsEnabled || !reviewable;
     nodes.rejectPlanButton.disabled = !controlsEnabled || !reviewable;
@@ -974,7 +995,14 @@
     return prefix + uuid.replace(/-/gu, '');
   }
 
+  function requestedGalleryGoals() {
+    return state.galleryGoals.length === GALLERY_GOALS.length
+      && GALLERY_GOALS.every(function (goal) { return state.galleryGoals.includes(goal); })
+      ? undefined : state.galleryGoals.slice();
+  }
+
   function createPlanBasisFor(plan) {
+    var galleryGoals = requestedGalleryGoals();
     return JSON.stringify({
       snapshotId: state.binding.snapshotId,
       supplyGoodsId: state.binding.supplyGoodsId,
@@ -984,6 +1012,7 @@
       draftVersion: state.binding.draftVersion,
       predecessorPlanId: plan ? plan.id : null,
       predecessorPlanRevision: plan ? plan.revision : null,
+      ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
     });
   }
 
@@ -1012,6 +1041,7 @@
       state.createOperation = deepFreeze({
         basis: basis,
         idempotencyKey: 'hosted-plan-' + hexadecimal,
+        ...(requestedGalleryGoals() === undefined ? {} : { galleryGoals: requestedGalleryGoals() }),
       });
     }
     return state.createOperation;
@@ -1196,7 +1226,7 @@
   }
 
   async function createPlan() {
-    if (!canOperate()) return false;
+    if (!canOperate() || currentPlan() || state.galleryGoals.length === 0) return false;
     state.busy = true;
     var epoch = state.lifecycleEpoch;
     render();
@@ -1216,6 +1246,7 @@
         await state.runtimeClient.createPlan({
           binding: state.binding,
           idempotencyKey: operation.idempotencyKey,
+          ...(operation.galleryGoals === undefined ? {} : { galleryGoals: operation.galleryGoals }),
         });
       } catch (error) {
         requestError = error;
@@ -1519,6 +1550,7 @@
     state.planResponse = null;
     state.pendingRetrySlotId = null;
     state.createOperation = null;
+    state.galleryGoals = GALLERY_GOALS.slice();
     state.assignmentOperation = null;
     state.hostedDispatchLocked = false;
     state.modeLockState = null;
@@ -1539,6 +1571,7 @@
     var byokApi = global.SS_ERP_BYOK_WORKBENCH_CLIENT;
     return global.document
       && Object.keys(nodes).every(function (key) { return Boolean(nodes[key]); })
+      && nodes.galleryGoalInputs.length > 0 && nodes.galleryGoalInputs.every(Boolean)
       && runtimeApi && typeof runtimeApi.createClient === 'function'
       && consumerApi && typeof consumerApi.createConsumer === 'function'
       && mapperApi && typeof mapperApi.createMapper === 'function'
@@ -1570,6 +1603,17 @@
     return;
   }
 
+  nodes.galleryGoalInputs.forEach(function (input) {
+    input.addEventListener('change', function (event) {
+      if (!trustedEvent(event)) return;
+      if (!nodes.galleryGoals.disabled) {
+        state.galleryGoals = GALLERY_GOALS.filter(function (_goal, index) {
+          return nodes.galleryGoalInputs[index].checked;
+        });
+      }
+      render();
+    });
+  });
   nodes.createPlanButton.addEventListener('click', function (event) {
     if (!trustedEvent(event) || nodes.createPlanButton.disabled) return;
     void createPlan();

@@ -6,6 +6,8 @@
   var PLAN_VERSION = 'extension-hosted-ai-image-plan/v1';
   var PLAN_CREATE_VERSION = 'extension-hosted-ai-image-plan-create/v1';
   var PLAN_REVIEW_VERSION = 'extension-hosted-ai-image-plan-review/v1';
+  // Wire values mirror the ai-media-planning owner; contract tests enforce parity.
+  var GALLERY_GOALS = Object.freeze(['scene', 'detail', 'function', 'fitment', 'spec', 'package', 'poster']);
   var ADAPTER_VERSION = 'hosted-ai-image-suite-workbench-adapter/v1';
   var INTENT_VERSION = 'extension-ai-image-suite-intent-witness/v1';
   var PREVIEW_VERSION = 'extension-hosted-ai-image-suite-candidate-preview-channel/v1';
@@ -85,6 +87,14 @@
     return Boolean(item)
       && Object.keys(item).length === keys.length
       && Object.keys(item).every(function (key) { return keys.includes(key); });
+  }
+
+  function normalizeGalleryGoals(value, code) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length < 1 || value.length > GALLERY_GOALS.length
+      || value.some(function (goal) { return !GALLERY_GOALS.includes(goal); })
+      || new Set(value).size !== value.length) fail(code);
+    return value.slice();
   }
 
   function exactPriceKeys(value, keys) {
@@ -815,7 +825,10 @@
 
       createPlan: async function (value) {
         var code = 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
-        if (!exactKeys(value, ['binding', 'idempotencyKey'])) fail(code);
+        var keys = ['binding', 'idempotencyKey'];
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'galleryGoals')) keys.push('galleryGoals');
+        if (!exactKeys(value, keys)) fail(code);
+        var galleryGoals = normalizeGalleryGoals(value.galleryGoals, code);
         var binding = pin(value.binding);
         var idempotencyKey = text(value.idempotencyKey, 128, code);
         if (idempotencyKey.length < 8) fail(code);
@@ -824,6 +837,7 @@
           contractVersion: PLAN_CREATE_VERSION,
           context: clone(binding),
           idempotencyKey: idempotencyKey,
+          ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
         }, 'media:execute');
         return normalizePlanResponse(response, binding, { requirePlan: true });
       },
@@ -1176,6 +1190,7 @@
   global.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     MODE_LOCK_VERSION: MODE_LOCK_VERSION,
+    GALLERY_GOALS: GALLERY_GOALS,
     PLAN_CONTRACTS: Object.freeze({
       response: PLAN_VERSION,
       create: PLAN_CREATE_VERSION,

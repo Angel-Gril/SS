@@ -148,6 +148,12 @@
     }
 
     function sameExactContext(session, input) {
+      var left = session.erpSourceAuthority;
+      var right = input && input.erpSourceAuthority;
+      if ((left === undefined || right === undefined) && left !== right) return false;
+      if (left && right && ['provenance', 'ownerUserId', 'deviceSessionId', 'apiOrigin', 'webOrigin'].some(function (key) {
+        return left[key] !== right[key];
+      })) return false;
       return Boolean(input && Array.isArray(input.sourceMediaKeys)) && [
         'platform', 'sourceProductId', 'snapshotId', 'supplyGoodsId', 'shopId',
         'listingWorkflowId', 'revision', 'draftVersion', 'operation',
@@ -178,6 +184,7 @@
           sourceTabId: input.sourceTabId,
           editorTabId: editorTabId,
           editorDocumentId: null,
+          ...(input.erpSourceAuthority ? { erpSourceAuthority: input.erpSourceAuthority } : {}),
         }, currentTime);
         if (!recovered) throw new Error('ERP 局部重绘恢复会话无效');
         records[recovered.nonce] = recovered;

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createExtensionHostedAiImagePlanBindingRecord,
@@ -5,10 +7,13 @@ import {
   ExtensionHostedAiImagePlanError,
   type ExtensionHostedAiImagePlanAuthority,
 } from '../services/extension-hosted-ai-image-plan.js';
-import type {
-  AiMediaPlanRecord,
-  AiMediaPlanVersionRecord,
-  ReviewAiMediaPlanInput,
+import {
+  AI_MEDIA_GALLERY_GOALS,
+  AiMediaPlanningError,
+  type AiMediaPlanRecord,
+  type AiMediaPlanVersionRecord,
+  type CreateRuleBasedAiMediaPlanningInput,
+  type ReviewAiMediaPlanInput,
 } from '../services/ai-media-planning.js';
 
 const binding = {
@@ -135,7 +140,7 @@ function setup(input: {
     candidateMediaKeys: ['media-1', 'media-2'],
   });
   const planning = {
-    createRuleBased: vi.fn(async () => ({ plan: currentPlan, replayed: false })),
+    createRuleBased: vi.fn(async (_input: CreateRuleBasedAiMediaPlanningInput) => ({ plan: currentPlan, replayed: false })),
     getWithSourceStatus: vi.fn(async () => ({ plan: currentPlan, sourceCurrent: true })),
     getCurrentByContext: vi.fn(async () => ({ plan: currentPlan, sourceCurrent: true })),
     review: vi.fn(async (_input: ReviewAiMediaPlanInput) => ({
@@ -182,6 +187,53 @@ function setup(input: {
 }
 
 describe('extension hosted AI image plan service', () => {
+  it('keeps all extension gallery allowlists aligned with the planning owner', () => {
+    for (const [file, name] of [
+      ['ai-image-suite-workbench-client.js', 'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT'],
+      ['ai-image-suite-workbench-runtime-client.js', 'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_CLIENT'],
+      ['ai-image-suite-workbench-runtime-dispatcher.js', 'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_DISPATCHER'],
+    ]) {
+      const sandbox: Record<string, { GALLERY_GOALS: readonly string[] }> = {};
+      runInNewContext(readFileSync(new URL(`../../../../extensions/ss-erp/shared/hosted/${file}`, import.meta.url), 'utf8'), sandbox);
+      expect([...sandbox[name!]!.GALLERY_GOALS]).toEqual([...AI_MEDIA_GALLERY_GOALS]);
+      expect(Object.isFrozen(sandbox[name!]!.GALLERY_GOALS)).toBe(true);
+    }
+  });
+
+  it('forwards selected gallery goals without creating a second initial-plan identity', async () => {
+    const fixture = setup();
+    const request = { identity, binding, idempotencyKey: 'client-gallery-operation-1' };
+    await fixture.service.create({ ...request, galleryGoals: ['scene'] });
+    const first = fixture.planning.createRuleBased.mock.calls[0]?.[0] as unknown as {
+      idempotencyKey: string; galleryGoals: string[];
+    };
+    expect(first.galleryGoals).toEqual(['scene']);
+
+    fixture.planning.createRuleBased.mockRejectedValueOnce(new AiMediaPlanningError(
+      'AI_MEDIA_PLANNING_IDEMPOTENCY_CONFLICT', 'Different frozen goals', 409,
+    ));
+    await expect(fixture.service.create({
+      ...request, idempotencyKey: 'another-client-operation', galleryGoals: ['detail'],
+    })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT', statusCode: 409 });
+    const second = fixture.planning.createRuleBased.mock.calls[1]?.[0] as unknown as {
+      idempotencyKey: string; galleryGoals: string[];
+    };
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.galleryGoals).toEqual(['detail']);
+    expect(fixture.bindings.bind).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
+    'rejects invalid gallery goals %j before planning', async (galleryGoals) => {
+      const fixture = setup();
+      await expect(fixture.service.create({
+        identity, binding, idempotencyKey: 'client-gallery-operation-1', ...{ galleryGoals },
+      } as never)).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST' });
+      expect(fixture.planning.createRuleBased).not.toHaveBeenCalled();
+      expect(fixture.bindings.bind).not.toHaveBeenCalled();
+    },
+  );
+
   it('creates from exact authoritative draft facts and returns a URL/provider/price-free projection', async () => {
     const fixture = setup();
     const result = await fixture.service.create({

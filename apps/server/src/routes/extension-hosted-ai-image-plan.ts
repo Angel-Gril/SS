@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { AI_MEDIA_GALLERY_GOALS } from '../services/ai-media-planning.js';
 import {
   ExtensionHostedAiImagePlanError,
   type ExtensionHostedAiImagePlanService,
@@ -32,6 +33,8 @@ const createBody = z.object({
   contractVersion: z.literal(EXTENSION_HOSTED_AI_IMAGE_PLAN_CREATE_VERSION),
   context: binding,
   idempotencyKey: operationKey,
+  galleryGoals: z.array(z.enum(AI_MEDIA_GALLERY_GOALS)).min(1).max(AI_MEDIA_GALLERY_GOALS.length)
+    .refine((goals) => new Set(goals).size === goals.length).optional(),
 }).strict();
 const planParams = z.object({ planId: identifier }).strict();
 const reviewBody = z.object({
@@ -96,6 +99,8 @@ function lifecycleError(reply: FastifyReply, error: ExtensionHostedAiImagePlanEr
     error.code.toLowerCase(),
     error.code === 'HOSTED_AI_IMAGE_PLAN_FORBIDDEN'
       ? '设备无权访问该托管生图计划'
+      : error.code === 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT'
+        ? '该草稿已创建不同目标的计划，请刷新查看现有计划'
       : error.code === 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'
         || error.code === 'HOSTED_AI_IMAGE_PLAN_SKU_AMBIGUOUS'
         ? '商品草稿或来源素材已变化，请刷新后重试'
@@ -175,6 +180,7 @@ export async function extensionHostedAiImagePlanRoutes(
       identity,
       binding: parsed.data.context,
       idempotencyKey: parsed.data.idempotencyKey,
+      ...(parsed.data.galleryGoals === undefined ? {} : { galleryGoals: parsed.data.galleryGoals }),
     }), 202);
   });
 
