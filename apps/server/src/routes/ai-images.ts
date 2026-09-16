@@ -1484,7 +1484,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
             readEnabled: true,
             applyEnabled: workflowEnabled && webMediaDecision.enabled,
-            listingDraftApplyEnabled: !production && workflowEnabled && webMediaDecision.enabled,
+            listingDraftApplyEnabled: workflowEnabled && webMediaDecision.enabled,
             rollbackEnabled: true,
             defaultMode: 'append',
             replaceOperations: ['IMAGE_TO_IMAGE'],

@@ -2876,6 +2876,7 @@ async function openErpSourceMediaEditor(input) {
     shopId: binding.shopId, listingWorkflowId: binding.workflowId,
     revision: binding.draftRevision, draftVersion: binding.draftVersion,
     operation: grant.mode, sourceMediaKeys: [...grant.sourceMediaKeys],
+    target: grant.target,
     sourceTabId: input.sourceTabId, erpSourceAuthority: input.erpSourceAuthority,
   };
   const authority = await loadFrozenSourceMediaEditorAuthority(session, true);
@@ -3033,6 +3034,7 @@ async function executeSourceMediaCreateWorkflow(input) {
     negativePrompt,
     maskAssetId,
     workflowOperationKey: 'extension-media-workflow:' + attemptId.slice(0, 32),
+    ...(input.target !== undefined ? { target: input.target } : {}),
   });
   return { result };
 }
@@ -3249,6 +3251,9 @@ async function openSourceMediaEditor(request) {
 
 async function loadFrozenSourceMediaEditorAuthority(session, preparingErpSource = false) {
   if (session.erpSourceAuthority) {
+    if (!globalThis.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH?.normalizeEditorTarget(session.target)) {
+      throw new Error('ERP 图片编辑缺少冻结槽位，请从当前草稿重新打开');
+    }
     await assertErpSourceDeviceAuthority(session.erpSourceAuthority);
   } else {
     if (preparingErpSource) throw new Error('ERP 图片编辑授权不可用');
@@ -3297,6 +3302,7 @@ async function loadFrozenSourceMediaEditorAuthority(session, preparingErpSource 
       revision: session.revision,
       draftVersion: session.draftVersion,
       sourceMediaKey: session.sourceMediaKeys[0],
+      ...(session.target ? { target: session.target } : {}),
     })
     : null;
   if (!preparingErpSource && !sameSourceMediaEditorPreparedSource(session.preparedSource, prepared)) {
@@ -3313,6 +3319,7 @@ async function readSourceMediaEditor(nonce, sender) {
   return {
     operation: session.operation,
     sourceMediaKeys: session.sourceMediaKeys,
+    ...(session.target ? { target: session.target } : {}),
     expiresAt: session.expiresAt,
     completed: session.completion !== null,
     completion: session.completion,
@@ -3384,6 +3391,7 @@ async function submitSourceMediaEditor(message, sender) {
             revision: session.revision,
             draftVersion: session.draftVersion,
             sourceMediaKey: session.sourceMediaKeys[0],
+            ...(session.target ? { target: session.target } : {}),
             maskSemantics: authority.prepared.maskSemantics,
             maskDataUrl: message.maskDataUrl,
             expectedWidth: authority.prepared.sourceAsset.width,
@@ -3408,6 +3416,7 @@ async function submitSourceMediaEditor(message, sender) {
         draftVersion: session.draftVersion,
         operation: session.operation,
         sourceMediaKeys: session.sourceMediaKeys,
+        ...(session.target ? { target: session.target } : {}),
         prompt,
         negativePrompt,
         maskAssetId,

@@ -1,3 +1,5 @@
+import type { SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
+
 export type ErpSourceImageEditorMode = 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
 export type ErpSourceImageLaunchMode = 'WORKBENCH' | ErpSourceImageEditorMode;
 
@@ -13,6 +15,7 @@ export interface ErpSourceImageLaunchScope {
   availableSourceMediaKeys: readonly string[];
   sourceMediaKey: string | null;
   preferredSkuKey: string | null;
+  target: SourceListingAiMediaTarget | null;
   editorMode: ErpSourceImageEditorMode;
   ready: boolean;
   dirty: boolean;
@@ -27,6 +30,7 @@ interface ErpSourceImageLaunchRequest {
   mode: ErpSourceImageLaunchMode;
   sourceMediaKeys: string[];
   preferredSkuKey: string | null;
+  target?: SourceListingAiMediaTarget;
 }
 
 interface LaunchDependencies {
@@ -88,7 +92,10 @@ function validateScope(scope: ErpSourceImageLaunchScope | null, mode: ErpSourceI
     || scope.selectedSkuKeys.some((key) => !identifier(key, 500))
     || scope.preferredSkuKey !== null && !scope.selectedSkuKeys.includes(scope.preferredSkuKey)
     || mode !== 'WORKBENCH' && (scope.editorMode !== mode || !identifier(scope.sourceMediaKey, 500)
-      || !scope.availableSourceMediaKeys.includes(scope.sourceMediaKey))) {
+      || !scope.availableSourceMediaKeys.includes(scope.sourceMediaKey)
+      || !scope.target || Object.keys(scope.target).sort().join(',') !== 'skuKey,slotKey'
+      || !identifier(scope.target.slotKey, 200)
+      || scope.target.skuKey !== null && !scope.selectedSkuKeys.includes(scope.target.skuKey))) {
     return fail('ERP_SOURCE_IMAGE_CONTEXT_INVALID');
   }
   return scope;
@@ -106,6 +113,7 @@ export function createErpSourceImageLauncher(options: LaunchDependencies) {
       ...value,
       selectedSkuKeys: Object.freeze([...value.selectedSkuKeys]),
       availableSourceMediaKeys: Object.freeze([...value.availableSourceMediaKeys]),
+      target: value.target ? Object.freeze({ ...value.target }) : null,
     }) : null;
     const nextKey = JSON.stringify(next);
     if (scopeKey === nextKey) return false;
@@ -171,6 +179,7 @@ export function createErpSourceImageLauncher(options: LaunchDependencies) {
         draftVersion: input.draftVersion, mode,
         sourceMediaKeys: mode === 'WORKBENCH' ? [] : [input.sourceMediaKey!],
         preferredSkuKey: input.preferredSkuKey,
+        ...(mode === 'WORKBENCH' ? {} : { target: input.target! }),
       }, { signal: controller.signal, timeoutMs: 15_000 }), 15_000));
       if (issued?.code !== 1) return fail('ERP_SOURCE_IMAGE_GRANT_REJECTED');
       const grant = object(issued.data);

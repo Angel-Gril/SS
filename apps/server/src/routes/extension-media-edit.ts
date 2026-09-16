@@ -4,6 +4,7 @@ import type { SourceWorkflowFeatureFlagEvaluator } from '../services/source-work
 import {
   ExtensionMediaWorkflowLaunchError,
   resolveStandaloneProviderConfig,
+  extensionMediaWorkflowTargetMatches,
   type ExtensionMediaTranslationLaunchContext,
 } from '../services/extension-media-workflow-launch.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
@@ -19,6 +20,7 @@ import {
   EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
   type ExtensionMediaWorkflowDecision,
 } from './extension-media-launch.js';
+import type { SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
 
 const EXTENSION_MEDIA_EDIT_SOURCE_CONTRACT = 'extension-media-edit-source/v1' as const;
 const EXTENSION_MEDIA_EDIT_MASK_CONTRACT = 'extension-media-edit-mask/v1' as const;
@@ -66,6 +68,7 @@ export interface ExtensionMediaEditRoutesOptions {
     listingWorkflowId: string;
     revision: number;
     draftVersion: number;
+    target?: SourceListingAiMediaTarget;
   }): Promise<ExtensionMediaTranslationLaunchContext | null>;
   internalizeSource(input: {
     ownerUserId: string;
@@ -74,6 +77,7 @@ export interface ExtensionMediaEditRoutesOptions {
     revision: number;
     draftVersion: number;
     role: 'EDIT';
+    target?: SourceListingAiMediaTarget;
   }): Promise<ExtensionMediaEditAsset>;
   checkMaskRequestRate(ownerUserId: string): Promise<
     { allowed: true } | { allowed: false; reason: string }
@@ -92,6 +96,7 @@ const editContextSchema = z.object({
   revision: z.number().int().min(1),
   draftVersion: z.number().int().min(1),
   sourceMediaKey,
+  target: z.object({ skuKey: sourceMediaKey.nullable(), slotKey: identifier }).strict().optional(),
 }).strict();
 const editMaskSchema = editContextSchema.extend({
   maskSemantics: z.literal(AI_IMAGE_EDIT_MASK_SEMANTICS),
@@ -161,6 +166,7 @@ function exactContext(
     && context.snapshotId === request.snapshotId
     && context.revision === request.revision
     && context.draftVersion === request.draftVersion
+    && extensionMediaWorkflowTargetMatches(request.target, context.target)
     && context.sourceMediaKeys.includes(request.sourceMediaKey));
 }
 
@@ -302,6 +308,7 @@ export async function extensionMediaEditRoutes(
         revision: parsed.data.revision,
         draftVersion: parsed.data.draftVersion,
         role: 'EDIT',
+        ...(parsed.data.target ? { target: parsed.data.target } : {}),
       });
       if (!validEditSourceAsset(sourceAsset)) {
         return sendError(reply, 503, 'media_edit_source_invalid', '编辑源图不符合安全限制');
@@ -349,6 +356,7 @@ export async function extensionMediaEditRoutes(
         revision: parsed.data.revision,
         draftVersion: parsed.data.draftVersion,
         role: 'EDIT',
+        ...(parsed.data.target ? { target: parsed.data.target } : {}),
       });
       if (!validEditSourceAsset(sourceAsset)) {
         return sendError(reply, 503, 'media_edit_source_invalid', '编辑源图不符合安全限制');
@@ -360,6 +368,9 @@ export async function extensionMediaEditRoutes(
         contextId: parsed.data.listingWorkflowId,
         contextDraftRevision: parsed.data.revision,
         contextDraftVersion: parsed.data.draftVersion,
+        ...(parsed.data.target ? {
+          contextSkuKey: parsed.data.target.skuKey, contextSlotKey: parsed.data.target.slotKey,
+        } : {}),
         sourceAssetId: sourceAsset.id,
         maskBuffer,
         maskSemantics: parsed.data.maskSemantics,

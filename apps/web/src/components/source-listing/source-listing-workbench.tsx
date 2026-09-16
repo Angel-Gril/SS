@@ -20,6 +20,7 @@ import {
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   OZON_LISTING_SUPPORTED_VAT_RATES,
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+  SOURCE_LISTING_AI_MEDIA_PRODUCT_SLOTS as LISTING_AI_MEDIA_PRODUCT_SLOTS,
   type OzonListingCurrencyCode,
   type OzonListingDraftView as OzonListingDraft,
   type OzonListingVatRate,
@@ -347,11 +348,6 @@ type ListingAiMediaScope = {
   assetId: string | null;
   occupied: boolean;
 };
-
-const LISTING_AI_MEDIA_PRODUCT_SLOTS = [
-  'product-main',
-  ...Array.from({ length: 7 }, (_, index) => `product-gallery-${index + 1}`),
-] as const;
 
 function listingAiMediaScopes(draft: OzonListingDraft): ListingAiMediaScope[] {
   const seen = new Set<string>();
@@ -881,6 +877,9 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       availableSourceMediaKeys: acceptedMedia.map((media) => media.key),
       sourceMediaKey: erpSourceImage?.key || null,
       preferredSkuKey: erpSourcePreferredSku,
+      target: selectedAiMediaScope ? {
+        skuKey: selectedAiMediaScope.skuKey, slotKey: selectedAiMediaScope.slotKey,
+      } : null,
       editorMode: erpSourceEditorMode,
       dirty: erpSourceDirty,
       ready: erpSourceReady && current.workflowId === draft.id
@@ -892,7 +891,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       setErpSourceLaunchNotice('');
     }
   }, [acceptedMedia, activeHandoff, draft, erpSourceDirty, erpSourceEditorMode,
-    erpSourceImage, erpSourceLauncher, erpSourcePreferredSku, erpSourceReady,
+    erpSourceImage, erpSourceLauncher, erpSourcePreferredSku, erpSourceReady, selectedAiMediaScope,
     handoff.snapshotId, handoff.snapshotVersion, handoff.supplyGoodsId, handoff.workflowId]);
 
   useLayoutEffect(() => () => {
@@ -1947,11 +1946,22 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                   <option value="INPAINT">局部重绘</option>
                 </select>
               </label>
+              <label className="min-w-0 space-y-1 text-xs">
+                <span>编辑结果槽位</span>
+                <select aria-label="扩展编辑目标槽位" value={selectedAiMediaScope?.key || ''}
+                  disabled={Boolean(erpSourceLaunchAction) || aiMediaMaskDraftDirty}
+                  onChange={(event) => setAiMediaScopeKey(event.target.value)}
+                  className="h-9 w-full border bg-background px-2 text-sm">
+                  {aiMediaScopes.map((scope) => <option key={scope.key} value={scope.key}>
+                    {scope.skuKey ? `SKU ${scope.skuKey}` : '商品级'} · {scope.slotKey} · {scope.occupied ? '已有图片' : '空槽'}
+                  </option>)}
+                </select>
+              </label>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               {erpSourceImage ? <img src={mediaUrl(erpSourceImage)} alt="当前扩展编辑原图" className="h-12 w-12 border object-contain" /> : null}
               <Button type="button" size="sm" data-testid="erp-source-edit-image"
-                disabled={!erpSourceReady || erpSourceDirty || !erpSourceImage || Boolean(erpSourceLaunchAction)}
+                disabled={!erpSourceReady || erpSourceDirty || !erpSourceImage || !selectedAiMediaScope || Boolean(erpSourceLaunchAction)}
                 onClick={() => void openErpSourceImage(erpSourceEditorMode)}>
                 {erpSourceLaunchAction && erpSourceLaunchAction !== 'WORKBENCH' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 编辑图片

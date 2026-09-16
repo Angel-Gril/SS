@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { isSourceListingAiMediaTarget, type SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
 import type { ExtensionDeviceLiveAuthorization } from '../lib/extension-device-auth.js';
 import type { ExtensionByokWorkbenchDraft } from './extension-byok-workbench-launch.js';
 import type { ExtensionMediaTranslationLaunchContext } from './extension-media-workflow-launch.js';
@@ -18,7 +19,7 @@ export interface ExtensionErpSourceLaunchOptions {
   loadDevice(sessionId: string): Promise<ExtensionDeviceLiveAuthorization | null>;
   loadShop(input: { ownerUserId: string; shopId: string }): Promise<{ id: string; userId: string; platform: string; status: string } | null>;
   loadDraft(input: { ownerUserId: string; workflowId: string }): Promise<ExtensionByokWorkbenchDraft | null>;
-  loadMediaContext(input: { ownerUserId: string; listingWorkflowId: string; draftRevision: number; draftVersion: number }): Promise<ExtensionMediaTranslationLaunchContext | null>;
+  loadMediaContext(input: { ownerUserId: string; listingWorkflowId: string; draftRevision: number; draftVersion: number; target?: SourceListingAiMediaTarget }): Promise<ExtensionMediaTranslationLaunchContext | null>;
   isEnabled?(input: { ownerUserId: string; deviceSessionId: string; shopId: string; mode: 'WORKBENCH' | 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT' }): Promise<boolean>;
   now?: () => Date;
   createToken?: () => string;
@@ -34,16 +35,21 @@ const id = (maximum = 200) => z.string().min(1).max(maximum)
   .refine(value => value === value.normalize('NFKC').trim()
     && !Array.from(value).some(character => (character.codePointAt(0) || 0) < 32));
 const mode = z.enum(['WORKBENCH', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']);
+const targetSchema = z.object({ skuKey: id(500).nullable(), slotKey: id(200) }).strict();
 export const erpSourceLaunchRequestSchema = z.object({
   deviceSessionId: id(), shopId: id(), listingWorkflowId: id(),
   draftRevision: z.number().int().positive(), draftVersion: z.number().int().positive(),
   mode, sourceMediaKeys: z.array(id(500)).max(4), preferredSkuKey: id(500).nullable(),
+  target: targetSchema.optional(),
 }).strict().superRefine((value, context) => {
   const maximum = value.mode === 'WORKBENCH' ? 0 : value.mode === 'IMAGE_TO_IMAGE' ? 4 : 1;
   if (value.sourceMediaKeys.length > maximum
     || (value.mode !== 'WORKBENCH' && value.sourceMediaKeys.length < 1)
     || new Set(value.sourceMediaKeys).size !== value.sourceMediaKeys.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['sourceMediaKeys'], message: 'Invalid source selection' });
+  }
+  if (value.mode === 'WORKBENCH' ? value.target !== undefined : !value.target) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['target'], message: 'An editor requires an exact draft target' });
   }
 });
 export type ErpSourceLaunchRequest = z.infer<typeof erpSourceLaunchRequestSchema>;
@@ -57,6 +63,7 @@ const resolvedSchema = z.object({
   contractVersion: z.literal(ERP_SOURCE_LAUNCH_VERSION), provenance: z.literal('ERP_SOURCE'),
   apiOrigin: z.string().url().max(2048), ownerUserId: id(), deviceSessionId: id(),
   mode, sourceMediaKeys: z.array(id(500)).max(4), launchRequest: launchRequestSchema,
+  target: targetSchema.optional(),
 }).strict();
 const grantSchema = z.object({
   schemaVersion: z.literal(1), deploymentId: id(128), ownerUserId: id(), actorUserId: id(),
@@ -114,7 +121,8 @@ export function createExtensionErpSourceLaunchService(options: ExtensionErpSourc
     const [draft, media, shop] = await Promise.all([
       options.loadDraft({ ownerUserId, workflowId: request.listingWorkflowId }),
       options.loadMediaContext({ ownerUserId, listingWorkflowId: request.listingWorkflowId,
-        draftRevision: request.draftRevision, draftVersion: request.draftVersion }),
+        draftRevision: request.draftRevision, draftVersion: request.draftVersion,
+        ...(request.target ? { target: request.target } : {}) }),
       options.loadShop({ ownerUserId, shopId: request.shopId }),
     ]);
     if (!shop || shop.id !== request.shopId || shop.userId !== ownerUserId
@@ -127,6 +135,8 @@ export function createExtensionErpSourceLaunchService(options: ExtensionErpSourc
       || media.supplyGoodsId !== draft.supplyGoodsId || media.revision !== draft.revision
       || media.draftVersion !== draft.draftVersion
       || request.sourceMediaKeys.some(key => !media.sourceMediaKeys.includes(key))
+      || request.target && (!isSourceListingAiMediaTarget(draft, request.target)
+        || media.target?.skuKey !== request.target.skuKey || media.target?.slotKey !== request.target.slotKey)
       || (request.preferredSkuKey !== null && !draft.selectedSkuKeys.includes(request.preferredSkuKey))) {
       return fail('ERP_LAUNCH_CONTEXT_STALE', 409);
     }
@@ -134,6 +144,7 @@ export function createExtensionErpSourceLaunchService(options: ExtensionErpSourc
       contractVersion: ERP_SOURCE_LAUNCH_VERSION, provenance: 'ERP_SOURCE',
       apiOrigin: options.apiOrigin, ownerUserId, deviceSessionId: live.sessionId,
       mode: request.mode, sourceMediaKeys: request.sourceMediaKeys,
+      ...(request.target ? { target: request.target } : {}),
       launchRequest: {
         sourcePlatform: draft.sourcePlatform, sourceProductId: draft.sourceProductId,
         sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId, supplyGoodsId: draft.supplyGoodsId,

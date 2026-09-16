@@ -63,14 +63,15 @@ test('a navigated ERP document and a stale server launch decision are refused',a
   const stale=fixture();stale.launch.draftRevision++;await assert.rejects(stale.run());assert.equal(stale.calls.some(([name])=>name==='workbench'),false);
 });
 test('INPAINT opens the existing editor with only the server-authorized source selection',async()=>{
-  const f=fixture();f.data.mode='INPAINT';f.data.sourceMediaKeys=['white-cup'];
+  const f=fixture();f.data.mode='INPAINT';f.data.sourceMediaKeys=['white-cup'];f.data.target={skuKey:null,slotKey:'product-main'};
   const result=await f.run();assert.equal(result.state,'editor_opened');assert.equal(Object.hasOwn(result,'nonce'),false);
   const editor=f.calls.find(([name])=>name==='editor')[1];
   assert.equal(editor.grant.mode,'INPAINT');assert.deepEqual(JSON.parse(JSON.stringify(editor.grant.sourceMediaKeys)),['white-cup']);
+  assert.deepEqual(JSON.parse(JSON.stringify(editor.grant.target)),{skuKey:null,slotKey:'product-main'});
   assert.equal(editor.erpSourceAuthority.provenance,'ERP_SOURCE');assert.equal(f.calls.some(([name])=>name==='resolve'),false);
 });
 test('the existing editor coordinator state-only result is a successful open',async()=>{
-  const f=fixture();f.data.mode='FULL_EDIT';f.data.sourceMediaKeys=['white-cup'];f.options.openEditor=async()=>({state:'editor_opened'});
+  const f=fixture();f.data.mode='FULL_EDIT';f.data.sourceMediaKeys=['white-cup'];f.data.target={skuKey:null,slotKey:'product-main'};f.options.openEditor=async()=>({state:'editor_opened'});
   assert.equal((await f.run()).state,'editor_opened');
 });
 test('missing pairing, missing scopes and unconfigured origins fail closed without grant consumption',async()=>{
@@ -90,6 +91,7 @@ test('ERP_SOURCE launch consumes its one-time grant through the real device tran
     const f = fixture(), requests = [];
     f.data.mode = mode;
     f.data.sourceMediaKeys = mode === 'WORKBENCH' ? [] : ['white-cup'];
+    if (mode !== 'WORKBENCH') f.data.target = { skuKey: null, slotKey: 'product-main' };
     const transport = transportContext.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
       credentials: {
         async beginOperation() {
@@ -126,5 +128,15 @@ test('ERP_SOURCE launch consumes its one-time grant through the real device tran
     }
     await assert.rejects(transport.get(consumePath), /source workbench path is invalid/u);
     assert.equal(requests.length, 1, 'rejected path variants must not reach the network');
+  }
+});
+
+test('an ERP editor grant cannot omit or disguise its target as caller authority', async () => {
+  for (const target of [undefined, { skuKey: null, slotKey: '' },
+    { skuKey: null, slotKey: 'product-main', ownerUserId: 'owner-b' }]) {
+    const f = fixture(); f.data.mode = 'IMAGE_TO_IMAGE'; f.data.sourceMediaKeys = ['white-cup'];
+    if (target !== undefined) f.data.target = target;
+    await assert.rejects(f.run());
+    assert.equal(f.calls.some(([name]) => name === 'editor'), false);
   }
 });

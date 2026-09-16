@@ -21,6 +21,7 @@ import { resolveAiImageProviderCapability } from './ai-image-provider-capabiliti
 import { isAiImageEditProviderCanvasSupported, resolveAiImageEditProviderContract } from './ai-image-edit-provider-contract.js';
 import type { AiImageEditStorageReadiness } from './ai-image-edit-storage.js';
 import type { AiPromptRenderingProfile } from './ai-image-edit-prompt-contract.js';
+import type { SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
 
 /**
  * Creation is deliberately a separate command contract from the B1 cancel/retry
@@ -48,6 +49,7 @@ interface ExtensionMediaWorkflowCreateBase extends Record<string, unknown> {
   negativePrompt: string;
   draftRevision: number;
   workflowOperationKey: string;
+  target?: SourceListingAiMediaTarget;
 }
 
 export type ExtensionMediaWorkflowCreateCommand =
@@ -78,6 +80,7 @@ export interface ExtensionMediaTranslationLaunchContext {
     skuKeys: string[];
   }>;
   category?: { categoryId: number; typeId: number };
+  target?: SourceListingAiMediaTarget;
 }
 
 export interface ExtensionMediaTranslationSettings {
@@ -123,6 +126,8 @@ export interface ExtensionMediaStandaloneExistingWorkflow
   negativePrompt?: string | null;
   estimatedCostCents?: number | null;
   providerRuntimeContract?: AiImageProviderRuntimeContract | null;
+  contextSkuKey?: string | null;
+  contextSlotKey?: string | null;
 }
 
 export class ExtensionMediaWorkflowLaunchError extends Error {
@@ -243,7 +248,7 @@ export function parseExtensionMediaWorkflowCreateCommand(
   }
   const commonKeys = [
     'schemaVersion', 'action', 'operation', 'sourceMediaKeys', 'prompt', 'negativePrompt',
-    'draftRevision', 'workflowOperationKey',
+    'draftRevision', 'workflowOperationKey', 'target',
   ];
   const allowed = new Set(operation === 'INPAINT'
     ? [...commonKeys, 'maskAssetId', 'maskSemantics']
@@ -272,6 +277,7 @@ export function parseExtensionMediaWorkflowCreateCommand(
     negativePrompt: normalizedPrompt(value.negativePrompt, 'negativePrompt', 4_000, true),
     draftRevision: positiveInteger(value.draftRevision, 'draftRevision'),
     workflowOperationKey: normalizedIdentifier(value.workflowOperationKey, 'workflowOperationKey', 128),
+    ...(value.target === undefined ? {} : { target: parseExtensionMediaWorkflowTarget(value.target) }),
   };
   if (operation !== 'INPAINT') {
     return { ...base, operation: operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' };
@@ -285,6 +291,26 @@ export function parseExtensionMediaWorkflowCreateCommand(
     maskAssetId: normalizedIdentifier(value.maskAssetId, 'maskAssetId', 200),
     maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
   };
+}
+
+export function parseExtensionMediaWorkflowTarget(value: unknown): SourceListingAiMediaTarget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).sort().join(',') !== 'skuKey,slotKey') {
+    throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Media target is invalid');
+  }
+  const target = value as Record<string, unknown>;
+  return {
+    skuKey: target.skuKey === null ? null : normalizedIdentifier(target.skuKey, 'target SKU', 500),
+    slotKey: normalizedIdentifier(target.slotKey, 'target slot', 200),
+  };
+}
+
+export function extensionMediaWorkflowTargetMatches(
+  requested: SourceListingAiMediaTarget | undefined,
+  current: SourceListingAiMediaTarget | undefined,
+): boolean {
+  return requested === undefined ? current === undefined : Boolean(current
+    && requested.skuKey === current.skuKey && requested.slotKey === current.slotKey);
 }
 
 export function parseExtensionMediaTranslationCreateCommand(
@@ -1054,6 +1080,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
     listingWorkflowId: string;
     draftRevision: number;
     draftVersion: number;
+    target?: SourceListingAiMediaTarget;
   }): Promise<ExtensionMediaTranslationLaunchContext | null>;
   loadExisting?(input: {
     ownerUserId: string;
@@ -1066,6 +1093,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
     draftRevision: number;
     draftVersion: number;
     role: 'GENERAL' | 'EDIT';
+    target?: SourceListingAiMediaTarget;
   }): Promise<{ id: string; width: number; height: number }>;
   getReadiness(
     operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
@@ -1180,6 +1208,8 @@ export function createExtensionMediaWorkflowLauncher(options: {
         || candidate.contextId !== input.listingWorkflowId
         || candidate.contextDraftRevision !== command.draftRevision
         || candidate.contextDraftVersion !== input.draftVersion
+        || (candidate.contextSkuKey ?? null) !== (command.target?.skuKey ?? null)
+        || (candidate.contextSlotKey ?? null) !== (command.target?.slotKey ?? null)
         || candidate.suiteId != null
         || !sameStringArray(sourceMediaKeys, command.sourceMediaKeys)
         || candidate.prompt !== command.prompt
@@ -1239,6 +1269,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
         listingWorkflowId: input.listingWorkflowId,
         draftRevision: command.draftRevision,
         draftVersion: input.draftVersion,
+        ...(command.target ? { target: command.target } : {}),
       });
     } catch (error) {
       if (isExtensionMediaContextStaleError(error)) context = null;
@@ -1255,6 +1286,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
       || context.shopId !== input.shopId
       || context.revision !== command.draftRevision
       || context.draftVersion !== input.draftVersion
+      || !extensionMediaWorkflowTargetMatches(command.target, context.target)
       || command.sourceMediaKeys.some((key) => !context!.sourceMediaKeys.includes(key))) {
       throw new ExtensionMediaWorkflowLaunchError(
         'MEDIA_CREATE_CONTEXT_STALE',
@@ -1272,6 +1304,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
           draftRevision: command.draftRevision,
           draftVersion: input.draftVersion,
           role: command.operation === 'IMAGE_TO_IMAGE' ? 'GENERAL' : 'EDIT',
+          ...(command.target ? { target: command.target } : {}),
         })
       )));
     } catch (error) {
@@ -1307,6 +1340,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
       id: context.id,
       revision: context.revision,
       draftVersion: context.draftVersion,
+      ...(context.target || {}),
     };
     let created;
     try {

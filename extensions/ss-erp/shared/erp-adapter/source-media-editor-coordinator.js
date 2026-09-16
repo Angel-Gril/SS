@@ -154,6 +154,10 @@
       if (left && right && ['provenance', 'ownerUserId', 'deviceSessionId', 'apiOrigin', 'webOrigin'].some(function (key) {
         return left[key] !== right[key];
       })) return false;
+      if (Boolean(session.target) !== Boolean(input && input.target)
+        || session.target && ['skuKey', 'slotKey'].some(function (key) {
+          return session.target[key] !== input.target[key];
+        })) return false;
       return Boolean(input && Array.isArray(input.sourceMediaKeys)) && [
         'platform', 'sourceProductId', 'snapshotId', 'supplyGoodsId', 'shopId',
         'listingWorkflowId', 'revision', 'draftVersion', 'operation',

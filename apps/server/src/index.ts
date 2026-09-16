@@ -148,6 +148,7 @@ import {
   extensionHostedAiImageListingAssignmentRoutes,
 } from './routes/extension-hosted-ai-image-listing-assignment.js';
 import { projectExtensionAiImageSuite } from './services/extension-ai-image-suite-projection.js';
+import { isSourceListingAiMediaTarget, type SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
 import {
   createExtensionHostedAiImagePlanBindingRecord,
   createExtensionHostedAiImagePlanService,
@@ -1280,6 +1281,8 @@ if (isExtensionDeviceAuthEnabled()) {
         revision: true,
         contextType: true,
         contextId: true,
+        contextSkuKey: true,
+        contextSlotKey: true,
         contextDraftRevision: true,
         contextDraftVersion: true,
         suiteSlot: { select: { suiteId: true } },
@@ -1324,6 +1327,8 @@ if (isExtensionDeviceAuthEnabled()) {
       revision: row.revision,
       contextType: row.contextType,
       contextId: row.contextId,
+      contextSkuKey: row.contextSkuKey,
+      contextSlotKey: row.contextSlotKey,
       contextDraftRevision: row.contextDraftRevision,
       contextDraftVersion: row.contextDraftVersion,
       suiteId: row.suiteSlot?.suiteId || null,
@@ -1353,21 +1358,24 @@ if (isExtensionDeviceAuthEnabled()) {
     listingWorkflowId,
     draftRevision,
     draftVersion,
+    target,
   }: {
     ownerUserId: string;
     listingWorkflowId: string;
     draftRevision: number;
     draftVersion: number;
+    target?: SourceListingAiMediaTarget;
   }) => {
     try {
       const draft = await sourceListingWorkflowService.getDraft({
         draftId: listingWorkflowId,
         ownerUserId,
       });
+      if (target && !isSourceListingAiMediaTarget(draft, target)) return null;
       const context = await extensionMediaContextService.loadListingDraft(
         ownerUserId,
         listingWorkflowId,
-        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
+        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion, ...target },
       );
       if (draft.revision !== draftRevision || draft.draftVersion !== draftVersion) return null;
       const trustedCategory = resolveTrustedAiImageTranslationCategory(draft);
@@ -1387,6 +1395,7 @@ if (isExtensionDeviceAuthEnabled()) {
         draftVersion: draft.draftVersion,
         sourceMediaKeys: [...new Set(sourceInputs.map((item) => item.sourceMediaKey))].slice(0, 50),
         sourceInputs: sourceInputs.slice(0, 50),
+        ...(target ? { target: { skuKey: context.target.skuKey, slotKey: context.target.slotKey! } } : {}),
         ...(trustedCategory ? { category: trustedCategory } : {}),
       };
     } catch (error) {
@@ -1801,12 +1810,13 @@ if (isExtensionDeviceAuthEnabled()) {
       draftRevision,
       draftVersion,
       role,
+      target,
     }) => {
       const asset = await extensionMediaContextService.internalizeListingDraft(
         ownerUserId,
         listingWorkflowId,
         sourceMediaKey,
-        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
+        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion, ...target },
         role,
       );
       return {
@@ -2968,12 +2978,13 @@ if (isExtensionDeviceAuthEnabled()) {
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
     getReadiness: () => getExtensionStandaloneReadiness('INPAINT'),
-    loadContext: ({ ownerUserId, listingWorkflowId, revision, draftVersion }) => (
+    loadContext: ({ ownerUserId, listingWorkflowId, revision, draftVersion, target }) => (
       loadExtensionMediaTranslationContext({
         ownerUserId,
         listingWorkflowId,
         draftRevision: revision,
         draftVersion,
+        ...(target ? { target } : {}),
       })
     ),
     internalizeSource: async ({
@@ -2983,12 +2994,13 @@ if (isExtensionDeviceAuthEnabled()) {
       revision,
       draftVersion,
       role,
+      target,
     }) => {
       const asset = await extensionMediaContextService.internalizeListingDraft(
         ownerUserId,
         listingWorkflowId,
         sourceMediaKey,
-        { expectedRevision: revision, expectedDraftVersion: draftVersion },
+        { expectedRevision: revision, expectedDraftVersion: draftVersion, ...target },
         role,
       );
       return {

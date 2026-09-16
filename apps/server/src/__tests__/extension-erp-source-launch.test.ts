@@ -29,6 +29,30 @@ function setup() {
 }
 
 describe('ERP account to paired-device source image launch', () => {
+  it('freezes a verified product slot into the issued and consumed editor authority', async () => {
+    const f = setup();
+    const target = { skuKey: null, slotKey: 'product-main' };
+    Object.assign(f.context, { target });
+    const issued = await f.service.issue(account, { ...input, mode: 'IMAGE_TO_IMAGE', sourceMediaKeys: ['white-cup'], target });
+    expect(f.dependencies.loadMediaContext).toHaveBeenCalledWith(expect.objectContaining({ target }));
+    await expect(f.service.consume(device, issued.launchToken)).resolves.toMatchObject({ mode: 'IMAGE_TO_IMAGE', target });
+  });
+  it('refuses missing, unknown, cross-scope or changed editor targets before consuming the grant', async () => {
+    for (const target of [undefined, null, { skuKey: null, slotKey: 'invented' },
+      { skuKey: 'foreign-sku', slotKey: 'sku:foreign-sku:hero' }]) {
+      const f = setup();
+      await expect(f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['white-cup'],
+        ...(target === undefined ? {} : { target }) })).rejects.toBeDefined();
+      expect(f.store.put).not.toHaveBeenCalled();
+    }
+    const f = setup();
+    const target = { skuKey: null, slotKey: 'product-main' };
+    Object.assign(f.context, { target });
+    const issued = await f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['white-cup'], target });
+    Object.assign(f.context, { target: { skuKey: null, slotKey: 'product-gallery-1' } });
+    await expect(f.service.consume(device, issued.launchToken)).rejects.toMatchObject({ code: 'ERP_LAUNCH_CONTEXT_STALE' });
+    expect(f.store.consume).not.toHaveBeenCalled();
+  });
   it('rejects an insecure cloud API origin even when device and draft authority match', async () => {
     const f = setup();
     const service = createExtensionErpSourceLaunchService({ ...f.dependencies, apiOrigin: 'http://ss-erp.com' });
@@ -92,7 +116,8 @@ describe('ERP account to paired-device source image launch', () => {
       expect(f.store.put).not.toHaveBeenCalled();
     }
     const f = setup();
-    await expect(f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['foreign-media'] })).rejects.toMatchObject({ code: 'ERP_LAUNCH_CONTEXT_STALE' });
+    await expect(f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['foreign-media'],
+      target: { skuKey: null, slotKey: 'product-main' } })).rejects.toMatchObject({ code: 'ERP_LAUNCH_CONTEXT_STALE' });
   });
 
   it('requires explicit feature readiness and never treats a missing gate as enabled', async () => {
@@ -137,7 +162,9 @@ describe('ERP account to paired-device source image launch', () => {
   it('binds the approved single-source INPAINT operation and discards client authority injection', async () => {
     const f = setup();
     await expect(f.service.issue(account, { ...input, ownerUserId: 'owner-b' })).rejects.toMatchObject({ code: 'ERP_LAUNCH_INVALID_REQUEST' });
-    const issued = await f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['white-cup'] });
+    const target = { skuKey: null, slotKey: 'product-main' };
+    Object.assign(f.context, { target });
+    const issued = await f.service.issue(account, { ...input, mode: 'INPAINT', sourceMediaKeys: ['white-cup'], target });
     await expect(f.service.consume(device, issued.launchToken)).resolves.toMatchObject({ mode: 'INPAINT', sourceMediaKeys: ['white-cup'] });
   });
 });

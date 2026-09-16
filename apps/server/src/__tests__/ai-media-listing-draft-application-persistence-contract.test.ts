@@ -18,6 +18,10 @@ const actorAuthority = readFileSync(new URL(
   '../../prisma/migrations/20260721123000_enforce_ai_media_listing_draft_actor_authority/migration.sql',
   import.meta.url,
 ), 'utf8');
+const paidApplication = readFileSync(new URL(
+  '../../prisma/migrations/20260917021000_allow_settled_ai_listing_draft_applications/migration.sql',
+  import.meta.url,
+), 'utf8');
 
 describe('AI media listing-draft application persistence contract', () => {
   it('uses a dedicated owner-bound ledger without widening the collect table', () => {
@@ -40,7 +44,7 @@ describe('AI media listing-draft application persistence contract', () => {
     expect(ledger).toMatch(/BEFORE UPDATE OR DELETE ON "ai_media_listing_draft_application_mutations"/u);
   });
 
-  it('enforces fake-only source, input, suite and assignment authority in PostgreSQL', () => {
+  it('retains the historical fake-only migration and independent source, suite and actor guards', () => {
     expect(ledger).toContain('stored_job."provider" IS DISTINCT FROM \'fake\'');
     expect(ledger).toContain('before_slot_count');
     expect(ledger).toContain('after_slot_count');
@@ -53,6 +57,20 @@ describe('AI media listing-draft application persistence contract', () => {
     expect(authority).toMatch(/"context_sku_key" IS NULL OR btrim\("context_sku_key"\) <> ''/u);
     expect(actorAuthority).toContain('actor."parent_id" = NEW."owner_user_id"');
     expect(actorAuthority).toContain('listing draft application actor does not belong to owner');
+  });
+
+  it('replaces only the active insert function and binds supported real outputs to exact settled task charges', () => {
+    expect(paidApplication).toContain('CREATE OR REPLACE FUNCTION validate_ai_media_listing_draft_application_mutation_insert()');
+    expect(paidApplication).not.toMatch(/(?:ALTER TABLE|DROP TABLE|DROP TRIGGER|UPDATE "ai_|DELETE FROM|TRUNCATE)/u);
+    expect(paidApplication).not.toContain('OR stored_job."provider" IS DISTINCT FROM \'fake\'');
+    expect(paidApplication).toContain(`stored_job."provider" NOT IN ('dashscope-wanx', 'dashscope-qwen-mt-image', 'openai-images', 'custom')`);
+    expect(paidApplication).toContain(`reservation."status" = 'SETTLED'`);
+    for (const field of ['job_id', 'owner_user_id', 'actor_user_id', 'workflow_id', 'provider', 'model', 'operation', 'request_fingerprint']) {
+      expect(paidApplication).toContain(`reservation."${field}"`);
+    }
+    for (const invariant of ['target does not match frozen workflow context', 'assignment projection does not match draft payload',
+      'output is not the reviewed job asset', 'source does not match operation', 'mode does not match slot occupancy',
+      'rollback is not the current target frontier']) expect(paidApplication).toContain(invariant);
   });
 
   it('accepts an explicit JSON null empty slot while rejecting unknown assignment fields', () => {

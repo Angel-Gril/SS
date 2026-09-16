@@ -435,7 +435,7 @@ describe('AI media workflow routes', () => {
     });
   });
 
-  it('keeps listing draft application fake-only in production without disabling reads or rollback', async () => {
+  it('enables production listing draft application while the owner verifies reviewed paid jobs', async () => {
     const { app } = await build(true, 'owner-1', false, 'fake', true, true);
     const response = await app.inject({ method: 'GET', url: '/capabilities' });
 
@@ -443,9 +443,15 @@ describe('AI media workflow routes', () => {
     expect(response.json().data.applications).toMatchObject({
       readEnabled: true,
       applyEnabled: true,
-      listingDraftApplyEnabled: false,
+      listingDraftApplyEnabled: true,
       rollbackEnabled: true,
     });
+  });
+
+  it.each([[false, true], [true, false]])('keeps production listing application closed when workflow=%s webMedia=%s', async (workflowEnabled, webEnabled) => {
+    const { app } = await build(workflowEnabled, 'owner-1', false, 'fake', webEnabled, true);
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+    expect(response.json().data.applications).toMatchObject({ listingDraftApplyEnabled: false, readEnabled: true, rollbackEnabled: true });
   });
 
   it('reports rolled-back listing draft applications from the immutable ledger', async () => {

@@ -1548,7 +1548,7 @@ export function SourceAiMediaPanel({
       return;
     }
     if (capabilities?.applications?.listingDraftApplyEnabled !== true) {
-      toast({ title: '候选应用当前关闭', description: '当前仍处于暗态 fake-only 验证阶段' });
+      toast({ title: '候选应用当前关闭', description: '当前账号的图片工作流或 Web 媒体写入功能尚未开启' });
       return;
     }
     if (mode === 'append' && authority.assignedAssetId) {
@@ -2473,7 +2473,7 @@ export function SourceAiMediaPanel({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h4 className="text-xs font-medium text-muted-foreground">草稿图片应用记录</h4>
             {listingDraftApplicationLedger?.frontier?.rollbackEligible ? <Badge variant="outline">可回滚 1 项</Badge> : null}
-            <Badge variant="outline">暗态 fake-only</Badge>
+            <Badge variant="outline">审核后写入草稿</Badge>
           </div>
           <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => void refreshApplicationHistory()} disabled={applicationLoading} title="刷新草稿图片应用记录" aria-label="刷新草稿图片应用记录">
             {applicationLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}

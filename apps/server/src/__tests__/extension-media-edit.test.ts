@@ -135,6 +135,34 @@ async function setup(input: {
 }
 
 describe('extension media edit routes', () => {
+  it('freezes the validated draft target into source and mask requests', async () => {
+    const state = await setup();
+    const target = { skuKey: null, slotKey: 'product-main' };
+    state.loadContext.mockResolvedValue({ ...(await state.loadContext()), target } as any);
+    try {
+      const source = await state.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: { ...basePayload, target } });
+      expect(source.statusCode).toBe(200);
+      const mask = await state.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/media-edit-mask',
+        payload: { ...basePayload, target, maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+          maskDataUrl: 'data:image/png;base64,iVBORw0KGgo=' } });
+      expect(mask.statusCode).toBe(201);
+      expect(state.loadContext).toHaveBeenLastCalledWith(expect.objectContaining({ target }));
+      expect(state.internalizeSource).toHaveBeenLastCalledWith(expect.objectContaining({ target }));
+      expect(state.createMask).toHaveBeenCalledWith(expect.objectContaining({
+        contextSkuKey: null, contextSlotKey: 'product-main',
+      }));
+    } finally { await state.app.close(); }
+  });
+  it('rejects a target not confirmed by current draft authority before creating the mask', async () => {
+    const state = await setup();
+    try {
+      const result = await state.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: { ...basePayload, target: { skuKey: null, slotKey: 'product-main' } } });
+      expect(result.statusCode).toBe(409);
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+    } finally { await state.app.close(); }
+  });
   it('prepares one exact server-owned edit source for the extension mask editor', async () => {
     const state = await setup();
     try {

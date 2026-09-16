@@ -535,6 +535,15 @@
       revision: positiveRevision(input && input.revision, 'revision'),
       draftVersion: positiveRevision(input && input.draftVersion, 'draftVersion'),
       sourceMediaKey: identifier(input && input.sourceMediaKey, 'sourceMediaKey', 500),
+      ...(input && input.target !== undefined ? { target: normalizedMediaTarget(input.target) } : {}),
+    };
+  }
+
+  function normalizedMediaTarget(value) {
+    if (!exactKeys(value, ['skuKey', 'slotKey'])) throw new TypeError('media target is invalid');
+    return {
+      skuKey: value.skuKey === null ? null : identifier(value.skuKey, 'target SKU', 500),
+      slotKey: identifier(value.slotKey, 'target slot', 200),
     };
   }
 
@@ -1581,6 +1590,7 @@
           negativePrompt: rawNegativePrompt,
           draftRevision: draftRevision,
           workflowOperationKey: workflowOperationKey,
+          ...(input.target !== undefined ? { target: normalizedMediaTarget(input.target) } : {}),
         };
         if (operation === 'INPAINT') {
           command.maskAssetId = identifier(input && input.maskAssetId, 'maskAssetId');

@@ -35,8 +35,18 @@
 - 专用 MV3 已通过正常 Web 设备配对。试点只允许既有 DOTH 店铺，误选 BINI 时草稿创建在业务准入处拒绝；随后按正常“更新授权”切换到 DOTH，旧自建设备会话已撤销，自有 QA 精确快照草稿创建成功。设备只有来源采集、草稿编辑、草稿审核和媒体执行权限，不执行 Ozon 商品写入。
 - 新 ERP_SOURCE 编辑入口被真实 Worker 的传输白名单拒绝，`erp-launch-grants/consume` 尚未发送。T2 最小组合测试先复现 `ERP_SOURCE_LAUNCH_UNAVAILABLE`，再仅将这个精确 POST 路径加入既有白名单；尾斜线、query、fragment、绝对 URL、相邻接口和 GET 继续拒绝。
 - 独立复核另发现成功 `CREATE_WORKFLOW` 回执包含 `action/replayed`，直接交给只接受四字段的 editor session 会使已入队任务被误报失败。修复只在 worker 薄适配层投影 `workflowId/operation/status/revision`，保留 session 严格白名单。实际 client→worker→coordinator 的三操作、三状态组合先 RED 后 GREEN，并验证重启后使用已保存 completion、零追加 POST。根 Agent 组合验证 37 项通过；服务端、shared、生成和计费 owner 未改。
-- 两个新收费 claim 已消费，I2I/INPAINT/两槽套图的四张尚未执行。为发布修复版，COM pilot 已实际恢复，凭据 revision 增至 8，未决 job、费用、恢复、workflow、suite 均为零。双区尚未全量开放。修复版只在新源码和签名候选上续验剩余四张；旧两张使用原生 QA04 对服务端与依赖完全相同的校验衔接，不为纯扩展改动重复生图，也不把先前 MV3 失败标记为通过。
+- 两个新收费 claim 已消费，I2I/INPAINT/两槽套图的四张尚未执行。为发布修复版，COM pilot 已实际恢复，凭据 revision 增至 8，未决 job、费用、恢复、workflow、suite 均为零。双区尚未全量开放。两处扩展补丁已推送为 `619853fa`；后续发现下节所述服务端/数据库缺口，在剩余付费前停止了该提交尚未完成的 offline，保留为已被后续修复取代的运行记录。旧两张保留原任务和费用，不能通过改写查询提交冒充新源码执行；最终源码另用尚未执行的一张 I2I 取得真实验收。
 - 当前私有原件继续在 `completion-20260916`；新修复发布材料与已执行 1.0.330 原件分开保存。普通扩展编辑器沿用一次点击创建任务的交互；本轮单价与最高费用已经用户批准，实际 POST 前仍核对当前配置、单参考和一次性 claim，不声称验收了独立的编辑器报价确认面板。
+
+### 真实草稿槽位与生产写回补齐
+
+- 付费前沿完整 owner 核查确认三处阻断：MV3 创建的 listing-draft workflow 没有 `contextSkuKey/contextSlotKey`，因此 Web 将候选判为过期且应用 owner 拒绝；生产能力投影硬编码 `!production`；数据库 INSERT 函数仍只允许 fake。此前局部成功或绿色模拟套件不能证明真实草稿写回已完成。
+- 创建前冻结目标：Web 复用当前 AI 精确槽位选择，将 `target:{skuKey,slotKey}` 绑定到 ERP_SOURCE 一次性 grant、扩展 session、恢复同一性、命令幂等、服务端 workflow 和 INPAINT 来源/蒙版 metadata。新 ERP_SOURCE 编辑请求必须携带合法 target；普通 native v2 的旧字段合同保留。无 SKU 使用 `skuKey:null`，不能把内部产品级占位符伪装为真实 SKU。
+- 标准空槽及现有 assignment 的校验进入 `packages/shared/src/ozon-listing-draft.ts`，Web 与服务端共用。产品级为 `product-main` / `product-gallery-1..7`，真实 SKU 的标准主槽为 `sku:<skuKey>:hero`；既有槽仍核对 scope/sku。服务端同时通过当前草稿、版本与现有 AI context owner 复核；错目标或过期目标在发包前拒绝，没有放宽 Web 的过期检查。
+- 生产应用能力现在遵循原 workflow/Web media 开关。真实图片必须来自受支持 Provider，并绑定同任务、owner/actor、workflow、model、operation、request fingerprint 的 SETTLED 费用预留；原 CHARGE/RECONCILED_CHARGE 的金额与成功单位一致性约束保留。生产 fake 仍由应用 owner 拒绝，撤销沿用原 APPLY 历史，不重新收费。
+- 新增兼容迁移 `20260917021000_allow_settled_ai_listing_draft_applications`，只替换原应用 INSERT 校验函数，保留独立 source、actor、slot、immutable 触发器及所有旧迁移。真实隔离 PostgreSQL 先证实旧函数拒绝已结算 Wanx（23514），再验证新函数允许真实费用链的申请、幂等回放和撤销；16 条旧 fixture 审计记录的数量与内容摘要完全不变。部署需应用第 150 个迁移；应用回滚须保留兼容的新约束函数，以免拒绝已存在真实记录。
+- 根 Agent 的当前组合验证为后端七文件 250 项、Web/MV3 与正式证据合同 58 项通过，均零失败。各 owner 的真实 PostgreSQL 14 项、类型和定向 lint 已通过；正式最终源码的完整 native offline 仍需重新取得。原生 Worker 文件直接使用根 ESLint 会报既有的 150 条 browser-global/unused 诊断，改动前后逐条规则/消息一致；新源码使用项目现有门禁及定向语法/合同验证，不修改无关旧诊断。
+- 新源码会使用已批准的一张 I2I，在 COM 自有账号、真实精确槽位完成生成、审核、APPEND 和配置恢复，再生成对应源码的正式 QA04。私有 bootstrap 只允许该 case，不能全量 enable；配置 CAS/加密备份、未决任务保留凭据、丢回执恢复、预算和其它模式保留已经真实隔离 PostgreSQL 验证。签名候选可先用于专用本地 QA，证据明确区别于官网发布；官网分发仍在正式验收和区域暗态检查后执行。既有两张不重复生成，总体仍最多六张/CNY 1。
 
 ## 正常流程真实验收与应用部署
 

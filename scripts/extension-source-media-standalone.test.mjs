@@ -316,6 +316,7 @@ assert.equal(typeof api?.createClient, 'function');
       const requests = [];
       const stored = {};
       const returnedReplay = status === 'SUCCEEDED';
+      const target = { skuKey: null, slotKey: 'product-gallery-1' };
       const commandResult = {
         workflowId: 'workflow-1', action: 'CREATE_WORKFLOW', operation,
         status, revision: 2, replayed: returnedReplay,
@@ -326,6 +327,7 @@ assert.equal(typeof api?.createClient, 'function');
           async post(path, body) {
             requests.push({ path, body: plain(body) });
             if (path.endsWith('/media-edit-mask')) {
+              assert.deepEqual(plain(body.target), target);
               return { state: 'response', status: 201, body: { code: 1, replayed: false, data: {
                 contractVersion: 'extension-media-edit-mask/v1',
                 sourceMediaKey: 'main-image', sourceAssetId: 'source-asset-1',
@@ -341,6 +343,7 @@ assert.equal(typeof api?.createClient, 'function');
             }
             assert.equal(path, '/api/extension-device/media-workflows/execute');
             assert.equal(body.command.operation, operation);
+            assert.deepEqual(plain(body.command.target), target);
             return { state: 'response', status: 200, body: { code: 1, data: {
               replay: returnedReplay,
               receipt: { id: 'receipt-1', status: 'SUCCEEDED', result: commandResult },
@@ -386,10 +389,11 @@ assert.equal(typeof api?.createClient, 'function');
         minimumSubmitRemainingMs: 4 * 60 * 1000,
       };
       coordinator = context.SS_ERP_SOURCE_MEDIA_EDITOR_COORDINATOR.createCoordinator(coordinatorOptions);
-      await coordinator.open({
+      const opening = {
         platform: '1688', sourceProductId: 'source-1', snapshotId: 'snapshot-1',
         supplyGoodsId: 'goods-1', shopId: 'shop-1', listingWorkflowId: 'listing-1',
         revision: 7, draftVersion: 3, operation, sourceMediaKeys: ['main-image'], sourceTabId: 9,
+        target,
         preparedSource: operation === 'INPAINT' ? {
           sourceMediaKey: 'main-image', sourceAssetId: 'source-asset-1', mimeType: 'image/png',
           width: 1024, height: 1024, maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
@@ -400,7 +404,8 @@ assert.equal(typeof api?.createClient, 'function');
           apiOrigin: 'https://ss-erp.com', webOrigin: 'https://app.ss-erp.com',
           grantSha256: 'b'.repeat(64),
         },
-      });
+      };
+      await coordinator.open(opening);
       const [nonce] = Object.keys(stored[coordinatorOptions.storageKey]);
       const sender = { tab: { id: 30 }, frameId: 0, documentId: 'editor-document-1' };
       assert.ok(await coordinator.claim(nonce, sender));
@@ -417,6 +422,7 @@ assert.equal(typeof api?.createClient, 'function');
       const persisted = await coordinator.read(nonce);
       assert.deepEqual(plain(persisted.completion), expectedCompletion);
       assert.equal(persisted.erpSourceAuthority.provenance, 'ERP_SOURCE');
+      assert.deepEqual(plain(persisted.target), target);
       const expectedPaths = [
         ...(operation === 'INPAINT' ? ['/api/extension-device/source-workbench/media-edit-mask'] : []),
         '/api/extension-device/command-grants', '/api/extension-device/media-workflows/execute',
@@ -428,6 +434,26 @@ assert.equal(typeof api?.createClient, 'function');
       assert.deepEqual(plain(replayed), { state: 'completed', replay: true, result: expectedCompletion });
       assert.equal(requests.length, expectedPaths.length,
         'a restarted editor must reuse its persisted completion without another command or mask POST');
+      if (operation === 'IMAGE_TO_IMAGE' && status === 'QUEUED') {
+        const recoveryOpening = { ...opening, sourceProductId: 'recoverable-source' };
+        await coordinator.open(recoveryOpening);
+        const pendingNonce = Object.keys(stored[coordinatorOptions.storageKey]).find(key => key !== nonce);
+        assert.ok(await coordinator.claim(pendingNonce, sender));
+        await assert.rejects(coordinator.submit(pendingNonce, sender, async () => {
+          throw new Error('synthetic unresolved response');
+        }), /synthetic unresolved response/u);
+        const otherTarget = { skuKey: null, slotKey: 'product-gallery-2' };
+        await coordinator.open({ ...recoveryOpening, target: otherTarget });
+        const records = stored[coordinatorOptions.storageKey];
+        assert.equal(Object.keys(records).length, 3,
+          'opening another slot must not silently reuse or retarget the unresolved operation');
+        assert.deepEqual(records[pendingNonce].target, target);
+        assert.ok(Object.values(records).some(record => record.target.slotKey === otherTarget.slotKey));
+        await coordinator.open(recoveryOpening);
+        assert.equal(Object.keys(stored[coordinatorOptions.storageKey]).length, 3,
+          'the original target can still recover its original intent');
+        assert.equal(requests.length, expectedPaths.length);
+      }
     }
   }
 }

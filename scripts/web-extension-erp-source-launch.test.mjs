@@ -13,6 +13,7 @@ const scope = changes => ({
   listingWorkflowId: 'draft-1', draftRevision: 2, draftVersion: 3,
   selectedSkuKeys: ['__ss_erp_product_only__'], availableSourceMediaKeys: ['captured-image-key'],
   sourceMediaKey: 'captured-image-key', preferredSkuKey: '__ss_erp_product_only__',
+  target: { skuKey: null, slotKey: 'product-main' },
   editorMode: 'FULL_EDIT', ready: true, dirty: false, ...changes,
 });
 const ticket = changes => ({ code: 1, data: {
@@ -70,6 +71,7 @@ test('forwards only the one-time ticket after device and account-scoped checks',
     deviceSessionId: 'device-session-1', shopId: 'shop-1', listingWorkflowId: 'draft-1',
     draftRevision: 2, draftVersion: 3, mode: 'FULL_EDIT', sourceMediaKeys: ['captured-image-key'],
     preferredSkuKey: '__ss_erp_product_only__',
+    target: { skuKey: null, slotKey: 'product-main' },
   });
   assert.equal(calls[1].options.timeoutMs, 15_000);
   assert.ok(calls[1].options.signal instanceof AbortSignal);
@@ -94,6 +96,26 @@ test('blocks unsaved media/masks, stale drafts and foreign image/SKU selection b
     const run = harness({ scope: change });
     await assert.rejects(run.launcher.open('FULL_EDIT'));
     assert.equal(run.calls.length, 0);
+  }
+});
+
+test('freezes the selected listing slot and cancels an in-flight launch when that slot changes', async () => {
+  const pending = deferred();
+  const run = harness({ grant: () => pending.promise });
+  const attempt = run.launcher.open('FULL_EDIT');
+  const rejected = assert.rejects(attempt, { code: 'ERP_SOURCE_IMAGE_CANCELLED' });
+  await settle();
+  const issuedTarget = run.calls.find(call => call.kind === 'grant').body.target;
+  run.launcher.updateScope(scope({ target: { skuKey: null, slotKey: 'product-gallery-1' } }));
+  pending.resolve(ticket());
+  await rejected;
+  assert.deepEqual(issuedTarget, { skuKey: null, slotKey: 'product-main' });
+  assert.equal(run.calls.filter(call => call.message?.type === 'ss-erp:erp-source-image-open').length, 0);
+  for (const target of [undefined, null, { skuKey: null, slotKey: '' },
+    { skuKey: 'foreign-sku', slotKey: 'sku:foreign-sku:hero' }]) {
+    const invalid = harness({ scope: { target } });
+    await assert.rejects(invalid.launcher.open('FULL_EDIT'));
+    assert.equal(invalid.calls.length, 0);
   }
 });
 

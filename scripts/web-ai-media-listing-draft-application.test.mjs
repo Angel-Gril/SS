@@ -87,7 +87,7 @@ assert.match(workbench, /sku:\$\{skuKey\}:hero/u);
 assert.match(route, /contexts\/listing-draft\/:id\/applications/u);
 assert.match(route, /workflows\/:id\/listing-draft-application/u);
 assert.match(route, /listing-draft-applications\/:id\/rollback/u);
-assert.match(route, /listingDraftApplyEnabled: !production && workflowEnabled && webMediaDecision\.enabled/u);
+assert.match(route, /listingDraftApplyEnabled: workflowEnabled && webMediaDecision\.enabled/u);
 assert.match(panel, /applications\?\.listingDraftApplyEnabled !== true/u);
 assert.match(service, /expectedTargetDraftVersion/u);
 assert.match(service, /targetDraftVersionBefore/u);

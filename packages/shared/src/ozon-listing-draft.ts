@@ -1,6 +1,40 @@
 export const SOURCE_LISTING_SKU_KEY_MAX_LENGTH = 500;
 export const SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS = 500;
 export const SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY = '__ss_erp_product_only__' as const;
+export const SOURCE_LISTING_AI_MEDIA_PRODUCT_SLOTS = [
+  'product-main',
+  ...Array.from({ length: 7 }, (_, index) => `product-gallery-${index + 1}`),
+] as const;
+export interface SourceListingAiMediaTarget {
+  skuKey: string | null;
+  slotKey: string;
+}
+
+/** Existing assignments and the normal empty slots share one server/UI contract. */
+export function isSourceListingAiMediaTarget(
+  draft: { selectedSkuKeys: readonly string[]; media: { assignments: readonly unknown[] } },
+  target: SourceListingAiMediaTarget,
+): boolean {
+  const exact = (value: unknown, maximum: number): value is string => typeof value === 'string'
+    && value.length > 0 && value.length <= maximum && value === value.normalize('NFKC').trim()
+    && !Array.from(value).some(character => (character.codePointAt(0) || 0) < 32);
+  if (!target || Object.keys(target).length !== 2
+    || !Object.prototype.hasOwnProperty.call(target, 'skuKey')
+    || !exact(target.slotKey, 200)
+    || target.skuKey !== null && (!exact(target.skuKey, SOURCE_LISTING_SKU_KEY_MAX_LENGTH)
+      || target.skuKey === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY
+      || !draft.selectedSkuKeys.includes(target.skuKey))) return false;
+  const matching = draft.media.assignments.filter((value): value is Record<string, unknown> => (
+    Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    && (value as Record<string, unknown>).slotKey === target.slotKey
+  ));
+  if (matching.length) return matching.length === 1 && (target.skuKey === null
+    ? matching[0]!.scope === 'PRODUCT'
+    : matching[0]!.scope === 'SKU' && matching[0]!.skuKey === target.skuKey);
+  return target.skuKey === null
+    ? SOURCE_LISTING_AI_MEDIA_PRODUCT_SLOTS.includes(target.slotKey)
+    : target.slotKey === `sku:${target.skuKey}:hero`;
+}
 export const SOURCE_LISTING_IDEMPOTENCY_KEY_MIN_LENGTH = 8;
 export const SOURCE_LISTING_IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 export const OZON_LISTING_PRICING_CONTRACT_VERSION = 'ozon-listing-pricing/v1' as const;

@@ -14,6 +14,8 @@ import { createAiMediaWorkflowService } from '../services/ai-media-workflows.js'
 import { createPrismaSourceListingWorkflowRepository } from '../services/source-listing-workflow-prisma.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 import { lockAiMediaApplicationOperation } from '../lib/ai-media-transaction.js';
+import { reserveAiCost, settleAiCost } from '../services/ai-cost-ledger.js';
+import sharp from 'sharp';
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
@@ -167,6 +169,58 @@ async function reviewedCollectWorkflow(
   return { workflow: await workflowService.get(succeeded.id, data.ownerUserId) };
 }
 
+async function reviewedPaidWorkflow(database: PrismaClient, data: Awaited<ReturnType<typeof fixture>>, options: {
+  provider?: string; settle?: boolean;
+} = {}) {
+  const workflowId = `paid_listing_${randomUUID()}`;
+  const jobId = `paid_job_${randomUUID()}`;
+  const provider = options.provider || 'dashscope-wanx';
+  const model = provider === 'dashscope-wanx' ? 'wanx2.1-imageedit' : 'fixture-model';
+  const fingerprint = createHash('sha256').update(workflowId).digest('hex');
+  const outputBytes = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' } }).png().toBuffer();
+  await database.aiMediaWorkflow.create({ data: {
+    id: workflowId, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+    operation: 'IMAGE_TO_IMAGE', status: 'SUCCEEDED', reviewStatus: 'PENDING', currentAttempt: 1,
+    contextType: 'listing-draft', contextId: data.draft.id, contextSkuKey: 'sku-red', contextSlotKey: 'sku:sku-red:hero',
+    contextDraftRevision: 1, contextDraftVersion: 1, requestFingerprint: fingerprint,
+  } });
+  await database.aiMediaWorkflowInput.create({ data: {
+    workflowId, ownerUserId: data.ownerUserId, assetId: data.sourceA, role: 'REFERENCE', ordinal: 0,
+    assetSha256: SOURCE_PNG_SHA256, assetUrl: `/uploads/${data.sourceA}.png`, mimeType: 'image/png', width: 1, height: 1,
+  } });
+  await database.aiImageJob.create({ data: {
+    id: jobId, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId, workflowId, workflowAttempt: 1,
+    provider, model, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING', prompt: 'Synthetic database application fixture',
+    requestFingerprint: fingerprint, requestedImageCount: 1, width: 1024, height: 1024,
+    estimatedCostCents: 14,
+  } });
+  const reserved = await reserveAiCost(database as never, {
+    ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId, workflowId, jobId,
+    idempotencyKey: `reserve-${jobId}`, requestFingerprint: fingerprint, provider, model, operation: 'IMAGE_TO_IMAGE',
+    currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14,
+  });
+  if (options.settle !== false) await settleAiCost(database as never, {
+    reservationId: reserved.reservation.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+    idempotencyKey: `settle-${jobId}`, requestFingerprint: fingerprint, actualCostMinor: 14, billedUnits: 1,
+  });
+  // Use the real ledger owner before finalization. Existing PostgreSQL billing
+  // guards must reject this state transition when the charge is not settled.
+  await database.aiImageJob.update({ where: { id: jobId }, data: {
+    status: 'SUCCEEDED', actualCostCents: 14, billedUnits: 1, completedAt: new Date(), progress: 100,
+  } });
+  const output = await database.mediaAsset.create({ data: {
+    id: `paid_output_${randomUUID()}`, ownerUserId: data.ownerUserId, aiImageJobId: jobId, kind: 'AI_GENERATED',
+    sourceCaptureSnapshotId: data.snapshotId, url: `https://owned-storage.example.invalid/${jobId}.png`,
+    storageBackend: 'oss', storageKey: `${jobId}.png`, mimeType: 'image/png', width: 1024, height: 1024,
+    sizeBytes: outputBytes.length, sha256: createHash('sha256').update(outputBytes).digest('hex'),
+    metadata: { pixelOrientationNormalized: true },
+  } });
+  const service = createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(database));
+  const reviewed = await service.review({ id: workflowId, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+    expectedRevision: 1, outputAssetId: output.id, decision: 'APPROVE', note: null });
+  return { workflow: reviewed, jobId, output, reservationId: reserved.reservation.id };
+}
+
 describePostgres('AI media listing-draft application PostgreSQL ledger', () => {
   beforeAll(async () => {
     assertIsolatedSchema();
@@ -174,9 +228,85 @@ describePostgres('AI media listing-draft application PostgreSQL ledger', () => {
   });
   afterAll(async () => client?.$disconnect());
 
+  it('applies one settled real CNY image in production, replays once and rolls back without touching its charge', async () => {
+    const data = await fixture(client!, randomUUID().replaceAll('-', '').slice(0, 10));
+    const image = await reviewedPaidWorkflow(client!, data);
+    const beforeCost = await client!.aiCostReservation.findUniqueOrThrow({ where: { id: image.reservationId }, include: { settlements: true } });
+    const input = { workflowId: image.workflow.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+      mode: 'append' as const, operationKey: `production-apply-${image.jobId}`, expectedWorkflowRevision: image.workflow.revision,
+      expectedTargetRevision: 1, expectedTargetDraftVersion: 1, production: true };
+    const applied = await applyAiMediaListingDraftApplication(client!, input);
+    expect(applied.target).toMatchObject({ revision: 2, draftVersion: 2 });
+    expect((await applyAiMediaListingDraftApplication(client!, input)).replayed).toBe(true);
+    const current = await client!.aiMediaWorkflow.findUniqueOrThrow({ where: { id: image.workflow.id } });
+    const rolledBack = await rollbackAiMediaListingDraftApplication(client!, {
+      applicationId: applied.application.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+      operationKey: `production-rollback-${image.jobId}`, expectedApplicationRevision: 1,
+      expectedWorkflowRevision: current.revision, expectedTargetRevision: 2, expectedTargetDraftVersion: 2,
+    });
+    expect(rolledBack.target).toMatchObject({ revision: 3, draftVersion: 3 });
+    expect(await client!.aiMediaListingDraftApplicationMutation.count({ where: { jobId: image.jobId } })).toBe(2);
+    expect(await client!.aiCostReservation.findUniqueOrThrow({ where: { id: image.reservationId }, include: { settlements: true } })).toEqual(beforeCost);
+  });
+
+  it('rejects an unsupported real provider and preserves draft/charge state', async () => {
+    for (const options of [{ provider: 'unregistered-provider-fixture' }]) {
+      const data = await fixture(client!, randomUUID().replaceAll('-', '').slice(0, 10));
+      const image = await reviewedPaidWorkflow(client!, data, options);
+      await expect(applyAiMediaListingDraftApplication(client!, {
+        workflowId: image.workflow.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+        mode: 'append', operationKey: `rejected-${image.jobId}`, expectedWorkflowRevision: image.workflow.revision,
+        expectedTargetRevision: 1, expectedTargetDraftVersion: 1, production: true,
+      })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+      expect(await client!.sourceListingWorkflow.findUniqueOrThrow({ where: { id: data.draft.id }, select: { currentRevision: true, currentDraftVersion: true } }))
+        .toEqual({ currentRevision: 1, currentDraftVersion: 1 });
+      expect(await client!.aiMediaListingDraftApplicationMutation.count({ where: { jobId: image.jobId } })).toBe(0);
+    }
+  });
+
+  it('PostgreSQL rejects an unsupported paid provider even if the caller misreports its provider projection', async () => {
+    const data = await fixture(client!, randomUUID().replaceAll('-', '').slice(0, 10));
+    const image = await reviewedPaidWorkflow(client!, data, { provider: 'unregistered-provider-fixture' });
+    const bypassedReader = {
+      $transaction: (operation: (tx: unknown) => Promise<unknown>, options: unknown) => client!.$transaction(async tx => {
+        const faulty = new Proxy(tx, { get(target, property) {
+          if (property === 'aiImageJob') return { ...target.aiImageJob, findFirst: async (args: never) => {
+            const job = await target.aiImageJob.findFirst(args);
+            return job ? { ...job, provider: 'fake' } : null;
+          } };
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        } });
+        return operation(faulty);
+      }, options as never),
+    };
+    await expect(applyAiMediaListingDraftApplication(bypassedReader, {
+      workflowId: image.workflow.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+      mode: 'append', operationKey: `database-reject-${image.jobId}`, expectedWorkflowRevision: image.workflow.revision,
+      expectedTargetRevision: 1, expectedTargetDraftVersion: 1, production: false,
+    })).rejects.toThrow(/listing draft application paid Provider is unsupported/i);
+    expect(await client!.sourceListingWorkflow.findUniqueOrThrow({ where: { id: data.draft.id }, select: { currentRevision: true, currentDraftVersion: true } }))
+      .toEqual({ currentRevision: 1, currentDraftVersion: 1 });
+    expect(await client!.aiMediaListingDraftApplicationMutation.count({ where: { jobId: image.jobId } })).toBe(0);
+  });
+
+  it('cannot finalize an unpaid real job into a succeeded candidate for listing application', async () => {
+    const data = await fixture(client!, randomUUID().replaceAll('-', '').slice(0, 10));
+    await expect(reviewedPaidWorkflow(client!, data, { settle: false }))
+      .rejects.toThrow(/successful paid AI image job requires its exact cost settlement/i);
+    expect(await client!.sourceListingWorkflow.findUniqueOrThrow({ where: { id: data.draft.id }, select: { currentRevision: true, currentDraftVersion: true } }))
+      .toEqual({ currentRevision: 1, currentDraftVersion: 1 });
+    expect(await client!.aiMediaListingDraftApplicationMutation.count({ where: { ownerUserId: data.ownerUserId } })).toBe(0);
+  });
+
   it('applies two slots, compensates them in strict LIFO while always advancing the draft pointer', async () => {
     const data = await fixture(client!, randomUUID().replaceAll('-', '').slice(0, 10));
     const first = await reviewedWorkflow(client!, data, 'first', data.sourceA, 'slot-a', 1, 1);
+    await expect(applyAiMediaListingDraftApplication(client!, {
+      workflowId: first.workflow.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
+      mode: 'append', operationKey: `production-fake-rejected-${data.draft.id}`, production: true,
+      expectedWorkflowRevision: first.workflow.revision, expectedTargetRevision: 1, expectedTargetDraftVersion: 1,
+    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
     const firstApplied = await applyAiMediaListingDraftApplication(client!, {
       workflowId: first.workflow.id, ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId,
       mode: 'append', operationKey: `h3b-apply-first-${data.draft.id}`,

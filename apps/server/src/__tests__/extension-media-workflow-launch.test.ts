@@ -319,6 +319,42 @@ function setupV2(options: {
 }
 
 describe('extension media translation launch', () => {
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)(
+    'freezes the authoritative listing slot for %s and passes it to source internalization', async (operation) => {
+      const state = setupV2();
+      const target = { skuKey: null, slotKey: 'product-gallery-1' };
+      state.loadContext.mockResolvedValueOnce({ ...(await state.loadContext()), target } as any);
+      await state.launch(input({ command: v2Command(operation, { target }) }));
+      expect(state.loadContext).toHaveBeenLastCalledWith(expect.objectContaining({ target }));
+      expect(state.internalizeSource).toHaveBeenCalledWith(expect.objectContaining({ target }));
+      const create = operation === 'IMAGE_TO_IMAGE' ? state.createImageToImage : state.createImageEdit;
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ context: {
+        type: 'listing-draft', id: 'listing-1', revision: 11, draftVersion: 7, ...target,
+      } }));
+    },
+  );
+  it('refuses a target that the current context did not validate before storage or queue work', async () => {
+    const state = setupV2();
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE', {
+      target: { skuKey: null, slotKey: 'product-main' },
+    }) }))).rejects.toMatchObject({ code: 'MEDIA_CREATE_CONTEXT_STALE' });
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageToImage).not.toHaveBeenCalled();
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
+  it('binds replay to the original target, including legacy targetless operations', async () => {
+    const target = { skuKey: null, slotKey: 'product-main' };
+    const existing = v2Existing('SUCCEEDED', { contextSkuKey: null, contextSlotKey: target.slotKey });
+    const state = setupV2({ existing });
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE', { target }) }))).resolves.toMatchObject({ replayed: true });
+    for (const command of [v2Command('IMAGE_TO_IMAGE'), v2Command('IMAGE_TO_IMAGE', {
+      target: { ...target, slotKey: 'product-gallery-1' },
+    })]) {
+      await expect(state.launch(input({ command }))).rejects.toMatchObject({ code: 'MEDIA_CREATE_IDEMPOTENCY_CONFLICT' });
+    }
+    expect(state.createImageToImage).not.toHaveBeenCalled();
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
   it('parses only the strict v2 standalone create union', () => {
     const base = {
       schemaVersion: 'ai-media-workflow-create/v2',

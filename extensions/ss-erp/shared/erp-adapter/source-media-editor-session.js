@@ -110,6 +110,7 @@
       'maskCheckpoint', 'completion', 'createdAt', 'expiresAt', 'submitLeaseExpiresAt',
       'completedAt',
       'erpSourceAuthority',
+      'target',
     ]);
     if (Object.keys(value).some(function (key) { return !allowed.has(key); })) return null;
     var hasErpAuthority = Object.prototype.hasOwnProperty.call(value, 'erpSourceAuthority');
@@ -117,6 +118,10 @@
     var erpSourceAuthority = hasErpAuthority && erpApi && typeof erpApi.normalizeAuthority === 'function'
       ? erpApi.normalizeAuthority(value.erpSourceAuthority) : null;
     if (hasErpAuthority && !erpSourceAuthority) return null;
+    var hasTarget = Object.prototype.hasOwnProperty.call(value, 'target');
+    var target = hasTarget && erpApi && typeof erpApi.normalizeEditorTarget === 'function'
+      ? erpApi.normalizeEditorTarget(value.target) : null;
+    if (hasTarget && !target) return null;
     var now = Number.isSafeInteger(options && options.now) ? options.now : Date.now();
     var maximumLifetimeMs = positiveInteger(options && options.maximumLifetimeMs);
     var maximumSubmitLeaseMs = positiveInteger(options && options.maximumSubmitLeaseMs);
@@ -208,6 +213,7 @@
       submitLeaseExpiresAt: submitLeaseExpiresAt,
       completedAt: completedAt,
       ...(hasErpAuthority ? { erpSourceAuthority: erpSourceAuthority } : {}),
+      ...(hasTarget ? { target: target } : {}),
     };
   }
 

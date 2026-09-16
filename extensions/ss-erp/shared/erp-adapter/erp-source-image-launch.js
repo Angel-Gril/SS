@@ -30,6 +30,11 @@
       || typeof value.grantSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.grantSha256)) return null;
     return Object.freeze(Object.fromEntries(AUTHORITY_KEYS.map(function (key) { return [key, value[key]]; })));
   }
+  function normalizeEditorTarget(value) {
+    if (!exact(value, ['skuKey', 'slotKey']) || !text(value.slotKey, 200)
+      || !(value.skuKey === null || text(value.skuKey, 500))) return null;
+    return Object.freeze({ skuKey: value.skuKey, slotKey: value.slotKey });
+  }
   function sameDevice(left, right, apiOrigin) {
     return left && right && left.state === 'paired' && right.state === 'paired'
       && text(left.ownerUserId, 200) && text(left.sessionId, 200)
@@ -42,7 +47,9 @@
       });
   }
   function normalizeGrant(value, device, apiOrigin) {
-    if (!exact(value, ['contractVersion', 'provenance', 'ownerUserId', 'deviceSessionId', 'apiOrigin', 'mode', 'sourceMediaKeys', 'launchRequest', 'grantSha256'])
+    var keys = ['contractVersion', 'provenance', 'ownerUserId', 'deviceSessionId', 'apiOrigin', 'mode', 'sourceMediaKeys', 'launchRequest', 'grantSha256'];
+    if (record(value) && Object.prototype.hasOwnProperty.call(value, 'target')) keys.push('target');
+    if (!exact(value, keys)
       || value.contractVersion !== VERSION || value.provenance !== 'ERP_SOURCE'
       || value.ownerUserId !== device.ownerUserId || value.deviceSessionId !== device.sessionId
       || value.apiOrigin !== apiOrigin || !['WORKBENCH', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(value.mode)
@@ -53,6 +60,8 @@
       fail('ERP_SOURCE_LAUNCH_AUTHORITY_INVALID');
     }
     var maximum = value.mode === 'WORKBENCH' ? 0 : value.mode === 'IMAGE_TO_IMAGE' ? 4 : 1;
+    var target = value.mode === 'WORKBENCH' ? undefined : normalizeEditorTarget(value.target);
+    if (value.mode === 'WORKBENCH' ? value.target !== undefined : !target) fail('ERP_SOURCE_LAUNCH_AUTHORITY_INVALID');
     var request = value.launchRequest;
     if (value.sourceMediaKeys.length > maximum || (value.mode !== 'WORKBENCH' && value.sourceMediaKeys.length < 1)
       || !['1688', 'pdd', 'taobao', 'tmall'].includes(request.sourcePlatform)
@@ -64,7 +73,7 @@
       || request.selectionKind !== (request.preferredSkuKey === null ? 'HINT' : 'EXPLICIT')) {
       fail('ERP_SOURCE_LAUNCH_AUTHORITY_INVALID');
     }
-    return Object.freeze({ ...value, sourceMediaKeys: Object.freeze(value.sourceMediaKeys.slice()),
+    return Object.freeze({ ...value, ...(target ? { target: target } : {}), sourceMediaKeys: Object.freeze(value.sourceMediaKeys.slice()),
       launchRequest: Object.freeze({ ...request }) });
   }
   function createLauncher(options) {
@@ -132,5 +141,6 @@
   root.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH = Object.freeze({
     MESSAGE_TYPE: MESSAGE_TYPE, CONTRACT_VERSION: VERSION,
     createLauncher: createLauncher, normalizeAuthority: normalizeAuthority,
+    normalizeEditorTarget: normalizeEditorTarget,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

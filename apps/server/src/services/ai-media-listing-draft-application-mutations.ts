@@ -15,6 +15,9 @@ export const AI_MEDIA_LISTING_DRAFT_APPLICATION_CONTRACT_VERSION =
   'ai-media-listing-draft-application/v1';
 export const AI_MEDIA_LISTING_DRAFT_ASSIGNMENT_PROJECTION_VERSION =
   'ai-media-listing-draft-assignment/v1';
+const LISTING_DRAFT_PAID_IMAGE_PROVIDERS = new Set([
+  'dashscope-wanx', 'dashscope-qwen-mt-image', 'openai-images', 'custom',
+]);
 
 export interface ApplyAiMediaListingDraftApplicationInput {
   workflowId: string;
@@ -743,9 +746,13 @@ export async function applyAiMediaListingDraftApplication(
     const job = await tx.aiImageJob.findFirst({
       where: { id: asset.aiImageJobId, ownerUserId, workflowId },
       select: {
-        id: true, status: true, operation: true, provider: true, appliedAt: true,
+        id: true, status: true, operation: true, provider: true, model: true, actorUserId: true,
+        requestFingerprint: true, appliedAt: true,
         workflowAttempt: true,
-        costReservation: { select: { status: true } },
+        costReservation: { select: {
+          status: true, jobId: true, ownerUserId: true, actorUserId: true, workflowId: true,
+          provider: true, model: true, operation: true, requestFingerprint: true,
+        } },
       },
     });
     if (!job
@@ -763,10 +770,16 @@ export async function applyAiMediaListingDraftApplication(
         'The fake AI image Provider is disabled in production',
       );
     }
-    if (job.provider !== 'fake' && job.costReservation?.status !== 'SETTLED') {
+    const reservation = job.costReservation;
+    if (job.provider !== 'fake' && (!LISTING_DRAFT_PAID_IMAGE_PROVIDERS.has(job.provider)
+      || reservation?.status !== 'SETTLED' || reservation.jobId !== job.id
+      || reservation.ownerUserId !== ownerUserId || reservation.actorUserId !== job.actorUserId
+      || reservation.workflowId !== workflowId || reservation.provider !== job.provider
+      || reservation.model !== job.model || reservation.operation !== job.operation
+      || reservation.requestFingerprint !== job.requestFingerprint)) {
       throw new AiMediaApplicationMutationError(
         'PROVIDER_NOT_READY',
-        'Paid AI image cost settlement is not complete',
+        'Paid listing draft output requires a supported Provider and its exact settled task charge',
       );
     }
     assignmentSource(job.operation);
