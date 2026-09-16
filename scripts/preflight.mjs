@@ -243,6 +243,16 @@ const steps = [
     args: ['scripts/web-ai-provider-reconciliation.test.mjs'],
   },
   {
+    name: 'Web JSON request deadline and session recovery contracts',
+    command: 'node',
+    args: [
+      '--test',
+      'scripts/web-api-request-deadline.test.mjs',
+      'scripts/web-dashboard-session.test.mjs',
+      'scripts/web-api-503-response.test.mjs',
+    ],
+  },
+  {
     name: 'Web AI media edit workbench contract',
     command: 'node',
     args: ['scripts/web-ai-media-edit-workbench.test.mjs'],

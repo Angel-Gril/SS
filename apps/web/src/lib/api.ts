@@ -59,6 +59,56 @@ export interface ApiResponse<T = unknown> {
   maintenance?: boolean;
 }
 
+export const API_GET_TIMEOUT_MS = 30_000;
+
+export interface ApiRequestOptions extends RequestInit {
+  /** Covers both response headers and JSON decoding; writes have no default deadline. */
+  timeoutMs?: number;
+}
+
+export class ApiRequestTimeoutError extends Error {
+  readonly code = 'API_REQUEST_TIMEOUT';
+
+  constructor(readonly timeoutMs: number) {
+    super('服务器响应超时，请稍后重试');
+    this.name = 'TimeoutError';
+  }
+}
+
+async function withApiRequestDeadline<T>(
+  options: ApiRequestOptions,
+  request: (signal?: AbortSignal | null) => Promise<T>,
+): Promise<T> {
+  const timeoutMs = options.timeoutMs
+    ?? ((options.method || 'GET').toUpperCase() === 'GET' ? API_GET_TIMEOUT_MS : undefined);
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000)) {
+    throw new RangeError('API timeoutMs must be an integer between 1 and 300000');
+  }
+  const callerSignal = options.signal;
+  if (callerSignal?.aborted) throw callerSignal.reason;
+  if (timeoutMs === undefined && !callerSignal) return request();
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectInterrupted: (reason: unknown) => void = () => {};
+  const interrupted = new Promise<never>((_resolve, reject) => { rejectInterrupted = reject; });
+  const interrupt = (reason: unknown) => {
+    rejectInterrupted(reason);
+    controller.abort(reason);
+  };
+  const onCallerAbort = () => interrupt(callerSignal?.reason);
+  callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+  if (timeoutMs !== undefined) {
+    timer = setTimeout(() => interrupt(new ApiRequestTimeoutError(timeoutMs)), timeoutMs);
+  }
+  try {
+    return await Promise.race([request(controller.signal), interrupted]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  }
+}
+
 const TOKEN_KEY = 'sserp.token';
 
 export const tokenStore = {
@@ -94,45 +144,52 @@ function redirectToLoginForCurrentPath() {
 
 export async function apiFetch<T = unknown>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestOptions = {},
 ): Promise<ApiResponse<T>> {
+  const { timeoutMs: _timeoutMs, ...requestOptions } = options;
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
 
-  const res = await fetch(apiUrl(path), {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
+  return withApiRequestDeadline(options, async (signal) => {
+    const res = await fetch(apiUrl(path), {
+      ...requestOptions,
+      signal,
+      headers,
+      credentials: 'include',
+    });
+    // A transport that settles after cancellation must not run stale auth side effects.
+    if (signal?.aborted) throw signal.reason;
 
-  if (res.status === 401) {
-    tokenStore.clear();
-    redirectToLoginForCurrentPath();
-  }
-
-  if (res.status === 503) {
-    try {
-      const data = await res.json();
-      if (data?.maintenance) {
-        return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T>;
-      }
-      // Preserve typed service errors (for example PROVIDER_NOT_READY) so callers
-      // can distinguish retryable transport failures from definitive business gates.
-      return {
-        ...(data && typeof data === 'object' ? data : {}),
-        code: typeof data?.code === 'string' || typeof data?.code === 'number' ? data.code : 0,
-        msg: data?.msg || '服务暂不可用',
-      } as ApiResponse<T>;
-    } catch {
-      return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T>;
+    if (res.status === 401) {
+      tokenStore.clear();
+      redirectToLoginForCurrentPath();
     }
-  }
 
-  try {
-    return await res.json();
-  } catch {
-    return { code: 0, msg: `服务器错误 (${res.status})` } as ApiResponse<T>;
-  }
+    if (res.status === 503) {
+      try {
+        const data = await res.json();
+        if (data?.maintenance) {
+          return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T>;
+        }
+        // Preserve service codes: unavailable transport is not a definitive business rejection.
+        return {
+          ...(data && typeof data === 'object' ? data : {}),
+          code: typeof data?.code === 'string' || typeof data?.code === 'number' ? data.code : 0,
+          msg: data?.msg || '服务暂不可用',
+        } as ApiResponse<T>;
+      } catch {
+        if (signal?.aborted) throw signal.reason;
+        return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T>;
+      }
+    }
+
+    try {
+      return await res.json();
+    } catch {
+      if (signal?.aborted) throw signal.reason;
+      return { code: 0, msg: `服务器错误 (${res.status})` } as ApiResponse<T>;
+    }
+  });
 }
 
 export async function apiDownload(
@@ -173,15 +230,15 @@ export async function apiDownload(
 }
 
 export const api = {
-  get: <T = unknown>(path: string, options: RequestInit = {}) =>
+  get: <T = unknown>(path: string, options: ApiRequestOptions = {}) =>
     apiFetch<T>(path, { ...options, method: 'GET' }),
-  post: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+  post: <T = unknown>(path: string, body?: unknown, options: ApiRequestOptions = {}) =>
     apiFetch<T>(path, { ...options, method: 'POST', body: JSON.stringify(body ?? {}) }),
-  put: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+  put: <T = unknown>(path: string, body?: unknown, options: ApiRequestOptions = {}) =>
     apiFetch<T>(path, { ...options, method: 'PUT', body: JSON.stringify(body ?? {}) }),
-  patch: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+  patch: <T = unknown>(path: string, body?: unknown, options: ApiRequestOptions = {}) =>
     apiFetch<T>(path, { ...options, method: 'PATCH', body: JSON.stringify(body ?? {}) }),
-  delete: <T = unknown>(path: string, options: RequestInit = {}) =>
+  delete: <T = unknown>(path: string, options: ApiRequestOptions = {}) =>
     apiFetch<T>(path, { ...options, method: 'DELETE' }),
   download: apiDownload,
 };

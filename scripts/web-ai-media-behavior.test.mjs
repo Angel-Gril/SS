@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createLatestLoadCoordinator, createLatestRequestGuard, createMediaMutationLock, buildSaveSourceImagesRequest, executeLockedMediaMutation, executeWithBusyState } from '../apps/web/src/components/ai-media/source-ai-media-state.ts';
+import { createLatestLoadCoordinator, createLatestRequestGuard, createMediaMutationLock, buildSaveSourceImagesRequest, executeLockedMediaMutation, executeWithBusyState, readAiMediaPanelResults } from '../apps/web/src/components/ai-media/source-ai-media-state.ts';
 import {
   AI_MEDIA_INTENT_TTL_MS,
   AI_MEDIA_EXECUTION_POLL_INTERVAL_MS,
@@ -309,6 +309,60 @@ assert.deepEqual(
   ['collect-b', 'collect-c', 'collect-e', 'collect-h', 'collect-i', 'collect-k'],
   'invalidating an active load must suppress its result while leaving the coordinator reusable',
 );
+
+for (const invalidateFirst of [false, true]) {
+  const startedReads = [];
+  const appliedReads = [];
+  let oldReadCancelled = false;
+  const cancellable = createLatestLoadCoordinator({
+    onLoadingChange() {},
+    async execute(request, isCurrent) {
+      startedReads.push(request.targetId);
+      if (startedReads.length === 1) {
+        await new Promise((resolve, reject) => {
+          request.signal?.addEventListener('abort', () => {
+            oldReadCancelled = true;
+            reject(request.signal.reason);
+          }, { once: true });
+        });
+      }
+      if (isCurrent()) appliedReads.push(request.targetId);
+    },
+  });
+  cancellable.setTarget('pending-target');
+  const oldRead = cancellable.load();
+  if (invalidateFirst) cancellable.invalidate();
+  const replacementTarget = invalidateFirst ? 'pending-target' : 'replacement-target';
+  cancellable.setTarget(replacementTarget);
+  const nextRead = cancellable.load();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(oldReadCancelled, true, 'a pending obsolete target read must be cancelled instead of blocking its replacement');
+  await Promise.all([oldRead, nextRead]);
+  assert.deepEqual(startedReads, ['pending-target', replacementTarget]);
+  assert.deepEqual(appliedReads, [replacementTarget], 'cancelled reads must not apply stale state');
+}
+
+const healthyReads = [
+  { code: 1, msg: '', data: { snapshot: { id: 'snapshot-current' } } },
+  { code: 1, msg: '', data: { items: [{ id: 'workflow-active', status: 'SUCCEEDED', revision: 2 }] } },
+  { code: 1, msg: '', data: { workflowEnabled: true } },
+];
+for (const failedIndex of [0, 1, 2]) {
+  const reads = await readAiMediaPanelResults(healthyReads.map((response, index) => (
+    index === failedIndex ? Promise.reject(new Error(`read-${index} unavailable`)) : Promise.resolve(response)
+  )));
+  for (const [index, response] of reads.entries()) {
+    if (index === failedIndex) assert.equal(response.code, 0);
+    else assert.equal(response, healthyReads[index], 'an unrelated failed read must not discard a healthy response');
+  }
+  if (failedIndex === 0) {
+    const updated = mergeAiMediaWorkflowHistoryHead(
+      [{ id: 'workflow-active', status: 'RUNNING', revision: 1 }], reads[1].data.items,
+    );
+    assert.equal(updated[0].status, 'SUCCEEDED', 'a completed workflow must become visible even while its context read fails');
+  }
+}
 
 const lock = createMediaMutationLock();
 const busy = [];

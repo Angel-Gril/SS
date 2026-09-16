@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { api, tokenStore } from '@/lib/api';
-import { normalizeLoginReturnTo } from '@/lib/auth-return-to';
+import { loadDashboardSession, type DashboardSessionResult } from '@/lib/dashboard-session';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { AnnouncementPopup } from '@/components/announcement-popup';
+import { Button } from '@/components/ui/button';
 import type { AuthUser } from 'shared';
 
 /** USER 切到 warehouse 端时，按 STAFF 视角渲染（菜单/拦截/默认页都共用 STAFF 规则）*/
@@ -47,47 +47,31 @@ function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean)
   return false;
 }
 
-function getLoginPath(pathname: string, search: string): string {
-  if (pathname.startsWith('/admin')) return '/admin/login';
-  const returnTo = normalizeLoginReturnTo(`${pathname}${search}`);
-  if (returnTo) return `/login?returnTo=${encodeURIComponent(returnTo)}`;
-  return '/login';
-}
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
+  const sessionRequest = useMemo(() => ({ pathname, attempt: sessionAttempt }), [pathname, sessionAttempt]);
+  const [session, setSession] = useState<{
+    request: typeof sessionRequest;
+    result: DashboardSessionResult;
+  } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const currentSession = session?.request === sessionRequest ? session.result : null;
+  const user = currentSession?.status === 'authenticated' ? currentSession.user : null;
 
   useEffect(() => {
-    let cancelled = false;
-
-    api.get<AuthUser>('/api/user/me')
-      .then((res) => {
-        if (cancelled) return;
-        if (res.code === 1 && res.data) {
-          setUser(res.data);
-        } else {
-          tokenStore.clear();
-          router.replace(getLoginPath(pathname, window.location.search));
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        tokenStore.clear();
-        router.replace(getLoginPath(pathname, window.location.search));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const controller = new AbortController();
+    void loadDashboardSession({ signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted || result.status === 'cancelled') return;
+      setSession({ request: sessionRequest, result });
+    });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [router, pathname]);
+  }, [sessionRequest]);
 
   // 路由权限保护：基于 effectiveRole 判断（USER 切仓库端时按 STAFF 视角拦）
   useEffect(() => {
@@ -102,10 +86,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     setMobileNavigationOpen(false);
   }, [pathname]);
 
-  if (loading) {
+  if (!currentSession || currentSession.status === 'cancelled') {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" role="status" aria-label="正在验证登录状态">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+
+  if (currentSession.status === 'unavailable') {
+    const descriptions = {
+      timeout: '服务器响应超时，请检查网络后重试。',
+      network: '暂时无法连接服务器，网络恢复后可重试。',
+      maintenance: '系统正在维护，请稍后重试。',
+      response: '暂时无法确认登录状态，请稍后重试。',
+    };
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="w-full max-w-sm space-y-4 rounded-lg border bg-card p-6 text-center" role="alert" aria-labelledby="session-error-title">
+          <h1 id="session-error-title" className="text-lg font-semibold">页面暂时无法加载</h1>
+          <p className="text-sm text-muted-foreground">{descriptions[currentSession.reason]}</p>
+          <Button type="button" onClick={() => setSessionAttempt((attempt) => attempt + 1)}>重试连接</Button>
+        </div>
       </div>
     );
   }

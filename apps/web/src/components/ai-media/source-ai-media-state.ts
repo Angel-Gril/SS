@@ -1,8 +1,11 @@
+import type { ApiResponse } from '@/lib/api';
+
 export interface LatestLoadRequest {
   targetId: string;
   generation: number;
   quiet: boolean;
   interactive: boolean;
+  signal: AbortSignal;
 }
 
 export function createLatestLoadCoordinator(options: {
@@ -13,7 +16,8 @@ export function createLatestLoadCoordinator(options: {
   let generation = 0;
   let active: Promise<void> | null = null;
   let activeRequest: LatestLoadRequest | null = null;
-  let queued: LatestLoadRequest | null = null;
+  let activeController: AbortController | null = null;
+  let queued: Omit<LatestLoadRequest, 'signal'> | null = null;
   let showsLoading = false;
 
   return {
@@ -36,20 +40,28 @@ export function createLatestLoadCoordinator(options: {
           || Boolean(sameQueuedTarget && previousQueued.interactive)
           || Boolean(sameActiveTarget && activeRequest?.interactive),
       };
-      if (active) return active;
+      if (active) {
+        if (activeRequest && activeRequest.targetId !== latestTargetId) activeController?.abort();
+        return active;
+      }
 
       const drain = (async () => {
         while (queued) {
-          const request = queued;
+          const controller = new AbortController();
+          const request: LatestLoadRequest = { ...queued, signal: controller.signal };
           queued = null;
           activeRequest = request;
+          activeController = controller;
           try {
             await options.execute(
               request,
-              () => request.generation === generation && request.targetId === latestTargetId,
+              () => !request.signal.aborted && request.generation === generation && request.targetId === latestTargetId,
             );
+          } catch (error) {
+            if (!request.signal.aborted) throw error;
           } finally {
             if (activeRequest === request) activeRequest = null;
+            if (activeController === controller) activeController = null;
           }
         }
       })();
@@ -70,9 +82,22 @@ export function createLatestLoadCoordinator(options: {
       generation += 1;
       queued = null;
       activeRequest = null;
+      activeController?.abort();
       showsLoading = false;
     },
   };
+}
+
+export async function readAiMediaPanelResults<TContext, THistory, TCapabilities>(
+  requests: readonly [Promise<ApiResponse<TContext>>, Promise<ApiResponse<THistory>>, Promise<ApiResponse<TCapabilities>>],
+): Promise<[ApiResponse<TContext>, ApiResponse<THistory>, ApiResponse<TCapabilities>]> {
+  const results = await Promise.allSettled(requests);
+  const response = <T>(result: PromiseSettledResult<ApiResponse<T>>): ApiResponse<T> => (
+    result.status === 'fulfilled'
+      ? result.value
+      : { code: 0, msg: result.reason instanceof Error ? result.reason.message : '读取失败，请重试' }
+  );
+  return [response(results[0]), response(results[1]), response(results[2])];
 }
 
 export interface MediaMutationLock {

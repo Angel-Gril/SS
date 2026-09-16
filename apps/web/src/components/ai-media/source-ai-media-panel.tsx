@@ -23,6 +23,7 @@ import {
 } from './source-ai-image-mask-editor';
 import {
   createLatestLoadCoordinator,
+  readAiMediaPanelResults,
   confirmAiMediaInteractiveDraftDiscard,
   isMediaMutationConflict,
   type AiImageApplyResult,
@@ -409,6 +410,7 @@ export function SourceAiMediaPanel({
   const priorityWorkflowIdsRef = useRef(new Set<string>());
   const detailRefreshOffsetRef = useRef(0);
   const detailRefreshGenerationRef = useRef(0);
+  const detailRefreshControllerRef = useRef<AbortController | null>(null);
   const applicationLoadGenerationRef = useRef(0);
   const applicationPageGenerationRef = useRef(0);
   const applicationLastReadAtRef = useRef(0);
@@ -527,7 +529,7 @@ export function SourceAiMediaPanel({
 
   const readApplicationLedger = useCallback(async (
     requestTargetId: string,
-    options: { beforeSequence?: number; operationKey?: string } = {},
+    options: { beforeSequence?: number; operationKey?: string; signal?: AbortSignal } = {},
   ): Promise<AiMediaApplicationLedger | undefined> => {
     const path = aiMediaTargetApplicationsPath(requestTargetId, {
       limit: 25,
@@ -535,7 +537,7 @@ export function SourceAiMediaPanel({
       operationKey: options.operationKey,
     });
     try {
-      const result = await api.get<unknown>(path);
+      const result = await api.get<unknown>(path, { signal: options.signal });
       const normalized = result.code === 1 ? normalizeAiMediaApplicationLedger(result.data) : null;
       return normalized?.target.id === requestTargetId ? normalized : undefined;
     } catch {
@@ -545,7 +547,7 @@ export function SourceAiMediaPanel({
 
   const readListingDraftApplicationLedger = useCallback(async (
     requestTargetId: string,
-    options: { beforeSequence?: number; operationKey?: string } = {},
+    options: { beforeSequence?: number; operationKey?: string; signal?: AbortSignal } = {},
   ): Promise<AiMediaListingDraftApplicationLedger | undefined> => {
     try {
       return await listingDraftApplicationClient.listApplications({
@@ -553,6 +555,7 @@ export function SourceAiMediaPanel({
         limit: 25,
         beforeSequence: options.beforeSequence,
         operationKey: options.operationKey,
+        signal: options.signal,
       });
     } catch {
       return undefined;
@@ -643,10 +646,10 @@ export function SourceAiMediaPanel({
     try {
       const capabilitiesRequest = capabilitiesRef.current
         ? Promise.resolve({ code: 1, msg: '', data: capabilitiesRef.current })
-        : api.get<AiMediaCapabilities>('/api/ai-images/capabilities');
-      const [contextResult, historyResult, capabilitiesResult] = await Promise.all([
-        api.get<AiMediaContextResponse>(aiMediaContextPath(requestTarget)),
-        api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(aiMediaWorkflowHistoryPath(requestTarget)),
+        : api.get<AiMediaCapabilities>('/api/ai-images/capabilities', { signal: request.signal });
+      const [contextResult, historyResult, capabilitiesResult] = await readAiMediaPanelResults([
+        api.get<AiMediaContextResponse>(aiMediaContextPath(requestTarget), { signal: request.signal }),
+        api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(aiMediaWorkflowHistoryPath(requestTarget), { signal: request.signal }),
         capabilitiesRequest,
       ]);
       if (!requestStillCurrent()) return;
@@ -705,10 +708,11 @@ export function SourceAiMediaPanel({
       const historyPage = historyResult.code === 1
         ? normalizeAiMediaWorkflowPage(historyResult.data)
         : null;
+      // Only a successful history read can substitute for refreshing individual tasks.
+      priorityWorkflowIdsRef.current = new Set(
+        historyPage?.priorityItems.map((workflow) => workflow.id) || [],
+      );
       if (historyPage) {
-        priorityWorkflowIdsRef.current = new Set(
-          historyPage.priorityItems.map((workflow) => workflow.id),
-        );
         const firstPageItems = mergeAiMediaWorkflowHistoryHead(
           historyPage.items,
           historyPage.priorityItems,
@@ -760,7 +764,7 @@ export function SourceAiMediaPanel({
           applicationPageGenerationRef.current += 1;
           setApplicationLoadingMore(false);
           applicationLastReadAtRef.current = Date.now();
-          const listingLedger = await readListingDraftApplicationLedger(request.targetId);
+          const listingLedger = await readListingDraftApplicationLedger(request.targetId, { signal: request.signal });
           if (!requestStillCurrent() || applicationGeneration !== applicationLoadGenerationRef.current) return;
           if (listingLedger) {
             setListingDraftTargetStale(
@@ -777,7 +781,7 @@ export function SourceAiMediaPanel({
           applicationPageGenerationRef.current += 1;
           setApplicationLoadingMore(false);
           applicationLastReadAtRef.current = Date.now();
-          const ledger = await readApplicationLedger(request.targetId);
+          const ledger = await readApplicationLedger(request.targetId, { signal: request.signal });
           if (!requestStillCurrent() || applicationGeneration !== applicationLoadGenerationRef.current) return;
           if (ledger) {
             reconcileApplicationTargetVersion(ledger.target.updatedAt);
@@ -806,6 +810,7 @@ export function SourceAiMediaPanel({
     prioritySeenCursorsRef.current.clear();
     priorityHeadSignatureRef.current = '';
     detailRefreshGenerationRef.current += 1;
+    detailRefreshControllerRef.current?.abort();
     applicationLoadGenerationRef.current += 1;
     applicationPageGenerationRef.current += 1;
     applicationLastReadAtRef.current = 0;
@@ -838,26 +843,36 @@ export function SourceAiMediaPanel({
       : Array.from({ length: 20 }, (_, index) => refreshableIds[(offset + index) % refreshableIds.length]!);
     detailRefreshOffsetRef.current = offset + activeIds.length;
     if (!activeIds.length) return;
-    const results = await Promise.all(activeIds.map((workflowId) => api.get<AiMediaWorkflow>(
-        `/api/ai-images/workflows/${encodeURIComponent(workflowId)}?contextType=${encodeURIComponent(targetRef.current.type)}&contextId=${encodeURIComponent(requestTargetId)}`,
-    ).catch(() => null)));
-    if (
-      targetIdRef.current !== requestTargetId
-      || generation !== detailRefreshGenerationRef.current
-    ) return;
-    const updates = new Map(results.flatMap((result) => (
-      result?.code === 1 && result.data ? [[result.data.id, result.data] as const] : []
-    )));
-    if (!updates.size) return;
-    setWorkflows((current) => current.map((workflow) => {
-      const updated = updates.get(workflow.id);
-      return updated
-        ? mergeAiMediaWorkflowHistoryHead([workflow], [updated])[0] || workflow
-        : workflow;
-    }));
+    detailRefreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    detailRefreshControllerRef.current = controller;
+    try {
+      const results = await Promise.all(activeIds.map((workflowId) => api.get<AiMediaWorkflow>(
+          `/api/ai-images/workflows/${encodeURIComponent(workflowId)}?contextType=${encodeURIComponent(targetRef.current.type)}&contextId=${encodeURIComponent(requestTargetId)}`,
+          { signal: controller.signal },
+      ).catch(() => null)));
+      if (
+        controller.signal.aborted
+        || targetIdRef.current !== requestTargetId
+        || generation !== detailRefreshGenerationRef.current
+      ) return;
+      const updates = new Map(results.flatMap((result) => (
+        result?.code === 1 && result.data ? [[result.data.id, result.data] as const] : []
+      )));
+      if (!updates.size) return;
+      setWorkflows((current) => current.map((workflow) => {
+        const updated = updates.get(workflow.id);
+        return updated
+          ? mergeAiMediaWorkflowHistoryHead([workflow], [updated])[0] || workflow
+          : workflow;
+      }));
+    } finally {
+      if (detailRefreshControllerRef.current === controller) detailRefreshControllerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
+    loadCoordinatorRef.current?.invalidate();
     contextRef.current = null;
     setLoading(true);
     setContext(null);
@@ -875,6 +890,7 @@ export function SourceAiMediaPanel({
     prioritySeenCursorsRef.current.clear();
     priorityHeadSignatureRef.current = '';
     detailRefreshGenerationRef.current += 1;
+    detailRefreshControllerRef.current?.abort();
     applicationLoadGenerationRef.current += 1;
     applicationPageGenerationRef.current += 1;
     applicationLastReadAtRef.current = 0;

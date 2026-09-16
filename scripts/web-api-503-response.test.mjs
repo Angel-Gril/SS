@@ -12,14 +12,26 @@ const compiled = ts.transpileModule(source, {
   },
 }).outputText;
 
+const authModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('apps/web/src/lib/auth-return-to.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { module: authModule, exports: authModule.exports, URL }, { filename: 'auth-return-to.ts' });
+
 async function run503(body) {
   const sandbox = {
     exports: {},
     module: { exports: {} },
     process: { env: {} },
+    require(specifier) {
+      assert.equal(specifier, '@/lib/auth-return-to');
+      return authModule.exports;
+    },
     fetch: async () => ({ status: 503, json: async () => body }),
     Headers,
     URL,
+    AbortController,
+    setTimeout,
+    clearTimeout,
     window: undefined,
   };
   vm.runInNewContext(compiled, sandbox, { filename: modulePath });

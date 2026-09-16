@@ -99,6 +99,7 @@ export interface AiMediaListingDraftApplicationClient {
     beforeSequence?: number | null;
     operationKey?: string | null;
     limit?: number;
+    signal?: AbortSignal;
   }): Promise<AiMediaListingDraftApplicationLedger>;
   apply(
     workflow: AiMediaWorkflow,
@@ -632,7 +633,7 @@ export function aiMediaListingDraftApplicationClient(
 
     async listApplications(input) {
       const raw = unwrap(
-        await transport.get<unknown>(listingDraftApplicationHistoryPath(input)),
+        await transport.get<unknown>(listingDraftApplicationHistoryPath(input), { signal: input.signal }),
         '读取草稿图片应用记录失败',
       );
       const ledger = normalizeAiMediaListingDraftApplicationLedger(raw);
