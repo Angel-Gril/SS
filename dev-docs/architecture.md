@@ -50,6 +50,7 @@
 | Wanx 隔离执行与预算 | `ai-image-wanx-trial-execution.ts`、`ai-image-wanx-trial-campaign.ts`、授权/重指定合同模块、`ai-image-sandbox-approval.ts`、原 sandbox claim/private writer；single-submit 和 campaign CLI 仅装配 | 同左 | v4 绑定物理根/冻结清单；不可变追加绑定旧历史与新输入，INPAINT 质量 PASS 后才可 FULL_EDIT；未消费条件额度的重指定须新明确批准并以旧 round 内不可变记录同时撤销旧操作，新旧 reader 均拒绝旧 FULL_EDIT；先累计预占再写槽位、最终发包复查 | 改 round/凭据/审批/目录重置累计、失败/免费返还、抢占遗留锁、跳过质量前置、隔离结果冒充 ERP 或结算 | keep |
 | 部署/配置 | env templates、deploy scripts、SystemConfig | 各自保持启动/业务配置职责 | env/deploy contract | 页面常量和历史计划 | repair |
 | REL-04 候选证据 | `packages/shared/src/rel04-release-evidence.ts` | 同左 | canary v2、完整 VPS verifier v1；CLI 与 API 共用候选绑定校验 | 日志文本、页面和手写运行回执 | keep |
+| 正式 QA04 汇总 | `scripts/qa04-final-acceptance.mjs`、`qa04-final-evidence.mjs`；原生离线运行由 `qa04-offline-gate.mjs` 负责 | 同左 | 原件摘要、当前 clean commit、九 gate 与真实扩展计数；历史 ERP 只可在业务源码/依赖相同下引用，输出保留未验证范围；REL04 消费者保持原合同 | 手写 COMPLETE、替换旧回执 commit、历史样本泛化为全部能力或新 UI 线上验收 | keep |
 | 全暗态维护验收 | `scripts/dark-maintenance-deployment.mjs`；原生离线回执由 `scripts/qa04-offline-gate.mjs` 产生 | 同左 | 独立维护 kind；原备份 verifier、签名、完整 VPS 与前后官网身份绑定；GET-only source 验收 | 手写 PASS、正式 QA04/REL04/官网或 Provider 能力消费者 | keep |
 
 ## 数据、合同与安全边界

@@ -19,6 +19,8 @@
     "qa:04:offline": "node scripts/qa04-offline-gate.mjs",
     "qa:04:offline:list": "node scripts/qa04-offline-gate.mjs --list",
     "test:qa04:offline-contract": "node scripts/qa04-offline-gate-contract.test.mjs",
+    "qa:04:final": "node scripts/qa04-final-acceptance.mjs",
+    "test:qa04:final": "node --test scripts/qa04-final-acceptance.test.mjs",
     "maintenance:backup:bind": "node scripts/dark-maintenance-deployment.mjs --backup-binding",
     "maintenance:baseline": "node --import ./apps/server/node_modules/tsx/dist/loader.mjs scripts/dark-maintenance-deployment.mjs --baseline",
     "maintenance:verify": "node --import ./apps/server/node_modules/tsx/dist/loader.mjs scripts/dark-maintenance-deployment.mjs --acceptance",

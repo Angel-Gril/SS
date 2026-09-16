@@ -479,6 +479,22 @@ VPS 验证必须在该候选签名之后开始，完成时间不晚于 canary �
 commit、完整九项 gate、extension 结果和零 Provider/Ozon/VPS 副作用，再把该摘要绑定为
 `TARGET_COMMIT_QA04_REGRESSION`。第一次真实 Ozon reconciliation 仍属于 `REL-02` 单店试点。
 
+正式 QA04 回执由 `pnpm qa:04:final` 汇总原件产生。先在最终 clean commit 执行
+`pnpm qa:04:offline --output <私有绝对路径>/qa04-offline.json`，保存完整原生日志。输入文件使用
+`SS_ERP_QA04_FINAL_INPUTS`，逐项引用原生回执/日志、四类 QA02 技术原件、历史质量反例与正常 ERP
+生成/计费/恢复原件的绝对路径和 SHA-256；字段合同见 `scripts/qa04-final-acceptance.mjs`。
+不接受操作员直接填写 `PASS` 或 `COMPLETE` 作为证据。可先不带 `--output` 校验，再写入新的私有文件：
+
+```text
+pnpm qa:04:final --input <私有输入文件> --input-sha256 <输入摘要>
+pnpm qa:04:final --input <私有输入文件> --input-sha256 <输入摘要> --output <新的私有回执文件>
+```
+
+入口核对当前 Git、九步原生日志、实际扩展检查计数及原件链；历史 ERP 证据仅在服务端、shared、
+schema 和依赖完全一致时可引用，仅允许根 package 新增本次两个固定 QA 命令；其他构建或安装脚本必须一致。输出保留真实执行提交和质量
+反例，明确新目标 Web、生产 MV3 与官网分发的未验证范围。它不查询供应商账单、不发网络请求、
+不改变配置；当前验收决定见[生图计费阶段](../dev-docs/stages/ai-image-billing-closure-2026-09.md)。
+
 ```bash
 export REL04_API_ORIGIN=https://ss-erp.com
 export REL04_TARGET_GIT_COMMIT=<full-target-commit>

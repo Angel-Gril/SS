@@ -14,6 +14,11 @@ const steps = [
     args: ['--experimental-vm-modules', '--test', 'scripts/preflight-process-exit.test.mjs'],
   },
   {
+    name: 'QA-04 original evidence aggregation contract',
+    command: 'node',
+    args: ['--test', 'scripts/qa04-final-acceptance.test.mjs'],
+  },
+  {
     name: 'server typecheck',
     command: 'pnpm',
     args: ['--filter', 'server', 'typecheck'],
