@@ -582,6 +582,11 @@ node scripts/sign-extension-release.mjs \
 `chrome://extensions` 对目标扩展明确 reload，并直接使用该实例既有的 loopback CDP 地址执行活动
 验收。
 
+同一 QA profile 的新进程仍可能复用旧 Service Worker 缓存，即使 `getManifest().version` 已显示新版。
+若 active-worker 的主脚本摘要不一致，先保留失败结果并将实际活动源码与候选、历史源码逐字节比较；
+确认旧缓存后，只在已核对身份的专用 QA 实例中明确 reload 该扩展，再执行下方两项原生验收。
+恢复保留受管目录、非密 profile 和原失败证据；版本号相同不能代替活动脚本一致性检查。
+
 安装前可在目标机器运行 `pnpm diagnose:extension:managed -- --expected-version <version>`，确认固定
 Extension ID、受管目录、稳定 key 派生 ID 和 loopback CDP 端口均已绑定。诊断返回
 `EXTENSION_STATUS=FOUND` 与 `CDP_STATUS=READY` 后，再按下方命令执行 active-worker attestation；
