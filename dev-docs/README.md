@@ -32,6 +32,7 @@
 ## 当前状态
 
 - 2026-09-18 接续：修复 hosted 套图计划 GET 被扩展响应安全层误判的问题。托管计划公开投影中的业务归属 `{level, key}` 仅在 hosted 工作台消息且对象字段精确时放行，BYOK/其他运行时响应仍拒绝 `key` 和所有密钥形状。提交 `15a42d6f`；定向授权 17/17、完整 preflight `6314 passed / 321 skipped`，cloud/local `1.0.335` 候选均已生成并通过包校验，但未签名、未部署、未产生 Provider 费用。原套图计划 `cmu5y1io600025oq82o0epff5` 保持未执行，下一步继续其批准、START/CONTINUE 和两槽验收。
+- 2026-09-18 真实套图接续：沿自有 QA 来源计划完成一次 Web 托管两槽执行，suite `cmu618tna000c5oq8vnn4pkys` 最终 `SUCCEEDED`，2/2 成功、0 失败、冻结 CNY 0.28；两个候选均人工审核通过并追加到草稿，当前 suite revision 9、两个 slot application 均为 `APPLIED`，队列 `queued/running/failed` 均为 0。图片已目视核验，无文字、水印或 Logo；该真实运行通过 Web 套图 owner，不替代修复版 MV3 扩展的独立浏览器 QA。`1.0.335` 候选已签名并独立验签（signature SHA-256 `ef26b8a1c241477c3e52110ff5eb8dd419e466f681a21e30b89229fa8399fa7d`），仍未部署或官网发布。
 
 - 2026-09-16 剩余功能收口：正常 Wanx 单参考、套图与 CNY 计费、生产扩展上传入口、四项 Web 合同及同源请求已完成本地实现；用户已批准六张/CNY 1 实测及双区全量启用配置。实现、迁移、验证和未执行边界统一见[本轮实现与已批准验收范围](stages/ai-image-billing-closure-2026-09.md#本轮实现与已批准验收范围)，原运行版本仍以下一条为准。
 - 2026-09-16 接续：Web 读取恢复已随 `eeb8dccd` 完成正式 QA04、COM/CN 部署和官网扩展 `1.0.329` 发布；COM 受管扩展升级、原生运行验证与常规浏览器读取通过。最终证据、旧 Worker 缓存恢复及未覆盖范围统一见[双区正式发布与受管升级](stages/ai-image-billing-closure-2026-09.md#双区正式发布与受管升级)；下面的 `81072d68` 结果保留为上轮正常 FULL_EDIT/费用基线，不重复付费生成或供应商账单轮询。
