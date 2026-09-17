@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { deflateSync } from 'node:zlib';
 import { QA04_OFFLINE_STEPS } from './qa04-offline-gate.mjs';
+import { suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
 
 let subject = {};
 try { subject = await import('./qa04-final-acceptance.mjs'); }
@@ -800,8 +801,105 @@ test('refuses to hide quality counterexamples or relabel them as positive eviden
   assert.throws(() => f.verify(), error => error.code === 'QA04_COUNTEREXAMPLE_INVALID');
 });
 
+test('derives current-source suite acceptance from two original jobs, PNGs, reviews, queue records and a restored bootstrap', t => {
+  const f = suiteFlowFixture(fixture(t), png), result = f.verify(), proof = result.report.provenance.normalErp;
+  assert.equal(proof.executionCommit, f.targetGitCommit); assert.equal(proof.workflowKind, 'SUITE');
+  assert.equal(proof.successfulImages, 2); assert.equal(proof.actualCostMinor, 28); assert.equal(proof.chargeCount, 2);
+  assert.equal(proof.applicationCount, 2); assert.equal(proof.verifiedSuiteBrowser, true); assert.equal(proof.targetUiProductionVerified, false);
+  assert.equal(proof.images.length, 2); assert.equal(proof.configurationRestored, true);
+  assert.equal(result.report.provenance.fullProductionMv3Verified, false);
+  assert.doesNotMatch(JSON.stringify(result.report), /private-suite|private-draft|private-source/u);
+});
+
+test('suite rejects missing images, price changes, reused jobs and historical records relabeled as current', t => {
+  const f = suiteFlowFixture(fixture(t), png);
+  const ref = f.input.normalErp.generated, original = readFileSync(ref.path);
+  for (const change of [value => { value.gitCommit = f.erpCommit; },
+    value => { value.rows[0].job.startedAt = '2026-09-16T10:19:59.000Z'; },
+    value => { value.rows[0].cost.charges[0].actualCostMinor = 13; },
+    value => { value.rows[0].job.pricing.unitCostCents = 15; },
+    value => { value.rows[1] = structuredClone(value.rows[0]); }, value => { value.rows[0].job.attemptCount = 2; }]) {
+    f.change(ref, change); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(ref, f.put('suite-generated-db.json', original));
+  }
+  f.change(f.input.normalErp.acceptance, value => { delete value.secondImage; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('suite refuses lost prior draft assignments, incorrect queue ids, rejected reviews and pending restoration', t => {
+  const f = suiteFlowFixture(fixture(t), png), ref = f.input.normalErp.applied, original = readFileSync(ref.path);
+  f.change(ref, value => { value.after.media.assignments.shift(); });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID'); Object.assign(ref, f.put('suite-applied.json', original));
+  const queue = f.get(f.manifest.queue); f.changeMapped('queue', value => { value.jobs[0].id = 'other-queue-job'; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID'); f.changeMapped('queue', value => Object.assign(value, queue));
+  f.changeMapped('reviews', value => { value.decision = 'REJECT'; }, 1);
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID'); f.changeMapped('reviews', value => { value.decision = 'APPROVE'; }, 1);
+  f.change(f.input.normalErp.controllerStatus, value => { value.result.qualification.pending.suites = 1; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('suite binds both image bytes, canonical source lineage, browser owner and restore candidate to the new execution', t => {
+  const f = suiteFlowFixture(fixture(t), png);
+  const manifestOriginal = readFileSync(f.input.normalErp.acceptance.path);
+  f.change(f.input.normalErp.acceptance, value => { value.secondImage = structuredClone(f.input.normalErp.image); });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  Object.assign(f.input.normalErp.acceptance, f.put('suite-inputs.json', manifestOriginal));
+  const canonical = f.put('canonical-suite-reference.png', png(1024, 1024, 63));
+  f.change(f.input.normalErp.acceptance, value => { value.referenceImage = canonical; });
+  for (const phase of ['generated', 'restored']) f.change(f.input.normalErp[phase], database => {
+    database.suiteReferences[0].assetSha256 = canonical.sha256;
+    database.suiteReferences[0].sizeBytes = readFileSync(canonical.path).length;
+    for (const row of database.rows) {
+      row.job.frozenInputs[0].sha256 = canonical.sha256; row.job.frozenInputs[0].sizeBytes = readFileSync(canonical.path).length;
+      row.workflow.inputs[0].assetSha256 = canonical.sha256; row.workflow.inputAssets[0].sha256 = canonical.sha256;
+      row.workflow.inputAssets[0].sizeBytes = readFileSync(canonical.path).length;
+    }
+  });
+  assert.equal(f.verify().report.provenance.normalErp.referenceSha256, canonical.sha256);
+  const controller = f.input.normalErp.controllerStatus, original = readFileSync(controller.path);
+  for (const change of [value => { value.result.qualification.commit = f.erpCommit; },
+    value => { value.result.qualification.candidate.offlineSha256 = hash('other-offline'); },
+    value => { value.result.qualification.maximumTaskCostCents = 14; }]) {
+    f.change(controller, change); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(controller, f.put('suite-controller.json', original));
+  }
+  f.changeMapped('browser', value => { value.ownerSha256 = hash('other-owner'); });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('suite binds the actual accepted 28-minor quote and permits UI readback before its later database snapshot', t => {
+  const f = suiteFlowFixture(fixture(t), png);
+  assert.ok(Date.parse(f.get(f.manifest.generatedUi).at) < Date.parse(f.get(f.input.normalErp.generated).observedAt));
+  const start = f.get(f.manifest.startRequest);
+  for (const mutate of [value => { value.body.command.acceptedMaximumCostCents = 29; },
+    value => { value.body.command.acceptedEstimatedCostCents = 27; },
+    value => { value.body.command.expectedPreviewHash = hash('other-preview'); },
+    value => { value.body.command.version = 'other-command'; }]) {
+    f.changeMapped('startRequest', mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    f.changeMapped('startRequest', value => Object.assign(value, structuredClone(start)));
+  }
+  const ui = f.get(f.manifest.generatedUi);
+  f.changeMapped('generatedUi', value => { value.projection.quote.maximumCostCents = 0; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  f.changeMapped('generatedUi', value => Object.assign(value, ui));
+  assert.equal(f.verify().report.provenance.normalErp.actualCostMinor, 28);
+});
+
+test('suite requires the distinct START receipt and the later CONTINUE dispatch before queue execution', t => {
+  const f = suiteFlowFixture(fixture(t), png), acceptance = f.input.normalErp.acceptance;
+  const original = readFileSync(acceptance.path);
+  for (const field of ['startResponse', 'continueRequest', 'continueResponse']) {
+    f.change(acceptance, value => { delete value[field]; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(acceptance, f.put('suite-inputs.json', original));
+  }
+  f.changeMapped('submitted', value => { value.startExecutePosts = 0; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
 test('writes only a new private artifact and is accepted by the unchanged formal consumer', async t => {
-  for (const f of [fixture(t), draftFlowFixture(t), historicalDraftFlowFixture(t)]) {
+  for (const f of [fixture(t), draftFlowFixture(t), historicalDraftFlowFixture(t), suiteFlowFixture(fixture(t), png)]) {
   const outputPath = path.join(f.evidenceRoot, 'final.json');
   assert.equal(typeof subject.writeQa04FinalAcceptance, 'function', 'durable formal producer must exist');
   const result = subject.writeQa04FinalAcceptance({ inputPath: f.inputPath, inputSha256: f.save(), repositoryRoot: f.repositoryRoot, now: NOW, outputPath });

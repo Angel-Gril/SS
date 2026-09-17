@@ -6,6 +6,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { gitCommitTreeEnvironment, gitCommitTreeSafeDirectoryArgs } from './git-commit-tree.mjs';
 import { QA04_OFFLINE_STEPS, parseQa04OfflineEvidence, readQa04GitProvenance } from './qa04-offline-gate.mjs';
+import { verifySuiteNormalErp } from './qa04-final-suite-evidence.mjs';
 import {
   canonicalJson, canonicalTimestamp, evidenceReader, exactKeys, fail, isCommit, isRecord,
   isSha256, isWithin, pngEvidence, privateOutputPath, realDirectory, requireThat, sha256, sortedJson,
@@ -662,6 +663,8 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
 function verifyNormalErp(reader, input, root, now) {
   return scoped('QA04_ERP_INVALID', () => {
     const code = 'QA04_ERP_INVALID', refs = input.normalErp, acceptance = reader.json(refs.acceptance, code);
+    if (acceptance.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS') return verifySuiteNormalErp(reader, input, acceptance, now,
+      (executionCommit, targetCommit) => verifyErpSource(root, executionCommit, targetCommit));
     if (acceptance.kind === 'NORMAL_IMAGE_DRAFT_FLOW_INPUTS') return verifyDraftNormalErp(reader, input, acceptance, root, now);
     const generated = reader.json(refs.generated, code), applied = reader.json(refs.applied, code), restored = reader.json(refs.restored, code);
     const controller = reader.json(refs.controllerStatus, code, { nativeCompact: true }), image = pngEvidence(reader, refs.image, code);
