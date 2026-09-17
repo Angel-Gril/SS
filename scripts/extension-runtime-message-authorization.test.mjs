@@ -674,6 +674,43 @@ test('rejects secrets from every public runtime response while allowing redacted
   }
 });
 
+test('allows only hosted ownership keys in hosted workbench responses', () => {
+  const { api } = loadApi();
+  const ownershipResponse = {
+    ok: true,
+    data: {
+      ownership: { level: 'sku', key: 'sku-1' },
+    },
+  };
+  const hostedType = api.MESSAGE_TYPES.HOSTED_WORKBENCH.GET_CURRENT_PLAN;
+  assert.doesNotThrow(() => api.assertSafeRuntimeResponse(
+    ownershipResponse,
+    [],
+    hostedType,
+  ));
+  const sent = [];
+  api.createSafeSendResponse({ type: hostedType }, (value) => sent.push(value))(ownershipResponse);
+  assert.deepEqual(sent, [ownershipResponse]);
+  assert.throws(
+    () => api.assertSafeRuntimeResponse(ownershipResponse, [], api.MESSAGE_TYPES.WORKBENCH.GET_PUBLIC_STATE),
+    (error) => error && error.code === 'SS_ERP_RUNTIME_RESPONSE_SECRET',
+  );
+  assert.throws(
+    () => api.assertSafeRuntimeResponse({
+      ok: true,
+      data: { ownership: { level: 'sku', key: 'sk-not-a-real-key' } },
+    }, [], hostedType),
+    (error) => error && error.code === 'SS_ERP_RUNTIME_RESPONSE_SECRET',
+  );
+  assert.throws(
+    () => api.assertSafeRuntimeResponse({
+      ok: true,
+      data: { ownership: { level: 'sku', key: 'sku-1', extra: 'unexpected' } },
+    }, [], hostedType),
+    (error) => error && error.code === 'SS_ERP_RUNTIME_RESPONSE_SECRET',
+  );
+});
+
 test('dispatcher authorizes before invoking handlers and sanitizes handler responses', async () => {
   const { api } = loadApi();
   const secret = 'sk-session-secret-sentinel';

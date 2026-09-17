@@ -432,7 +432,20 @@
     });
   }
 
-  function inspectPublicValue(value, state, forbiddenValues, responseMode) {
+  function isPublicOwnershipKey(parent, key, messageType, responseMode) {
+    if (!responseMode
+      || !HOSTED_WORKBENCH_TYPES.has(messageType)
+      || normalizedKey(key) !== 'key'
+      || !isRecord(parent)) return false;
+    var keys = Object.keys(parent);
+    return keys.length === 2
+      && keys.includes('level')
+      && keys.includes('key')
+      && (parent.level === 'sku' || parent.level === 'compatibility_group')
+      && typeof parent.key === 'string';
+  }
+
+  function inspectPublicValue(value, state, forbiddenValues, responseMode, messageType) {
     if (value === null || typeof value === 'string' || typeof value === 'number'
       || typeof value === 'boolean') {
       if (typeof value === 'string') assertSafeString(value, forbiddenValues);
@@ -454,7 +467,7 @@
       }
       state.depth += 1;
       value.forEach(function (item) {
-        inspectPublicValue(item, state, forbiddenValues, responseMode);
+        inspectPublicValue(item, state, forbiddenValues, responseMode, messageType);
       });
       state.depth -= 1;
       return;
@@ -462,11 +475,13 @@
     if (!isRecord(value)) throw authError('SS_ERP_RUNTIME_MESSAGE_PAYLOAD_INVALID');
     state.depth += 1;
     Object.keys(value).forEach(function (key) {
-      if (isSecretField(key)) throw authError('SS_ERP_RUNTIME_MESSAGE_SECRET_FORBIDDEN');
+      if (isSecretField(key) && !isPublicOwnershipKey(value, key, messageType, responseMode)) {
+        throw authError('SS_ERP_RUNTIME_MESSAGE_SECRET_FORBIDDEN');
+      }
       if (responseMode && RESPONSE_URL_FIELD_NAMES.has(normalizedKey(key))) {
         throw authError('SS_ERP_RUNTIME_MESSAGE_SECRET_FORBIDDEN');
       }
-      inspectPublicValue(value[key], state, forbiddenValues, responseMode);
+      inspectPublicValue(value[key], state, forbiddenValues, responseMode, messageType);
     });
     state.depth -= 1;
   }
@@ -783,9 +798,9 @@
     return result;
   }
 
-  function assertSafeRuntimeResponse(value, forbiddenValues) {
+  function assertSafeRuntimeResponse(value, forbiddenValues, messageType) {
     try {
-      inspectPublicValue(value, { depth: 0, nodes: 0 }, forbiddenValues || [], true);
+      inspectPublicValue(value, { depth: 0, nodes: 0 }, forbiddenValues || [], true, messageType);
     } catch (error) {
       if (error && error.code === 'SS_ERP_RUNTIME_MESSAGE_SECRET_FORBIDDEN') {
         throw authError('SS_ERP_RUNTIME_RESPONSE_SECRET');
@@ -815,7 +830,7 @@
       if (settled) return false;
       settled = true;
       try {
-        return sendResponse(assertSafeRuntimeResponse(value, forbiddenValues));
+        return sendResponse(assertSafeRuntimeResponse(value, forbiddenValues, type));
       } catch (_error) {
         return sendResponse({
           ok: false,
