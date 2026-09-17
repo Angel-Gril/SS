@@ -97,7 +97,7 @@ class FakeDocument extends FakeTarget {
 }
 
 const IDS = [
-  'hostedControlPanel', 'workspaceConnectionBadge', 'hostedStateBadge', 'hostedStatus',
+  'workspaceShell', 'hostedControlPanel', 'workspaceConnectionBadge', 'hostedStateBadge', 'hostedStatus',
   'hostedPlanSummary', 'hostedReviewSummary', 'hostedSuiteSummary',
   'hostedCreatePlanButton', 'hostedApprovePlanButton', 'hostedRejectPlanButton',
   'hostedGalleryGoals', 'hostedGalleryGoalsHint',
@@ -332,6 +332,7 @@ function harness(options = {}) {
           : id === 'hostedSlotList' ? 'ol' : 'div',
   )]));
   nodes.hostedControlPanel.hidden = true;
+  nodes.workspaceShell.hidden = true;
   nodes.hostedQuotePanel.hidden = true;
   nodes.hostedPreviewPanel.hidden = true;
   nodes.resultPanel.hidden = true;
@@ -777,6 +778,8 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   activate(test);
   await settle();
   assert.equal(test.controller.isActive(), true);
+  assert.equal(test.nodes.workspaceShell.hidden, false);
+  assert.equal(test.nodes.workspaceShell.attributes['aria-busy'], 'false');
   assert.equal(test.nodes.hostedControlPanel.hidden, false);
   assert.equal(test.document.body.classList.contains('is-hosted-mode'), true);
   assert.equal(test.nodes.byokControlPanel.hidden, false);

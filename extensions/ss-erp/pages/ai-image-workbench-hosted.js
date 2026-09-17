@@ -228,6 +228,7 @@
   }
 
   var nodes = {
+    workspaceShell: byId('workspaceShell'),
     panel: byId('hostedControlPanel'),
     connectionBadge: byId('workspaceConnectionBadge'),
     stateBadge: byId('hostedStateBadge'),
@@ -508,6 +509,11 @@
 
   function render() {
     if (!nodes.panel) return;
+    if (state.active && nodes.workspaceShell) {
+      nodes.workspaceShell.hidden = false;
+      nodes.workspaceShell.setAttribute('aria-busy', 'false');
+      nodes.workspaceShell.setAttribute('aria-disabled', 'false');
+    }
     nodes.panel.hidden = !state.active;
     if (global.document && global.document.body && global.document.body.classList) {
       global.document.body.classList.toggle('is-hosted-mode', state.active);
