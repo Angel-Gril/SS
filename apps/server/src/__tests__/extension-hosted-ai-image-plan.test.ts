@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createExtensionHostedAiImagePlanBindingRecord,
@@ -130,13 +131,14 @@ function setup(input: {
   authority?: ExtensionHostedAiImagePlanAuthority | null;
   enabled?: boolean;
   plan?: AiMediaPlanRecord;
+  bindingSkuKeys?: string[];
 } = {}) {
   const currentPlan = input.plan ?? plan();
   const seededBinding = createExtensionHostedAiImagePlanBindingRecord({
     planId: currentPlan.id,
     identity,
     binding,
-    selectedSkuKeys: ['sku-1', 'sku-2'],
+    selectedSkuKeys: input.bindingSkuKeys ?? ['sku-1', 'sku-2'],
     candidateMediaKeys: ['media-1', 'media-2'],
   });
   const planning = {
@@ -187,6 +189,71 @@ function setup(input: {
 }
 
 describe('extension hosted AI image plan service', () => {
+  it.each([
+    'CATEGORY_REVIEW', 'ATTRIBUTE_REVIEW', 'CONTENT_REVIEW',
+    'MEDIA_REVIEW', 'PRICING_REVIEW', 'VALIDATION',
+  ] as const)('reads, creates, and reviews an exact active %s draft plan', async (draftStage) => {
+    const fixture = setup({ authority: authority({ draftStage }) });
+    fixture.bindings.find.mockResolvedValueOnce(null);
+
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { context: binding, plan: null },
+    });
+    await expect(fixture.service.create({
+      identity, binding, idempotencyKey: 'early-draft-plan-create', galleryGoals: ['scene'],
+    })).resolves.toMatchObject({ data: { plan: { id: 'plan-1' } } });
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { plan: { id: 'plan-1' } },
+    });
+    await expect(fixture.service.get({ identity, binding, planId: 'plan-1' })).resolves.toMatchObject({
+      data: { plan: { id: 'plan-1' } },
+    });
+    await fixture.service.review({
+      identity, binding, planId: 'plan-1', expectedRevision: 3,
+      operationKey: 'early-draft-plan-review', decision: 'APPROVE', note: null,
+    });
+    expect(fixture.planning.createRuleBased).toHaveBeenCalledOnce();
+    expect(fixture.planning.review).toHaveBeenCalledOnce();
+  });
+
+  it('preserves verified product-only SKU and media authority in an early draft plan', async () => {
+    const baseVersion = version();
+    const productVersion = version({
+      inputSnapshot: {
+        ...(baseVersion.inputSnapshot as Record<string, unknown>),
+        skus: [{ skuKey: SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY }],
+      },
+      planPayload: {
+        slots: [{
+          slotKey: `sku:${SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY}:hero`,
+          goal: 'sku_hero', status: 'READY', aspectRatio: '3:4',
+          ownership: { level: 'sku', key: SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY },
+          references: [{ candidateId: 'media-1' }],
+        }],
+      },
+    });
+    const fixture = setup({
+      authority: authority({
+        draftStage: 'CATEGORY_REVIEW',
+        selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+        capturedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+      }),
+      bindingSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+      plan: plan({ currentVersion: productVersion }),
+    });
+
+    await expect(fixture.service.create({
+      identity, binding, idempotencyKey: 'product-only-plan-create', galleryGoals: ['scene'],
+    })).resolves.toMatchObject({ data: { plan: { id: 'plan-1' } } });
+    expect(fixture.planning.createRuleBased).toHaveBeenCalledWith(expect.objectContaining({
+      selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+      candidateMediaKeys: ['media-1', 'media-2'], galleryGoals: ['scene'],
+    }));
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { plan: { currentVersion: { slots: [{ ownership: { key: SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } }] } } },
+    });
+  });
+
   it('keeps all extension gallery allowlists aligned with the planning owner', () => {
     for (const [file, name] of [
       ['ai-image-suite-workbench-client.js', 'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT'],
@@ -343,10 +410,13 @@ describe('extension hosted AI image plan service', () => {
     ['owner', authority({ ownerUserId: 'owner-2' }), 'HOSTED_AI_IMAGE_PLAN_FORBIDDEN'],
     ['stale source', authority({ sourceCaptureCurrent: false }), 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'],
     [
-      'pre-media-review stage',
-      authority({ draftStage: 'CATEGORY_REVIEW' }),
+      'ready-to-publish stage',
+      authority({ draftStage: 'READY_TO_PUBLISH' }),
       'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
     ],
+    ['publish intent', authority({ draftStage: 'PUBLISH_INTENT_RECORDED' }), 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'],
+    ['published stage', authority({ draftStage: 'PUBLISHED' }), 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'],
+    ['inactive workflow', authority({ workflowStatus: 'CANCELLED' }), 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'],
   ] as const)('rejects a changed %s before creating a plan', async (_label, loaded, code) => {
     const fixture = setup({ authority: loaded });
     await expect(fixture.service.create({
@@ -359,6 +429,8 @@ describe('extension hosted AI image plan service', () => {
     authority({ selectedSkuKeys: [] }),
     authority({ selectedSkuKeys: ['sku-1', 'sku-1'] }),
     authority({ selectedSkuKeys: ['sku-3'] }),
+    authority({ selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY] }),
+    authority({ selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY], capturedSkuKeys: [] }),
   ])('rejects missing, duplicate, or capture-foreign SKU authority', async (loaded) => {
     const fixture = setup({ authority: loaded });
     await expect(fixture.service.create({

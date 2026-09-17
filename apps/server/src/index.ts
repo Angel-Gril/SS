@@ -152,6 +152,7 @@ import { isSourceListingAiMediaTarget, type SourceListingAiMediaTarget } from 's
 import {
   createExtensionHostedAiImagePlanBindingRecord,
   createExtensionHostedAiImagePlanService,
+  isExtensionHostedAiImageActiveDraftStage,
 } from './services/extension-hosted-ai-image-plan.js';
 import {
   createPrismaExtensionHostedAiImagePlanBindingStore,
@@ -1127,7 +1128,7 @@ if (isExtensionDeviceAuthEnabled()) {
       || authority.draftVersion !== input.binding.draftVersion
       || authority.sourceCaptureCurrent !== true
       || authority.workflowStatus !== 'ACTIVE'
-      || authority.draftStage !== 'MEDIA_REVIEW') return null;
+      || !isExtensionHostedAiImageActiveDraftStage(authority.draftStage)) return null;
     const lookupRecord = createExtensionHostedAiImagePlanBindingRecord({
       planId: 'hosted-plan-binding-recovery-lookup',
       identity: input.identity,

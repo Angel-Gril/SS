@@ -637,7 +637,7 @@ function candidateAuthorityFromRow(
     || row.currentShopId !== stored.shopId
     || row.currentSupplyGoodsId !== stored.supplyGoodsId
     || row.listingStatus !== 'ACTIVE'
-    || row.listingStage !== 'MEDIA_REVIEW'
+    || !isExtensionHostedAiImageActiveDraftStage(row.listingStage)
     || row.draftOwnerUserId !== stored.ownerUserId
     || row.draftShopId !== stored.shopId
     || row.draftSnapshotId !== stored.snapshotId
@@ -645,7 +645,7 @@ function candidateAuthorityFromRow(
     || row.draftRevision !== stored.draftRevision
     || row.draftVersion !== stored.draftVersion
     || row.draftStatus !== 'ACTIVE'
-    || row.draftStage !== 'MEDIA_REVIEW'
+    || row.draftStage !== row.listingStage
     || row.latestSnapshotId !== stored.snapshotId
     || planId !== binding.planId
     || row.planOwnerUserId !== stored.ownerUserId

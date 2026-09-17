@@ -532,7 +532,7 @@ export function createExtensionHostedAiImagePlanService(
     if (!sameBinding(authority, binding)
       || authority.sourceCaptureCurrent !== true
       || authority.workflowStatus !== 'ACTIVE'
-      || authority.draftStage !== 'MEDIA_REVIEW') {
+      || !isExtensionHostedAiImageActiveDraftStage(authority.draftStage)) {
       return error(
         'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
         409,

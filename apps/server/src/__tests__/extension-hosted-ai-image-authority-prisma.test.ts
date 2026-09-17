@@ -549,6 +549,16 @@ describe('Prisma extension hosted AI image authority loader', () => {
   });
 
   it.each([
+    'CATEGORY_REVIEW', 'ATTRIBUTE_REVIEW', 'CONTENT_REVIEW',
+    'MEDIA_REVIEW', 'PRICING_REVIEW', 'VALIDATION',
+  ] as const)('loads the exact settled candidate for matching active %s draft stages', async (stage) => {
+    const { loader } = fixture([[bindingRow()], [graphRow({ listingStage: stage, draftStage: stage })]]);
+    await expect(loader.loadCandidateAuthority(candidateInput())).resolves.toMatchObject({
+      binding, output: { id: 'asset-1', width: 900, height: 1200 },
+    });
+  });
+
+  it.each([
     ['cross-device row', createExtensionHostedAiImagePlanBindingRecord({
       planId: binding.planId,
       identity: {
@@ -602,6 +612,12 @@ describe('Prisma extension hosted AI image authority loader', () => {
 
   it.each([
     ['stale draft', { currentDraftRevision: 6 }],
+    ['inactive listing', { listingStatus: 'CANCELLED' }],
+    ['inactive draft', { draftStatus: 'CANCELLED' }],
+    ['ready-to-publish draft', { listingStage: 'READY_TO_PUBLISH', draftStage: 'READY_TO_PUBLISH' }],
+    ['recorded publish intent', { listingStage: 'PUBLISH_INTENT_RECORDED', draftStage: 'PUBLISH_INTENT_RECORDED' }],
+    ['published draft', { listingStage: 'PUBLISHED', draftStage: 'PUBLISHED' }],
+    ['mismatched active stages', { listingStage: 'CATEGORY_REVIEW', draftStage: 'ATTRIBUTE_REVIEW' }],
     ['stale plan revision', { planRevision: 4 }],
     ['stale suite revision', { suiteRevision: 10 }],
     ['stale slot revision', { slotRevision: 6 }],

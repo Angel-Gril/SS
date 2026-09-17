@@ -57,6 +57,8 @@ describe('extension hosted AI image production registration', () => {
     expect(recovery).toContain('extensionHostedAiImagePlanBindings.find(bindingLookup)');
     expect(recovery).toContain('extensionAiImageSuiteService.getCurrentByPlan');
     expect(recovery).toContain('readEnabled: Boolean(currentSuite)');
+    expect(recovery).toContain('isExtensionHostedAiImageActiveDraftStage(authority.draftStage)');
+    expect(recovery).not.toContain("authority.draftStage !== 'MEDIA_REVIEW'");
 
     const planRouteStart = source.indexOf('const extensionHostedAiImagePlanRouteService');
     const planRouteEnd = source.indexOf('const extensionHostedCandidatePreviewService', planRouteStart);
