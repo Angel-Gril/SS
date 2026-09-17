@@ -15,7 +15,7 @@
 
 ## 当前阶段与事实
 
-- 2026-09-18 接续：原套图计划 `cmu5y1io600025oq82o0epff5` 已创建但尚未批准、START、claim 或扣费；扩展读取计划时因通用响应守卫把规划归属对象的 `key` 当作密钥返回 `SS_ERP_RUNTIME_RESPONSE_SECRET`。提交 `15a42d6f` 将放行限制为 hosted 工作台消息中的精确 `{level: sku|compatibility_group, key}` 对象，并保留其他消息类型及额外字段的拒绝。定向授权 17/17、完整 preflight `6314 passed / 321 skipped`、cloud/local `1.0.335` 候选包校验通过；候选仍未签名、部署或发布，未产生 Provider 请求/费用。接下来继续读取该原计划、审批、START/CONTINUE、两张生成、审核和批量草稿写入。
+- 2026-09-18 接续：原套图计划 `cmu5y1io600025oq82o0epff5` 已创建但尚未批准、START、claim 或扣费；扩展读取计划时因通用响应守卫把规划归属对象的 `key` 当作密钥返回 `SS_ERP_RUNTIME_RESPONSE_SECRET`。提交 `15a42d6f` 将放行限制为 hosted 工作台消息中的精确 `{level: sku|compatibility_group, key}` 对象，并保留其他消息类型及额外字段的拒绝。定向授权 17/17、完整 preflight `6314 passed / 321 skipped`、cloud/local `1.0.335` 候选包校验通过；初始候选未签名，随后已完成签名验签，仍未部署或发布，未产生 Provider 请求/费用；真实套图结果见下一条。
 - 2026-09-18 真实套图接续：在自有 QA 来源 Web 工作台完成一次明确 CNY 0.28 最高费用确认并执行，suite `cmu618tna000c5oq8vnn4pkys` 由 `QUEUED/RUNNING` 收敛为 `SUCCEEDED`，2/2 成功、0 失败；两个结果目视通过后分别 `REVIEW_SLOT=APPROVE`，再以 append 目标写入草稿，suite revision 9，两个 slot 均 `application=APPLIED`，草稿新增两张媒体。只读 readiness 为 READY，suite counts `queued=0/running=0/failed=0`。无重试、无取消、无 Ozon 写入；真实 Provider 成功计费按冻结报价记录 CNY 0.28。该证据是 Web 托管 owner 的真实运行，不写成修复版 MV3 扩展的独立浏览器证据。候选 `1.0.335` 已用现有受控 Ed25519 key 签名并验签：提交 `15a42d6f`，release evidence SHA-256 `ae4471d1d564b4c28d6ebea2b712676b447c7ea9a2882a7e9286b0aeff88f75b`，signature SHA-256 `ef26b8a1c241477c3e52110ff5eb8dd419e466f681a21e30b89229fa8399fa7d`；签名候选尚未部署/官网发布。
 
 - 2026-09-17 后续接续：`8addb54a / 1.0.332` 已完成完整离线、正式 QA04、COM/CN 部署和官网分发，COM 同路径升级与活动 Worker/Unicode 验证通过。INPAINT 原图及画笔真实验收通过，一次生成成功并唯一结算 CNY 14 分，累计四张/CNY 0.56；遮罩外像素变化为零，选区有可见灰色痕迹，已真实审核拒绝且未采用。套图尚未创建/收费；其早期草稿阶段限制已定位并进入下节修复，COM 临时试点已恢复、未决任务为零，原两张套图预算保留。
