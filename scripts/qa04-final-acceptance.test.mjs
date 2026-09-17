@@ -343,6 +343,35 @@ function draftFlowFixture(t, operation = 'IMAGE_TO_IMAGE') {
   return { ...f, browser, interactions, operation, changeMapped };
 }
 
+function historicalDraftFlowFixture(t, operation = 'IMAGE_TO_IMAGE') {
+  const f = draftFlowFixture(t, operation), executionGitCommit = f.targetGitCommit;
+  const executionOfflineQa04 = structuredClone(f.input.offline), originalManifest = f.get(f.input.normalErp.acceptance);
+  const originals = [...Object.values(f.input.normalErp), ...Object.values(executionOfflineQa04),
+    originalManifest.source, originalManifest.browser, originalManifest.interactions,
+    ...(originalManifest.mask ? [originalManifest.mask] : [])].map(ref => ({ path: ref.path, sha256: ref.sha256 }));
+  const extensionFile = 'extensions/ss-erp/pages/source-preview.js';
+  mkdirSync(path.dirname(path.join(f.repositoryRoot, extensionFile)), { recursive: true });
+  writeFileSync(path.join(f.repositoryRoot, extensionFile), 'extension image transport repair\n');
+  f.git('add', '--', extensionFile); f.git('commit', '-qm', 'repair extension source preview');
+  const targetGitCommit = f.git('rev-parse', 'HEAD');
+  f.input.targetGitCommit = targetGitCommit;
+  f.input.offline = {
+    receipt: f.put('target-offline.json', { ...f.get(executionOfflineQa04.receipt), gitCommit: targetGitCommit,
+      startedAt: '2026-09-16T11:00:00.000Z', completedAt: '2026-09-16T11:20:00.000Z' }),
+    log: f.put('target-offline.log', readFileSync(executionOfflineQa04.log.path, 'utf8')
+      .replace(executionGitCommit, targetGitCommit).replace('459 pass(es)', '472 pass(es)')),
+  };
+  f.input.normalErp.acceptance = f.put('historical-draft-flow-inputs.json', {
+    ...originalManifest, schemaVersion: 2, executionGitCommit, executionOfflineQa04,
+  });
+  const changeExecutionOffline = (name, mutate) => {
+    const reference = executionOfflineQa04[name];
+    f.change(reference, mutate);
+    f.change(f.input.normalErp.acceptance, value => { value.executionOfflineQa04[name].sha256 = reference.sha256; });
+  };
+  return { ...f, targetGitCommit, executionGitCommit, executionOfflineQa04, originals, changeExecutionOffline };
+}
+
 for (const operation of ['IMAGE_TO_IMAGE', 'INPAINT']) {
   test(`derives current-code ${operation} draft acceptance from original records and pointer bindings`, t => {
     const f = draftFlowFixture(t, operation), result = f.verify();
@@ -353,10 +382,135 @@ for (const operation of ['IMAGE_TO_IMAGE', 'INPAINT']) {
     assert.equal(result.report.provenance.normalErp.applicationCount, 1);
     assert.equal(result.report.provenance.normalErp.configurationRestored, true);
     assert.equal(result.report.provenance.normalErp.image.width, 1024);
+    assert.equal(Object.hasOwn(result.report.provenance.normalErp, 'executionOfflineQa04'), false,
+      'v1 reports must retain their original shape');
     if (operation === 'IMAGE_TO_IMAGE') assert.equal(f.get(f.input.normalErp.generated).snapshot.outputs[0].width, null,
       'actual nullable DB dimensions must not be filled in by the producer');
     assert.equal(result.report.provenance.fullProductionMv3Verified, false);
     assert.doesNotMatch(JSON.stringify(result.report), /private-owner|private-workflow|private-job|private-credential/u);
+  });
+
+  test(`bridges historical ${operation} draft originals with an explicit execution commit and its native offline run`, t => {
+    const f = historicalDraftFlowFixture(t, operation), result = f.verify(), proof = result.report.provenance.normalErp;
+    assert.equal(result.report.gitCommit, f.targetGitCommit);
+    assert.equal(proof.executionCommit, f.executionGitCommit);
+    assert.notEqual(proof.executionCommit, result.report.gitCommit);
+    assert.equal(proof.sourceBridge.kind, 'IDENTICAL_ERP_SOURCE_AND_DEPENDENCIES');
+    assert.deepEqual(proof.executionOfflineQa04, { gitCommit: f.executionGitCommit,
+      receiptSha256: f.executionOfflineQa04.receipt.sha256, logSha256: f.executionOfflineQa04.log.sha256,
+      startedAt: '2026-09-16T10:00:00.000Z', completedAt: '2026-09-16T10:20:00.000Z' });
+    assert.equal(result.report.provenance.offline.receiptSha256, f.input.offline.receipt.sha256);
+    assert.equal(result.report.extensionVerification.source.passed, 472);
+    assert.equal(proof.actualCostMinor, 14);
+    assert.equal(proof.targetUiProductionVerified, false);
+    assert.equal(result.report.provenance.fullProductionMv3Verified, false);
+    assert.equal(result.report.provenance.allConfigurationsPromoted, false);
+    for (const reference of f.originals) assert.equal(hash(readFileSync(reference.path)), reference.sha256,
+      'historical execution, controller and offline originals must not be rewritten');
+  });
+}
+
+test('draft v2 requires both explicit execution fields without relaxing the v1 manifest', t => {
+  const f = historicalDraftFlowFixture(t), reference = f.input.normalErp.acceptance, original = readFileSync(reference.path);
+  for (const mutate of [value => { delete value.executionGitCommit; }, value => { delete value.executionOfflineQa04; },
+    value => { value.schemaVersion = 1; }, value => { value.schemaVersion = 3; }, value => { value.status = 'PASS'; },
+    value => { delete value.executionOfflineQa04.log; }]) {
+    f.change(reference, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    Object.assign(reference, f.put(path.basename(reference.path), original));
+  }
+});
+
+test('rejects an execution commit different from the original draft records even if ERP source is identical', t => {
+  const f = historicalDraftFlowFixture(t), reference = f.input.normalErp.acceptance, original = readFileSync(reference.path);
+  for (const commit of [f.targetGitCommit, f.erpCommit, 'not-a-commit']) {
+    f.change(reference, value => { value.executionGitCommit = commit; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+    Object.assign(reference, f.put(path.basename(reference.path), original));
+  }
+});
+
+test('keeps every historical draft phase, browser, action and restored candidate bound to the execution commit', t => {
+  const f = historicalDraftFlowFixture(t);
+  const cases = [
+    ...['applied', 'restored'].map(phase => [f.input.normalErp[phase], value => { value.snapshot.gitCommit = f.targetGitCommit; }]),
+    [f.input.normalErp.controllerStatus, value => { value.result.qualification.commit = f.targetGitCommit; }],
+    [f.input.normalErp.controllerStatus, value => { value.result.qualification.candidate.gitCommit = f.targetGitCommit; }],
+    [f.input.normalErp.controllerStatus, value => { value.result.qualification.candidate.offlineSha256 = f.input.offline.receipt.sha256; }],
+  ];
+  for (const [reference, mutate] of cases) {
+    const original = readFileSync(reference.path);
+    f.change(reference, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    Object.assign(reference, f.put(path.basename(reference.path), original));
+  }
+  for (const [name, key] of [['browser', 'browser'], ['interactions', 'actions']]) {
+    const original = f.get(f[name]);
+    f.changeMapped(name, value => { value[key].gitCommit = f.targetGitCommit; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_INVALID');
+    f.changeMapped(name, value => { value[key].gitCommit = original[key].gitCommit; });
+  }
+  assert.equal(f.verify().report.provenance.normalErp.executionCommit, f.executionGitCommit);
+});
+
+test('rejects wrong-source, incomplete and forged original execution offline receipts', t => {
+  const f = historicalDraftFlowFixture(t), original = f.get(f.executionOfflineQa04.receipt);
+  for (const mutate of [value => { value.gitCommit = f.targetGitCommit; }, value => { value.kind = 'QA04_FINAL_ACCEPTANCE'; },
+    value => { value.steps.pop(); }, value => { value.completesFormalTask = true; }, value => { value.status = 'UNKNOWN'; }]) {
+    f.changeExecutionOffline('receipt', mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_OFFLINE_INVALID');
+    f.changeExecutionOffline('receipt', value => { Object.assign(value, structuredClone(original)); });
+  }
+});
+
+test('requires the complete original execution offline log and its pinned bytes', t => {
+  const f = historicalDraftFlowFixture(t), reference = f.executionOfflineQa04.log, original = readFileSync(reference.path, 'utf8');
+  for (const log of [original.replace(f.executionGitCommit, f.targetGitCommit),
+    original.replace('[qa04-offline] Workspace lint', '[qa04-offline] skipped lint'),
+    original.replace('464 pass(es)', '0 pass(es)'), `${original}\n${original}`]) {
+    Object.assign(reference, f.put(path.basename(reference.path), log));
+    f.change(f.input.normalErp.acceptance, value => { value.executionOfflineQa04.log.sha256 = reference.sha256; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_OFFLINE_INVALID');
+  }
+  Object.assign(reference, f.put(path.basename(reference.path), original));
+  f.change(f.input.normalErp.acceptance, value => { value.executionOfflineQa04.log.sha256 = reference.sha256; });
+  writeFileSync(reference.path, `${original}changed after pinning\n`);
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ARTIFACT_CHANGED');
+});
+
+test('rejects a job preceding its execution offline run and a run already stale when the job started', t => {
+  const f = historicalDraftFlowFixture(t), original = f.get(f.executionOfflineQa04.receipt);
+  for (const times of [
+    { startedAt: '2026-09-16T10:20:00.000Z', completedAt: '2026-09-16T10:30:00.001Z' },
+    { startedAt: '2026-09-15T10:00:00.000Z', completedAt: '2026-09-15T10:20:00.000Z' },
+  ]) {
+    f.changeExecutionOffline('receipt', value => { Object.assign(value, times); });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_OFFLINE_INVALID');
+    f.changeExecutionOffline('receipt', value => { Object.assign(value, original); });
+  }
+});
+
+test('checks historical offline freshness at execution while requiring a fresh independent target offline run', t => {
+  const f = historicalDraftFlowFixture(t), now = '2026-09-17T12:00:00.000Z';
+  f.change(f.input.offline.receipt, value => {
+    value.startedAt = '2026-09-17T11:00:00.000Z'; value.completedAt = '2026-09-17T11:20:00.000Z';
+  });
+  assert.equal(f.verify({ now }).report.provenance.normalErp.executionCommit, f.executionGitCommit);
+  assert.throws(() => f.verify({ now: '2026-09-18T12:00:00.000Z' }), error => error.code === 'QA04_OFFLINE_INVALID');
+  f.input.offline = structuredClone(f.executionOfflineQa04);
+  assert.throws(() => f.verify({ now }), error => error.code === 'QA04_OFFLINE_INVALID');
+});
+
+for (const filename of ['apps/server/src/rule.ts', 'packages/shared/src/contracts.ts', 'pnpm-lock.yaml']) {
+  test(`refuses historical draft evidence after ${filename} changes`, t => {
+    const f = historicalDraftFlowFixture(t), previous = f.targetGitCommit;
+    writeFileSync(path.join(f.repositoryRoot, filename), 'changed production behavior\n');
+    f.git('add', '--', filename); f.git('commit', '-qm', 'change protected ERP source');
+    f.input.targetGitCommit = f.git('rev-parse', 'HEAD');
+    f.change(f.input.offline.receipt, value => { value.gitCommit = f.input.targetGitCommit; });
+    Object.assign(f.input.offline.log, f.put(path.basename(f.input.offline.log.path),
+      readFileSync(f.input.offline.log.path, 'utf8').replace(previous, f.input.targetGitCommit)));
+    assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
   });
 }
 
@@ -647,7 +801,7 @@ test('refuses to hide quality counterexamples or relabel them as positive eviden
 });
 
 test('writes only a new private artifact and is accepted by the unchanged formal consumer', async t => {
-  for (const f of [fixture(t), draftFlowFixture(t)]) {
+  for (const f of [fixture(t), draftFlowFixture(t), historicalDraftFlowFixture(t)]) {
   const outputPath = path.join(f.evidenceRoot, 'final.json');
   assert.equal(typeof subject.writeQa04FinalAcceptance, 'function', 'durable formal producer must exist');
   const result = subject.writeQa04FinalAcceptance({ inputPath: f.inputPath, inputSha256: f.save(), repositoryRoot: f.repositoryRoot, now: NOW, outputPath });

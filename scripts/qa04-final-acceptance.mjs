@@ -398,9 +398,15 @@ function workflowEventPayloadHash(event, operation, code) {
 function verifyDraftNormalErp(reader, input, manifest, root, now) {
   const code = 'QA04_ERP_INVALID', refs = input.normalErp, operation = manifest.operation;
   requireThat(['IMAGE_TO_IMAGE', 'INPAINT'].includes(operation), code);
+  const explicitExecution = manifest.schemaVersion === 2;
   exactKeys(manifest, ['schemaVersion', 'kind', 'operation', 'pointers', 'source', 'browser', 'interactions',
-    ...(operation === 'INPAINT' ? ['mask'] : [])], code);
-  requireThat(manifest.schemaVersion === 1, code);
+    ...(operation === 'INPAINT' ? ['mask'] : []),
+    ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : [])], code);
+  requireThat(manifest.schemaVersion === 1 || explicitExecution, code);
+  const executionCommit = explicitExecution ? manifest.executionGitCommit : input.targetGitCommit;
+  const executionOfflineRefs = explicitExecution ? manifest.executionOfflineQa04 : input.offline;
+  requireThat(isCommit(executionCommit), 'QA04_ERP_SOURCE_CHANGED');
+  if (explicitExecution) exactKeys(executionOfflineRefs, ['receipt', 'log'], code);
   exactKeys(manifest.pointers, ['generated', 'applied', 'restored', 'controllerStatus'], code);
   const stages = Object.fromEntries(['generated', 'applied', 'restored'].map(phase => [phase,
     jsonPointer(reader.json(refs[phase], code, { nativeCompact: true }), manifest.pointers[phase], code)]));
@@ -419,10 +425,16 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
   const fields = (row, names) => Object.fromEntries(names.map(name => [name, row[name]]));
   const generated = stages.generated, applied = stages.applied, restored = stages.restored;
   requireThat(isRecord(generated) && isCommit(generated.gitCommit)
-    && generated.gitCommit === input.targetGitCommit, 'QA04_ERP_SOURCE_CHANGED');
+    && generated.gitCommit === executionCommit, 'QA04_ERP_SOURCE_CHANGED');
   const owner = generated.ownerUserId, flow = generated.workflow, job = single(generated.jobs);
   requireThat(boundedText(owner) && isRecord(flow), code);
-  const offline = reader.json(input.offline.receipt, 'QA04_OFFLINE_INVALID');
+  // An earlier execution must have its own complete offline run, fresh when that
+  // job started. The target's independently verified run remains fresh at release.
+  // v1 retains the same-commit, after-target-offline contract and report bytes.
+  const executionOffline = explicitExecution ? verifyOffline(reader, {
+    targetGitCommit: executionCommit, offline: executionOfflineRefs,
+  }, job.startedAt) : null;
+  const offline = executionOffline?.receipt ?? reader.json(input.offline.receipt, 'QA04_OFFLINE_INVALID');
   requireThat(canonicalTimestamp(job.startedAt, code) >= canonicalTimestamp(offline.completedAt, 'QA04_OFFLINE_INVALID'),
     'QA04_ERP_SOURCE_CHANGED');
   const finalOutput = single(generated.outputs?.filter(row => row.kind === 'AI_GENERATED'));
@@ -462,7 +474,7 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
     exactKeys(value, ['schemaVersion', 'kind', 'gitCommit', 'region', 'phase', 'at', 'ownerUserId', 'actorUserId',
       'workflow', 'jobs', 'inputs', 'outputs', 'reservations', 'settlements', 'draft', 'applications', 'events'], code);
     requireThat(value.schemaVersion === 1 && value.kind === 'NORMAL_IMAGE_DRAFT_DATABASE_SNAPSHOT'
-      && value.phase === phase && value.gitCommit === input.targetGitCommit && value.region === 'COM'
+      && value.phase === phase && value.gitCommit === executionCommit && value.region === 'COM'
       && value.ownerUserId === owner && value.actorUserId === owner, code);
     const at = canonicalTimestamp(value.at, code);
     requireThat(at >= previousTime && at <= Date.parse(now), code); previousTime = at;
@@ -596,19 +608,19 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
     && applicationEvent.payload.rollbackOfId === null && applicationEvent.payload.targetType === 'listing-draft'
     && applicationEvent.payload.targetSequence === mutation.targetSequence, code);
   requireThat(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
-    && controller.action === 'restore' && controller.phase === 'restored' && controller.commit === input.targetGitCommit
+    && controller.action === 'restore' && controller.phase === 'restored' && controller.commit === executionCommit
     && controller.ownerSha256 === sha256(owner) && controller.currency === 'CNY' && controller.unitCostCents === 14
     && controller.maximumTaskCostCents === 14 && controller.workflowEnabled === false && controller.sharedDailyBudgetModified === false
     && controller.userDailyLimitModified === false && controller.legacyTextAiModified === false
     && equal(controller.pending, { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 })
     && isSha256(controller.backupSha256) && positiveInteger(controller.credentialRevisionBefore)
     && positiveInteger(controller.credentialRevisionAfter) && controller.credentialRevisionAfter > controller.credentialRevisionBefore
-    && controller.candidate?.gitCommit === input.targetGitCommit && controller.candidate.offlineSha256 === input.offline.receipt.sha256
+    && controller.candidate?.gitCommit === executionCommit && controller.candidate.offlineSha256 === executionOfflineRefs.receipt.sha256
     && ['releaseEvidenceSha256', 'signatureSha256', 'vpsSha256'].every(key => isSha256(controller.candidate[key])), code);
   const restoredAt = canonicalTimestamp(controller.restoredAt, code);
   requireThat(restoredAt >= Date.parse(applied.at) && restoredAt <= Date.parse(restored.at), code);
   requireThat(browser?.schemaVersion === 1 && browser.kind === 'NORMAL_IMAGE_DRAFT_BROWSER_EXECUTION'
-    && browser.gitCommit === input.targetGitCommit && browser.ownerUserId === owner && browser.operation === operation
+    && browser.gitCommit === executionCommit && browser.ownerUserId === owner && browser.operation === operation
     && browser.workflowId === flow.id && browser.jobId === job.id && browser.outputAssetId === finalOutput.id
     && browser.sourceSha256 === source.sha256 && browser.outputSha256 === image.sha256 && browser.realSignedInAccount === true
     && browser.ownedTargetsClosed === true && browser.originalBrowserPreserved === true
@@ -620,7 +632,7 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
   requireThat(browserStarted <= Date.parse(job.startedAt) && completedAt >= Date.parse(restored.at) && completedAt <= Date.parse(now), code);
   exactKeys(actions, ['schemaVersion', 'kind', 'gitCommit', 'ownerUserId', 'operation', 'creates', 'reviews', 'applications'], code);
   requireThat(actions.schemaVersion === 1 && actions.kind === 'NORMAL_IMAGE_DRAFT_UI_INTERACTIONS'
-    && actions.gitCommit === input.targetGitCommit && actions.ownerUserId === owner && actions.operation === operation, code);
+    && actions.gitCommit === executionCommit && actions.ownerUserId === owner && actions.operation === operation, code);
   const createAction = single(actions.creates), reviewAction = single(actions.reviews), applyAction = single(actions.applications);
   for (const action of [createAction, reviewAction, applyAction]) {
     const at = canonicalTimestamp(action.at, code);
@@ -641,6 +653,9 @@ function verifyDraftNormalErp(reader, input, manifest, root, now) {
     provider: runtime.provider, model: runtime.model, currency: 'CNY', unitCostMinor: 14,
     successfulImages: 1, actualCostMinor: 14, chargeCount: 1, applicationCount: 1, originalImagePreserved: true,
     configurationRestored: true, image, sourceBridge, targetUiProductionVerified: false,
+    ...(executionOffline ? { executionOfflineQa04: { gitCommit: executionCommit,
+      receiptSha256: executionOfflineRefs.receipt.sha256, logSha256: executionOfflineRefs.log.sha256,
+      startedAt: executionOffline.receipt.startedAt, completedAt: executionOffline.receipt.completedAt } } : {}),
     evidence: Object.fromEntries(Object.entries(refs).map(([key, ref]) => [`${key}Sha256`, ref.sha256])) };
 }
 
