@@ -288,6 +288,16 @@
       && Number.isSafeInteger(pixels) && pixels <= maxPixels;
   }
 
+  // Container metadata only; consumers must enforce their own dimension limits and decode.
+  // The BYOK inspector below retains its existing, stricter limits.
+  function readImageMetadata(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength < 1
+      || bytes.byteLength > DEFAULT_MAX_BYTES) {
+      fail('SS_ERP_BYOK_IMAGE_BYTES_INVALID', 'Image bytes are invalid');
+    }
+    return Object.freeze(parseImage(bytes));
+  }
+
   async function verifyDecode(decodeImage, blob, parsed) {
     var decoded;
     try {
@@ -420,6 +430,7 @@
       maxPixels: DEFAULT_MAX_PIXELS,
     }),
     ImageInputError: ImageInputError,
+    readImageMetadata: readImageMetadata,
     inspectImageBlob: inspectImageBlob,
     assertSameDimensions: assertSameDimensions,
   });

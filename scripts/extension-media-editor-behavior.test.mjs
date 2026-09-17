@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import './extension-media-editor-source-preview.test.mjs';
 
 const extensionRoot = 'extensions/ss-erp';
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -113,6 +114,8 @@ async function testEditorRuntimeBehavior() {
   const editorWorkspace = new FakeElement('editorWorkspace');
   const windowListeners = new Map();
   const runtimeMessages = [];
+  const previewFetches = [];
+  const revokedPreviewUrls = [];
   let closeCalls = 0;
   let animationId = 0;
   const nonce = 'a'.repeat(64);
@@ -129,7 +132,16 @@ async function testEditorRuntimeBehavior() {
     TypeError,
     Uint8Array,
     Uint8ClampedArray,
+    URL,
     URLSearchParams,
+    Blob,
+    AbortController,
+    fetch: async (url, options) => {
+      previewFetches.push({ url, options });
+      return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAE0lEQVQYlWP4TyRgGFWID1A/eAAj+46A5o3AdQAAAABJRU5ErkJggg==', 'base64'), {
+        headers: { 'content-type': 'image/png', 'cross-origin-resource-policy': 'same-origin' },
+      });
+    },
     console,
     queueMicrotask,
     setTimeout,
@@ -144,6 +156,7 @@ async function testEditorRuntimeBehavior() {
     },
     chrome: {
       runtime: {
+        getManifest: () => ({ host_permissions: ['https://cdn.example/*'] }),
         lastError: null,
         sendMessage(message, callback) {
           runtimeMessages.push(plain(message));
@@ -180,6 +193,10 @@ async function testEditorRuntimeBehavior() {
     },
   };
   pageContext.window = pageContext;
+  pageContext.URL = class extends URL {
+    static createObjectURL() { return 'blob:chrome-extension://test/source-preview'; }
+    static revokeObjectURL(url) { revokedPreviewUrls.push(url); }
+  };
   pageContext.globalThis = pageContext;
   pageContext.location = { hash: `#nonce=${nonce}` };
   pageContext.devicePixelRatio = 1;
@@ -204,12 +221,21 @@ async function testEditorRuntimeBehavior() {
     'shared/ai-media/image-mask-core.js',
     'shared/ai-media/image-mask-layout.js',
     'shared/ai-media/image-mask-canvas.js',
+    'shared/byok/profile-schema.js',
+    'shared/byok/image-input-inspector.js',
+    'shared/ai-media/image-source-preview.js',
     'pages/media-editor.js',
   ]) {
     const path = `${extensionRoot}/${relativePath}`;
     vm.runInNewContext(fs.readFileSync(path, 'utf8'), pageContext, { filename: path });
   }
   await tick();
+  assert.equal(previewFetches.length, 1,
+    'CORP same-origin source must be fetched before being displayed inside the extension');
+  assert.equal(previewFetches[0].options.credentials, 'omit');
+  assert.equal(previewFetches[0].options.redirect, 'error');
+  assert.match(elements.sourceImage.src, /^blob:/u,
+    'the image element must display the bounded local blob, not the cross-origin source URL');
   elements.sourceImage.dispatch('load', { isTrusted: true });
   elements.promptInput.value = 'Replace the selected area';
   elements.promptInput.dispatch('input', { isTrusted: true });
@@ -252,6 +278,10 @@ async function testEditorRuntimeBehavior() {
   assert.equal(closeCalls, 0, 'a recovery-required cancellation must keep the editor open');
   assert.match(elements.editorStatus.textContent, /尚未确认/u);
   assert.equal(elements.cancelButton.disabled, false);
+  for (const listener of windowListeners.get('pagehide')) listener();
+  assert.deepEqual(revokedPreviewUrls, ['blob:chrome-extension://test/source-preview'],
+    'closing the page must release the source blob');
+  assert.equal(previewFetches[0].options.signal.aborted, true);
 }
 
 async function testTabCloseRecoveryLifecycle() {

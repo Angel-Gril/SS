@@ -66,6 +66,47 @@
   var sourceError = '';
   var initialPrompt = '';
   var initialNegativePrompt = '';
+  var sourcePreview = null;
+  var sourcePreviewVersion = 0;
+  var pageClosed = false;
+
+  function clearSourcePreview() {
+    sourcePreviewVersion += 1;
+    sourceReady = false;
+    sourceImage.removeAttribute('src');
+    if (sourcePreview) sourcePreview.clear();
+  }
+
+  function sourceLoadFailed() {
+    sourceReady = false;
+    canvasLoading.hidden = false;
+    canvasLoading.textContent = '来源图片加载失败';
+    sourceError = '来源图片加载失败，请从商品页重试。';
+    setStatus(sourceError, 'error');
+    refreshControls();
+  }
+
+  function loadSourcePreview() {
+    if (!sourcePreview) {
+      var permissions = chrome.runtime.getManifest().host_permissions || [];
+      sourcePreview = window.SS_ERP_IMAGE_SOURCE_PREVIEW.createPreview({
+        fetch: window.fetch.bind(window),
+        urlApi: window.URL,
+        readImageMetadata: window.SS_ERP_BYOK_IMAGE_INPUT_INSPECTOR.readImageMetadata,
+        canonicalizeEndpoint: window.SS_ERP_BYOK_PROFILE_SCHEMA.canonicalizeEndpoint,
+        allowLoopback: permissions.includes('http://localhost/*')
+          || permissions.includes('http://127.0.0.1/*'),
+      });
+    }
+    var version = sourcePreviewVersion;
+    canvasLoading.hidden = false;
+    canvasLoading.textContent = '正在加载图片';
+    sourcePreview.load(source).then(function (objectUrl) {
+      if (!pageClosed && version === sourcePreviewVersion) sourceImage.src = objectUrl;
+    }).catch(function () {
+      if (!pageClosed && version === sourcePreviewVersion) sourceLoadFailed();
+    });
+  }
 
   function send(message) {
     return new Promise(function (resolve, reject) {
@@ -305,6 +346,7 @@
       throw new Error('AI 图片任务上下文无效');
     }
 
+    clearSourcePreview();
     editor = value;
     completed = value.completed === true;
     sourceError = '';
@@ -350,7 +392,7 @@
       brushSize.max = String(maximumBrush);
       brushSize.value = String(initialBrush);
       updateBrushValue();
-      sourceImage.src = source.url;
+      loadSourcePreview();
       resizeMaskStage();
     }
 
@@ -371,6 +413,7 @@
       type: 'ss-erp:source-listing-workbench-media-editor-read',
       nonce: nonce,
     });
+    if (pageClosed) return;
     if (!response || !response.ok || !response.editor) {
       throw new Error(response && response.error || 'AI 图片任务内容不可用');
     }
@@ -512,13 +555,14 @@
   });
 
   sourceImage.addEventListener('load', function () {
-    if (!isInpaint()) return;
+    if (pageClosed || !isInpaint() || !sourceImage.src.startsWith('blob:')) return;
     if (!source || sourceImage.naturalWidth !== source.width
       || sourceImage.naturalHeight !== source.height) {
       sourceReady = false;
       canvasLoading.textContent = '来源图片尺寸不一致';
       sourceError = '来源图片已变化，请从商品页重新打开。';
       setStatus(sourceError, 'error');
+      clearSourcePreview();
       refreshControls();
       return;
     }
@@ -533,12 +577,9 @@
   });
 
   sourceImage.addEventListener('error', function () {
-    if (!isInpaint()) return;
-    sourceReady = false;
-    canvasLoading.textContent = '来源图片加载失败';
-    sourceError = '来源图片加载失败，请从商品页重试。';
-    setStatus(sourceError, 'error');
-    refreshControls();
+    if (pageClosed || !isInpaint() || !sourceImage.src.startsWith('blob:')) return;
+    clearSourcePreview();
+    sourceLoadFailed();
   });
 
   submitButton.addEventListener('click', function (event) {
@@ -619,6 +660,8 @@
   });
 
   window.addEventListener('pagehide', function () {
+    pageClosed = true;
+    clearSourcePreview();
     if (previewFrame !== null) {
       window.cancelAnimationFrame(previewFrame);
       previewFrame = null;
