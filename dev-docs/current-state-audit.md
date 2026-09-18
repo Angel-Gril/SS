@@ -7,6 +7,8 @@
 
 以下三条 `0f5ea6d1 / 1.0.337` 与旧候选摘要仅保留为历史部署证据，不代表当前 CN 运行版本。
 
+历史条目中的“备份目录复用”和 `0f5ea6d1` 运行号均已被本节上方的 `7b4503ac / 1.0.338` 结果取代。
+
 - `0f5ea6d1 / 1.0.337` 是目录分离修复前的 CN 部署基线；其备份、migration、dark gate 和 direct-mode 验收证据保留为历史记录，当前运行状态以上述 `7b4503ac / 1.0.338` 为准。
 - CN 已正式切换到 `0f5ea6d1 / 1.0.337`。目标提交备份 gzip/恢复演练通过，public 表 `143`，部署 attestation SHA-256 `f9a7d163645fb1bc74e7bc9288144c1539daa59e8133fd58440854e227ae221b`；150 migrations 无 pending，post-migration suite guard、AI dark gate、systemd、API/Web/Worker 和 `/ready` 均通过。按 `VERIFY_ORIGIN_MODE=direct`、四个 `.cn` host 的完整 VPS verifier 为 `0 failure / 1 warning`，唯一 warning 是既定的远端备份未配置。
 - CN 候选包证据保持独立绑定：cloud `66beb279825dfeed667e32c663064030ab54114f241c14de9b1a971815604bd0`、local `3791fe3d8a5634c45d1337349568a0e59701c54a9394601ded5011cfea30cdcc`、detached signature `94ad1cdc7aae48dfc0e329db27c3cc2a403573cb5acbad5cf4fbb164c784eb68`；官网仍是已批准的 `1.0.332`，未公开 `1.0.337`。
