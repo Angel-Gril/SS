@@ -156,6 +156,29 @@
     });
   }
 
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage
+    && typeof chrome.runtime.onMessage.addListener === 'function') {
+    chrome.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
+      if (!message || message.type !== 'ss-erp:source-listing-workbench-ai-image-suite-relay'
+        || message.platform !== SOURCE_PLATFORM
+        || message.sourceProductId !== currentSourceProductId()) return false;
+      var allowed = new Set([
+        'type', 'sourceProductId', 'platform', 'listingWorkflowId', 'action', 'slotId',
+        'decision', 'costConfirmed', 'intentWitness',
+      ]);
+      if (Object.keys(message).some(function (key) { return !allowed.has(key); })) {
+        sendResponse({ ok: false, error: 'ERP AI 主图/套图转发请求字段无效' });
+        return false;
+      }
+      var forwarded = { ...message,
+        type: 'ss-erp:source-listing-workbench-ai-image-suite-command' };
+      sendRuntimeMessage(forwarded).then(sendResponse).catch(function (error) {
+        sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+      });
+      return true;
+    });
+  }
+
   function bindSourceMediaConfirmationNotifications() {
     chrome.runtime.onMessage.addListener(function (message, sender) {
       if (!message || message.type !== 'ss-erp:source-listing-workbench-media-confirmed'

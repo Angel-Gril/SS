@@ -105,6 +105,8 @@ const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite';
 const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite-command';
+const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_RELAY_MESSAGE =
+  'ss-erp:source-listing-workbench-ai-image-suite-relay';
 const SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE = 'ss-erp:source-ai-workbench-open';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-prepare';
@@ -3057,6 +3059,59 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   if (decision) input.decision = decision;
   const result = await authority.client.executeAiImageSuiteCommand(input);
   return { handoff: authority.handoff, result };
+}
+
+function sourcePageUrlMatches(platform, sourceProductId, value) {
+  const normalizedProductId = sourceWorkflowHandoffText(sourceProductId, 200);
+  if (!normalizedProductId || typeof value !== 'string') return false;
+  let parsed;
+  try { parsed = new URL(value); } catch { return false; }
+  if (parsed.protocol !== 'https:' || parsed.hash) return false;
+  const hostname = parsed.hostname.toLowerCase();
+  let pageProductId = '';
+  if (platform === '1688' && (hostname === '1688.com' || hostname.endsWith('.1688.com'))) {
+    const match = parsed.pathname.match(/^\/offer\/([^/]+)\.html$/u);
+    if (match) {
+      try { pageProductId = decodeURIComponent(match[1]); } catch { return false; }
+    }
+  } else if (platform === 'pdd' && (
+    hostname === 'pinduoduo.com' || hostname.endsWith('.pinduoduo.com')
+    || hostname === 'yangkeduo.com' || hostname.endsWith('.yangkeduo.com')
+  ) && parsed.pathname === '/goods.html') {
+    pageProductId = parsed.searchParams.get('goods_id') || '';
+  } else if (platform === 'taobao' && hostname === 'item.taobao.com'
+    && parsed.pathname === '/item.htm') {
+    pageProductId = parsed.searchParams.get('id') || '';
+  } else if (platform === 'tmall' && hostname === 'detail.tmall.com'
+    && parsed.pathname === '/item.htm') {
+    pageProductId = parsed.searchParams.get('id') || '';
+  }
+  return pageProductId.normalize('NFKC').trim() === normalizedProductId;
+}
+
+async function relaySourceAiImageSuiteCommand(message) {
+  const allowedKeys = new Set([
+    'type', 'sourceProductId', 'platform', 'listingWorkflowId',
+    'action', 'slotId', 'decision', 'costConfirmed', 'intentWitness',
+  ]);
+  if (!message || typeof message !== 'object' || Array.isArray(message)
+    || Object.keys(message).some((key) => !allowedKeys.has(key))) {
+    throw new Error('ERP AI 主图/套图转发请求字段无效');
+  }
+  const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+  const platform = sourceWorkflowPlatform(message.platform);
+  if (!sourceProductId || !platform || !sourceWorkflowHandoffText(message.listingWorkflowId, 200)) {
+    throw new Error('ERP AI 主图/套图转发上下文无效');
+  }
+  const tabs = await chrome.tabs.query({});
+  const matches = tabs.filter((tab) => tab && Number.isSafeInteger(tab.id)
+    && sourcePageUrlMatches(platform, sourceProductId, tab.pendingUrl || tab.url || ''));
+  if (matches.length !== 1) {
+    throw new Error(matches.length === 0
+      ? '没有找到当前来源商品页，请保持来源页打开'
+      : '当前来源商品页不唯一，请只保留一个来源页');
+  }
+  return chrome.tabs.sendMessage(matches[0].id, message, { frameId: 0 });
 }
 
 async function executeSourceMediaCreateWorkflow(input) {
@@ -6202,6 +6257,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { handoff: authority.handoff, result: authority.result };
     }).then((result) => {
       sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_RELAY_MESSAGE) {
+    Promise.resolve().then(() => relaySourceAiImageSuiteCommand(message)).then((result) => {
+      sendResponse(result || { ok: true });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });

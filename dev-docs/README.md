@@ -2,6 +2,12 @@
 
 ## 2026-09-18 COM hosted pilot 部署接续
 
+## 2026-09-19 MV3 source-page transport 修复（未部署）
+
+- 独立 hosted AI 工作台新增受限 `source-listing-workbench-ai-image-suite-relay` 消息：扩展工作台页只能请求 Worker 查找唯一匹配的 marketplace source 商品页，Worker 再把原始意图转回该 source content-script；source 页重新发送原有 authoritative command，owner/device/shop/binding 仍由 Worker 和服务端重读，extension page 不能直接执行 suite mutation。
+- relay 仅允许 `/pages/ai-image-workbench.html`、`/pages/ai-image-workbench-launch.html` 发起；source tab 必须为当前平台和商品 ID 的唯一 HTTPS 商品页，重复/缺失 source tab 直接拒绝。source workbench 的 `CREATE_AND_REVIEW_PLAN` 仍复用既有 plan create -> binding -> review owner。
+- 定向 source workbench contract、relay VM 测试、`pnpm verify:extension`（462 pass）、workspace typecheck/lint 通过。未部署、未执行 Provider POST、Ozon 写入或新增费用；远程真实 store-draft assignment 仍待新候选部署后验收。
+
 - 部署合同修复提交为 `959ae65f`、`8bc1a19f` 并已推送。`deploy-environment.mjs` 现在在受限执行边界显式透传 `AI_MEDIA_ROLLOUT_EXPECTATION` 与 `AI_MEDIA_PILOT_EXPECTATIONS_JSON`；pilot scope 合同精确要求 `capture:write`、`listing:review`、`listing:write`、`media:execute`，并按 `allowedOperations` 只开启 `IMAGE_TO_IMAGE`、`SUITE`。定向部署合同 `9 passed / 1 skipped`，AI dark/pilot 合同通过。
 - COM 已切换到 `8bc1a19f90744444dba95012bc2468312efbda72`，扩展候选 `1.0.340`。cloud/local ZIP SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`；签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`，候选四件套和 detached signature 均为 root-owned 0644、按 commit 分目录预置。COM `/ready`、API/Web/Worker、迁移和 post-migration suite guard 均通过。
 - COM hosted-pilot 运行合同已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、两个 active device session `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，四项 device scope 精确匹配；`FULL_EDIT`/`INPAINT`、BYOK、Ozon publisher 保持关闭。多次失败候选目录均移动到 `.failed-*` 归档，未切换 current 时服务按合同保持/恢复旧版本。

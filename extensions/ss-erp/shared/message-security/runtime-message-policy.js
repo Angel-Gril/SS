@@ -98,6 +98,10 @@
     'ss-erp:source-listing-workbench-ai-image-suite-command',
   ]);
 
+  var SOURCE_AI_IMAGE_SUITE_RELAY_TYPES = setOf([
+    'ss-erp:source-listing-workbench-ai-image-suite-relay',
+  ]);
+
   var SOURCE_AI_WORKBENCH_LAUNCH_TYPES = setOf([
     'ss-erp:source-ai-workbench-open',
   ]);
@@ -266,6 +270,7 @@
     SOURCE_MEDIA_EDITOR_PAGE_TYPES,
     SOURCE_PAGE_TYPES,
     SOURCE_AI_IMAGE_SUITE_TYPES,
+    SOURCE_AI_IMAGE_SUITE_RELAY_TYPES,
     SOURCE_AI_WORKBENCH_LAUNCH_TYPES,
     OZON_PAGE_TYPES,
     GENERAL_EXTENSION_TYPES,
@@ -340,6 +345,8 @@
     if (url.protocol === 'chrome-extension:' && url.hostname === extensionId) {
       if (url.pathname === '/pages/media-editor.html') return 'media_editor';
       if (url.pathname === '/pages/media-confirm.html') return 'media_confirm';
+      if (url.pathname === '/pages/ai-image-workbench.html'
+        || url.pathname === '/pages/ai-image-workbench-launch.html') return 'workbench';
       if (url.pathname === '/pages/settings.html') return 'settings';
       if (url.pathname === '/pages/config-import.html') return 'config_import';
       return 'extension';
@@ -386,11 +393,13 @@
     if (messageType === 'ss-erp:erp-source-image-open') return kind === 'erp';
     if (kind === 'media_editor') return SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'media_confirm') return SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType);
+    if (kind === 'workbench') return SOURCE_AI_IMAGE_SUITE_RELAY_TYPES.has(messageType);
     if (kind === 'settings') return !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+      && !SOURCE_AI_IMAGE_SUITE_RELAY_TYPES.has(messageType)
       && !SOURCE_AI_WORKBENCH_LAUNCH_TYPES.has(messageType);
     if (kind === 'config_import') return CONFIG_IMPORT_TYPES.has(messageType);
     if (kind === 'extension') return !SETTINGS_ONLY_TYPES.has(messageType)
@@ -399,6 +408,7 @@
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+      && !SOURCE_AI_IMAGE_SUITE_RELAY_TYPES.has(messageType)
       && !SOURCE_AI_WORKBENCH_LAUNCH_TYPES.has(messageType);
     if (kind === 'erp') return ERP_BRIDGE_TYPES.has(messageType);
     if (kind === 'official') return OFFICIAL_PAGE_TYPES.has(messageType);

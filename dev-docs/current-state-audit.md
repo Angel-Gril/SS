@@ -2,6 +2,12 @@
 
 ## 2026-09-18 COM hosted pilot 已部署
 
+## 2026-09-19 MV3 source-page transport 修复（未部署）
+
+- 修复独立 hosted 工作台从 extension page 发起套图计划时的 transport 边界：新增 source-page relay，Worker 只接受受控工作台页请求，查找唯一匹配的 source 商品 tab，并由 source content-script 重新提交 `ss-erp:source-listing-workbench-ai-image-suite-command`。不会放宽 extension page 直接调用，也不允许页面提交 owner、device、shop 或 plan binding。
+- `CREATE_AND_REVIEW_PLAN` 在 source launch 上经 relay 执行，仍由 Worker authoritative re-read handoff、草稿、设备权限并调用服务端 plan-binding owner；source tab 缺失、重复或商品身份不匹配均拒绝。
+- 新鲜验证：`node --test scripts/extension-source-listing-workbench.test.mjs`、`pnpm verify:extension`（462 pass）、`pnpm -r typecheck`、`pnpm -r lint` 通过。当前只证明源码合同，未部署到 COM/CN，未执行 Provider/Ozon 写入或新增费用；下一步仍是 COM 正式恢复/attestation gate 后部署并进行远程真实 store-draft assignment 验收。
+
 - `8bc1a19f90744444dba95012bc2468312efbda72` 已通过受限 `deploy-pilot.sh` 并切换 COM current；`1.0.340` cloud/local 包 SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`，签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`。
 - 部署前后 backup attestation、150 migrations、AI suite DB guard、cloud-r2 runtime env、systemd、API/Web/Worker 与 `https://ss-erp.com/ready` 均通过。完整 cloudflare VPS verifier 主体为 `0 failure / 1 warning`，唯一 warning 为远端备份延期；官网仍服务旧批准 `1.0.332`，本次未公开候选。
 - hosted pilot contract 已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、shop DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，scopes 精确为 `capture:write/listing:review/listing:write/media:execute`，允许操作仅 `IMAGE_TO_IMAGE/SUITE`。历史残留 BINI grant 所属 session `15654e33-70a9-4491-ae59-72bb52181366` 已经由 owner API 正式撤销并验证 `REVOKED + shopIds=[]`，未手工改库。

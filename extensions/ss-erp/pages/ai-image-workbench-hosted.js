@@ -1231,6 +1231,41 @@
     }
   }
 
+  function relaySourceSuiteCommand(action) {
+    return new Promise(function (resolve, reject) {
+      if (!global.chrome || !global.chrome.runtime
+        || typeof global.chrome.runtime.sendMessage !== 'function') {
+        reject(controllerError('SS_ERP_HOSTED_WORKBENCH_SOURCE_TRANSPORT_UNAVAILABLE'));
+        return;
+      }
+      try {
+        global.chrome.runtime.sendMessage({
+          type: 'ss-erp:source-listing-workbench-ai-image-suite-relay',
+          sourceProductId: state.launch.sourceProductId,
+          platform: state.launch.sourcePlatform,
+          listingWorkflowId: state.launch.workflowId,
+          action: action,
+          slotId: null,
+          decision: null,
+          costConfirmed: false,
+          intentWitness: undefined,
+        }, function (response) {
+          if (global.chrome.runtime.lastError) {
+            reject(controllerError('SS_ERP_HOSTED_WORKBENCH_SOURCE_TRANSPORT_FAILED'));
+            return;
+          }
+          if (!response || response.ok !== true) {
+            reject(controllerError('SS_ERP_HOSTED_WORKBENCH_SOURCE_TRANSPORT_FAILED'));
+            return;
+          }
+          resolve(response);
+        });
+      } catch {
+        reject(controllerError('SS_ERP_HOSTED_WORKBENCH_SOURCE_TRANSPORT_FAILED'));
+      }
+    });
+  }
+
   async function createPlan() {
     if (!canOperate() || currentPlan() || state.galleryGoals.length === 0) return false;
     state.busy = true;
@@ -1249,11 +1284,15 @@
     var requestError = null;
     try {
       try {
-        await state.runtimeClient.createPlan({
-          binding: state.binding,
-          idempotencyKey: operation.idempotencyKey,
-          ...(operation.galleryGoals === undefined ? {} : { galleryGoals: operation.galleryGoals }),
-        });
+        if (state.launch && state.launch.sourcePlatform) {
+          await relaySourceSuiteCommand('CREATE_AND_REVIEW_PLAN');
+        } else {
+          await state.runtimeClient.createPlan({
+            binding: state.binding,
+            idempotencyKey: operation.idempotencyKey,
+            ...(operation.galleryGoals === undefined ? {} : { galleryGoals: operation.galleryGoals }),
+          });
+        }
       } catch (error) {
         requestError = error;
       }

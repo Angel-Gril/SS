@@ -7,6 +7,7 @@ const root = 'extensions/ss-erp';
 const manifest = JSON.parse(fs.readFileSync(`${root}/manifest.json`, 'utf8'));
 const worker = fs.readFileSync(`${root}/background/service-worker.js`, 'utf8');
 const panel = fs.readFileSync(`${root}/content/source-costing-panel.js`, 'utf8');
+const hostedWorkbench = fs.readFileSync(`${root}/pages/ai-image-workbench-hosted.js`, 'utf8');
 const panelCss = fs.readFileSync(`${root}/content/source-costing-panel.css`, 'utf8');
 const viewCss = fs.readFileSync(`${root}/content/source-listing-workbench.css`, 'utf8');
 const popup = fs.readFileSync(`${root}/pages/popup.js`, 'utf8');
@@ -87,6 +88,8 @@ assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-command/);
+assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-relay/);
+assert.match(worker, /relaySourceAiImageSuiteCommand/);
 assert.match(worker, /ss-erp:source-ai-workbench-open/);
 assert.match(
   worker,
@@ -171,6 +174,11 @@ assert.match(policy, /ss-erp:source-listing-workbench-media-history/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
 assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite/);
 assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite-command/);
+assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite-relay/);
+assert.match(policy, /ai-image-workbench\.html/);
+assert.match(panel, /ss-erp:source-listing-workbench-ai-image-suite-relay/);
+assert.match(hostedWorkbench, /relaySourceSuiteCommand/);
+assert.match(hostedWorkbench, /CREATE_AND_REVIEW_PLAN/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PREPARE_TYPES/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
@@ -308,6 +316,11 @@ const sourceSender = {
   url: 'https://detail.1688.com/offer/123.html',
   tab: { url: 'https://detail.1688.com/offer/123.html' },
 };
+const workbenchSender = {
+  id: extensionId,
+  url: `chrome-extension://${extensionId}/pages/ai-image-workbench.html`,
+  tab: { url: `chrome-extension://${extensionId}/pages/ai-image-workbench.html` },
+};
 const confirmSender = {
   id: extensionId,
   url: `chrome-extension://${extensionId}/pages/media-confirm.html`,
@@ -344,6 +357,12 @@ for (const type of [
 assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
   'ss-erp:source-listing-workbench-media-confirm-prepare', sourceSender, extensionId,
 ), true);
+assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
+  'ss-erp:source-listing-workbench-ai-image-suite-relay', workbenchSender, extensionId,
+), true);
+assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
+  'ss-erp:source-listing-workbench-ai-image-suite-command', workbenchSender, extensionId,
+), false);
 for (const type of [
   'ss-erp:source-listing-workbench-media-confirm-read',
   'ss-erp:source-listing-workbench-media-confirm-submit',
@@ -1298,7 +1317,7 @@ const planClient = {
   },
 };
 const authoritativeSuiteContext = {
-  Array, Error, Number, Object, Promise, Set, String, TextEncoder,
+  Array, Error, Number, Object, Promise, Set, String, TextEncoder, URL,
   crypto: { subtle: { digest: async () => new Uint8Array(32).buffer } },
   SS_ERP_LISTING_WORKFLOW_CLIENT: suiteIntentContract,
   sourceWorkflowHandoffText(value, maximum) {
@@ -1328,6 +1347,39 @@ vm.runInNewContext(
   { filename: 'service-worker-authoritative-ai-image-suite.js' },
 );
 const authoritativeSuiteApi = authoritativeSuiteContext.authoritativeSuiteApi;
+const relayCalls = [];
+authoritativeSuiteContext.chrome = {
+  tabs: {
+    async query() {
+      return [{ id: 42, url: 'https://detail.1688.com/offer/source-product-1.html' }];
+    },
+    async sendMessage(tabId, message, options) {
+      relayCalls.push({ tabId, message, options });
+      return { ok: true, result: { state: 'completed', action: message.action } };
+    },
+  },
+};
+vm.runInNewContext(
+  `${extractAsyncWorkerFunction('sourcePageUrlMatches')}\n`
+    + `${extractAsyncWorkerFunction('relaySourceAiImageSuiteCommand')}\n`
+    + 'globalThis.sourceRelayApi = { sourcePageUrlMatches, relaySourceAiImageSuiteCommand };',
+  authoritativeSuiteContext,
+  { filename: 'service-worker-source-ai-image-suite-relay.js' },
+);
+assert.equal(
+  authoritativeSuiteContext.sourceRelayApi.sourcePageUrlMatches(
+    '1688', 'source-product-1', 'https://detail.1688.com/offer/source-product-1.html?spm=x',
+  ),
+  true,
+);
+const relayedSuite = await authoritativeSuiteContext.sourceRelayApi.relaySourceAiImageSuiteCommand({
+  type: 'ss-erp:source-listing-workbench-ai-image-suite-relay',
+  platform: '1688', sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1',
+  action: 'CREATE_AND_REVIEW_PLAN', slotId: null, decision: null, costConfirmed: false,
+});
+assert.equal(relayedSuite.result.action, 'CREATE_AND_REVIEW_PLAN');
+assert.equal(relayCalls[0].tabId, 42);
+assert.equal(relayCalls[0].options.frameId, 0);
 const suiteMessageContext = {
   type: 'ss-erp:source-listing-workbench-ai-image-suite',
   platform: '1688', sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1',
