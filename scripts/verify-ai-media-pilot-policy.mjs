@@ -6,15 +6,18 @@ import { resolve } from 'node:path';
 
 const REQUIRED_FLAGS = Object.freeze([
   'feature_ai_media_workflow_v2',
-  'feature_ai_media_image_to_image',
-  'feature_ai_media_full_edit',
-  'feature_ai_media_inpaint',
   'feature_ai_media_suite',
   'feature_extension_hosted_ai',
   'feature_source_listing_workflow',
   'feature_source_listing_extension_workbench',
   'feature_source_listing_web_media',
 ]);
+
+const OPERATION_FLAGS = Object.freeze({
+  IMAGE_TO_IMAGE: 'feature_ai_media_image_to_image',
+  FULL_EDIT: 'feature_ai_media_full_edit',
+  INPAINT: 'feature_ai_media_inpaint',
+});
 
 const FORBIDDEN_FLAGS = Object.freeze([
   'feature_source_ozon_publisher_v2',
@@ -118,6 +121,12 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
   }
   for (const key of REQUIRED_FLAGS) {
     if (values.get(key)?.trim() !== 'true') fail(`${key} must be true for hosted pilot`);
+  }
+  for (const operation of expected.allowedOperations) {
+    const key = OPERATION_FLAGS[operation];
+    if (key && values.get(key)?.trim() !== 'true') {
+      fail(`${key} must be true for the explicitly allowed ${operation} operation`);
+    }
   }
   for (const key of FORBIDDEN_FLAGS) {
     if (values.has(key) && values.get(key)?.trim() === 'true') fail(`${key} must remain false for hosted pilot`);
