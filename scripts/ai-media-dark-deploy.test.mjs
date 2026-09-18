@@ -511,6 +511,11 @@ assert.match(
   'VPS verification must assert AI Media remains dark',
 );
 assert.match(
+  verifyAiMediaDark,
+  /feature_source_listing_workflow/u,
+  'hosted pilot verification must query the source listing workflow flag',
+);
+assert.match(
   verifyDeployReadiness,
   /verify-ai-media-dark\.sh/u,
   'deploy readiness must assert AI Media remains dark before switching releases',
@@ -952,7 +957,6 @@ assert.match(
   'app-dir verification must require the imported extension BYOK verifier',
 );
 for (const [name, source] of [
-  ['app-dir', verifyAiMediaDark],
   ['Compose', composeDarkVerifier],
 ]) {
   assert.doesNotMatch(

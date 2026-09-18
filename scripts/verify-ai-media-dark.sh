@@ -63,6 +63,7 @@ try {
           'feature_ai_media_suite',
           'feature_ai_media_full_edit',
           'feature_ai_media_inpaint',
+          'feature_source_listing_workflow',
           'feature_source_listing_web_media',
           'feature_source_listing_extension_workbench',
           'feature_source_ozon_publisher_v2',
