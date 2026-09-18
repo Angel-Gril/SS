@@ -183,6 +183,11 @@ const steps = [
     args: ['scripts/ai-media-dark-deploy.test.mjs'],
   },
   {
+    name: 'AI media hosted pilot deployment contract',
+    command: 'node',
+    args: ['--test', 'scripts/ai-media-pilot-policy.test.mjs', 'scripts/deploy-pilot.test.mjs'],
+  },
+  {
     name: 'REL-04 dark canary contract',
     command: 'node',
     args: ['--test', 'scripts/rel04-dark-canary.test.mjs'],

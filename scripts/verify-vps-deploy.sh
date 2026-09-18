@@ -1176,7 +1176,10 @@ check_ai_media_dark_rollout() {
     fail "AI Media dark-rollout verifier is missing or unreadable: $verifier"
     return
   fi
-  if DEPLOY_DIR="$DEPLOY_DIR" ENV_FILE="$ENV_FILE" bash "$verifier"; then
+  if DEPLOY_DIR="$DEPLOY_DIR" ENV_FILE="$ENV_FILE" \
+    AI_MEDIA_ROLLOUT_EXPECTATION="${AI_MEDIA_ROLLOUT_EXPECTATION:-off}" \
+    AI_MEDIA_PILOT_EXPECTATIONS_JSON="${AI_MEDIA_PILOT_EXPECTATIONS_JSON:-}" \
+    bash "$verifier"; then
     return
   fi
   fail "AI Media dark-rollout verification failed"
