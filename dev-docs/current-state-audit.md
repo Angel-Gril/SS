@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-18 COM hosted pilot 已部署
+
+- `8bc1a19f90744444dba95012bc2468312efbda72` 已通过受限 `deploy-pilot.sh` 并切换 COM current；`1.0.340` cloud/local 包 SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`，签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`。
+- 部署前后 backup attestation、150 migrations、AI suite DB guard、cloud-r2 runtime env、systemd、API/Web/Worker 与 `https://ss-erp.com/ready` 均通过。完整 cloudflare VPS verifier 主体为 `0 failure / 1 warning`，唯一 warning 为远端备份延期；官网仍服务旧批准 `1.0.332`，本次未公开候选。
+- hosted pilot contract 已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、shop DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，scopes 精确为 `capture:write/listing:review/listing:write/media:execute`，允许操作仅 `IMAGE_TO_IMAGE/SUITE`。历史残留 BINI grant 所属 session `15654e33-70a9-4491-ae59-72bb52181366` 已经由 owner API 正式撤销并验证 `REVOKED + shopIds=[]`，未手工改库。
+- COM runtime backup 已迁移至 `/var/backups/ss-erp-runtime`，deployment attestation 与签名候选证据仍在 `/var/backups/ss-erp` 及 commit-bound extension release roots；备份恢复 public 表 `144`。Provider/Ozon/官网写入均为 0。
+- verifier 控制台已证明所有主检查通过，但 `scripts/vps-verification-evidence.mjs` 在 COM Node 22 上直接 import `.ts` 合同时失败（`ERR_UNKNOWN_FILE_EXTENSION`，尝试 Node strip-types 又因发行版无 TypeScript 支持失败），因此 canonical VPS evidence JSON 尚未写回；该工具链问题是独立待办，不降低已完成的运行 gate 结论，也不能用手写回执替代。
+
 ## 2026-09-18 推送与 CN 部署接续
 
 - 备份目录分离修复已提交为 `7b4503ac00fc605a6210c2484ba0ff632ac0443a` 并推送。`verify-vps-deploy.sh` 不再把运行备份目录和部署 attestation 强制视为同一目录，而是要求两个 canonical、非根路径且不同；`backup-operations-contract` 为 `13 passed / 7 skipped`。CN `/etc/ss-erp-backup.env` 的后台备份已改为 `/var/backups/ss-erp-runtime`，部署证据继续位于 `/var/backups/ss-erp`，并已生成新 runtime backup/status。
