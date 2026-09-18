@@ -2,7 +2,12 @@
 
 ## 2026-09-18 推送与 CN 部署接续
 
-- 当前 Git 为 clean `0f5ea6d1e3319a5719691ffab12427d17877179e`，已推送到 `origin/feat/ai-media-prompt-registry`；部署门禁聚焦回归 `22/22` 通过，`git diff --check` 通过。首次从 Windows 挂载工作树打包被远端权限 gate 拒绝，随后使用同一提交的 Linux clean worktree 重打包，未改源码。
+- 备份目录分离修复已提交为 `7b4503ac00fc605a6210c2484ba0ff632ac0443a` 并推送。`verify-vps-deploy.sh` 不再把运行备份目录和部署 attestation 强制视为同一目录，而是要求两个 canonical、非根路径且不同；`backup-operations-contract` 为 `13 passed / 7 skipped`。CN `/etc/ss-erp-backup.env` 的后台备份已改为 `/var/backups/ss-erp-runtime`，部署证据继续位于 `/var/backups/ss-erp`，并已生成新 runtime backup/status。
+- CN 已正式切换到 `7b4503ac / 1.0.338`。目标 attestation SHA-256 `482b07f0d2a76f96160dbd002e97e81070d2e82c393e8b667402902758a386ef`；direct-mode VPS verifier `0 failure / 1 warning`，唯一 warning 是远端备份未配置。候选 cloud/local SHA-256 为 `bcec3872daabe831b9542d8a076dabcc194478eefc0bde1f479b30c31ab8bc95` / `541db0611e52db406dea7186bae7781e4eee2ded47f4fdf2d8436d5a63b0d857`，签名 SHA-256 `530c79200a2cd05d38f8c2dfcbc52321e0731ed84c967208dfa6417c95e24b4d`。
+
+以下三条 `0f5ea6d1 / 1.0.337` 与旧候选摘要仅保留为历史部署证据，不代表当前 CN 运行版本。
+
+- `0f5ea6d1 / 1.0.337` 是目录分离修复前的 CN 部署基线；其备份、migration、dark gate 和 direct-mode 验收证据保留为历史记录，当前运行状态以上述 `7b4503ac / 1.0.338` 为准。
 - CN 已正式切换到 `0f5ea6d1 / 1.0.337`。目标提交备份 gzip/恢复演练通过，public 表 `143`，部署 attestation SHA-256 `f9a7d163645fb1bc74e7bc9288144c1539daa59e8133fd58440854e227ae221b`；150 migrations 无 pending，post-migration suite guard、AI dark gate、systemd、API/Web/Worker 和 `/ready` 均通过。按 `VERIFY_ORIGIN_MODE=direct`、四个 `.cn` host 的完整 VPS verifier 为 `0 failure / 1 warning`，唯一 warning 是既定的远端备份未配置。
 - CN 候选包证据保持独立绑定：cloud `66beb279825dfeed667e32c663064030ab54114f241c14de9b1a971815604bd0`、local `3791fe3d8a5634c45d1337349568a0e59701c54a9394601ded5011cfea30cdcc`、detached signature `94ad1cdc7aae48dfc0e329db27c3cc2a403573cb5acbad5cf4fbb164c784eb68`；官网仍是已批准的 `1.0.332`，未公开 `1.0.337`。
 - COM 运行态未改变：`40c3db87298a48bb7de385badb366af509a94f48`、三服务 active、`/ready` 正常。COM 的 DOTH pilot flags 与 tenant allowlist 仍开启；正式部署脚本固定 dark-off，因而没有切换 COM、没有修改 flags、没有绕过 gate。COM 部署待 pilot 部署合同/策略明确后再做。

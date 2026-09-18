@@ -2,9 +2,10 @@
 
 ## 2026-09-18 部署接续
 
-- `0f5ea6d1e3319a5719691ffab12427d17877179e` 已推送到 `origin/feat/ai-media-prompt-registry`；工作树 clean，部署门禁聚焦回归 `22/22` 通过，`git diff --check` 通过。
-- CN 已按正式 `scripts/deploy.sh` 部署 `0f5ea6d1 / 1.0.337`：Linux clean worktree 重新打包以保留 POSIX 权限；目标备份恢复演练 public 表 `143`，attestation SHA-256 `f9a7d163645fb1bc74e7bc9288144c1539daa59e8133fd58440854e227ae221b`；migration `150` 无 pending，suite DB guard 与 AI dark gate 通过。当前、API/Web/Worker、RDS/Redis、四个 `.cn` 公网 `/ready` 和 direct-mode VPS verifier 均通过，结果 `0 failure / 1 warning`，唯一 warning 为远端备份未配置。
-- CN `1.0.337` cloud/local 包继续绑定已签名候选：cloud SHA-256 `66beb279825dfeed667e32c663064030ab54114f241c14de9b1a971815604bd0`，local SHA-256 `3791fe3d8a5634c45d1337349568a0e59701c54a9394601ded5011cfea30cdcc`，签名 SHA-256 `94ad1cdc7aae48dfc0e329db27c3cc2a403573cb5acbad5cf4fbb164c784eb68`；官网 pointer 仍保持旧批准版本 `1.0.332`，未发布新候选。
+- 备份目录分离修复已推送为 `7b4503ac00fc605a6210c2484ba0ff632ac0443a`：VPS verifier 现在要求 runtime `BACKUP_LOCAL_DIR` 与 deployment `DEPLOY_BACKUP_LOCAL_DIR` 都是 canonical 非根目录且必须分离；合同测试 `13 passed / 7 skipped`。CN runtime 备份已切到 `/var/backups/ss-erp-runtime`，deployment attestation 保留在 `/var/backups/ss-erp`。
+- CN 已更新到 `7b4503ac / 1.0.338`：目标 attestation SHA-256 `482b07f0d2a76f96160dbd002e97e81070d2e82c393e8b667402902758a386ef`，direct-mode VPS verifier `0 failure / 1 warning`，API/Web/Worker 和四个 `.cn` `/ready` 均通过。cloud/local 包 SHA-256 分别为 `bcec3872daabe831b9542d8a076dabcc194478eefc0bde1f479b30c31ab8bc95`、`541db0611e52db406dea7186bae7781e4eee2ded47f4fdf2d8436d5a63b0d857`，签名 SHA-256 `530c79200a2cd05d38f8c2dfcbc52321e0731ed84c967208dfa6417c95e24b4d`。
+
+- `0f5ea6d1 / 1.0.337` 是本次目录分离修复前的 CN 部署基线；其备份、migration、dark gate 和 direct-mode 验收证据保留为历史记录，当前运行状态以上述 `7b4503ac / 1.0.338` 为准。
 - COM 仍运行 `40c3db87298a48bb7de385badb366af509a94f48`，三服务与 `/ready` 已恢复正常；其 `feature_extension_hosted_ai=true`、套图/工作流/source listing pilot 为 DOTH allowlist，正式 `verify-ai-media-dark.sh` 固定要求 off，因此本轮没有切换 COM，也没有关闭或绕过已授权 pilot。COM 目标候选和备份仍待明确 pilot 部署策略。
 - CN 备份取证时发现 `/etc/ss-erp-backup.env` 的 `BACKUP_LOCAL_DIR` 与 `DEPLOY_BACKUP_LOCAL_DIR` 复用 `/var/backups/ss-erp`；本次部署 gate 按应用 env 语义通过，未修改后台备份配置。该配置漂移列为后续运维修复，不作为部署成功条件隐藏。
 - 本轮没有 Provider POST、Ozon 写入、官网 pointer 切换或新增 AI 费用；独立 MV3 store-draft assignment 边界仍未关闭。
