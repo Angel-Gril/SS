@@ -31,7 +31,7 @@ function snapshot(overrides = {}) {
   ];
   const deviceSessions = devices.map((id) => ({
     id, status: 'ACTIVE', ownerUserId: owner, actorUserId: owner,
-    scopes: ['listing:review', 'listing:write', 'media:execute'], shopIds: [shop],
+    scopes: ['capture:write', 'listing:review', 'listing:write', 'media:execute'], shopIds: [shop],
   }));
   return { configRows, deviceSessions, ...overrides };
 }

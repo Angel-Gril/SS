@@ -26,7 +26,12 @@ const FORBIDDEN_FLAGS = Object.freeze([
   'feature_extension_byok_publish',
 ]);
 
-const REQUIRED_SCOPES = Object.freeze(['listing:review', 'listing:write', 'media:execute']);
+const REQUIRED_SCOPES = Object.freeze([
+  'capture:write',
+  'listing:review',
+  'listing:write',
+  'media:execute',
+]);
 const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE']);
 
 function fail(message) {

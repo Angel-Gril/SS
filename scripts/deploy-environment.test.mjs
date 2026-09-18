@@ -52,6 +52,20 @@ test('deployment environment is snapshotted and executed as data', () => {
     ]);
     assert.equal(executed.status, 0);
     assert.equal(executed.stdout, 'literal value');
+    const pilotEnvironment = run([
+      'exec-check', snapshot, root, '--', process.execPath, '-e',
+      'process.stdout.write(`${process.env.AI_MEDIA_ROLLOUT_EXPECTATION || ""}|${process.env.AI_MEDIA_PILOT_EXPECTATIONS_JSON || ""}`)',
+    ], {
+      ...process.env,
+      AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot',
+      AI_MEDIA_PILOT_EXPECTATIONS_JSON: '{"ownerUserIds":["owner-1"]}',
+    });
+    assert.equal(pilotEnvironment.status, 0);
+    assert.equal(
+      pilotEnvironment.stdout,
+      'hosted-pilot|{"ownerUserIds":["owner-1"]}',
+      'hosted-pilot verifier inputs must cross the restricted execution boundary',
+    );
     const buildEnvironment = run([
       'exec-build', snapshot, root, '--', process.execPath, '-e',
       'process.stdout.write(`${process.env.SAFE_VALUE || ""}|${process.env.DATABASE_URL || ""}`)',

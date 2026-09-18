@@ -194,6 +194,8 @@ function execute(profile, file, cwd, command, args, identity = null) {
     'SKIP_HTTP_CHECK',
     'SKIP_PROCESS_ENV_CHECKS',
     'SKIP_SERVICE_CHECKS',
+    'AI_MEDIA_ROLLOUT_EXPECTATION',
+    'AI_MEDIA_PILOT_EXPECTATIONS_JSON',
   ]) {
     if (process.env[key]) environment[key] = process.env[key];
   }
