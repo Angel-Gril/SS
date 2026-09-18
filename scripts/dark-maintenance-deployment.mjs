@@ -14,7 +14,7 @@ import { readStablePublicationFile } from './extension-website-publication-appro
 import { verifyExtensionReleaseSignature } from './verify-extension-release-signature.mjs';
 import { canonicalExtensionReleaseEvidenceJson, parseExtensionReleaseEvidence } from './extension-release-contract.mjs';
 import { parseRel04CandidateIdentity, parseVpsVerificationEvidence,
-  validateRel04ReleaseBinding } from '../packages/shared/src/rel04-release-evidence.ts';
+  validateRel04ReleaseBinding } from '../packages/shared/src/rel04-release-evidence-runtime.mjs';
 
 export const DARK_MAINTENANCE_SCOPE = 'MAINTENANCE_DARK_DEPLOY';
 const SOURCE_KEYS = ['full-image-edit.base', 'inpaint.base'];

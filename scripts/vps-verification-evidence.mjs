@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { parseVpsVerificationEvidence } from '../packages/shared/src/rel04-release-evidence.ts';
+import { parseVpsVerificationEvidence } from '../packages/shared/src/rel04-release-evidence-runtime.mjs';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { readStablePublicationFile } from './extension-website-publication-approval.mjs';
 import { sha256 } from './extension-release-publication-contract.mjs';

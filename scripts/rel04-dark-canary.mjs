@@ -27,7 +27,7 @@ import {
 import {
   parseVpsVerificationEvidence,
   validateRel04ReleaseBinding,
-} from '../packages/shared/src/rel04-release-evidence.ts';
+} from '../packages/shared/src/rel04-release-evidence-runtime.mjs';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_JSON_RESPONSE_BYTES = 256 * 1024;

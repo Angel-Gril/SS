@@ -11,7 +11,7 @@ import path from 'node:path';
 import {
   parseRel04CandidateIdentity,
   validateRel04ReleaseBinding,
-} from '../packages/shared/src/rel04-release-evidence.ts';
+} from '../packages/shared/src/rel04-release-evidence-runtime.mjs';
 import {
   MAX_KEYRING_BYTES,
   MAX_PUBLICATION_APPROVAL_BYTES,

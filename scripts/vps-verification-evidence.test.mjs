@@ -126,6 +126,10 @@ test('ordinary VPS verification keeps receipt output opt-in', () => {
 
 for (const runtime of [
   { name: 'native Node', nodeOptions: '' },
+  {
+    name: 'ordinary Node without native TypeScript stripping',
+    nodeOptions: '--no-experimental-strip-types',
+  },
   { name: 'the configured tsx loader', nodeOptions: `--import=${tsxLoader}` },
 ]) {
   test(`a linked script directory retains full VPS evidence with ${runtime.name}`, () => {
