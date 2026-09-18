@@ -1,5 +1,14 @@
 # SS ERP 内部开发真源
 
+## 2026-09-18 部署接续
+
+- `0f5ea6d1e3319a5719691ffab12427d17877179e` 已推送到 `origin/feat/ai-media-prompt-registry`；工作树 clean，部署门禁聚焦回归 `22/22` 通过，`git diff --check` 通过。
+- CN 已按正式 `scripts/deploy.sh` 部署 `0f5ea6d1 / 1.0.337`：Linux clean worktree 重新打包以保留 POSIX 权限；目标备份恢复演练 public 表 `143`，attestation SHA-256 `f9a7d163645fb1bc74e7bc9288144c1539daa59e8133fd58440854e227ae221b`；migration `150` 无 pending，suite DB guard 与 AI dark gate 通过。当前、API/Web/Worker、RDS/Redis、四个 `.cn` 公网 `/ready` 和 direct-mode VPS verifier 均通过，结果 `0 failure / 1 warning`，唯一 warning 为远端备份未配置。
+- CN `1.0.337` cloud/local 包继续绑定已签名候选：cloud SHA-256 `66beb279825dfeed667e32c663064030ab54114f241c14de9b1a971815604bd0`，local SHA-256 `3791fe3d8a5634c45d1337349568a0e59701c54a9394601ded5011cfea30cdcc`，签名 SHA-256 `94ad1cdc7aae48dfc0e329db27c3cc2a403573cb5acbad5cf4fbb164c784eb68`；官网 pointer 仍保持旧批准版本 `1.0.332`，未发布新候选。
+- COM 仍运行 `40c3db87298a48bb7de385badb366af509a94f48`，三服务与 `/ready` 已恢复正常；其 `feature_extension_hosted_ai=true`、套图/工作流/source listing pilot 为 DOTH allowlist，正式 `verify-ai-media-dark.sh` 固定要求 off，因此本轮没有切换 COM，也没有关闭或绕过已授权 pilot。COM 目标候选和备份仍待明确 pilot 部署策略。
+- CN 备份取证时发现 `/etc/ss-erp-backup.env` 的 `BACKUP_LOCAL_DIR` 与 `DEPLOY_BACKUP_LOCAL_DIR` 复用 `/var/backups/ss-erp`；本次部署 gate 按应用 env 语义通过，未修改后台备份配置。该配置漂移列为后续运维修复，不作为部署成功条件隐藏。
+- 本轮没有 Provider POST、Ozon 写入、官网 pointer 切换或新增 AI 费用；独立 MV3 store-draft assignment 边界仍未关闭。
+
 本目录记录当前项目状态、技术组合、owner 边界、阶段执行和验收证据。公开安装、使用、部署与运维说明仍由 `docs/` 负责。
 
 ## 当前真源索引

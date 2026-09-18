@@ -1,5 +1,10 @@
 # 生图与计费链路收口（2026-09）
 
+## 2026-09-18 推送与区域部署结果
+
+- 目标源码 `0f5ea6d1e3319a5719691ffab12427d17877179e` 已推送。CN 按 direct-origin 正式部署为 `1.0.337` 并通过完整 VPS verifier（`0 failure / 1 warning`）；COM 因 DOTH hosted pilot 与固定 dark-off 部署 gate 冲突保持旧版本，不关闭 pilot、不绕过校验。该结果不改变独立 MV3 store-draft assignment 未完成的边界。
+- CN 真实部署使用目标提交备份恢复 attestation、150 migrations、suite post-migration DB guard、签名候选和四个公网 `.cn` readiness；未执行 Provider/Ozon 写入或官网 pointer 切换。备份目录复用漂移已记录到当前状态审计，待后续运维修复。
+
 ## 2026-09-15 用户纠偏后的当前验收
 
 - 用户明确要求完成正常生图和正常计费，成功生成后按已提供的单张费用记账；供应商后台账单核对、免费抵扣、最终结算不是本次功能开发的前置或任务。该决定取代本阶段此前把供应商对账和单张严格改色样本挂在正常功能前的要求；旧试验记录仍保留其原始事实，不改写成供应商已结算。

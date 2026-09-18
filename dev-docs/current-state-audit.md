@@ -1,5 +1,14 @@
 # SS ERP 当前状态审计
 
+## 2026-09-18 推送与 CN 部署接续
+
+- 当前 Git 为 clean `0f5ea6d1e3319a5719691ffab12427d17877179e`，已推送到 `origin/feat/ai-media-prompt-registry`；部署门禁聚焦回归 `22/22` 通过，`git diff --check` 通过。首次从 Windows 挂载工作树打包被远端权限 gate 拒绝，随后使用同一提交的 Linux clean worktree 重打包，未改源码。
+- CN 已正式切换到 `0f5ea6d1 / 1.0.337`。目标提交备份 gzip/恢复演练通过，public 表 `143`，部署 attestation SHA-256 `f9a7d163645fb1bc74e7bc9288144c1539daa59e8133fd58440854e227ae221b`；150 migrations 无 pending，post-migration suite guard、AI dark gate、systemd、API/Web/Worker 和 `/ready` 均通过。按 `VERIFY_ORIGIN_MODE=direct`、四个 `.cn` host 的完整 VPS verifier 为 `0 failure / 1 warning`，唯一 warning 是既定的远端备份未配置。
+- CN 候选包证据保持独立绑定：cloud `66beb279825dfeed667e32c663064030ab54114f241c14de9b1a971815604bd0`、local `3791fe3d8a5634c45d1337349568a0e59701c54a9394601ded5011cfea30cdcc`、detached signature `94ad1cdc7aae48dfc0e329db27c3cc2a403573cb5acbad5cf4fbb164c784eb68`；官网仍是已批准的 `1.0.332`，未公开 `1.0.337`。
+- COM 运行态未改变：`40c3db87298a48bb7de385badb366af509a94f48`、三服务 active、`/ready` 正常。COM 的 DOTH pilot flags 与 tenant allowlist 仍开启；正式部署脚本固定 dark-off，因而没有切换 COM、没有修改 flags、没有绕过 gate。COM 部署待 pilot 部署合同/策略明确后再做。
+- 备份运维待办：CN `/etc/ss-erp-backup.env` 当前将后台 `BACKUP_LOCAL_DIR` 与应用 `DEPLOY_BACKUP_LOCAL_DIR` 复用同一路径；本轮只在 verifier 进程中去掉后台变量以验证应用 gate，没有改写该配置或隐瞒漂移。后续应按 runbook 分离目录并单独验收。
+- 本轮 Provider POST、Ozon 写入、新增费用、官网 pointer 切换均为 0；独立 MV3 的 source-product 写回通过但独立 store-draft assignment 仍未完成。
+
 2026-09-16 当前开发与授权以[本轮实现与已批准验收范围](stages/ai-image-billing-closure-2026-09.md#本轮实现与已批准验收范围)为准：剩余参考图、套图、扩展入口和 Web 合同已完成本地实现，正在收口最终发布门禁与已批准的真实验收。以下运行提交和一次 FULL_EDIT 费用属于此前已完成批次，不代表新源码已部署或全部模式已验收。
 
 当前开发结果（2026-09-16 北京时间）：正常生图和按冻结单价计费已修复；最新接续补齐 Web 报价与断网恢复、扩展总开关和运行时传递。最终源码已推送，COM/CN 应用部署及完整 VPS 验证通过；一次真实 FULL_EDIT 已完成生成、审核、追加和单张 CNY 0.14 记账，临时配置已恢复。当前决定见[阶段 owner](stages/ai-image-billing-closure-2026-09.md#2026-09-15-用户纠偏后的当前验收)，本次运行与费用事实只维护在[正常流程真实验收](stages/ai-image-billing-closure-2026-09.md#正常流程真实验收与应用部署)，源码证据见[生图报价与扩展入口接续](#生图报价与扩展入口接续2026-09-15)。供应商后台账单不再是本次功能前置，以下试验与费用观察保留历史含义。
