@@ -2918,6 +2918,68 @@ async function loadAuthoritativeSourceAiImageSuiteProjection(message) {
   return { handoff, client, listing, result };
 }
 
+function sourceAiImageSuitePlanBinding(authority) {
+  return {
+    snapshotId: authority.handoff.snapshotId,
+    supplyGoodsId: authority.handoff.supplyGoodsId,
+    shopId: authority.listing.shopId,
+    listingWorkflowId: authority.listing.listingWorkflowId,
+    draftRevision: authority.listing.revision,
+    draftVersion: authority.listing.draftVersion,
+  };
+}
+
+async function sourceAiImageSuiteOperationKey(prefix, value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return prefix + Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function executeAuthoritativeSourceAiImageSuitePlan(message) {
+  const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
+  if (authority.result.projection.plan !== null) {
+    throw new Error('ERP AI 主图/套图计划已存在，请刷新后继续');
+  }
+  const binding = sourceAiImageSuitePlanBinding(authority);
+  const client = createHostedAiImageSuiteWorkbenchClient();
+  const createIdempotencyKey = await sourceAiImageSuiteOperationKey(
+    'source-ai-plan-create:',
+    { action: 'CREATE_PLAN', binding },
+  );
+  const created = await client.createPlan({
+    binding,
+    idempotencyKey: createIdempotencyKey,
+    galleryGoals: ['scene'],
+  });
+  if (!created || !created.plan || created.plan.reviewStatus !== 'PENDING') {
+    throw new Error('ERP AI 主图/套图计划创建结果无效');
+  }
+  const reviewIdempotencyKey = await sourceAiImageSuiteOperationKey(
+    'source-ai-plan-review:',
+    { action: 'REVIEW_PLAN', binding, planId: created.plan.id, revision: created.plan.revision },
+  );
+  const reviewed = await client.reviewPlan({
+    binding,
+    planId: created.plan.id,
+    expectedRevision: created.plan.revision,
+    operationKey: reviewIdempotencyKey,
+    decision: 'APPROVE',
+    note: 'source product page explicit plan approval',
+  });
+  if (!reviewed || !reviewed.plan || reviewed.plan.reviewStatus !== 'APPROVED') {
+    throw new Error('ERP AI 主图/套图计划审核结果无效');
+  }
+  return {
+    handoff: authority.handoff,
+    result: {
+      state: 'completed',
+      action: 'CREATE_AND_REVIEW_PLAN',
+      replay: Boolean(created.replayed && reviewed.replayed),
+    },
+  };
+}
+
 async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   const allowedKeys = new Set([
     'type', 'sourceProductId', 'platform', 'listingWorkflowId',
@@ -2928,7 +2990,7 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
     throw new Error('ERP AI 主图/套图请求字段无效');
   }
   const action = typeof message.action === 'string' ? message.action : '';
-  if (!['START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT']
+  if (!['CREATE_AND_REVIEW_PLAN', 'START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT']
     .includes(action)) {
     throw new Error('ERP AI 主图/套图操作无效');
   }
@@ -2945,7 +3007,9 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
     throw new Error('ERP AI 主图/套图费用确认无效');
   }
   const costConfirmed = message.costConfirmed === true;
-  const validShape = action === 'START'
+  const validShape = action === 'CREATE_AND_REVIEW_PLAN'
+    ? slotId === null && decision === null && !costConfirmed && message.intentWitness === undefined
+    : action === 'START'
     ? slotId === null && decision === null && costConfirmed
     : action === 'CONTINUE' || action === 'CANCEL'
       ? slotId === null && decision === null && !costConfirmed
@@ -2955,6 +3019,10 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
           ? Boolean(slotId) && Boolean(decision) && !costConfirmed
           : Boolean(slotId) && decision === null && !costConfirmed;
   if (!validShape) throw new Error('ERP AI 主图/套图请求字段无效');
+
+  if (action === 'CREATE_AND_REVIEW_PLAN') {
+    return executeAuthoritativeSourceAiImageSuitePlan(message);
+  }
 
   const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
   const intentContract = globalThis.SS_ERP_LISTING_WORKFLOW_CLIENT;

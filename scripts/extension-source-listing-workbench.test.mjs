@@ -117,6 +117,8 @@ assert.doesNotMatch(
 );
 assert.match(worker, /loadAuthoritativeSourceAiImageSuiteProjection/);
 assert.match(worker, /executeAuthoritativeSourceAiImageSuiteCommand/);
+assert.match(worker, /CREATE_AND_REVIEW_PLAN/);
+assert.match(worker, /executeAuthoritativeSourceAiImageSuitePlan/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
 assert.match(
@@ -1255,7 +1257,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(suiteCommandRequests[6].body.command)
 });
 
 function extractAsyncWorkerFunction(name) {
-  const expression = new RegExp(`async function ${name}\\([^]*?\\n\\}`, 'u');
+  const expression = new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`, 'u');
   const match = worker.match(expression);
   assert.ok(match, `${name} should be independently testable`);
   return match[0];
@@ -1284,8 +1286,20 @@ const authoritativeSuiteClient = {
     return { state: 'completed', action: input.action, replay: false };
   },
 };
+const planCreateCalls = [];
+const planClient = {
+  async createPlan(input) {
+    planCreateCalls.push({ method: 'createPlan', input });
+    return { plan: { id: 'plan-created', revision: 1, reviewStatus: 'PENDING' }, replayed: false };
+  },
+  async reviewPlan(input) {
+    planCreateCalls.push({ method: 'reviewPlan', input });
+    return { plan: { id: 'plan-created', revision: 2, reviewStatus: 'APPROVED' }, replayed: false };
+  },
+};
 const authoritativeSuiteContext = {
-  Array, Error, Number, Object, Promise, Set, String,
+  Array, Error, Number, Object, Promise, Set, String, TextEncoder,
+  crypto: { subtle: { digest: async () => new Uint8Array(32).buffer } },
   SS_ERP_LISTING_WORKFLOW_CLIENT: suiteIntentContract,
   sourceWorkflowHandoffText(value, maximum) {
     const normalized = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -1297,13 +1311,18 @@ const authoritativeSuiteContext = {
   async readPersistedSourceWorkflowHandoff() { return authoritativeSuiteHandoff; },
   getSourceListingWorkflowClient() { return authoritativeSuiteClient; },
   currentSourceListingContext() { return authoritativeSuiteListing; },
+  createHostedAiImageSuiteWorkbenchClient() { return planClient; },
 };
 authoritativeSuiteContext.globalThis = authoritativeSuiteContext;
 vm.runInNewContext(
   `${extractAsyncWorkerFunction('loadAuthoritativeSourceAiImageSuiteProjection')}\n`
+    + `${extractAsyncWorkerFunction('sourceAiImageSuitePlanBinding')}\n`
+    + `${extractAsyncWorkerFunction('sourceAiImageSuiteOperationKey')}\n`
+    + `${extractAsyncWorkerFunction('executeAuthoritativeSourceAiImageSuitePlan')}\n`
     + `${extractAsyncWorkerFunction('executeAuthoritativeSourceAiImageSuiteCommand')}\n`
     + 'globalThis.authoritativeSuiteApi = {'
     + 'loadAuthoritativeSourceAiImageSuiteProjection,'
+    + 'executeAuthoritativeSourceAiImageSuitePlan,'
     + 'executeAuthoritativeSourceAiImageSuiteCommand};',
   authoritativeSuiteContext,
   { filename: 'service-worker-authoritative-ai-image-suite.js' },
@@ -1324,6 +1343,32 @@ assert.deepEqual(JSON.parse(JSON.stringify(authoritativeSuiteCalls[1].input)), {
   listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
 });
 
+const planProjection = structuredClone(suiteProjection);
+planProjection.plan = null;
+planProjection.commandAuthority = null;
+planProjection.suite = null;
+authoritativeSuiteRead = { state: 'ready', projection: planProjection };
+planCreateCalls.length = 0;
+const createdAndReviewed = await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuitePlan({
+  ...suiteMessageContext,
+  type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'CREATE_AND_REVIEW_PLAN',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(createdAndReviewed.result)), {
+  state: 'completed', action: 'CREATE_AND_REVIEW_PLAN', replay: false,
+});
+assert.deepEqual(planCreateCalls.map((call) => call.method), ['createPlan', 'reviewPlan']);
+assert.deepEqual(JSON.parse(JSON.stringify(planCreateCalls[0].input.binding)), {
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+});
+assert.equal(planCreateCalls[0].input.galleryGoals[0], 'scene');
+assert.equal(planCreateCalls[1].input.planId, 'plan-created');
+assert.equal(planCreateCalls[1].input.expectedRevision, 1);
+assert.equal(Object.prototype.hasOwnProperty.call(planCreateCalls[0].input, 'ownerUserId'), false);
+authoritativeSuiteRead = { state: 'ready', projection: suiteProjection };
+authoritativeSuiteCalls.length = 0;
+
 await assert.rejects(
   authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
     ...suiteMessageContext,
@@ -1334,7 +1379,7 @@ await assert.rejects(
   /请求字段无效/u,
   'content-script projections must never cross the service-worker authority boundary',
 );
-assert.equal(authoritativeSuiteCalls.length, 2);
+assert.equal(authoritativeSuiteCalls.length, 0);
 
 const staleClientProjection = { contractVersion: 'stale-content-projection' };
 authoritativeSuiteCalls.length = 0;
@@ -2563,6 +2608,38 @@ suiteReloadButton.listeners.click({ isTrusted: true });
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(suiteReloadEvents.length, 1);
 assert.deepEqual(suiteReloadErrors, ['手动重读失败']);
+
+const suitePlanCreateContainer = new TestNode('section');
+const suitePlanCreateEvents = [];
+const noPlanProjection = aiImageSuiteProjectionFixture();
+noPlanProjection.plan = null;
+noPlanProjection.commandAuthority = null;
+noPlanProjection.suite = null;
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suitePlanCreateContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: noPlanProjection },
+  onAiImageSuiteCommand(payload) { suitePlanCreateEvents.push(payload); },
+});
+const planCreateButton = renderedNodes(suitePlanCreateContainer)
+  .find((node) => node.textContent === '创建并审核 AI 套图计划');
+assert.ok(planCreateButton);
+planCreateButton.listeners.click({ isTrusted: false });
+assert.equal(suitePlanCreateEvents.length, 0);
+planCreateButton.listeners.click({ isTrusted: true });
+assert.deepEqual(JSON.parse(JSON.stringify(suitePlanCreateEvents)), [{
+  action: 'CREATE_AND_REVIEW_PLAN', costConfirmed: false,
+}]);
 
 const suiteStartContainer = new TestNode('section');
 const suiteStartEvents = [];

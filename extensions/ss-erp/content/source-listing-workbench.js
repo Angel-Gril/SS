@@ -959,6 +959,21 @@
     });
   }
 
+  function aiImageSuitePlanCommandButton(container, options) {
+    var button = element('button', 'is-primary', '创建并审核 AI 套图计划');
+    button.type = 'button';
+    button.disabled = Boolean(options.aiImageSuiteBusyKey);
+    button.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || button.disabled
+        || typeof options.onAiImageSuiteCommand !== 'function') return;
+      invokeAiImageSuiteCommand(container, button, options, {
+        action: 'CREATE_AND_REVIEW_PLAN',
+        costConfirmed: false,
+      }, 'CREATE_AND_REVIEW_PLAN');
+    });
+    return button;
+  }
+
   function aiImageSuiteCommandButton(container, options, payload, label, className) {
     var button = element('button', className || '', label);
     button.type = 'button';
@@ -1205,6 +1220,9 @@
         'ss-erp-source-workbench-empty',
         '生成结果只会追加到 ERP 来源商品，不会直接写入店铺草稿。',
       ));
+      if (typeof options.onAiImageSuiteCommand === 'function') {
+        drawer.appendChild(aiImageSuitePlanCommandButton(container, options));
+      }
       container.appendChild(drawer);
       stopAiImageSuitePolling(container);
       return;
