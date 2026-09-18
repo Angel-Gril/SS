@@ -15,6 +15,8 @@
 - COM 运行态未改变：`40c3db87298a48bb7de385badb366af509a94f48`、三服务 active、`/ready` 正常。COM 的 DOTH pilot flags 与 tenant allowlist 仍开启；正式部署脚本固定 dark-off，因而没有切换 COM、没有修改 flags、没有绕过 gate。COM 部署待 pilot 部署合同/策略明确后再做。
 - 备份运维待办：CN `/etc/ss-erp-backup.env` 当前将后台 `BACKUP_LOCAL_DIR` 与应用 `DEPLOY_BACKUP_LOCAL_DIR` 复用同一路径；本轮只在 verifier 进程中去掉后台变量以验证应用 gate，没有改写该配置或隐瞒漂移。后续应按 runbook 分离目录并单独验收。
 - 本轮 Provider POST、Ozon 写入、新增费用、官网 pointer 切换均为 0；独立 MV3 的 source-product 写回通过但独立 store-draft assignment 仍未完成。
+- COM pilot 合同已提交为 `3b01c1b4`，合同测试 `7/7` 通过；它验证 owner/shop/active device session/scope、AI/source rollout revision 和发布关闭，但尚未接入通用部署入口，因此没有改变 COM 运行态。
+- 独立 MV3 store-draft assignment 仍需 hosted plan-binding owner 建立当前 draft 的 extension binding；现有 Web plan 不能直接复用，服务端继续拒绝 stale/不存在 binding，未绕过 owner。
 
 2026-09-16 当前开发与授权以[本轮实现与已批准验收范围](stages/ai-image-billing-closure-2026-09.md#本轮实现与已批准验收范围)为准：剩余参考图、套图、扩展入口和 Web 合同已完成本地实现，正在收口最终发布门禁与已批准的真实验收。以下运行提交和一次 FULL_EDIT 费用属于此前已完成批次，不代表新源码已部署或全部模式已验收。
 

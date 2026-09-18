@@ -4,6 +4,8 @@
 
 - CN 备份目录分离和 verifier 合同已随 `7b4503ac` 完成并部署；runtime backups 使用 `/var/backups/ss-erp-runtime`，deployment attestation 使用 `/var/backups/ss-erp`。完整 direct-mode VPS 验收为 `0 failure / 1 warning`。
 - CN 当前运行 `7b4503ac / 1.0.338`，签名候选已验证；COM 仍保持 `40c3db87` DOTH pilot 旧版本，尚未改变 pilot 开关或绕过 dark gate。
+- COM pilot 的受限快照合同已在 `3b01c1b4` 本地闭合，但通用部署入口仍保持 dark-off；接入专用 pilot deploy entrypoint 前不切 COM。
+- 独立 MV3 store-draft assignment 仍未关闭，当前 `ERP_SOURCE_PRODUCT / writesStoreDraft=false` 只证明来源商品写回。
 
 下方 `0f5ea6d1 / 1.0.337` 部署记录为历史基线，不代表当前 CN 运行版本。
 

@@ -9,6 +9,7 @@
 - COM 仍运行 `40c3db87298a48bb7de385badb366af509a94f48`，三服务与 `/ready` 已恢复正常；其 `feature_extension_hosted_ai=true`、套图/工作流/source listing pilot 为 DOTH allowlist，正式 `verify-ai-media-dark.sh` 固定要求 off，因此本轮没有切换 COM，也没有关闭或绕过已授权 pilot。COM 目标候选和备份仍待明确 pilot 部署策略。
 - CN 备份取证时发现 `/etc/ss-erp-backup.env` 的 `BACKUP_LOCAL_DIR` 与 `DEPLOY_BACKUP_LOCAL_DIR` 复用 `/var/backups/ss-erp`；本次部署 gate 按应用 env 语义通过，未修改后台备份配置。该配置漂移列为后续运维修复，不作为部署成功条件隐藏。
 - 本轮没有 Provider POST、Ozon 写入、官网 pointer 切换或新增 AI 费用；独立 MV3 store-draft assignment 边界仍未关闭。
+- COM pilot 合同已提交为 `3b01c1b4`：`verify-ai-media-pilot-policy.mjs` 要求显式 owner/shop/active device session、scope、AI/source rollout revision，并强制发布关闭；合同测试 `7/7` 通过。该合同尚未接入通用部署入口或改变 COM flags，因此 COM 仍未部署新版本。
 
 本目录记录当前项目状态、技术组合、owner 边界、阶段执行和验收证据。公开安装、使用、部署与运维说明仍由 `docs/` 负责。
 
