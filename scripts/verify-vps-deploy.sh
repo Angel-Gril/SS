@@ -787,8 +787,20 @@ NODE
     fail "backup and application DEPLOY_DATABASE_ID values do not match"
     return
   fi
-  if [ "$app_backup_dir" != "$backup_dir" ]; then
-    fail "backup and application deployment backup directories do not match"
+  if [[ "$backup_dir" != /* ]] \
+    || [ "$(readlink -m -- "$backup_dir")" != "$backup_dir" ] \
+    || [ "$backup_dir" = "/" ]; then
+    fail "BACKUP_LOCAL_DIR must be one canonical non-root absolute path"
+    return
+  fi
+  if [[ "$app_backup_dir" != /* ]] \
+    || [ "$(readlink -m -- "$app_backup_dir")" != "$app_backup_dir" ] \
+    || [ "$app_backup_dir" = "/" ]; then
+    fail "DEPLOY_BACKUP_LOCAL_DIR must be one canonical non-root absolute path"
+    return
+  fi
+  if [ "$app_backup_dir" = "$backup_dir" ]; then
+    fail "backup and application deployment backup directories must be separate"
     return
   fi
   if [ ! -r "$status_file" ]; then

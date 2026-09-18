@@ -14,7 +14,8 @@
 # DEPLOY_BACKUP_MAX_AGE_MINUTES="120"
 # DEPLOY_BACKUP_VERIFY_TIMEOUT="20m"
 # BACKUP_LOCAL_DIR="/var/backups/ss-erp"
-# BACKUP_LOCAL_DIR must equal the app DEPLOY_BACKUP_LOCAL_DIR and be owned by the backup user;
+# BACKUP_LOCAL_DIR is the runtime backup directory and must be separate from the app
+# DEPLOY_BACKUP_LOCAL_DIR deployment-attestation directory; it must be owned by the backup user;
 # it must not be group/world writable or shared with the application backup worker.
 # BACKUP_KEEP_DAYS="7"
 # BACKUP_S3_BUCKET="ss-erp-backup"

@@ -160,6 +160,16 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
   assert.match(deployBackupVerifier, /DEPLOY_BACKUP_ATTESTATION_TEST_NOW is forbidden/u);
   assert.match(deployBackupVerifier, /DEPLOY_DATABASE_URL="\$DATABASE_URL"/u);
   assert.doesNotMatch(deployBackupVerifier, /DEPLOY_BACKUP_LOCAL_DIR:-\$\{BACKUP_LOCAL_DIR/u);
+  assert.match(
+    verifier,
+    /backup and application deployment backup directories must be separate/u,
+    'VPS verification must keep runtime backups separate from deployment attestations',
+  );
+  assert.match(
+    verifier,
+    /BACKUP_LOCAL_DIR must be one canonical non-root absolute path/u,
+    'VPS verification must canonicalize the runtime backup directory',
+  );
   assert.doesNotMatch(appDirDeployer, /RUN_DB_BACKUP/u);
   assert.match(deployReadiness, /deploy-backup-attestation\.mjs/u);
   assert.match(deployReadiness, /deploy-database-identity\.mjs/u);
