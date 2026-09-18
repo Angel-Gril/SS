@@ -141,6 +141,48 @@ try {
       WHERE "revision" >= 5
     `), 'suite graph count');
     const suitesValidated = integer(suites.suitesValidated, 'validated suite');
+
+    const applied = one(await tx.$queryRawUnsafe(`
+      SELECT count(*)::INTEGER AS "invalidApplied"
+      FROM "ai_media_suites" suite
+      JOIN "ai_media_suite_slots" slot
+        ON slot."suite_id" = suite."id"
+       AND slot."owner_user_id" = suite."owner_user_id"
+      JOIN "ai_image_jobs" job
+        ON job."workflow_id" = slot."child_workflow_id"
+       AND job."owner_user_id" = slot."owner_user_id"
+       AND job."workflow_attempt" = slot."attempt"
+      WHERE suite."revision" >= 5
+        AND job."applied_at" IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "extension_hosted_ai_image_listing_assignments" assignment
+          WHERE assignment."job_id" = job."id"
+            AND assignment."owner_user_id" = job."owner_user_id"
+            AND assignment."child_workflow_id" = job."workflow_id"
+            AND assignment."created_at" = job."applied_at"
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "ai_media_application_mutations" mutation
+          WHERE mutation."job_id" = job."id"
+            AND mutation."owner_user_id" = job."owner_user_id"
+            AND mutation."kind" = 'APPLY'
+            AND mutation."created_at" = job."applied_at"
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "ai_media_listing_draft_application_mutations" mutation
+          WHERE mutation."job_id" = job."id"
+            AND mutation."owner_user_id" = job."owner_user_id"
+            AND mutation."kind" = 'APPLY'
+            AND mutation."created_at" = job."applied_at"
+        )
+    `), 'applied child graph ledger count');
+    const invalidApplied = integer(applied.invalidApplied, 'invalid applied child graph');
+    if (invalidApplied !== 0) {
+      throw new Error(`${invalidApplied} applied suite child jobs have no application ledger`);
+    }
     await tx.$executeRawUnsafe(`
       DO $ai_media_suite_post_migration_guard$
       DECLARE stored_suite RECORD;
@@ -149,6 +191,17 @@ try {
           SELECT "id", "owner_user_id"
           FROM "ai_media_suites"
           WHERE "revision" >= 5
+            AND NOT EXISTS (
+              SELECT 1
+              FROM "ai_media_suite_slots" slot
+              JOIN "ai_image_jobs" job
+                ON job."workflow_id" = slot."child_workflow_id"
+               AND job."owner_user_id" = slot."owner_user_id"
+               AND job."workflow_attempt" = slot."attempt"
+              WHERE slot."suite_id" = "ai_media_suites"."id"
+                AND slot."owner_user_id" = "ai_media_suites"."owner_user_id"
+                AND job."applied_at" IS NOT NULL
+            )
           ORDER BY "id"
         LOOP
           PERFORM assert_ai_media_suite_execution_graph(
