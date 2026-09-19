@@ -16,6 +16,11 @@
 - 生产证据的唯一 warning 是远端备份尚未配置；runtime `BACKUP_LOCAL_DIR` 与 deployment `DEPLOY_BACKUP_LOCAL_DIR` 保持分离。COM public restore 表 144，CN public restore 表 143；临时恢复库均已清理。未执行 Provider/Ozon/官网写入或新增业务费用。
 - 当前主缺口保持不变：独立 MV3 远程真实验收尚未重跑。源码 relay 已部署，但仍需在新扩展上完成 source page -> `CREATE_AND_REVIEW_PLAN` -> suite -> review -> plan-binding owner -> store-draft assignment -> idempotency replay，并记录 `ozon_publish_attempts=0` 与 Provider POST/费用为 0。
 
+## 2026-09-19 API-origin launcher 修复与 COM 部署阻塞
+
+- `cb219892cc43d4f10f474abbcc78325949d2efd9` 修复扩展 ERP source launcher 的受控 sender allowlist：正式草稿页使用的 `erpApiBaseUrl` 现在与 Web/Admin origin 一起由 Worker 精确允许；定向 launcher/bridge、`pnpm verify:extension`、workspace typecheck/lint 均通过。候选版本为 `1.0.342`，cloud SHA-256 `015cb9cc3e8a5684a5082ca85c1d876070567181b7872ba884a4cdddd58f3695`，local SHA-256 `4b82d127869c9cb77161de5cb00f4aa890cee66a37fdfb6a301e6c6dd7506459`，detached signature SHA-256 `8aa22b6e8e24bfe3640d8a280d9524c2e45bc4346ee0c43e7d2e9f2049f04bf1`。
+- COM `deploy-pilot.sh` 已按精确 hosted-pilot 合同尝试部署，但在目标 commit 的 backup/restore gate 因 RDS 应用账号无 `CREATEDB` 且没有配置 `VERIFY_RESTORE_MAINTENANCE_URL` 停止；没有切换 current、没有执行 migration、没有 Provider/Ozon 写入。API/Worker/Web 已恢复 active，`/ready` 正常，current 仍为 `5a20822c / 1.0.341`。继续部署需要受控 RDS maintenance/admin 连接或等价的已授权 CREATEDB 路径；不能伪造 attestation 或绕过 restore gate。
+
 - `8bc1a19f90744444dba95012bc2468312efbda72` 已通过受限 `deploy-pilot.sh` 并切换 COM current；`1.0.340` cloud/local 包 SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`，签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`。
 - 部署前后 backup attestation、150 migrations、AI suite DB guard、cloud-r2 runtime env、systemd、API/Web/Worker 与 `https://ss-erp.com/ready` 均通过。完整 cloudflare VPS verifier 主体为 `0 failure / 1 warning`，唯一 warning 为远端备份延期；官网仍服务旧批准 `1.0.332`，本次未公开候选。
 - hosted pilot contract 已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、shop DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，scopes 精确为 `capture:write/listing:review/listing:write/media:execute`，允许操作仅 `IMAGE_TO_IMAGE/SUITE`。历史残留 BINI grant 所属 session `15654e33-70a9-4491-ae59-72bb52181366` 已经由 owner API 正式撤销并验证 `REVOKED + shopIds=[]`，未手工改库。
