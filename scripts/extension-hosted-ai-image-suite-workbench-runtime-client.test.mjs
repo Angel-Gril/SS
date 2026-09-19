@@ -162,13 +162,14 @@ function executeData(action) {
   };
 }
 
-function previewData() {
+function previewData(overrides = {}) {
   return {
     contractVersion: 'extension-hosted-ai-image-suite-candidate-preview-channel/v1',
     channelName: 'ss-erp:hosted-candidate-preview:' + 'c'.repeat(48),
     previewTicket: 'hp_' + 'd'.repeat(48),
     expiresAt: '2026-07-27T08:00:30.000Z',
     metadata: { mimeType: 'image/png', byteLength: null },
+    ...overrides,
   };
 }
 
@@ -267,6 +268,7 @@ assert.equal(
   'extension-hosted-ai-image-suite-workbench-runtime-client/v1',
 );
 assert.equal(api.DEFAULT_TIMEOUT_MS, 30_000);
+assert.equal(api.MAXIMUM_PREVIEW_CLOCK_SKEW_MS, 30_000);
 assert.deepEqual([...api.BINDING_KEYS], [
   'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
   'draftRevision', 'draftVersion',
@@ -285,6 +287,36 @@ assert.deepEqual(plain(api.MESSAGE_TYPES), {
 });
 assert.equal(Object.isFrozen(api), true);
 assert.equal(Object.isFrozen(api.MESSAGE_TYPES), true);
+
+{
+  const skewed = harness(api, {
+    respond(message) {
+      if (message.type.endsWith('OPEN_PREVIEW')) {
+        return { ok: true, data: previewData({
+          expiresAt: '2026-07-27T08:00:40.000Z',
+        }) };
+      }
+      return responseFor(message);
+    },
+  });
+  const result = await skewed.client.openPreview({ binding: binding(), slotId: 'slot-1' });
+  assert.equal(result.expiresAt, '2026-07-27T08:00:40.000Z');
+
+  const excessive = harness(api, {
+    respond(message) {
+      if (message.type.endsWith('OPEN_PREVIEW')) {
+        return { ok: true, data: previewData({
+          expiresAt: '2026-07-27T08:01:00.001Z',
+        }) };
+      }
+      return responseFor(message);
+    },
+  });
+  await rejectsCode(
+    excessive.client.openPreview({ binding: binding(), slotId: 'slot-1' }),
+    'SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID',
+  );
+}
 
 const test = harness(api);
 const sourceBinding = binding();

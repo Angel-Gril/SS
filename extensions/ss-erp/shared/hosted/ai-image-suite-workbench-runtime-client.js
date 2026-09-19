@@ -10,6 +10,7 @@
   var PREVIEW_VERSION = 'extension-hosted-ai-image-suite-candidate-preview-channel/v1';
   var ASSIGNMENT_VERSION = 'extension-hosted-ai-image-listing-assignment/v2';
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
+  var MAXIMUM_PREVIEW_CLOCK_SKEW_MS = 30 * 1000;
   var MAX_COST_CENTS = 10000000;
   var MAX_ASSIGNMENT_ORDINAL = 499;
   // Wire values mirror the ai-media-planning owner; contract tests enforce parity.
@@ -466,7 +467,7 @@
     if (!Number.isFinite(currentTime)
       || !Number.isFinite(expiryTime)
       || expiryTime <= currentTime
-      || expiryTime - currentTime > DEFAULT_TIMEOUT_MS) {
+      || expiryTime - currentTime > DEFAULT_TIMEOUT_MS + MAXIMUM_PREVIEW_CLOCK_SKEW_MS) {
       fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
     }
     return deepFreeze(result);
@@ -794,6 +795,7 @@
   global.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_CLIENT = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
+    MAXIMUM_PREVIEW_CLOCK_SKEW_MS: MAXIMUM_PREVIEW_CLOCK_SKEW_MS,
     BINDING_KEYS: BINDING_KEYS,
     GALLERY_GOALS: GALLERY_GOALS,
     MESSAGE_TYPES: MESSAGE_TYPES,
