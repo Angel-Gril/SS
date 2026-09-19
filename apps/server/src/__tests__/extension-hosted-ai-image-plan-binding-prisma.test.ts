@@ -206,7 +206,9 @@ describe('Prisma extension hosted AI image plan binding store', () => {
     expect(sql).toMatch(/predecessor\."revoked_reason" = 'PAIRING_APPROVED'/u);
     expect(sql).toMatch(/successor\."device_id" = predecessor\."device_id"/u);
     expect(sql).toMatch(/successor\."deployment_id" = predecessor\."deployment_id"/u);
-    expect(sql).toMatch(/successor\."scopes" = predecessor\."scopes"/u);
+    expect(sql).toMatch(/successor\."scopes" @> predecessor\."scopes"/u);
+    expect(sql).toMatch(/successor\."scopes" <@ predecessor\."scopes"/u);
+    expect(sql).toMatch(/cardinality\(successor\."scopes"\) = cardinality\(predecessor\."scopes"\)/u);
     expect(sql).toMatch(/NOT EXISTS[\s\S]*FROM "ai_media_suites"/u);
     expect(sql).toMatch(/NOT EXISTS[\s\S]*FROM "extension_hosted_ai_image_listing_assignments"/u);
     expect(values).toEqual([

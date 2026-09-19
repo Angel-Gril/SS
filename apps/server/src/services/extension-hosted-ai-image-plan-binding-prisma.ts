@@ -354,7 +354,9 @@ async function adoptApprovedSessionSuccessorLineageInTransaction(
          AND predecessor."revoked_reason" = 'PAIRING_APPROVED'
          AND successor."device_id" = predecessor."device_id"
          AND successor."deployment_id" = predecessor."deployment_id"
-         AND successor."scopes" = predecessor."scopes"
+         AND successor."scopes" @> predecessor."scopes"
+         AND successor."scopes" <@ predecessor."scopes"
+         AND cardinality(successor."scopes") = cardinality(predecessor."scopes")
        UNION ALL
        SELECT descendant."id" AS "successorId",
               ancestor."id" AS "predecessorId",
@@ -374,7 +376,9 @@ async function adoptApprovedSessionSuccessorLineageInTransaction(
          AND ancestor."revoked_reason" = 'PAIRING_APPROVED'
          AND descendant."device_id" = ancestor."device_id"
          AND descendant."deployment_id" = ancestor."deployment_id"
-         AND descendant."scopes" = ancestor."scopes"
+         AND descendant."scopes" @> ancestor."scopes"
+         AND descendant."scopes" <@ ancestor."scopes"
+         AND cardinality(descendant."scopes") = cardinality(ancestor."scopes")
          AND cardinality(lineage."path") < 50
          AND NOT ancestor."id" = ANY(lineage."path")
      ), adopted AS (

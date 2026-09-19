@@ -162,6 +162,7 @@ async function seedSessionSuccessorLineage(
   const deploymentId = 'hosted-binding-integration';
   const deviceId = `${seed.ownerUserId}_device`;
   const scopes = ['capture:write', 'listing:review', 'listing:write', 'media:execute'];
+  const predecessorScopes = ['capture:write', 'listing:write', 'listing:review', 'media:execute'];
   const expiresAt = new Date(Date.now() + 86_400_000);
   const now = new Date();
 
@@ -192,7 +193,7 @@ async function seedSessionSuccessorLineage(
       actorUserId: seed.ownerUserId,
       ownerUserId: seed.ownerUserId,
       status: active ? 'ACTIVE' : 'REVOKED',
-      scopes,
+      scopes: active ? scopes : predecessorScopes,
       currentJti: `${seed.ownerUserId}_jti_${index + 1}`,
       expiresAt,
       ...(active ? {} : { revokedAt: now, revokedReason: 'PAIRING_APPROVED' as const }),
@@ -353,5 +354,22 @@ describePostgres('extension hosted plan binding PostgreSQL concurrency', () => {
       deviceSessionId: sessions.successorSessionId,
       bindingHash: successor.bindingHash,
     }]);
+  }, 30_000);
+
+  it('rejects a successor lineage when the effective scope set changes', async () => {
+    const seed = await seedAuthority(first, 'successor_scope_change');
+    const sessions = await seedSessionSuccessorLineage(first, seed, 2);
+    await first.extensionDeviceSession.update({
+      where: { id: sessions.successorSessionId },
+      data: { scopes: ['capture:write', 'listing:review', 'listing:write'] },
+    });
+    const store = createPrismaExtensionHostedAiImagePlanBindingStore(
+      first as unknown as ExtensionHostedAiImagePlanBindingPrismaClient,
+    );
+    const predecessor = binding(seed, seed.planIds[0]!, sessions.predecessorSessionId);
+    const successor = binding(seed, seed.planIds[0]!, sessions.successorSessionId);
+
+    await expect(store.bind(predecessor)).resolves.toMatchObject({ kind: 'bound' });
+    await expect(store.bind(successor)).resolves.toEqual({ kind: 'conflict' });
   }, 30_000);
 });
