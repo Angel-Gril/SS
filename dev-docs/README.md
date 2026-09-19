@@ -8,6 +8,13 @@
 - relay 仅允许 `/pages/ai-image-workbench.html`、`/pages/ai-image-workbench-launch.html` 发起；source tab 必须为当前平台和商品 ID 的唯一 HTTPS 商品页，重复/缺失 source tab 直接拒绝。source workbench 的 `CREATE_AND_REVIEW_PLAN` 仍复用既有 plan create -> binding -> review owner。
 - 定向 source workbench contract、relay VM 测试、`pnpm verify:extension`（462 pass）、workspace typecheck/lint 通过。未部署、未执行 Provider POST、Ozon 写入或新增费用；远程真实 store-draft assignment 仍待新候选部署后验收。
 
+## 2026-09-19 双区 1.0.341 部署完成
+
+- COM 已切换 `5a20822cb259d48775526f0f378a34d9c806e047 / 1.0.341`，候选 cloud/local SHA-256 为 `7c14dd39710b9c667653b3eeecf0957fc3670506e05426d48dd094286a0b2418` / `8208dc55c62893cfcfe825cdd9c87b37563497bb90913c1a12b724273f50899e`；签名 SHA-256 `0c8e5d9f4e89e67c34526c828d9cf74bd2c48634d001f2bea4b1f51b985aa7a0`。hosted pilot 合同精确绑定既有 COM owner/shop/device sessions，允许操作仅 `IMAGE_TO_IMAGE/SUITE`，未启用 FULL_EDIT/INPAINT、BYOK 或 Ozon publisher。
+- CN 已切换同一 commit/version，`.cn` 区域候选 cloud/local SHA-256 为 `ea961476316183b4003ff352556295dd2b06abb52106914740de8d99e4518e8f` / `9cbea2fea400acabce9c3a346ac8fd87348c45655fda19430142c63c3de3e09e`；签名 SHA-256 `95c5899f8c9056bb33e4b039899d157112e06c92237d51e0481661f678de55fc`。CN 使用 RDS、direct-origin HTTPS 和全暗态 AI/BYOK 配置。
+- COM/CN 完整 VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 是既定未配置远端备份。canonical evidence 均由部署后的普通 Node 22 runtime writer 生成并落盘为 root-owned 0600：COM `062366d0b730b7fd2878169413b286cb47dc904afcd3959cbd48bb14f0857464`，CN `ac3b484cfb0d1dcf8ffb275937964c846e806da52ed5111aeb98070bd9be706`。
+- 双区部署未执行 Provider POST、Ozon 写入、官网 pointer 切换或新增费用。下一步仍是用 `1.0.341` 独立扩展在远程真实 source page 完成 plan binding、suite、slot review 和 store-draft assignment；COM/CN 部署通过不替代该浏览器证据。
+
 - 部署合同修复提交为 `959ae65f`、`8bc1a19f` 并已推送。`deploy-environment.mjs` 现在在受限执行边界显式透传 `AI_MEDIA_ROLLOUT_EXPECTATION` 与 `AI_MEDIA_PILOT_EXPECTATIONS_JSON`；pilot scope 合同精确要求 `capture:write`、`listing:review`、`listing:write`、`media:execute`，并按 `allowedOperations` 只开启 `IMAGE_TO_IMAGE`、`SUITE`。定向部署合同 `9 passed / 1 skipped`，AI dark/pilot 合同通过。
 - COM 已切换到 `8bc1a19f90744444dba95012bc2468312efbda72`，扩展候选 `1.0.340`。cloud/local ZIP SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`；签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`，候选四件套和 detached signature 均为 root-owned 0644、按 commit 分目录预置。COM `/ready`、API/Web/Worker、迁移和 post-migration suite guard 均通过。
 - COM hosted-pilot 运行合同已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、两个 active device session `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，四项 device scope 精确匹配；`FULL_EDIT`/`INPAINT`、BYOK、Ozon publisher 保持关闭。多次失败候选目录均移动到 `.failed-*` 归档，未切换 current 时服务按合同保持/恢复旧版本。

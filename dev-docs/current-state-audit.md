@@ -8,6 +8,13 @@
 - `CREATE_AND_REVIEW_PLAN` 在 source launch 上经 relay 执行，仍由 Worker authoritative re-read handoff、草稿、设备权限并调用服务端 plan-binding owner；source tab 缺失、重复或商品身份不匹配均拒绝。
 - 新鲜验证：`node --test scripts/extension-source-listing-workbench.test.mjs`、`pnpm verify:extension`（462 pass）、`pnpm -r typecheck`、`pnpm -r lint` 通过。当前只证明源码合同，未部署到 COM/CN，未执行 Provider/Ozon 写入或新增费用；下一步仍是 COM 正式恢复/attestation gate 后部署并进行远程真实 store-draft assignment 验收。
 
+## 2026-09-19 双区 1.0.341 部署完成
+
+- COM current 为 `5a20822cb259d48775526f0f378a34d9c806e047`，Web/API/Worker、`https://ss-erp.com/ready`、150 migrations、AI suite post-migration guard、hosted-pilot policy 和签名候选均通过。COM 完整 VPS evidence SHA-256 `062366d0b730b7fd2878169413b286cb47dc904afcd3959cbd48bb14f0857464`，`failures=0,warnings=1`。
+- CN current 为同一 commit，Web/API/Worker、四个 `.cn` direct HTTPS host、RDS、150 migrations、AI dark gate 和签名候选均通过。CN 完整 VPS evidence SHA-256 `ac3b484cfb0d1dcf8ffb275937964c846e806da52ed5111aeb98070bd9be706`，`failures=0,warnings=1`。
+- 生产证据的唯一 warning 是远端备份尚未配置；runtime `BACKUP_LOCAL_DIR` 与 deployment `DEPLOY_BACKUP_LOCAL_DIR` 保持分离。COM public restore 表 144，CN public restore 表 143；临时恢复库均已清理。未执行 Provider/Ozon/官网写入或新增业务费用。
+- 当前主缺口保持不变：独立 MV3 远程真实验收尚未重跑。源码 relay 已部署，但仍需在新扩展上完成 source page -> `CREATE_AND_REVIEW_PLAN` -> suite -> review -> plan-binding owner -> store-draft assignment -> idempotency replay，并记录 `ozon_publish_attempts=0` 与 Provider POST/费用为 0。
+
 - `8bc1a19f90744444dba95012bc2468312efbda72` 已通过受限 `deploy-pilot.sh` 并切换 COM current；`1.0.340` cloud/local 包 SHA-256 为 `2b885a6200a7e4d31e9b4427efe4620ec15423fab3da81f635f6ae3bf560e05d` / `21f0332594df5f1c4df1146db8b5d3f45ca7f60d7520975051c01e21cde9eeeb`，签名 SHA-256 `3af46922583a6962df15a2c92bea063f8c236e0005272531fb856166c770e7b7`。
 - 部署前后 backup attestation、150 migrations、AI suite DB guard、cloud-r2 runtime env、systemd、API/Web/Worker 与 `https://ss-erp.com/ready` 均通过。完整 cloudflare VPS verifier 主体为 `0 failure / 1 warning`，唯一 warning 为远端备份延期；官网仍服务旧批准 `1.0.332`，本次未公开候选。
 - hosted pilot contract 已实际通过：owner `cmpsj2g6800005ow9rrtvqhay`、shop DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `b864be4c-9bf9-4304-aa2e-5ef2c49a72db`，scopes 精确为 `capture:write/listing:review/listing:write/media:execute`，允许操作仅 `IMAGE_TO_IMAGE/SUITE`。历史残留 BINI grant 所属 session `15654e33-70a9-4491-ae59-72bb52181366` 已经由 owner API 正式撤销并验证 `REVOKED + shopIds=[]`，未手工改库。
