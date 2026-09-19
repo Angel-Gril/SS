@@ -1380,6 +1380,15 @@ const relayedSuite = await authoritativeSuiteContext.sourceRelayApi.relaySourceA
 assert.equal(relayedSuite.result.action, 'CREATE_AND_REVIEW_PLAN');
 assert.equal(relayCalls[0].tabId, 42);
 assert.equal(relayCalls[0].options.frameId, 0);
+authoritativeSuiteContext.chrome.tabs.sendMessage = async () => undefined;
+await assert.rejects(
+  authoritativeSuiteContext.sourceRelayApi.relaySourceAiImageSuiteCommand({
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-relay',
+    platform: '1688', sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1',
+    action: 'CREATE_AND_REVIEW_PLAN', slotId: null, decision: null, costConfirmed: false,
+  }),
+  /source page did not acknowledge AI suite command/u,
+);
 const suiteMessageContext = {
   type: 'ss-erp:source-listing-workbench-ai-image-suite',
   platform: '1688', sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1',

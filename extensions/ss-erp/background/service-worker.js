@@ -3112,7 +3112,11 @@ async function relaySourceAiImageSuiteCommand(message) {
       ? '没有找到当前来源商品页，请保持来源页打开'
       : '当前来源商品页不唯一，请只保留一个来源页');
   }
-  return chrome.tabs.sendMessage(matches[0].id, message, { frameId: 0 });
+  const response = await chrome.tabs.sendMessage(matches[0].id, message, { frameId: 0 });
+  if (!response || response.ok !== true) {
+    throw new Error('source page did not acknowledge AI suite command');
+  }
+  return response;
 }
 
 async function executeSourceMediaCreateWorkflow(input) {
@@ -6266,7 +6270,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_RELAY_MESSAGE) {
     Promise.resolve().then(() => relaySourceAiImageSuiteCommand(message)).then((result) => {
-      sendResponse(result || { ok: true });
+      sendResponse(result);
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });

@@ -42,8 +42,8 @@ test('manual Ozon ERP collection remains persistent and visible in SKU collect p
   assert.ok(currentTabCase, 'collect-current-tab message case should be present');
   assert.match(
     currentTabCase[0],
-    /collectFromCurrentTab\(\)/,
-    'manual current-tab collection should use the normal persistent collect path',
+    /collectFromCurrentTab\(sender\s*&&\s*sender\.tab\)/,
+    'content-script collection should stay bound to the sender tab while popup collection falls back to the active tab',
   );
   assert.doesNotMatch(
     currentTabCase[0],

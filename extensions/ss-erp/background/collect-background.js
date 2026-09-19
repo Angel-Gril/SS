@@ -1594,8 +1594,10 @@ async function getCurrentTab() {
   return tabs[0];
 }
 
-async function collectFromCurrentTab() {
-  const tab = await getCurrentTab();
+async function collectFromCurrentTab(senderTab) {
+  const tab = senderTab && Number.isSafeInteger(senderTab.id) && senderTab.id > 0
+    ? senderTab
+    : await getCurrentTab();
   if (!tab.id) {
     throw new Error("当前标签页没有有效 id");
   }
@@ -6111,7 +6113,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "spb-self-hosted:get-last-collected":
         return { ok: true, data: await getLastCollected() };
       case "spb-self-hosted:collect-current-tab":
-        return { ok: true, data: await collectFromCurrentTab() };
+        return { ok: true, data: await collectFromCurrentTab(sender && sender.tab) };
       case "spb-self-hosted:get-ozon-insights":
         try {
           return { ok: true, data: await getOzonInsights(message.productId || parseOzonProductId(message.sourceUrl || "")) };
