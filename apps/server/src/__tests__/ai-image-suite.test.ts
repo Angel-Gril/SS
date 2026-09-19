@@ -142,6 +142,42 @@ describe('AI image suite preview', () => {
     expect(() => createAiImageSuitePreview(tooMany, provider())).toThrow(/inputs do not satisfy/u);
   });
 
+  it('deterministically freezes one ordered reference for an exact single-reference Provider', () => {
+    const value = authority();
+    (value.inputSnapshot as any).candidates = Array.from({ length: 5 }, (_, index) => ({
+      id: `media-${index + 1}`,
+      url: `https://source.example/${index + 1}.jpg`,
+      width: 900,
+      height: 1200,
+      mimeType: 'image/jpeg',
+      role: 'product_main',
+      skuKeys: ['sku-1'],
+      contentHash: null,
+    }));
+    (value.planPayload as any).slots.forEach((item: any) => {
+      item.references = Array.from(
+        { length: 5 },
+        (_, index) => reference(`media-${index + 1}`),
+      );
+    });
+
+    const preview = createAiImageSuitePreview(value, provider({
+      provider: 'dashscope-wanx',
+      model: 'wanx2.1-imageedit',
+      pricingVersion: `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`,
+      estimatedCostPerImageCents: 14,
+      maximumCostPerImageCents: 14,
+    }));
+
+    expect(preview.maximumCostCents).toBe(112);
+    expect(preview.slots.every((item) => item.references.length === 1)).toBe(true);
+    expect(preview.slots.every((item) => item.references[0]?.candidateId === 'media-1')).toBe(true);
+    expect(preview.slots.every((item) => (
+      Array.isArray(item.slotSnapshot.references)
+      && item.slotSnapshot.references.length === 1
+    ))).toBe(true);
+  });
+
   it('requires a positive verified price for paid provider configuration', () => {
     expect(() => createAiImageSuitePreview(authority(), provider({
       provider: 'paid-provider', model: 'paid-model', estimatedCostPerImageCents: 0,

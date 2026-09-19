@@ -8,6 +8,7 @@ import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import {
   AiMediaCapabilityError,
   assertAiMediaCapability,
+  resolveAiImageProviderCapability,
 } from './ai-image-provider-capabilities.js';
 
 export const AI_IMAGE_SUITE_PREVIEW_VERSION = 'ai-image-suite-preview/v1';
@@ -282,6 +283,14 @@ export function createAiImageSuitePreview(
   rawProviderConfig: AiImageSuiteProviderConfig,
 ): AiImageSuitePreview {
   const providerConfig = normalizeAiImageSuiteProviderConfig(rawProviderConfig);
+  const providerCapability = resolveAiImageProviderCapability(
+    providerConfig.provider,
+    providerConfig.model,
+  );
+  const useSingleOrderedReference = providerCapability?.operations.includes('IMAGE_TO_IMAGE')
+    && providerCapability.maxReferences === 1
+    && providerCapability.inputTransport === 'base64'
+    && providerCapability.resultMode === 'async';
   const payload = planPayloadSchema.safeParse(authority.planPayload);
   const input = inputSnapshotSchema.safeParse(authority.inputSnapshot);
   if (!payload.success || !input.success) {
@@ -300,7 +309,7 @@ export function createAiImageSuitePreview(
     }
     seenSlots.add(slot.slotKey);
     const seenReferences = new Set<string>();
-    const references = slot.references.map((reference) => {
+    const planReferences = slot.references.map((reference) => {
       if (seenReferences.has(reference.candidateId)) {
         throw new AiImageSuiteError('AI_MEDIA_SUITE_NOT_READY', 'Approved plan contains duplicate references', 409);
       }
@@ -323,6 +332,7 @@ export function createAiImageSuitePreview(
         },
       };
     });
+    const references = useSingleOrderedReference ? planReferences.slice(0, 1) : planReferences;
     try {
       assertAiMediaCapability({
         provider: providerConfig.provider,
@@ -347,7 +357,7 @@ export function createAiImageSuitePreview(
       goal: slot.goal,
       aspectRatio: slot.aspectRatio,
       ownership: { ...slot.ownership },
-      references: slot.references.map((reference) => ({
+      references: references.map((reference) => ({
         candidateId: reference.candidateId,
         evidenceIds: [...reference.evidenceIds].sort(compareAiMediaPlanningStrings),
       })),
