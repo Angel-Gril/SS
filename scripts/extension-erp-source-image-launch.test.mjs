@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const context = vm.createContext({ URL, console });
 vm.runInContext(readFileSync(new URL('../extensions/ss-erp/shared/erp-adapter/erp-source-image-launch.js', import.meta.url), 'utf8'), context);
 const api = context.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
+const workerSource = readFileSync(new URL('../extensions/ss-erp/background/service-worker.js', import.meta.url), 'utf8');
 const sender = { id: 'runtime-id', frameId: 0, documentId: 'erp-document', origin: 'https://app.ss-erp.com', url: 'https://app.ss-erp.com/collect/source', tab: { id: 9, url: 'https://app.ss-erp.com/collect/source' } };
 const message = { type: 'ss-erp:erp-source-image-open', launchToken: 'a'.repeat(43), requestId: 'bridge-request' };
 const request = { sourcePlatform:'1688',sourceProductId:'fixed-qa-cup',sourceCaptureSnapshotId:'snapshot-a',supplyGoodsId:'goods-a',shopId:'shop-a',workflowId:'draft-a',draftRevision:7,draftVersion:3,preferredSkuKey:'__ss_erp_product_only__',selectionKind:'EXPLICIT' };
@@ -32,6 +33,21 @@ test('a server-issued ERP_SOURCE grant opens a normal workbench session without 
   assert.equal(opened.erpSourceAuthority.provenance,'ERP_SOURCE');assert.equal(opened.erpSourceAuthority.grantSha256,'b'.repeat(64));
   assert.equal(opened.context.workflowId,'draft-a');assert.equal(JSON.stringify(result).includes(message.launchToken),false);
   assert.deepEqual(f.calls.map(([name])=>name),['consume','resolve','workbench']);
+});
+test('the configured API origin is an approved ERP sender for the hosted draft page', async () => {
+  assert.match(workerSource, /defaults\.erpApiBaseUrl/);
+  const f = fixture();
+  f.options.erpOrigins.push('https://ss-erp.com');
+  const result = await f.options.openWorkbench;
+  const apiSender = {
+    ...sender,
+    origin: 'https://ss-erp.com',
+    url: 'https://ss-erp.com/collect/source?workflowId=draft-a',
+    tab: { id: 9, url: 'https://ss-erp.com/collect/source?workflowId=draft-a' },
+  };
+  const opened = await api.createLauncher(f.options).open(message, apiSender);
+  assert.equal(opened.state, 'workbench_opened');
+  assert.equal(typeof result, 'function');
 });
 test('foreign sites, other official subdomains, frames and forged sender identity fail before consumption',async()=>{
   for(const patch of [

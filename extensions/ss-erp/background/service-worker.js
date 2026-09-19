@@ -2831,7 +2831,8 @@ function getErpSourceImageLauncher() {
   erpSourceImageLauncher = api.createLauncher({
     runtimeId: chrome.runtime.id,
     apiOrigin: packagedErpDeviceBaseUrl(),
-    erpOrigins: [defaults.erpBaseUrl, defaults.erpAdminBaseUrl].filter(Boolean).map(value => new URL(value).origin),
+    erpOrigins: [defaults.erpBaseUrl, defaults.erpAdminBaseUrl, defaults.erpApiBaseUrl]
+      .filter(Boolean).map(value => new URL(value).origin),
     readDevice: () => readExtensionDeviceStatus(true),
     isSenderCurrent: async (source) => {
       try {
