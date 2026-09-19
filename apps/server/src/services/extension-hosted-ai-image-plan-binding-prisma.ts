@@ -332,6 +332,77 @@ async function getInTransaction(
   return record;
 }
 
+async function adoptDirectSessionSuccessorInTransaction(
+  tx: ExtensionHostedAiImagePlanBindingPrismaTransaction,
+  record: ExtensionHostedAiImagePlanBindingRecord,
+): Promise<ExtensionHostedAiImagePlanBindingRecord | null> {
+  const rows = await tx.$queryRawUnsafe<unknown[]>(
+    `WITH adopted AS (
+       UPDATE "extension_hosted_ai_image_plan_bindings" binding
+       SET "plan_id" = $1,
+           "device_session_id" = $3,
+           "binding_hash" = $4,
+           "updated_at" = NOW()
+       FROM "extension_device_sessions" successor
+       JOIN "extension_device_sessions" predecessor
+         ON successor."replaces_session_id" = predecessor."id"
+       WHERE binding."owner_user_id" = $2
+         AND binding."authority_hash" = $5
+         AND binding."device_session_id" = predecessor."id"
+         AND binding."shop_id" = $6
+         AND binding."listing_workflow_id" = $7
+         AND binding."source_capture_snapshot_id" = $8
+         AND binding."supply_goods_id" = $9
+         AND binding."draft_revision" = $10
+         AND binding."draft_version" = $11
+         AND binding."selected_sku_hash" = $12
+         AND binding."candidate_media_hash" = $13
+         AND successor."id" = $3
+         AND successor."owner_user_id" = $2
+         AND successor."actor_user_id" = $2
+         AND successor."status" = 'ACTIVE'
+         AND predecessor."owner_user_id" = $2
+         AND predecessor."actor_user_id" = $2
+         AND predecessor."status" = 'REVOKED'
+         AND predecessor."revoked_reason" = 'PAIRING_APPROVED'
+         AND successor."device_id" = predecessor."device_id"
+         AND successor."deployment_id" = predecessor."deployment_id"
+         AND successor."scopes" = predecessor."scopes"
+         AND NOT EXISTS (
+           SELECT 1 FROM "ai_media_suites" suite
+           WHERE suite."owner_user_id" = binding."owner_user_id"
+             AND suite."plan_id" = binding."plan_id"
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM "extension_hosted_ai_image_listing_assignments" assignment
+           WHERE assignment."owner_user_id" = binding."owner_user_id"
+             AND assignment."plan_id" = binding."plan_id"
+         )
+       RETURNING binding.*
+     )
+     SELECT ${BINDING_COLUMNS}
+     FROM adopted`,
+    record.planId,
+    record.ownerUserId,
+    record.deviceSessionId,
+    record.bindingHash,
+    record.authorityHash,
+    record.shopId,
+    record.listingWorkflowId,
+    record.snapshotId,
+    record.supplyGoodsId,
+    record.draftRevision,
+    record.draftVersion,
+    record.selectedSkuHash,
+    record.candidateMediaHash,
+  );
+  const adopted = rowOrNull(rows, 'direct session successor adoption');
+  if (adopted && !sameRecord(adopted, record)) {
+    return invalidRow('Adopted binding identity does not match the request');
+  }
+  return adopted;
+}
+
 export function createPrismaExtensionHostedAiImagePlanBindingStore(
   client: ExtensionHostedAiImagePlanBindingPrismaClient,
   options: { createId?: () => string } = {},
@@ -382,6 +453,8 @@ export function createPrismaExtensionHostedAiImagePlanBindingStore(
         if (existing && sameRecord(existing, record)) {
           return { kind: 'replayed' as const, record: existing };
         }
+        const adopted = await adoptDirectSessionSuccessorInTransaction(tx, record);
+        if (adopted) return { kind: 'bound' as const, record: adopted };
         return { kind: 'conflict' as const };
       });
     },

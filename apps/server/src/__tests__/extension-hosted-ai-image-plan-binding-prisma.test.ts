@@ -175,6 +175,53 @@ describe('Prisma extension hosted AI image plan binding store', () => {
     expect(values).toEqual([record.ownerUserId, record.planId]);
   });
 
+  it('adopts an unused binding only for the direct approved device-session successor', async () => {
+    const successor = binding({
+      planId: 'plan-2',
+      deviceSessionId: 'device-session-2',
+    });
+    const predecessor = binding({
+      planId: successor.planId,
+      deviceSessionId: 'device-session-1',
+    });
+    const { store, transactionQuery } = fixture({
+      transactionResults: [[], [storedRow(predecessor)], [storedRow(successor)]],
+    });
+
+    await expect(store.bind(successor)).resolves.toEqual({
+      kind: 'bound',
+      record: successor,
+    });
+
+    expect(transactionQuery).toHaveBeenCalledTimes(3);
+    const [sql, ...values] = transactionQuery.mock.calls[2]!;
+    expect(sql).toMatch(/UPDATE "extension_hosted_ai_image_plan_bindings" binding/u);
+    expect(sql).toMatch(/successor\."replaces_session_id" = predecessor\."id"/u);
+    expect(sql).toMatch(/successor\."status" = 'ACTIVE'/u);
+    expect(sql).toMatch(/predecessor\."status" = 'REVOKED'/u);
+    expect(sql).toMatch(/predecessor\."revoked_reason" = 'PAIRING_APPROVED'/u);
+    expect(sql).toMatch(/successor\."device_id" = predecessor\."device_id"/u);
+    expect(sql).toMatch(/successor\."deployment_id" = predecessor\."deployment_id"/u);
+    expect(sql).toMatch(/successor\."scopes" = predecessor\."scopes"/u);
+    expect(sql).toMatch(/NOT EXISTS[\s\S]*FROM "ai_media_suites"/u);
+    expect(sql).toMatch(/NOT EXISTS[\s\S]*FROM "extension_hosted_ai_image_listing_assignments"/u);
+    expect(values).toEqual([
+      successor.planId,
+      successor.ownerUserId,
+      successor.deviceSessionId,
+      successor.bindingHash,
+      successor.authorityHash,
+      successor.shopId,
+      successor.listingWorkflowId,
+      successor.snapshotId,
+      successor.supplyGoodsId,
+      successor.draftRevision,
+      successor.draftVersion,
+      successor.selectedSkuHash,
+      successor.candidateMediaHash,
+    ]);
+  });
+
   it('conflicts when the same owner and plan are already bound to another hash', async () => {
     const existing = binding();
     const changed = binding({ shopId: 'shop-2' });

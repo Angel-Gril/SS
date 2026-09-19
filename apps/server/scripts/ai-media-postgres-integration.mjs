@@ -49,6 +49,7 @@ try {
     'src/__tests__/ai-image-output-ownership.postgres.integration.test.ts',
     'src/__tests__/ai-media-application-mutations.postgres.integration.test.ts',
     'src/__tests__/ai-media-listing-draft-application.postgres.integration.test.ts',
+    'src/__tests__/extension-hosted-ai-image-plan-binding.postgres.integration.test.ts',
     'src/__tests__/hosted-suite-listing-draft-assignment.postgres.integration.test.ts',
     'src/__tests__/extension-ai-image-execution-mode.postgres.integration.test.ts',
     'src/__tests__/ai-media-translation-budget.postgres.integration.test.ts',
