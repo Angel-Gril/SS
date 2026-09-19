@@ -175,7 +175,7 @@ describe('Prisma extension hosted AI image plan binding store', () => {
     expect(values).toEqual([record.ownerUserId, record.planId]);
   });
 
-  it('adopts an unused binding only for the direct approved device-session successor', async () => {
+  it('adopts an unused binding only through the approved device-session successor lineage', async () => {
     const successor = binding({
       planId: 'plan-2',
       deviceSessionId: 'device-session-2',
@@ -195,6 +195,10 @@ describe('Prisma extension hosted AI image plan binding store', () => {
 
     expect(transactionQuery).toHaveBeenCalledTimes(3);
     const [sql, ...values] = transactionQuery.mock.calls[2]!;
+    expect(sql).toMatch(/WITH RECURSIVE replacement_lineage/u);
+    expect(sql).toMatch(/UNION ALL/u);
+    expect(sql).toMatch(/cardinality\(lineage\."path"\) < 50/u);
+    expect(sql).toMatch(/NOT ancestor\."id" = ANY\(lineage\."path"\)/u);
     expect(sql).toMatch(/UPDATE "extension_hosted_ai_image_plan_bindings" binding/u);
     expect(sql).toMatch(/successor\."replaces_session_id" = predecessor\."id"/u);
     expect(sql).toMatch(/successor\."status" = 'ACTIVE'/u);

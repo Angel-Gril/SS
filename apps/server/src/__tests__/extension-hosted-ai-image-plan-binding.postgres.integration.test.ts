@@ -147,18 +147,26 @@ function binding(
   });
 }
 
-async function seedDirectSessionSuccessor(
+async function seedSessionSuccessorLineage(
   client: PrismaClient,
   seed: Awaited<ReturnType<typeof seedAuthority>>,
+  sessionCount: number,
 ) {
-  const predecessorSessionId = `${seed.ownerUserId}_session_1`;
-  const successorSessionId = `${seed.ownerUserId}_session_2`;
+  if (!Number.isSafeInteger(sessionCount) || sessionCount < 2) {
+    throw new Error('sessionCount must be at least two');
+  }
+  const sessionIds = Array.from(
+    { length: sessionCount },
+    (_, index) => `${seed.ownerUserId}_session_${index + 1}`,
+  );
   const deploymentId = 'hosted-binding-integration';
   const deviceId = `${seed.ownerUserId}_device`;
   const scopes = ['capture:write', 'listing:review', 'listing:write', 'media:execute'];
   const expiresAt = new Date(Date.now() + 86_400_000);
+  const now = new Date();
 
-  for (const suffix of ['1', '2']) {
+  for (const [index] of sessionIds.entries()) {
+    const suffix = String(index + 1);
     await client.extensionDevicePairingCode.create({ data: {
       id: `${seed.ownerUserId}_pairing_${suffix}`,
       deploymentId,
@@ -171,36 +179,30 @@ async function seedDirectSessionSuccessor(
       scopes,
       status: 'CLAIMED',
       expiresAt,
-      claimedAt: new Date(),
+      claimedAt: now,
     } });
   }
-  await client.extensionDeviceSession.create({ data: {
-    id: predecessorSessionId,
-    pairingCodeId: `${seed.ownerUserId}_pairing_1`,
-    deploymentId,
-    deviceId,
-    actorUserId: seed.ownerUserId,
-    ownerUserId: seed.ownerUserId,
-    status: 'REVOKED',
-    scopes,
-    currentJti: `${seed.ownerUserId}_jti_1`,
-    expiresAt,
-    revokedAt: new Date(),
-    revokedReason: 'PAIRING_APPROVED',
-  } });
-  await client.extensionDeviceSession.create({ data: {
-    id: successorSessionId,
-    pairingCodeId: `${seed.ownerUserId}_pairing_2`,
-    deploymentId,
-    deviceId,
-    actorUserId: seed.ownerUserId,
-    ownerUserId: seed.ownerUserId,
-    scopes,
-    currentJti: `${seed.ownerUserId}_jti_2`,
-    expiresAt,
-    replacesSessionId: predecessorSessionId,
-  } });
-  return { predecessorSessionId, successorSessionId };
+  for (const [index, sessionId] of sessionIds.entries()) {
+    const active = index === sessionIds.length - 1;
+    await client.extensionDeviceSession.create({ data: {
+      id: sessionId,
+      pairingCodeId: `${seed.ownerUserId}_pairing_${index + 1}`,
+      deploymentId,
+      deviceId,
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      status: active ? 'ACTIVE' : 'REVOKED',
+      scopes,
+      currentJti: `${seed.ownerUserId}_jti_${index + 1}`,
+      expiresAt,
+      ...(active ? {} : { revokedAt: now, revokedReason: 'PAIRING_APPROVED' as const }),
+      ...(index > 0 ? { replacesSessionId: sessionIds[index - 1] } : {}),
+    } });
+  }
+  return {
+    predecessorSessionId: sessionIds[0]!,
+    successorSessionId: sessionIds[sessionIds.length - 1]!,
+  };
 }
 
 describePostgres('extension hosted plan binding PostgreSQL concurrency', () => {
@@ -279,7 +281,45 @@ describePostgres('extension hosted plan binding PostgreSQL concurrency', () => {
 
   it('atomically adopts an unused binding for its direct approved session successor', async () => {
     const seed = await seedAuthority(first, 'direct_successor');
-    const sessions = await seedDirectSessionSuccessor(first, seed);
+    const sessions = await seedSessionSuccessorLineage(first, seed, 2);
+    const store = createPrismaExtensionHostedAiImagePlanBindingStore(
+      first as unknown as ExtensionHostedAiImagePlanBindingPrismaClient,
+    );
+    const predecessor = binding(seed, seed.planIds[0]!, sessions.predecessorSessionId);
+    const successor = binding(seed, seed.planIds[0]!, sessions.successorSessionId);
+
+    await expect(store.bind(predecessor)).resolves.toEqual({
+      kind: 'bound',
+      record: predecessor,
+    });
+    await expect(store.bind(successor)).resolves.toEqual({
+      kind: 'bound',
+      record: successor,
+    });
+
+    const rows = await first.$queryRawUnsafe<Array<{
+      count: bigint;
+      deviceSessionId: string;
+      bindingHash: string;
+    }>>(
+      `SELECT COUNT(*) OVER () AS "count",
+              "device_session_id" AS "deviceSessionId",
+              "binding_hash" AS "bindingHash"
+       FROM "extension_hosted_ai_image_plan_bindings"
+       WHERE "owner_user_id" = $1 AND "authority_hash" = $2`,
+      seed.ownerUserId,
+      successor.authorityHash,
+    );
+    expect(rows).toEqual([{
+      count: 1n,
+      deviceSessionId: sessions.successorSessionId,
+      bindingHash: successor.bindingHash,
+    }]);
+  }, 30_000);
+
+  it('atomically adopts an unused binding across an approved session successor lineage', async () => {
+    const seed = await seedAuthority(first, 'successor_lineage');
+    const sessions = await seedSessionSuccessorLineage(first, seed, 3);
     const store = createPrismaExtensionHostedAiImagePlanBindingStore(
       first as unknown as ExtensionHostedAiImagePlanBindingPrismaClient,
     );
