@@ -160,8 +160,7 @@
     && typeof chrome.runtime.onMessage.addListener === 'function') {
     chrome.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
       if (!message || message.type !== 'ss-erp:source-listing-workbench-ai-image-suite-relay'
-        || message.platform !== SOURCE_PLATFORM
-        || message.sourceProductId !== currentSourceProductId()) return false;
+        || message.platform !== SOURCE_PLATFORM) return false;
       var allowed = new Set([
         'type', 'sourceProductId', 'platform', 'listingWorkflowId', 'action', 'slotId',
         'decision', 'costConfirmed', 'intentWitness',
@@ -172,7 +171,19 @@
       }
       var forwarded = { ...message,
         type: 'ss-erp:source-listing-workbench-ai-image-suite-command' };
-      sendRuntimeMessage(forwarded).then(sendResponse).catch(function (error) {
+      Promise.resolve().then(async function () {
+        var sourceProductId = currentSourceProductId();
+        if (!sourceProductId) {
+          var collected = await collectCurrentSourceProduct();
+          sourceProductId = collected && collected.ok
+            ? AiWorkbenchLaunchContext.deriveSourceProductId(collected.data) || ''
+            : '';
+        }
+        if (!sourceProductId || message.sourceProductId !== sourceProductId) {
+          return { ok: false, error: 'ERP AI 主图/套图来源商品页不匹配' };
+        }
+        return sendRuntimeMessage(forwarded);
+      }).then(sendResponse).catch(function (error) {
         sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
       });
       return true;

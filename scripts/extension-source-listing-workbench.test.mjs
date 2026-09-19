@@ -179,6 +179,15 @@ assert.match(policy, /ai-image-workbench\.html/);
 assert.match(panel, /ss-erp:source-listing-workbench-ai-image-suite-relay/);
 assert.match(hostedWorkbench, /relaySourceSuiteCommand/);
 assert.match(hostedWorkbench, /CREATE_AND_REVIEW_PLAN/);
+const sourceSuiteRelayListener = panel.slice(
+  panel.indexOf("message.type !== 'ss-erp:source-listing-workbench-ai-image-suite-relay'"),
+  panel.indexOf('function bindSourceMediaConfirmationNotifications'),
+);
+assert.match(
+  sourceSuiteRelayListener,
+  /collectCurrentSourceProduct\(\)[\s\S]*AiWorkbenchLaunchContext\.deriveSourceProductId/u,
+  'a closed source workbench must collect from its bound sender tab before validating a relayed suite command',
+);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PREPARE_TYPES/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
