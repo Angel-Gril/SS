@@ -23,6 +23,13 @@
     WORKBENCH: 'ai_image_workbench',
     PROVIDER_SETTINGS: 'ai_provider_settings',
   });
+  // This legacy message is intentionally retained as a narrow bridge from the
+  // hosted workbench to the authoritative marketplace source tab. It must still
+  // pass the legacy policy's exact sender checks; other legacy messages remain
+  // denied from new security surfaces.
+  var LEGACY_WORKBENCH_TYPES = new Set([
+    'ss-erp:source-listing-workbench-ai-image-suite-relay',
+  ]);
 
   var MESSAGE_TYPES = Object.freeze({
     PROVIDER_SETTINGS: Object.freeze({
@@ -403,6 +410,9 @@
     if (isNewType(normalized)) {
       var descriptor = descriptorFor(normalized);
       return Boolean(descriptor && surface === descriptor.surface);
+    }
+    if (surface === SENDER_SURFACES.WORKBENCH && LEGACY_WORKBENCH_TYPES.has(normalized)) {
+      return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
     }
     // A future workbench/settings page must not inherit the broad legacy extension
     // page allowlist. Legacy pages continue through the existing policy unchanged.

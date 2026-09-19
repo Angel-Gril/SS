@@ -714,6 +714,22 @@ function identityImpact(name: string): ImagePromptPlanSku['attributes'][number][
   return 'unknown';
 }
 
+function isImageLikeCapturedMedia(media: SourceProductCaptureV2['media'][number]): boolean {
+  if (typeof media.url !== 'string' || !media.url) return false;
+  const declaredMime = typeof media.mimeType === 'string'
+    ? media.mimeType.split(';', 1)[0]!.trim().toLowerCase()
+    : '';
+  if (['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/tiff'].includes(declaredMime)) {
+    return true;
+  }
+  try {
+    const pathname = new URL(media.url).pathname.toLowerCase();
+    return /\.(?:jpe?g|png|webp|gif|avif|tiff?)$/u.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 function verifiedFactsFromCapture(
   snapshotId: string,
   capture: SourceProductCaptureV2,
@@ -795,7 +811,10 @@ export function resolveRuleBasedAiMediaPlanningInput(
   }));
   const selectedSkuSet = new Set(input.selectedSkuKeys);
   const acceptedMedia = authority.capture.media.filter((media) => (
-    media.kind === 'image' && media.disposition === 'accepted' && Boolean(media.url)
+    media.kind === 'image'
+      && media.disposition === 'accepted'
+      && Boolean(media.url)
+      && isImageLikeCapturedMedia(media)
   ));
   const eligibleMedia = acceptedMedia.filter((media) => (
     media.skuKeys.length === 0 || media.skuKeys.some((skuKey) => selectedSkuSet.has(skuKey))

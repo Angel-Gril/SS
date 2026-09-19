@@ -76,6 +76,21 @@ test('limits selected-edit review handoff to the exact workbench page', () => {
   }
 });
 
+test('allows only the source-suite relay from the exact workbench page', () => {
+  const { policy } = loadApi();
+  const workbench = extensionSender('/pages/ai-image-workbench.html');
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:source-listing-workbench-ai-image-suite-relay', workbench, extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:source-listing-workbench-ai-image-suite-command', workbench, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:source-listing-workbench-ai-image-suite-relay',
+    extensionSender('/pages/settings.html'), extensionId,
+  ), false);
+});
+
 function readinessBinding(api, overrides = {}) {
   return {
     contractVersion: api.READINESS_BINDING_VERSION,

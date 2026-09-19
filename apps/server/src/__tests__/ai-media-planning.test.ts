@@ -209,6 +209,26 @@ describe('AI media planning rule worker', () => {
     expect(resolved.candidates.map((candidate) => candidate.id)).toEqual(['main-1']);
   });
 
+  it('does not auto-select accepted media whose URL is not image-shaped', () => {
+    const scopedAuthority = authority();
+    scopedAuthority.capture.media.push({
+      key: 'detail-page',
+      kind: 'image',
+      disposition: 'accepted',
+      url: 'https://shop.example.com/page/activity.htm',
+      width: null,
+      height: null,
+      mimeType: null,
+      role: 'detail',
+      skuKeys: [],
+    } as never);
+    const resolved = resolveRuleBasedAiMediaPlanningInput({
+      ...planningInput(),
+      candidateMediaKeys: undefined,
+    }, scopedAuthority);
+    expect(resolved.candidates.map((candidate) => candidate.id)).toEqual(['main-1']);
+  });
+
   it('plans a stable product-only identity when the source has no explicit SKUs', () => {
     const productOnly = authority();
     productOnly.capture.skus = [];
