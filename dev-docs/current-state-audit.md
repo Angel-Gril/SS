@@ -1,5 +1,12 @@
 # SS ERP 当前状态审计
 
+## 2026-09-20 MV3 store-draft 已闭环并完成双区 1.0.353 部署
+
+- 当前源码和 COM/CN current 均为 `617e8518a9218422e1174fe193b493b4a38e42e7`，扩展候选 `1.0.353`。COM 保持精确 DOTH hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 保持 direct-origin、外部 RDS 和 AI/BYOK/Ozon 全暗态。两区三服务、150 migrations、post-migration guard 与公网 `/ready` 均通过。
+- 独立 MV3 已在当前草稿 `draft-749873fd-28b8-415e-8769-70a9cc762710` 完成计划绑定、两张 suite 生成、安全预览、逐槽审核、store-draft assignment 和同请求幂等重放。草稿从 `1/1` 变为 `2/2`，新增 SKU hero 与 PRODUCT gallery 两条且 replay 后数量仍为 2；两个结算各 CNY 0.14，`ozon_publish_attempts=0`。完整事实由[生图与计费阶段 owner](stages/ai-image-billing-closure-2026-09.md#2026-09-20-mv3-10353-全链验收与双区部署)维护。
+- COM/CN 完整 VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 是未配置远端备份。root-only canonical evidence SHA-256 分别为 `dd340f1049ad2459346c711837a810bd479d403106438f1cfc3af071e289fe1f` 与 `c90ea2cb32482ab56ecf087529b411d11e52f8f3b113ebc104e79f9c94f85018`；官网 extension pointer 仍为 `1.0.332`，未发布 `1.0.353`。
+- 剩余相关边界不再是 assignment owner 或 RDS gate：审核后的即时 authority refresh 偶发显示可恢复提示，显式只读 refresh 可立即恢复；该 UX 行为待单独收口。Ozon publish、官网分发和 CN hosted pilot 均不在本次通过结论内。
+
 ## 2026-09-18 COM hosted pilot 已部署
 
 ## 2026-09-19 MV3 source-page transport 修复（已随 1.0.341 部署）

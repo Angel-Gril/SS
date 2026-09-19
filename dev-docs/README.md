@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-20 独立 MV3 全链与双区 1.0.353 已完成
+
+- 独立 MV3 已在真实 source 页完成 plan binding、suite、安全预览、两槽审核、store-draft assignment 和幂等 replay；草稿 `1/1 -> 2/2`，两条 assignment 保持唯一，两笔结算各 CNY 0.14，`ozon_publish_attempts=0`。完整证据见[阶段 owner](stages/ai-image-billing-closure-2026-09.md#2026-09-20-mv3-10353-全链验收与双区部署)。
+- COM/CN current 均为 `617e8518a9218422e1174fe193b493b4a38e42e7 / 1.0.353`。COM 继续受限 hosted pilot；CN 继续 direct-origin、RDS 和全暗态。两区完整 verifier 均为 `0 failure / 1 warning`，canonical evidence SHA-256 分别为 `dd340f10...fe1f`、`c90ea2cb...5018`。
+- 官网 pointer 仍为 `1.0.332`；未执行 Ozon publish、官网发布或 CN hosted pilot。当前仅保留审核后即时 authority refresh 的可恢复 UX 提示作为后续收口，不再把 RDS maintenance 或 store-draft owner 列为主阻塞。
+
 ## 2026-09-18 COM hosted pilot 部署接续
 
 ## 2026-09-19 MV3 source-page transport 修复（未部署）

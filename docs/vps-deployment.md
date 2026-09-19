@@ -6,6 +6,13 @@ This project can keep the current single-server systemd model. There are three s
 2. direct Git checkout deployment at `/opt/ss-erp`
 3. release directory deployment with `/opt/ss-erp/current`
 
+## Latest Dual-Region Application Deployment (2026-09-20)
+
+- COM and CN now run immutable commit `617e8518a9218422e1174fe193b493b4a38e42e7` with staged extension candidate `1.0.353`. The public website extension pointer remains on approved `1.0.332`; this deployment did not publish the new candidate.
+- COM retains its restricted hosted pilot for the existing owner/shop/device set and permits only `IMAGE_TO_IMAGE` and `SUITE`. CN remains direct-origin with external RDS and all AI, BYOK, and Ozon publisher capabilities dark.
+- Both target-bound backup/restore drills, 150-migration checks, suite database guards, service restarts, and local/public readiness checks passed. CN additionally passed certificate-valid readiness on `ss-erp.cn`, `www.ss-erp.cn`, `app.ss-erp.cn`, and `admin.ss-erp.cn`, with local PostgreSQL port 5432 closed.
+- Full VPS verification returned `0 failures / 1 warning` in both regions; the only warning is unconfigured remote backup storage. Canonical private VPS evidence SHA-256 is `dd340f1049ad2459346c711837a810bd479d403106438f1cfc3af071e289fe1f` for COM and `c90ea2cb32482ab56ecf087529b411d11e52f8f3b113ebc104e79f9c94f85018` for CN. No Ozon publish or website pointer mutation occurred.
+
 ## Latest Japan/COM Deployment (2026-09-05)
 
 - The COM VPS now runs immutable commit
