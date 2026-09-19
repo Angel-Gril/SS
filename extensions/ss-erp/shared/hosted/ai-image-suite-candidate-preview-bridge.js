@@ -4,6 +4,7 @@
   var CONTRACT_VERSION = 'extension-hosted-ai-image-suite-candidate-preview-channel/v1';
   var SERVER_CONTRACT_VERSION = 'extension-hosted-ai-image-suite-candidate-preview/v1';
   var TICKET_TTL_MS = 30 * 1000;
+  var MAXIMUM_CLOCK_SKEW_MS = 30 * 1000;
   var MAX_IMAGE_BYTES = 20 * 1024 * 1024;
   var MAX_DIMENSION = 4096;
   var MAX_PIXELS = MAX_DIMENSION * MAX_DIMENSION;
@@ -195,7 +196,7 @@
         || !Number.isFinite(expiresAtMillis)
         || new Date(expiresAtMillis).toISOString() !== expiresAt
         || expiresAtMillis <= issuedAtMillis
-        || expiresAtMillis - issuedAtMillis > TICKET_TTL_MS
+        || expiresAtMillis - issuedAtMillis > TICKET_TTL_MS + MAXIMUM_CLOCK_SKEW_MS
         || value.output.assetId !== binding.outputAssetId
         || value.output.mimeType !== 'image/png'
         || value.output.previewAvailable !== true
@@ -472,6 +473,7 @@
     SERVER_CONTRACT_VERSION: SERVER_CONTRACT_VERSION,
     LIMITS: Object.freeze({
       ticketTtlMs: TICKET_TTL_MS,
+      maximumClockSkewMs: MAXIMUM_CLOCK_SKEW_MS,
       maxImageBytes: MAX_IMAGE_BYTES,
       maxPendingChannels: MAX_PENDING_CHANNELS,
     }),

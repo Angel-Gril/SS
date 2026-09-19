@@ -244,8 +244,18 @@ async function rejectsCode(promise, code) {
 }
 
 {
+  const test = fixture();
+  const inputTicket = ticket(3, { expiresAt: new Date(NOW + 40_000).toISOString() });
+  backgroundFor(inputTicket, (channel) => channel.postMessage(previewMessage(inputTicket)));
+  const result = await test.consumer.consume(inputTicket);
+  assert.equal(result.metadata.byteLength, pngBytes.byteLength);
+  result.revoke();
+  test.consumer.dispose();
+}
+
+{
   const invalidTickets = [
-    ticket(3, { expiresAt: new Date(NOW + 30_001).toISOString() }),
+    ticket(4, { expiresAt: new Date(NOW + 60_001).toISOString() }),
     ticket(4, { expiresAt: new Date(NOW).toISOString() }),
     ticket(5, { metadata: { mimeType: 'image/png', byteLength: 14 } }),
     { ...ticket(6), previewUrl: 'https://storage.example/secret.png' },
@@ -338,6 +348,7 @@ async function rejectsCode(promise, code) {
 assert.equal(api.CONTRACT_VERSION, CONTRACT_VERSION);
 assert.deepEqual(JSON.parse(JSON.stringify(api.LIMITS)), {
   ticketTtlMs: 30_000,
+  maximumClockSkewMs: 30_000,
   maxImageBytes: 20 * 1024 * 1024,
 });
 

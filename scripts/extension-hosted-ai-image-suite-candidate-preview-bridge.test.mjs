@@ -239,6 +239,27 @@ async function receive(ticket, ready = { type: 'READY', previewTicket: ticket.pr
 }
 
 {
+  const test = fixture({
+    issuePreview: async (input) => issueResult(input.binding, {
+      expiresAt: new Date(NOW + 40_000).toISOString(),
+    }),
+  });
+  const ticket = await test.bridge.open(binding());
+  assert.equal(ticket.expiresAt, new Date(NOW + 40_000).toISOString());
+  assert.equal([...test.timers.rows.values()][0].delay, 40_000);
+  test.bridge.clear();
+}
+
+await assert.rejects(
+  fixture({
+    issuePreview: async (input) => issueResult(input.binding, {
+      expiresAt: new Date(NOW + 60_001).toISOString(),
+    }),
+  }).bridge.open(binding()),
+  (error) => error?.code === 'SS_ERP_HOSTED_CANDIDATE_PREVIEW_ISSUE_INVALID',
+);
+
+{
   const test = fixture();
   const first = await test.bridge.open(binding());
   const second = await test.bridge.open(binding({ outputAssetId: 'asset-2', slotId: 'slot-2' }));

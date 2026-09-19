@@ -3,6 +3,7 @@
 
   var CONTRACT_VERSION = 'extension-hosted-ai-image-suite-candidate-preview-channel/v1';
   var TICKET_TTL_MS = 30 * 1000;
+  var MAXIMUM_CLOCK_SKEW_MS = 30 * 1000;
   var MAX_IMAGE_BYTES = 20 * 1024 * 1024;
   var PNG_SIGNATURE = Object.freeze([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -82,7 +83,7 @@
       if (!Number.isFinite(expiresAtMillis)
         || new Date(expiresAtMillis).toISOString() !== value.expiresAt
         || expiresAtMillis <= issuedAtMillis
-        || expiresAtMillis - issuedAtMillis > TICKET_TTL_MS) {
+        || expiresAtMillis - issuedAtMillis > TICKET_TTL_MS + MAXIMUM_CLOCK_SKEW_MS) {
         throw consumerError(code);
       }
       return Object.freeze({
@@ -323,6 +324,7 @@
     CONTRACT_VERSION: CONTRACT_VERSION,
     LIMITS: Object.freeze({
       ticketTtlMs: TICKET_TTL_MS,
+      maximumClockSkewMs: MAXIMUM_CLOCK_SKEW_MS,
       maxImageBytes: MAX_IMAGE_BYTES,
     }),
     createConsumer: createConsumer,
