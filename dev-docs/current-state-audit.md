@@ -2,16 +2,17 @@
 
 ## 2026-09-18 COM hosted pilot 已部署
 
-## 2026-09-19 MV3 source-page transport 修复（未部署）
+## 2026-09-19 MV3 source-page transport 修复（已随 1.0.341 部署）
 
 - 修复独立 hosted 工作台从 extension page 发起套图计划时的 transport 边界：新增 source-page relay，Worker 只接受受控工作台页请求，查找唯一匹配的 source 商品 tab，并由 source content-script 重新提交 `ss-erp:source-listing-workbench-ai-image-suite-command`。不会放宽 extension page 直接调用，也不允许页面提交 owner、device、shop 或 plan binding。
 - `CREATE_AND_REVIEW_PLAN` 在 source launch 上经 relay 执行，仍由 Worker authoritative re-read handoff、草稿、设备权限并调用服务端 plan-binding owner；source tab 缺失、重复或商品身份不匹配均拒绝。
-- 新鲜验证：`node --test scripts/extension-source-listing-workbench.test.mjs`、`pnpm verify:extension`（462 pass）、`pnpm -r typecheck`、`pnpm -r lint` 通过。当前只证明源码合同，未部署到 COM/CN，未执行 Provider/Ozon 写入或新增费用；下一步仍是 COM 正式恢复/attestation gate 后部署并进行远程真实 store-draft assignment 验收。
+- 新鲜验证：`node --test scripts/extension-source-listing-workbench.test.mjs`、`pnpm verify:extension`（462 pass）、`pnpm -r typecheck`、`pnpm -r lint` 通过；该 relay 已随 `5a20822cb259d48775526f0f378a34d9c806e047 / 1.0.341` 部署到 COM/CN。部署未执行 Provider/Ozon 写入或新增费用；下一步仍是用新扩展完成远程真实 store-draft assignment 验收。
 
 ## 2026-09-19 双区 1.0.341 部署完成
 
 - COM current 为 `5a20822cb259d48775526f0f378a34d9c806e047`，Web/API/Worker、`https://ss-erp.com/ready`、150 migrations、AI suite post-migration guard、hosted-pilot policy 和签名候选均通过。COM 完整 VPS evidence SHA-256 `062366d0b730b7fd2878169413b286cb47dc904afcd3959cbd48bb14f0857464`，`failures=0,warnings=1`。
 - CN current 为同一 commit，Web/API/Worker、四个 `.cn` direct HTTPS host、RDS、150 migrations、AI dark gate 和签名候选均通过。CN 完整 VPS evidence SHA-256 `ac3b484cfb0d1dcf8ffb275937964c846e806da52ed5111aeb98070bd9be706`，`failures=0,warnings=1`。
+- 本次 CN direct-mode 新鲜复核保持同一 current commit：`VERIFY_ORIGIN_MODE=direct`、`VERIFY_DIRECT_HOSTNAMES=ss-erp.cn,www.ss-erp.cn,app.ss-erp.cn,admin.ss-erp.cn`、`VERIFY_EXPECT_LOCAL_POSTGRES=false`；运行配置 `RUNTIME_MODE=cloud`，数据库主机为阿里云 RDS，公网/本机 `/ready` 与四个证书 host 均为 `ready`。完整 verifier 仍为 `0 failure / 1 warning`，AI Media dark gate 通过，CN hosted pilot 未启用。
 - 生产证据的唯一 warning 是远端备份尚未配置；runtime `BACKUP_LOCAL_DIR` 与 deployment `DEPLOY_BACKUP_LOCAL_DIR` 保持分离。COM public restore 表 144，CN public restore 表 143；临时恢复库均已清理。未执行 Provider/Ozon/官网写入或新增业务费用。
 - 当前主缺口保持不变：独立 MV3 远程真实验收尚未重跑。源码 relay 已部署，但仍需在新扩展上完成 source page -> `CREATE_AND_REVIEW_PLAN` -> suite -> review -> plan-binding owner -> store-draft assignment -> idempotency replay，并记录 `ozon_publish_attempts=0` 与 Provider POST/费用为 0。
 
