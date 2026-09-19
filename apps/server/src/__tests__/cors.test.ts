@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedCorsOrigin } from '../lib/cors.js';
+import { isAllowedCorsOrigin, shouldAllowPrivateNetwork } from '../lib/cors.js';
 
 describe('cors origin policy', () => {
   it('allows configured web origins in production', () => {
@@ -38,5 +38,23 @@ describe('cors origin policy', () => {
         CORS_EXTENSION_ORIGINS: 'chrome-extension://*',
       }),
     ).toBe(true);
+  });
+
+  it('allows private-network preflight only for an already allowed origin', () => {
+    expect(shouldAllowPrivateNetwork(
+      'chrome-extension://abcdefghijklmnop',
+      'true',
+      { NODE_ENV: 'production', CORS_EXTENSION_ORIGINS: 'chrome-extension://abcdefghijklmnop' },
+    )).toBe(true);
+    expect(shouldAllowPrivateNetwork(
+      'chrome-extension://foreign-extension',
+      'true',
+      { NODE_ENV: 'production', CORS_EXTENSION_ORIGINS: 'chrome-extension://abcdefghijklmnop' },
+    )).toBe(false);
+    expect(shouldAllowPrivateNetwork(
+      'chrome-extension://abcdefghijklmnop',
+      'false',
+      { NODE_ENV: 'production', CORS_EXTENSION_ORIGINS: 'chrome-extension://abcdefghijklmnop' },
+    )).toBe(false);
   });
 });

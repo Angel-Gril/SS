@@ -42,3 +42,11 @@ export function isAllowedCorsOrigin(origin: string | undefined, env: CorsEnv = p
 
   return false;
 }
+
+export function shouldAllowPrivateNetwork(
+  origin: string | undefined,
+  requested: unknown,
+  env: CorsEnv = process.env,
+): boolean {
+  return requested === 'true' && isAllowedCorsOrigin(origin, env);
+}

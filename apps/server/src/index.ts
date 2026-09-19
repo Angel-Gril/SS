@@ -400,7 +400,7 @@ import {
 } from './services/logistics-scope-bootstrap-prisma.js';
 import { getRuntimeConfig, getRuntimeMode } from './adapters/runtime-config.js';
 
-import { isAllowedCorsOrigin } from './lib/cors.js';
+import { isAllowedCorsOrigin, shouldAllowPrivateNetwork } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
 
 const app = Fastify({
@@ -437,6 +437,15 @@ await app.register(cors, {
     }
   },
   credentials: true,
+});
+app.addHook('onSend', async (request, reply, payload) => {
+  if (shouldAllowPrivateNetwork(
+    request.headers.origin,
+    request.headers['access-control-request-private-network'],
+  )) {
+    reply.header('Access-Control-Allow-Private-Network', 'true');
+  }
+  return payload;
 });
 await app.register(rateLimit, {
   max: 200,
