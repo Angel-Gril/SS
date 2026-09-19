@@ -322,6 +322,46 @@ describe('Prisma extension hosted AI image authority loader', () => {
     })).resolves.toMatchObject({ candidateMediaKeys: [] });
   });
 
+  it('does not project accepted non-image URLs into hosted plan authority', async () => {
+    const capture = structuredClone(captureFixture.capture);
+    const invalid = structuredClone(capture.media[0]!);
+    invalid.key = 'media-detail-page';
+    invalid.ordinal = capture.media.length;
+    invalid.role = 'product_detail';
+    invalid.url = 'https://shop.example.com/page/activity.htm';
+    invalid.mimeType = null;
+    invalid.width = null;
+    invalid.height = null;
+    invalid.fieldEvidence.url.value = invalid.url;
+    invalid.fieldEvidence.role.value = invalid.role;
+    invalid.fieldEvidence.mimeType = {
+      ...structuredClone(invalid.fieldEvidence.width),
+      sourcePath: 'window.offerDetailData.detailImages[1].mimeType',
+    };
+    invalid.fieldEvidence.width.value = null;
+    invalid.fieldEvidence.height.value = null;
+    capture.media.push(invalid);
+    Object.assign(capture.counts.find((row) => row.fieldPath === '/media')!, {
+      totalCount: capture.media.length,
+      capturedCount: capture.media.length,
+      submittedCount: capture.media.length,
+    });
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    await expect(verifySourceProductCaptureV2Submission(submission)).resolves.toMatchObject({
+      valid: true,
+    });
+    const { loader } = fixture([[planRow({
+      snapshotCaptureHash: submission.captureHash,
+      snapshotPayloadBytes: submission.payloadBytes,
+      snapshotPayload: submission.capture,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toMatchObject({ candidateMediaKeys: ['media-main-0'] });
+  });
+
   it('rejects capture SKU identities that collide after NFKC normalization', async () => {
     const capturedSkuKey = 'sku:variant\uff081.5cm+4cm\uff09';
     const canonicalSkuKey = capturedSkuKey.normalize('NFKC');

@@ -458,6 +458,21 @@ function capturedSkuKeys(capture: SourceProductCaptureV2): string[] | null {
   return new Set(result).size === result.length ? result : null;
 }
 
+function isImageLikeCapturedMedia(media: SourceProductCaptureV2['media'][number]): boolean {
+  if (typeof media.url !== 'string' || !media.url) return false;
+  const declaredMime = typeof media.mimeType === 'string'
+    ? media.mimeType.split(';', 1)[0]!.trim().toLowerCase()
+    : '';
+  if (['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/tiff'].includes(declaredMime)) {
+    return true;
+  }
+  try {
+    return /\.(?:jpe?g|png|webp|gif|avif|tiff?)$/u.test(new URL(media.url).pathname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function eligibleMediaKeys(
   capture: SourceProductCaptureV2,
   selectedSkuKeys: readonly string[],
@@ -480,8 +495,7 @@ function eligibleMediaKeys(
     if (mediaSkuKeys.some((skuKey) => skuKey === null)) return null;
     if (media.kind === 'image'
       && media.disposition === 'accepted'
-      && typeof media.url === 'string'
-      && media.url.length > 0
+      && isImageLikeCapturedMedia(media)
       && ((media.role !== 'sku' && mediaSkuKeys.length === 0)
         || (mediaSkuKeys as string[]).some((skuKey) => selected.has(skuKey)))
       && eligible.length < MAX_CANDIDATE_MEDIA) eligible.push(key);
