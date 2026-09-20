@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-21 `04f9ff9e` 双区部署完成，官网发布等待 fresh QA04
+
+- `04f9ff9efc8f92427ef94046ea258c64555a8e5e` 已部署到 COM/CN，扩展版本均为 `1.0.354`；COM 保持受限 hosted pilot（仅 `IMAGE_TO_IMAGE/SUITE`），CN 保持 RDS/direct-origin 和全暗态。两区 API/Web/Worker 与公网 `/ready` 通过，150 migrations 无待执行项。
+- COM fresh VPS verifier 为 `0 failure / 1 warning`，CN direct-mode fresh verifier 为 `0 failure / 1 warning`；唯一 warning 是远端备份未配置。COM evidence SHA-256 为 `adb91045bd4bf995212d78a4471e9e965ad371f742ec1b94210c1e195a34b096`，CN evidence SHA-256 为 `74463c41aae3b9cac49567cf03549ee89320d2d54f11d7b86015993d8ab8472c`。
+- CN RDS 恢复演练通过 `143` 张 public 表；临时高权限 maintenance 账号 `ss_erp_maint_20260920` 已删除，owner/admin canary sessions 也已清理。没有 Provider POST、Ozon 写入或新增业务费用。
+- 双区新候选已签名并预置：COM cloud/local `4d602704...b45a` / `7e5d8975...0bac`，CN cloud/local `47b2a2e1...90fb` / `8ffe5213...69cd`。官网 pointer 仍为旧 `b41097d6 / 1.0.354`，未执行新 CAS 激活。
+- 新 commit 的 `pnpm qa:04:offline` 已通过：server `6320 passed / 324 skipped`、AI Media PostgreSQL `196/196`。正式 QA04 final 暂不能生成，因为历史 normal ERP suite evidence 被正确拒绝为 `QA04_ERP_SOURCE_CHANGED`；禁止改写旧 QA04 JSON 或跳过该 gate。下一步是重新取得绑定 `04f9ff9e` 的 fresh normal ERP suite evidence，再生成 COM v3/CN v2 canary、website approval、distribution probe 和最终 publication verifier。
+
 ## 2026-09-20 受限 hosted pilot 官网发布合同收口（待新提交发布）
 
 - 双区 `e33f68d1 / 1.0.354` 应用部署及完整 VPS verifier 已通过；COM 保持 DOTH 受限 hosted pilot，CN 保持 RDS/direct-origin 全暗态。CN v2 dark canary 已通过并完成临时账号/设备清理，但官网 pointer 仍为 `1.0.332`。

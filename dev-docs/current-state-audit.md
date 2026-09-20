@@ -684,3 +684,8 @@
 - 需要用户确认：Provider 每个真实操作仍需独立精确费用上限和一次性批准；Ozon 写入仍需有效凭据且可证明为专用测试店。远端备份按用户决定暂不配置，受管扩展 live worker 已完成独立验收。
 - 停止条件：出现产品行为改变、数据迁移、真实费用、凭据、部署、公开发布或无法隔离用户现有改动。
 - 未验证项：远端仓库 visibility、Redis 集群/外部告警、可对账 Provider pilot、Ozon 纯测试工作流/compiler envelope/写入/归档、REL-04 canary 对区域候选四件套的精确摘要绑定，以及 CN 远端备份。
+# 当前接续：`04f9ff9e` 双区已部署，官网 CAS 未切换
+
+- COM/CN current 均为 `04f9ff9efc8f92427ef94046ea258c64555a8e5e / 1.0.354`；COM 为受限 hosted pilot，CN 为 RDS/direct-origin 全暗态。两区 `/ready`、150 migrations 和 fresh VPS verifier 已通过，各 `0 failure / 1 warning`，warning 均为远端备份未配置。
+- CN RDS fresh restore 通过 `143` 张 public 表；maintenance 账号和临时 canary sessions 已清理。没有 Provider/Ozon 写入。
+- 新候选签名已绑定该 commit，但官网仍服务旧 `b41097d6` pointer。`qa:04:offline` 当前 commit 已通过（`6320 passed / 324 skipped`、AI Media PostgreSQL `196/196`）；正式 QA04 final 因历史 normal ERP suite evidence 与新 server source 不一致而正确停止，错误码 `QA04_ERP_SOURCE_CHANGED`。不得重标旧 evidence，需 fresh normal ERP suite 后才能生成新 canary/approval 并执行 CAS。
