@@ -521,17 +521,29 @@ function harness(options = {}) {
     },
   };
 
+  const runtime = {
+    lastError: null,
+    onMessage: { addListener(listener) { runtimeListeners.push(listener); } },
+    sendMessage(message, callback) {
+      calls.push(['runtime-message', message]);
+      const error = createErrors.shift();
+      if (error) {
+        runtime.lastError = { message: error.message || String(error) };
+        callback(undefined);
+        runtime.lastError = null;
+        return;
+      }
+      callback({ ok: true });
+    },
+  };
+
   const context = {
     Array, ArrayBuffer, Boolean, Date, Error, JSON, Map, Math, Number, Object, Promise,
     RegExp, Set, String, TextEncoder, TypeError, Uint8Array,
     Blob: class Blob {}, BroadcastChannel: class BroadcastChannel {},
     CustomEvent: FakeCustomEvent,
     document,
-    chrome: {
-      runtime: {
-        onMessage: { addListener(listener) { runtimeListeners.push(listener); } },
-      },
-    },
+    chrome: { runtime },
     crypto: {
       subtle: webcrypto.subtle,
       randomUUID() {
@@ -914,13 +926,25 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   await test.controller.refresh();
   activate(test);
   await settle(20);
+  const loadCountBeforeExecute = test.calls.filter((row) => row[0] === 'load-suite').length;
   test.nodes.hostedCostConfirmation.checked = true;
   test.nodes.hostedCostConfirmation.dispatch('change');
   test.nodes.hostedStartButton.dispatch('click');
+  await new Promise((resolve) => setTimeout(resolve, 150));
   await settle(40);
-  assert.equal(test.controller.isAvailable(), false);
+  assert.equal(test.controller.isAvailable(), true);
   assert.equal(test.controller.isActive(), true);
-  assert.match(test.nodes.hostedStatus.textContent, /已被 ERP 接受/u);
+  assert.match(test.nodes.hostedStatus.textContent, /权威状态已刷新/u);
+  assert.equal(
+    test.calls.filter((row) => row[0] === 'execute').length,
+    1,
+    'accepted mutation recovery must never resend the mutation',
+  );
+  assert.equal(
+    test.calls.filter((row) => row[0] === 'load-suite').length,
+    loadCountBeforeExecute + 2,
+    'accepted mutation recovery retries only the failed authority read once',
+  );
   assert.equal(
     test.workspaceEvents.filter((row) => row[0] === 'bootstrap').at(-1)[1].dispatched,
     true,
@@ -950,8 +974,14 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
 
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const firstCreate = test.calls.filter((row) => row[0] === 'create-plan')[0];
+  const firstCreate = test.calls.filter((row) => row[0] === 'runtime-message'
+    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay')[0];
   assert.ok(firstCreate);
+  assert.equal(
+    test.calls.some((row) => row[0] === 'create-plan'),
+    false,
+    'a source-bound workbench must create plans only through the source-page relay',
+  );
   assert.equal(test.nodes.hostedCreatePlanButton.disabled, false);
 
   const reloadedPage = harness({ plan: planResponse(null), projection: emptyProjection() });
@@ -960,22 +990,26 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   await settle();
   reloadedPage.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  assert.equal(
-    reloadedPage.calls.find((row) => row[0] === 'create-plan')[1].idempotencyKey,
-    firstCreate[1].idempotencyKey,
-    'the exact create basis must survive a full page reload deterministically',
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(reloadedPage.calls.find((row) => (
+      row[0] === 'runtime-message'
+      && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay'
+    ))[1])),
+    JSON.parse(JSON.stringify(firstCreate[1])),
+    'the exact source-page create intent must survive a full page reload deterministically',
   );
 
   test.setPlan(planResponse('PENDING'));
   test.setProjection(emptyProjection());
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const creates = test.calls.filter((row) => row[0] === 'create-plan');
+  const creates = test.calls.filter((row) => row[0] === 'runtime-message'
+    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay');
   assert.equal(creates.length, 2);
-  assert.equal(
-    creates[1][1].idempotencyKey,
-    creates[0][1].idempotencyKey,
-    'response-loss retry must reuse the exact create identity',
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(creates[1][1])),
+    JSON.parse(JSON.stringify(creates[0][1])),
+    'response-loss retry must reuse the exact source-page create intent',
   );
   assert.equal(test.nodes.hostedApprovePlanButton.disabled, false);
   assert.equal(test.nodes.hostedRejectPlanButton.disabled, false);
@@ -1005,16 +1039,21 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   assert.equal(test.nodes.hostedCreatePlanButton.disabled, false);
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const created = test.calls.find((row) => row[0] === 'create-plan')[1];
-  assert.deepEqual([...created.galleryGoals], ['scene']);
+  const created = test.calls.find((row) => row[0] === 'runtime-message'
+    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay')[1];
+  assert.equal(created.action, 'CREATE_AND_REVIEW_PLAN');
   assert.equal(test.nodes.hostedGalleryGoals.disabled, true, 'the submitted target selection stays frozen until authority resolves it');
   test.nodes['hostedGalleryGoal-detail'].checked = true;
   test.nodes['hostedGalleryGoal-detail'].dispatch('change');
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const retried = test.calls.filter((row) => row[0] === 'create-plan').at(-1)[1];
-  assert.equal(retried.idempotencyKey, created.idempotencyKey);
-  assert.deepEqual([...retried.galleryGoals], ['scene']);
+  const retried = test.calls.filter((row) => row[0] === 'runtime-message'
+    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay').at(-1)[1];
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(retried)),
+    JSON.parse(JSON.stringify(created)),
+    'relay retries reuse the exact high-level create intent',
+  );
   assert.equal(test.calls.some((row) => row[0] === 'execute'), false, 'plan selection never starts generation');
   test.setPlan(planResponse('PENDING'));
   await test.controller.refresh();

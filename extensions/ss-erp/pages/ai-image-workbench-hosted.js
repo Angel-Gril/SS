@@ -11,6 +11,7 @@
   var HOSTED_MODE_STATE_EVENT = 'ss-erp:hosted-mode-state-change';
   var WORKSPACE_ACTION_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var WORKSPACE_PREVIEW_STATE_VERSION = 'extension-byok-workbench-preview-state/v1';
+  var ACCEPTED_AUTHORITY_RELOAD_RETRY_DELAY_MS = 100;
   var WORKSPACE_INTENT_VERSION = 'extension-byok-workbench-action-intent/v1';
   var WORKSPACE_OUTCOME_VERSION = 'extension-byok-workbench-action-outcome/v1';
   var LAUNCH_CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
@@ -1115,6 +1116,17 @@
     }));
   }
 
+  async function reloadAuthorityAfterAcceptedMutation(options, epoch) {
+    if (await loadAuthority(options)) return true;
+    if (epoch !== state.lifecycleEpoch || state.disposed || state.invalidated
+      || typeof global.setTimeout !== 'function') return false;
+    await new Promise(function (resolve) {
+      global.setTimeout(resolve, ACCEPTED_AUTHORITY_RELOAD_RETRY_DELAY_MS);
+    });
+    if (epoch !== state.lifecycleEpoch || state.disposed || state.invalidated) return false;
+    return loadAuthority({ ...options, forceBootstrap: true });
+  }
+
   async function executeHosted(intent, confirmation, workspaceSource) {
     if (!canOperate() || !intent || intent.action === 'APPLY_SLOT') {
       if (workspaceSource) {
@@ -1148,7 +1160,9 @@
       });
       executionAccepted = true;
       if (epoch !== state.lifecycleEpoch) return false;
-      var reloaded = await loadAuthority({ successMessage: '托管任务已接受，权威状态已刷新。' });
+      var reloaded = await reloadAuthorityAfterAcceptedMutation({
+        successMessage: '托管任务已接受，权威状态已刷新。',
+      }, epoch);
       if (!reloaded) throw controllerError('SS_ERP_HOSTED_WORKBENCH_AUTHORITY_RELOAD_REQUIRED');
       if (workspaceSource) workspaceOutcome(workspaceSource, 'APPLIED', null);
       return true;
