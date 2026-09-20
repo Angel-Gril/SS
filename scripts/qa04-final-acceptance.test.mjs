@@ -48,6 +48,20 @@ function png(width, height, seed = 1) {
   return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
+function jpeg(width, height) {
+  const segment = (marker, payload) => {
+    const length = Buffer.alloc(2); length.writeUInt16BE(payload.length + 2);
+    return Buffer.concat([Buffer.from([0xff, marker]), length, payload]);
+  };
+  const app = Buffer.concat([Buffer.from('JFIF\0', 'ascii'), Buffer.from([1, 1, 0, 0, 1, 0, 1, 0, 0])]);
+  const quantization = Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)]);
+  const frame = Buffer.alloc(15); frame[0] = 8; frame.writeUInt16BE(height, 1); frame.writeUInt16BE(width, 3); frame[5] = 3;
+  frame.set([1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0], 6);
+  const scan = Buffer.from([3, 1, 0, 2, 0, 3, 0, 0, 63, 0]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xe0, app), segment(0xdb, quantization),
+    segment(0xc0, frame), segment(0xda, scan), Buffer.from([0x01, 0xff, 0x00, 0x02, 0xff, 0xd9])]);
+}
+
 function fixture(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-qa04-final-'));
   const repositoryRoot = path.join(root, 'repository'), evidenceRoot = path.join(root, 'private');
@@ -371,6 +385,69 @@ function historicalDraftFlowFixture(t, operation = 'IMAGE_TO_IMAGE') {
     f.change(f.input.normalErp.acceptance, value => { value.executionOfflineQa04[name].sha256 = reference.sha256; });
   };
   return { ...f, targetGitCommit, executionGitCommit, executionOfflineQa04, originals, changeExecutionOffline };
+}
+
+function historicalRestrictedSuiteFixture(t) {
+  const f = suiteFlowFixture(fixture(t), png), executionGitCommit = f.targetGitCommit;
+  const executionOfflineQa04 = structuredClone(f.input.offline), manifest = f.get(f.input.normalErp.acceptance);
+  const extensionFile = 'extensions/ss-erp/pages/ai-image-workbench-hosted.js';
+  mkdirSync(path.dirname(path.join(f.repositoryRoot, extensionFile)), { recursive: true });
+  writeFileSync(path.join(f.repositoryRoot, extensionFile), 'authority refresh repair\n');
+  f.git('add', '--', extensionFile); f.git('commit', '-qm', 'repair hosted authority refresh');
+  const targetGitCommit = f.git('rev-parse', 'HEAD');
+  f.input.targetGitCommit = targetGitCommit;
+  f.input.offline = {
+    receipt: f.put('suite-target-offline.json', { ...f.get(executionOfflineQa04.receipt), gitCommit: targetGitCommit,
+      startedAt: '2026-09-16T11:00:00.000Z', completedAt: '2026-09-16T11:20:00.000Z' }),
+    log: f.put('suite-target-offline.log', readFileSync(executionOfflineQa04.log.path, 'utf8')
+      .replace(executionGitCommit, targetGitCommit).replace('459 pass(es)', '476 pass(es)')),
+  };
+  const source = f.put('suite-source.jpg', jpeg(1024, 1024));
+  f.change(manifest.workbench, value => { value.sourceSha256 = source.sha256; });
+  const updateDatabaseSource = reference => f.change(reference, value => {
+    const lineage = value.suiteReferences[0];
+    Object.assign(lineage, { assetSha256: source.sha256, rawSourceSha256: source.sha256,
+      sizeBytes: readFileSync(source.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
+    for (const row of value.rows) {
+      Object.assign(row.job.frozenInputs[0], { sha256: source.sha256, sizeBytes: readFileSync(source.path).length });
+      row.workflow.inputs[0].assetSha256 = source.sha256;
+      Object.assign(row.workflow.inputAssets[0], { sourceSha256: source.sha256, sha256: source.sha256,
+        sizeBytes: readFileSync(source.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
+    }
+  });
+  updateDatabaseSource(f.input.normalErp.generated);
+  updateDatabaseSource(f.input.normalErp.restored);
+  f.change(manifest.queue, value => {
+    value.retentionPolicy = 'REMOVE_ON_COMPLETE';
+    value.jobs = [];
+  });
+  for (const [key, id] of [['startResponse', 'suite-start-receipt'], ['continueResponse', 'suite-continue-receipt']]) {
+    f.change(manifest[key], value => {
+      const result = value.body.data;
+      value.status = 202;
+      value.body.data = { receipt: { id, grantId: id + '-grant', status: 'SUCCEEDED', result,
+        failureCode: null, createdAt: value.at, completedAt: value.at }, replay: false };
+    });
+  }
+  const generated = f.get(f.input.normalErp.generated), ownerSha256 = generated.rows[0].job.ownerSha256;
+  const pilot = (observedAt) => ({ kind: 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE', observedAt,
+    gitCommit: executionGitCommit, version: '1.0.354', region: 'COM', providerRequests: 0, ozonWrites: 0,
+    result: { expectation: 'hosted-pilot', ownerSha256, shopIds: ['private-shop'], deviceCount: 2,
+      allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'], rolloutRevision: 11, sourcePolicyRevision: 'pilot-11' } });
+  f.input.normalErp.controllerStatus = f.put('suite-restricted-pilot-control.json', {
+    schemaVersion: 1, kind: 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL', gitCommit: executionGitCommit,
+    version: '1.0.354', region: 'COM', ownerSha256, currency: 'CNY', maximumTaskCostCents: 28,
+    configurationChanged: false, pending: { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 },
+    before: pilot('2026-09-16T10:23:00.000Z'), after: pilot('2026-09-16T10:36:00.000Z'),
+  });
+  manifest.schemaVersion = 2;
+  manifest.executionGitCommit = executionGitCommit;
+  manifest.executionOfflineQa04 = executionOfflineQa04;
+  manifest.source = source;
+  manifest.referenceImage = source;
+  f.input.normalErp.acceptance = f.put('suite-v2-inputs.json', manifest);
+  f.save();
+  return { ...f, executionGitCommit, executionOfflineQa04, targetGitCommit };
 }
 
 for (const operation of ['IMAGE_TO_IMAGE', 'INPAINT']) {
@@ -809,6 +886,41 @@ test('derives current-source suite acceptance from two original jobs, PNGs, revi
   assert.equal(proof.images.length, 2); assert.equal(proof.configurationRestored, true);
   assert.equal(result.report.provenance.fullProductionMv3Verified, false);
   assert.doesNotMatch(JSON.stringify(result.report), /private-suite|private-draft|private-source/u);
+});
+
+test('suite v2 bridges a JPEG source execution with removed completed queue jobs and unchanged restricted pilot', t => {
+  const f = historicalRestrictedSuiteFixture(t), result = f.verify(), proof = result.report.provenance.normalErp;
+  assert.equal(result.report.decision, 'PASS');
+  assert.equal(proof.executionCommit, f.executionGitCommit);
+  assert.equal(proof.sourceBridge.kind, 'IDENTICAL_ERP_SOURCE_AND_DEPENDENCIES');
+  assert.equal(proof.source.mimeType, 'image/jpeg');
+  assert.equal(proof.configurationRestored, true);
+  assert.deepEqual(proof.executionOfflineQa04, {
+    gitCommit: f.executionGitCommit,
+    receiptSha256: f.executionOfflineQa04.receipt.sha256,
+    logSha256: f.executionOfflineQa04.log.sha256,
+    startedAt: '2026-09-16T10:00:00.000Z',
+    completedAt: '2026-09-16T10:20:00.000Z',
+  });
+});
+
+test('suite v2 rejects queue retention ambiguity, restricted pilot drift, and malformed JPEG evidence', t => {
+  {
+    const f = historicalRestrictedSuiteFixture(t), manifest = f.get(f.input.normalErp.acceptance);
+    f.change(manifest.queue, value => { delete value.retentionPolicy; });
+    f.change(f.input.normalErp.acceptance, value => { value.queue.sha256 = manifest.queue.sha256; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
+  {
+    const f = historicalRestrictedSuiteFixture(t);
+    f.change(f.input.normalErp.controllerStatus, value => { value.after.result.rolloutRevision += 1; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
+  {
+    const f = historicalRestrictedSuiteFixture(t), source = f.put('suite-source.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    f.change(f.input.normalErp.acceptance, value => { value.source = source; value.referenceImage = source; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
 });
 
 test('suite rejects missing images, price changes, reused jobs and historical records relabeled as current', t => {

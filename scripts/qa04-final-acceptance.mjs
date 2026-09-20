@@ -664,7 +664,8 @@ function verifyNormalErp(reader, input, root, now) {
   return scoped('QA04_ERP_INVALID', () => {
     const code = 'QA04_ERP_INVALID', refs = input.normalErp, acceptance = reader.json(refs.acceptance, code);
     if (acceptance.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS') return verifySuiteNormalErp(reader, input, acceptance, now,
-      (executionCommit, targetCommit) => verifyErpSource(root, executionCommit, targetCommit));
+      (executionCommit, targetCommit) => verifyErpSource(root, executionCommit, targetCommit),
+      (offline, executionCommit, asOf) => verifyOffline(reader, { targetGitCommit: executionCommit, offline }, asOf));
     if (acceptance.kind === 'NORMAL_IMAGE_DRAFT_FLOW_INPUTS') return verifyDraftNormalErp(reader, input, acceptance, root, now);
     const generated = reader.json(refs.generated, code), applied = reader.json(refs.applied, code), restored = reader.json(refs.restored, code);
     const controller = reader.json(refs.controllerStatus, code, { nativeCompact: true }), image = pngEvidence(reader, refs.image, code);

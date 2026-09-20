@@ -1,5 +1,14 @@
 # 生图与计费链路收口（2026-09）
 
+## 2026-09-20 1.0.354 authority refresh 与第二次独立 MV3 全链
+
+- 源码 `688469239665101de8745521da38bc42236457f6` 为已部署的 `1.0.354` UX 修复：托管 mutation 已被 ERP 接受后，首次 authority read 失败只等待 100ms 并重试一次只读 load，不重发 mutation；完整 extension verifier 462/462、workspace lint/typecheck 通过。
+- 专用 profile 重新配对固定扩展 ID `gdibahdfhkbiaaapnnnclmedepkfinek`，只授权 DOTH 与 `capture:write`、`listing:write`、`listing:review`、`media:execute`，未授予 `listing:publish`。原已验收草稿 `draft-749873fd-28b8-415e-8769-70a9cc762710` 因两目标槽均占用，通过正式 cancel owner 留存为历史；新草稿 `draft-269de912-c844-41d6-9f52-1bf66a282817` 从同一 current snapshot 创建为 r1/v1，旧 assignment、费用及审计均未删除或改库。
+- plan `cmu9auonv000e5ohoe2b6ymqb` 由 source-page relay 以 `galleryGoals=[scene]` 创建并审核，报价两张/CNY 0.28。suite `cmu9bfp8r000o5ohoh4kp9rwe` 仅执行一次 `START -> CONTINUE`，2/2 `SUCCEEDED`、revision 9、attempt 1，无 retry/cancel；输出 SHA-256 为 `6417d125...a6c76`、`e5ef0617...aff7c`。两次审核均一次成功且即时 UI 显示权威状态已更新。
+- assignment batch `hosted-assignment-batch:34965026ca7e8c7c369128b499609f205edc624611789d95` 一次写入两条 GENERATED assignment，草稿 r1/v1 -> r2/v2；Worker 内受控 device transport 重放原始 request 返回 `replayed=true`，数据库 assignment 仍为 2。两笔 job/成本均为 `SUCCEEDED/SETTLED`，各唯一 `CHARGE` CNY 0.14；Ozon publish attempts 为 0。COM restricted pilot 前后 allowlist、DOTH、两个 active device session、四 scope 和允许操作 `IMAGE_TO_IMAGE/SUITE` 一致，全局 pending 五类均为 0。
+- 正式 QA04 producer 的旧 fixture 与生产漂移：原图只接受 PNG、强制保留 BullMQ completed job、只接受 dark bootstrap restore。新增 suite v2 仅在显式 execution commit/offline/source bridge 下接受基线 JPEG、`REMOVE_ON_COMPLETE` 空 queue job + SUCCEEDED DB slot，以及前后完全一致的 restricted-pilot control；真实 device command receipt envelope 同时被严格验证。RED 后定向及完整 47 项 producer 回归通过，旧 v1 行为保持。
+- 官网 pointer 仍为 `1.0.332`。producer 改动提交后必须重跑目标 commit offline，并重建、签名、部署双区 `1.0.354` 候选；本段真实执行只能作为显式 execution bridge 原件，不能把 `68846923` 的签名/VPS 回执重标为新提交。
+
 ## 2026-09-20 MV3 1.0.353 全链验收与双区部署
 
 - 最终源码 `617e8518a9218422e1174fe193b493b4a38e42e7` 已推送。连续修复覆盖重配对后的 plan-binding adoption、device session lineage、scope 集合比较以及 preview ticket 的 30 秒有界时钟偏差；扩展候选为 `1.0.353`。定向 PostgreSQL 门禁 `196/196`、扩展 verifier `462/462` 和受影响 lint/typecheck 均已通过。

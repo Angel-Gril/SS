@@ -181,3 +181,75 @@ export function pngEvidence(reader, reference, code) {
     return { sha256: reference.sha256, width, height, bytes: bytes.length, mimeType: 'image/png' };
   } catch { fail(code); }
 }
+
+export function jpegEvidence(reader, reference, code) {
+  const bytes = reader.read(reference, 32 * 1024 * 1024);
+  try {
+    requireThat(bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8, code);
+    let cursor = 2, width, height, frameSeen = false, scanSeen = false, ended = false;
+    while (cursor < bytes.length) {
+      requireThat(bytes[cursor] === 0xff, code);
+      while (cursor < bytes.length && bytes[cursor] === 0xff) cursor += 1;
+      requireThat(cursor < bytes.length, code);
+      const marker = bytes[cursor++];
+      if (marker === 0xd9) {
+        requireThat(scanSeen && cursor === bytes.length, code);
+        ended = true;
+        break;
+      }
+      requireThat(marker !== 0x00 && marker !== 0xd8 && !(marker >= 0xd0 && marker <= 0xd7) && marker !== 0x01, code);
+      requireThat(cursor + 2 <= bytes.length, code);
+      const length = bytes.readUInt16BE(cursor);
+      requireThat(length >= 2 && cursor + length <= bytes.length, code);
+      const start = cursor + 2, end = cursor + length;
+      if (marker === 0xc0) {
+        requireThat(!frameSeen && length >= 11 && bytes[start] === 8, code);
+        height = bytes.readUInt16BE(start + 1); width = bytes.readUInt16BE(start + 3);
+        const components = bytes[start + 5];
+        requireThat((components === 1 || components === 3) && length === 8 + components * 3
+          && width > 0 && height > 0 && width <= 8192 && height <= 8192 && width * height <= 40_000_000, code);
+        frameSeen = true;
+      } else if ((marker >= 0xc1 && marker <= 0xcf) && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        fail(code);
+      } else if (marker === 0xda) {
+        requireThat(frameSeen && !scanSeen && length >= 8, code);
+        const components = bytes[start];
+        requireThat((components === 1 || components === 3) && length === 6 + components * 2, code);
+        scanSeen = true;
+        cursor = end;
+        let scanEnded = false;
+        while (cursor < bytes.length) {
+          if (bytes[cursor] !== 0xff) { cursor += 1; continue; }
+          requireThat(cursor + 1 < bytes.length, code);
+          const next = bytes[cursor + 1];
+          if (next === 0x00 || next >= 0xd0 && next <= 0xd7) { cursor += 2; continue; }
+          if (next === 0xd9) {
+            cursor += 2;
+            requireThat(cursor === bytes.length, code);
+            ended = true;
+            scanEnded = true;
+            break;
+          }
+          scanEnded = true;
+          break;
+        }
+        requireThat(scanEnded, code);
+        if (ended) break;
+        continue;
+      }
+      cursor = end;
+    }
+    requireThat(frameSeen && scanSeen && ended && width && height, code);
+    return { bytes: bytes.length, sha256: sha256(bytes), width, height, mimeType: 'image/jpeg' };
+  } catch (error) {
+    if (error.code?.startsWith('QA04_')) throw error;
+    fail(code);
+  }
+}
+
+export function imageEvidence(reader, reference, code) {
+  const bytes = reader.read(reference, 32 * 1024 * 1024);
+  if (bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return pngEvidence(reader, reference, code);
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return jpegEvidence(reader, reference, code);
+  fail(code);
+}

@@ -1,4 +1,4 @@
-import { canonicalTimestamp, exactKeys, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
+import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
 
 const CODE = 'QA04_SUITE_INVALID';
 const check = condition => requireThat(condition, CODE);
@@ -13,21 +13,29 @@ const success = response => check(response?.status >= 200 && response.status < 3
 
 // This variant consumes only original local records. It cannot create tasks,
 // rewrite old evidence, bridge historical execution, or grant production access.
-export function verifySuiteNormalErp(reader, input, manifest, now, verifySource) {
+export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
+  const explicitExecution = manifest.schemaVersion === 2;
   exactKeys(manifest, ['schemaVersion', 'kind', 'operation', 'source', 'referenceImage', 'secondImage', 'workbench', 'generatedUi',
-    'submitted', 'startRequest', 'startResponse', 'continueRequest', 'continueResponse', 'applyRequest', 'queue', 'browser', 'previews', 'reviews'], CODE);
-  check(manifest.schemaVersion === 1 && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
+    'submitted', 'startRequest', 'startResponse', 'continueRequest', 'continueResponse', 'applyRequest', 'queue', 'browser', 'previews', 'reviews',
+    ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : [])], CODE);
+  check((manifest.schemaVersion === 1 || explicitExecution)
+    && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
+  const executionCommit = explicitExecution ? manifest.executionGitCommit : input.targetGitCommit;
+  const executionOfflineRefs = explicitExecution ? manifest.executionOfflineQa04 : input.offline;
+  check(/^[a-f0-9]{40}$/u.test(executionCommit));
+  if (explicitExecution) exactKeys(executionOfflineRefs, ['receipt', 'log'], CODE);
   pair(manifest.previews); pair(manifest.reviews);
   const refs = input.normalErp, read = ref => reader.json(ref, CODE, { nativeCompact: true });
   const generated = read(refs.generated), restored = read(refs.restored), applied = read(refs.applied);
   const binding = read(manifest.workbench), ui = read(manifest.generatedUi), submitted = read(manifest.submitted);
   const start = read(manifest.startRequest), startResponse = read(manifest.startResponse), continueRequest = read(manifest.continueRequest),
     continueResponse = read(manifest.continueResponse), applyRequest = read(manifest.applyRequest), queue = read(manifest.queue), browser = read(manifest.browser);
-  const controller = read(refs.controllerStatus)?.result?.qualification;
-  const source = pngEvidence(reader, manifest.source, CODE), reference = pngEvidence(reader, manifest.referenceImage, CODE);
+  const controllerRecord = read(refs.controllerStatus), controller = controllerRecord?.result?.qualification ?? controllerRecord;
+  const source = imageEvidence(reader, manifest.source, CODE), reference = imageEvidence(reader, manifest.referenceImage, CODE);
   const images = [pngEvidence(reader, refs.image, CODE), pngEvidence(reader, manifest.secondImage, CODE)];
   check(images.every(image => image.width === 900 && image.height === 1200) && images[0].sha256 !== images[1].sha256);
-  const commit = input.targetGitCommit, offline = reader.json(input.offline.receipt, CODE), owner = binding.ownerSha256;
+  const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit, binding.launchedAt) : null;
+  const commit = executionCommit, offline = executionOffline?.receipt ?? reader.json(input.offline.receipt, CODE), owner = binding.ownerSha256;
   const native = (value, kind) => check(value?.kind === kind && value.gitCommit === commit);
   native(ui, 'REAL_HOSTED_SUITE_UI_GET_READBACK'); native(applied, 'REAL_HOSTED_SUITE_ERP_DRAFT_ASSIGNMENT');
   native(queue, 'REAL_HOSTED_SUITE_QUEUE_READBACK'); native(browser, 'NORMAL_IMAGE_SUITE_BROWSER_EXECUTION');
@@ -52,20 +60,29 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource)
   check(submitted.gitCommit === commit && submitted.suiteId === suiteId && submitted.startExecutePosts === 1
     && submitted.continueExecutePosts === 1 && submitted.additionalStartPosts === 0
     && submitted.providerWorkDispatched === true && submitted.retryAllowed === false);
-  success(startResponse);
-  check(startResponse.body.data.action === 'START' && startResponse.body.data.suiteId === suiteId
-    && startResponse.body.data.status === 'PLANNED' && startResponse.body.data.revision === 1 && startResponse.body.data.replayed === false);
+  const commandResponse = response => {
+    success(response);
+    const data = response.body.data;
+    if (!isRecord(data?.receipt)) return data;
+    check(data.replay === false && text(data.receipt.id) && text(data.receipt.grantId)
+      && data.receipt.status === 'SUCCEEDED' && data.receipt.failureCode === null
+      && time(data.receipt.createdAt) <= time(data.receipt.completedAt) && isRecord(data.receipt.result));
+    return data.receipt.result;
+  };
+  const startResult = commandResponse(startResponse);
+  check(startResult.action === 'START' && startResult.suiteId === suiteId
+    && startResult.status === 'PLANNED' && startResult.revision === 1 && startResult.replayed === false);
   check(continueRequest.method === 'POST' && continueRequest.path === '/api/extension-device/media-workflows/execute'
     && continueRequest.body?.command?.version === 'extension-ai-image-suite-execute-command/v1'
     && continueRequest.body.command.action === 'CONTINUE' && continueRequest.body.command.suiteId === suiteId
-    && continueRequest.body.command.expectedSuiteRevision === startResponse.body.data.revision
+    && continueRequest.body.command.expectedSuiteRevision === startResult.revision
     && continueRequest.body.workflowId === binding.draftId && continueRequest.body.draftVersion === binding.draftVersion
     && text(continueRequest.body.idempotencyKey));
-  success(continueResponse);
-  check(continueResponse.body.data.action === 'CONTINUE' && continueResponse.body.data.suiteId === suiteId
-    && ['QUEUED', 'RUNNING', 'SUCCEEDED'].includes(continueResponse.body.data.status)
-    && positive(continueResponse.body.data.revision) && continueResponse.body.data.revision > startResponse.body.data.revision
-    && continueResponse.body.data.replayed === false);
+  const continueResult = commandResponse(continueResponse);
+  check(continueResult.action === 'CONTINUE' && continueResult.suiteId === suiteId
+    && ['QUEUED', 'RUNNING', 'SUCCEEDED'].includes(continueResult.status)
+    && positive(continueResult.revision) && continueResult.revision > startResult.revision
+    && continueResult.replayed === false);
   check(start.method === 'POST' && start.path === '/api/extension-device/media-workflows/execute'
     && start.body?.shopId === binding.shopId && start.body.workflowId === binding.draftId && start.body.draftVersion === binding.draftVersion
     && text(start.body.idempotencyKey) && start.body.command?.version === 'extension-ai-image-suite-execute-command/v1'
@@ -194,29 +211,54 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource)
   }
   check(queue.suiteId === suiteId && queue.readOnly === true && queue.databaseId === 'production-com-primary' && queue.ownerSha256 === owner
     && queue.queueName === 'ai-image-suite-generation' && time(queue.observedAt) >= time(generated.observedAt) && time(queue.observedAt) <= time(now));
-  pair(queue.jobs); pair(queue.slots); unique(queue.jobs.map(job => job.id)); unique(queue.slots.map(slot => slot.id));
+  const removedCompletedJobs = explicitExecution && queue.retentionPolicy === 'REMOVE_ON_COMPLETE';
+  check(Array.isArray(queue.jobs) && (removedCompletedJobs ? queue.jobs.length === 0 : queue.jobs.length === 2));
+  pair(queue.slots); unique(queue.jobs.map(job => job.id)); unique(queue.slots.map(slot => slot.id));
+  if (removedCompletedJobs) check(queue.allCompleted === true);
   for (const { job, flow, slot } of rows) {
     const payload = { suiteId, slotId: slot.id, workflowId: flow.id, jobId: job.id, attempt: 1 };
     const id = 'suite-generate-' + sha256(JSON.stringify(['ai-image-suite-generation/v1', suiteId, slot.id, flow.id, job.id, 1]));
     const queued = queue.jobs.find(value => value.id === id), observedSlot = queue.slots.find(value => value.id === slot.id);
-    check(queued && queued.name === 'generate-suite-slot' && queued.state === 'completed' && equal(queued.payload, payload)
+    if (removedCompletedJobs) check(queued === undefined);
+    else check(queued && queued.name === 'generate-suite-slot' && queued.state === 'completed' && equal(queued.payload, payload)
       && queued.attemptsMade === 1 && queued.attemptsStarted === 1 && positive(queued.processedOn) && positive(queued.finishedOn)
       && queued.processedOn >= time(offline.completedAt) && queued.processedOn <= time(job.startedAt)
-      && queued.finishedOn >= time(job.completedAt) && queued.finishedOn <= time(queue.observedAt)
-      && observedSlot?.suiteId === suiteId && observedSlot.childWorkflowId === flow.id && observedSlot.attempt === 1
+      && queued.finishedOn >= time(job.completedAt) && queued.finishedOn <= time(queue.observedAt));
+    check(observedSlot?.suiteId === suiteId && observedSlot.childWorkflowId === flow.id && observedSlot.attempt === 1
       && observedSlot.status === 'SUCCEEDED' && observedSlot.slotKey === slot.slotKey && observedSlot.ownerSha256 === owner);
   }
-  check(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
-    && controller.action === 'restore' && controller.phase === 'restored' && controller.caseId === 'suite'
-    && controller.commit === commit && controller.ownerSha256 === owner && controller.currency === 'CNY'
-    && controller.unitCostCents === 14 && controller.maximumTaskCostCents === 28 && controller.workflowEnabled === false
-    && controller.sharedDailyBudgetModified === false && controller.userDailyLimitModified === false && controller.legacyTextAiModified === false
-    && equal(controller.pending, { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 }) && isSha256(controller.backupSha256)
-    && positive(controller.credentialRevisionBefore) && positive(controller.credentialRevisionAfter)
-    && controller.credentialRevisionAfter > controller.credentialRevisionBefore
-    && controller.candidate?.gitCommit === commit && controller.candidate.offlineSha256 === input.offline.receipt.sha256
-    && ['releaseEvidenceSha256', 'signatureSha256', 'vpsSha256'].every(key => isSha256(controller.candidate[key]))
-    && time(controller.restoredAt) >= time(applied.at) && time(controller.restoredAt) <= time(restored.observedAt));
+  if (explicitExecution && controller?.kind === 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL') {
+    const expectedPending = { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 };
+    const pilot = value => {
+      check(value?.kind === 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE' && value.gitCommit === commit
+        && /^\d+\.\d+\.\d+$/u.test(value.version) && value.region === 'COM'
+        && value.providerRequests === 0 && value.ozonWrites === 0 && value.result?.expectation === 'hosted-pilot'
+        && value.result.ownerSha256 === owner && equal(value.result.shopIds, [binding.shopId])
+        && positive(value.result.deviceCount) && equal(value.result.allowedOperations, ['IMAGE_TO_IMAGE', 'SUITE'])
+        && positive(value.result.rolloutRevision) && text(value.result.sourcePolicyRevision));
+      return value;
+    };
+    const beforePilot = pilot(controller.before), afterPilot = pilot(controller.after);
+    check(controller.schemaVersion === 1 && controller.gitCommit === commit && controller.version === afterPilot.version
+      && controller.region === 'COM' && controller.ownerSha256 === owner && controller.currency === 'CNY'
+      && controller.maximumTaskCostCents === 28 && controller.configurationChanged === false
+      && equal(controller.pending, expectedPending)
+      && equal(beforePilot.result, afterPilot.result)
+      && time(beforePilot.observedAt) <= time(binding.launchedAt)
+      && time(afterPilot.observedAt) >= time(applied.at) && time(afterPilot.observedAt) <= time(restored.observedAt));
+  } else {
+    check(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
+      && controller.action === 'restore' && controller.phase === 'restored' && controller.caseId === 'suite'
+      && controller.commit === commit && controller.ownerSha256 === owner && controller.currency === 'CNY'
+      && controller.unitCostCents === 14 && controller.maximumTaskCostCents === 28 && controller.workflowEnabled === false
+      && controller.sharedDailyBudgetModified === false && controller.userDailyLimitModified === false && controller.legacyTextAiModified === false
+      && equal(controller.pending, { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 }) && isSha256(controller.backupSha256)
+      && positive(controller.credentialRevisionBefore) && positive(controller.credentialRevisionAfter)
+      && controller.credentialRevisionAfter > controller.credentialRevisionBefore
+      && controller.candidate?.gitCommit === commit && controller.candidate.offlineSha256 === input.offline.receipt.sha256
+      && ['releaseEvidenceSha256', 'signatureSha256', 'vpsSha256'].every(key => isSha256(controller.candidate[key]))
+      && time(controller.restoredAt) >= time(applied.at) && time(controller.restoredAt) <= time(restored.observedAt));
+  }
   check(browser.schemaVersion === 1 && browser.ownerSha256 === owner && browser.suiteId === suiteId
     && Array.isArray(browser.jobIdHashes) && browser.jobIdHashes.length === 2 && browser.jobIdHashes.every(isSha256)
     && Array.isArray(browser.imageSha256) && browser.imageSha256.length === 2 && browser.imageSha256.every(isSha256)
@@ -228,12 +270,15 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource)
     && positive(browser.isolation.protectedDebuggingPort) && browser.isolation.protectedDebuggingPort <= 65535
     && browser.isolation.debuggingPort !== browser.isolation.protectedDebuggingPort
     && time(browser.startedAt) <= time(binding.launchedAt) && time(browser.completedAt) >= time(restored.observedAt) && time(browser.completedAt) <= time(now));
-  const sourceBridge = verifySource(commit, commit);
+  const sourceBridge = verifySource(commit, input.targetGitCommit);
   return { executionCommit: commit, completedAt: browser.completedAt, operation: 'IMAGE_TO_IMAGE', workflowKind: 'SUITE',
     provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', currency: 'CNY', unitCostMinor: 14,
     successfulImages: 2, actualCostMinor: 28, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
-    configurationRestored: true, image: images[0], images, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
+    configurationRestored: true, image: images[0], images, source, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
     sourceSha256: source.sha256, referenceSha256: reference.sha256,
+    ...(executionOffline ? { executionOfflineQa04: { gitCommit: executionCommit,
+      receiptSha256: executionOfflineRefs.receipt.sha256, logSha256: executionOfflineRefs.log.sha256,
+      startedAt: executionOffline.receipt.startedAt, completedAt: executionOffline.receipt.completedAt } } : {}),
     evidence: { ...Object.fromEntries(Object.entries(refs).map(([key, ref]) => [`${key}Sha256`, ref.sha256])),
       ...Object.fromEntries(Object.entries(manifest).filter(([, value]) => isRecord(value) && isSha256(value.sha256)).map(([key, ref]) => [`${key}Sha256`, ref.sha256])),
       previewSha256: manifest.previews.map(ref => ref.sha256), reviewSha256: manifest.reviews.map(ref => ref.sha256),
