@@ -285,7 +285,7 @@ function fixtureFetcher(options = {}) {
         id,
         deviceId: `device-${id}`,
         status: 'ACTIVE',
-        scopes: ['capture:write', 'listing:review', 'listing:write', 'media:execute'],
+        scopes: ['capture:write', 'listing:write', 'listing:review', 'media:execute'],
         shopIds: [shopId],
         expiresAt: '2030-01-02T00:00:00.000Z',
       })) : [];

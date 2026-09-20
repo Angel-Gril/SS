@@ -1017,8 +1017,8 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
             status: session.status,
             ownerUserId: hostedPilotExpectation.ownerUserIds[0],
             actorUserId: hostedPilotExpectation.ownerUserIds[0],
-            scopes: exactArray(session.scopes, 'PILOT_DEVICE_SCOPES'),
-            shopIds: exactArray(session.shopIds, 'PILOT_DEVICE_SHOPS'),
+            scopes: [...exactArray(session.scopes, 'PILOT_DEVICE_SCOPES')].sort(),
+            shopIds: [...exactArray(session.shopIds, 'PILOT_DEVICE_SHOPS')].sort(),
           };
         });
         try {
