@@ -41,6 +41,16 @@ const shopId = 'shop-canary-01';
 const workflowId = 'workflow-canary-01';
 const attemptId = 'attempt-canary-01';
 const sessionId = 'session-canary-01';
+const pilotOwner = 'owner-pilot-01';
+const pilotSessionIds = ['pilot-device-session-01', 'pilot-device-session-02'];
+const pilotExpectation = Object.freeze({
+  ownerUserIds: [pilotOwner],
+  shopIds: [shopId],
+  deviceSessionIds: pilotSessionIds,
+  rolloutRevision: 15,
+  sourcePolicyRevision: 'pilot-source-revision-15',
+  allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+});
 
 test.afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -92,9 +102,50 @@ function darkConfigValues() {
   ]);
 }
 
+function pilotConfigValues() {
+  const sourceFeatures = {
+    SOURCE_LISTING_WORKFLOW: {
+      mode: 'pilot', ownerUserIds: [pilotOwner], shopIds: [shopId],
+      listingStage: 'dual_read', platforms: ['OZON'],
+    },
+    SOURCE_LISTING_EXTENSION_WORKBENCH: { mode: 'pilot', ownerUserIds: [pilotOwner] },
+    SOURCE_LISTING_WEB_MEDIA: { mode: 'pilot', ownerUserIds: [pilotOwner] },
+  };
+  return new Map([
+    ['feature_ai_media_workflow_v2', 'true'],
+    ['feature_ai_media_image_to_image', 'true'],
+    ['feature_ai_media_suite', 'true'],
+    ['feature_ai_media_full_edit', 'false'],
+    ['feature_ai_media_inpaint', 'false'],
+    ['feature_source_listing_workflow', 'true'],
+    ['feature_source_listing_web_media', 'true'],
+    ['feature_source_listing_extension_workbench', 'true'],
+    ['feature_source_ozon_publisher_v2', 'false'],
+    ['feature_extension_hosted_ai', 'true'],
+    ['feature_extension_byok_ai', 'false'],
+    ['feature_extension_byok_ingest', 'false'],
+    ['feature_extension_byok_publish', 'false'],
+    ['ai_image_generation_enabled', 'false'],
+    ['ai_image_provider', 'disabled'],
+    ['feature_image_translate', 'false'],
+    ['ai_image_translation_provider', 'disabled'],
+    ['ai_media_workflow_v2_rollout_policy', JSON.stringify({
+      revision: 15, tenantIds: [pilotOwner], mode: 'allowlist',
+    })],
+    ['source_workflow_rollout_policy', JSON.stringify({
+      revision: pilotExpectation.sourcePolicyRevision, features: sourceFeatures,
+    })],
+    ['extension_byok_admin_policy', JSON.stringify({
+      contractVersion: 'extension-byok-admin-policy/v1', revision: 0, mode: 'off',
+      ownerUserIds: [], shopIds: [], deviceSessionIds: [], allowedOrigins: [],
+      allowedOperations: [], maxConcurrency: 1,
+    })],
+  ]);
+}
+
 function fixtureFetcher(options = {}) {
   const calls = [];
-  const config = darkConfigValues();
+  const config = options.pilot ? pilotConfigValues() : darkConfigValues();
   if (options.enabledFlag) config.set(options.enabledFlag, 'true');
   let revoked = false;
   let canceled = false;
@@ -169,7 +220,8 @@ function fixtureFetcher(options = {}) {
     if (url.pathname.startsWith('/api/admin/system-config/')) {
       assert.equal(init.headers.authorization, `Bearer ${adminToken}`);
       const key = decodeURIComponent(url.pathname.slice('/api/admin/system-config/'.length));
-      assert.ok(REL04_DARK_CONFIG_KEYS.includes(key));
+      assert.ok(REL04_DARK_CONFIG_KEYS.includes(key)
+        || ['feature_source_listing_workflow', 'source_workflow_rollout_policy'].includes(key));
       return config.has(key)
         ? jsonResponse({ code: 1, data: { key, value: config.get(key) } })
         : jsonResponse({ code: 0 }, 404);
@@ -229,18 +281,32 @@ function fixtureFetcher(options = {}) {
     }
     if (url.pathname === '/api/extension-device/sessions' && init.method === 'GET') {
       assert.equal(init.headers.authorization, `Bearer ${ownerToken}`);
+      const pilotSessions = options.pilot ? pilotSessionIds.map((id) => ({
+        id,
+        deviceId: `device-${id}`,
+        status: 'ACTIVE',
+        scopes: ['capture:write', 'listing:review', 'listing:write', 'media:execute'],
+        shopIds: [shopId],
+        expiresAt: '2030-01-02T00:00:00.000Z',
+      })) : [];
       return jsonResponse({
         code: 1,
         data: claimed
-          ? [{ id: sessionId, deviceId: claimedDeviceId, status: revoked ? 'REVOKED' : 'ACTIVE' }]
-          : [],
+          ? [...pilotSessions, { id: sessionId, deviceId: claimedDeviceId, status: revoked ? 'REVOKED' : 'ACTIVE' }]
+          : pilotSessions,
       });
     }
     if (url.pathname === '/api/ai-images/suites/readiness') {
       assert.equal(init.headers.authorization, `Bearer ${ownerToken}`);
       return jsonResponse({
         code: 1,
-        data: {
+        data: options.pilot ? {
+          suiteEnabled: true,
+          workflowEnabled: true,
+          webMediaEnabled: true,
+          ready: true,
+          reasonCode: 'READY',
+        } : {
           suiteEnabled: false,
           workflowEnabled: false,
           webMediaEnabled: false,
@@ -508,6 +574,44 @@ test('runs the bounded dark canary, reads reconciliation, and revokes its device
   for (const secret of [
     ownerToken, adminToken, pairingCode, accessToken, nextAccessToken, refreshToken, nextRefreshToken,
   ]) assert.equal(retained.includes(secret), false);
+});
+
+test('runs a candidate-bound restricted hosted pilot canary without Provider or Ozon writes', async () => {
+  const summary = await runRel04DarkCanary(input({
+    rolloutExpectation: 'hosted-pilot',
+    hostedPilotExpectation: pilotExpectation,
+  }), {
+    fetcher: fixtureFetcher({ pilot: true }),
+    randomUUID: () => '00000000-0000-4000-8000-000000000001',
+  });
+  assert.equal(summary.status, 'PASS');
+  assert.equal(summary.schemaVersion, 3);
+  assert.equal(summary.kind, 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY');
+  assert.equal(summary.bindings.rollout.expectation, 'hosted-pilot');
+  assert.match(summary.bindings.rollout.policySha256, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(summary.checks.map(({ id }) => id), [
+    'deployment-and-publication-isolation',
+    'restricted-pilot-policy',
+    'hosted-route-readiness',
+    'publish-reconciliation-read',
+    'device-pairing-active-lifecycle',
+    'byok-disabled-path',
+    'device-session-cleanup',
+  ]);
+  assert.equal(summary.requestAudit.providerDispatchSent, false);
+  assert.equal(summary.requestAudit.erpIngestSent, false);
+  assert.equal(summary.requestAudit.ozonMutationSent, false);
+  const expected = {
+    expectedGitCommit: gitCommit,
+    expectedApiOrigin: apiOrigin,
+    expectedCandidate: releaseBinding().candidate,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z',
+    requireReleaseBinding: true,
+  };
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, expected));
+  const tampered = structuredClone(summary);
+  tampered.checks.find(({ id }) => id === 'restricted-pilot-policy').evidence.rolloutRevision += 1;
+  assert.throws(() => validateRel04DarkCanarySummary(tampered, expected), /pilot|rollout|digest|policy/iu);
 });
 
 test('binds exact-commit QA-04 reconciliation evidence when no live attempt exists', async () => {
@@ -781,6 +885,22 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   assert.equal(parsed.adminToken, adminToken);
   assert.equal(parsed.releaseBinding.candidate.version, '1.2.3');
   assert.equal(parsed.releaseBinding.vpsVerificationSha256, environment.REL04_VPS_VERIFICATION_SHA256);
+  const pilotEnvironment = {
+    ...environment,
+    REL04_AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot',
+    REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(pilotExpectation),
+  };
+  const parsedPilot = parse(pilotEnvironment);
+  assert.equal(parsedPilot.rolloutExpectation, 'hosted-pilot');
+  assert.deepEqual(parsedPilot.hostedPilotExpectation, pilotExpectation);
+  assert.throws(() => parse({
+    ...pilotEnvironment,
+    REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: '{',
+  }), /PILOT_EXPECTATION_INVALID/u);
+  assert.throws(() => parse({
+    ...environment,
+    REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(pilotExpectation),
+  }), /PILOT_EXPECTATION_INVALID/u);
   for (const kind of ['SS_ERP_QA04_OFFLINE_REHEARSAL', 'SS_ERP_DARK_MAINTENANCE_BASELINE',
     'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE', 'SS_ERP_DARK_MAINTENANCE_BACKUP']) {
     const bytes = Buffer.from(`${JSON.stringify({ ...acceptance, kind }, null, 2)}\n`);

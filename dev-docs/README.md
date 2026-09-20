@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-20 受限 hosted pilot 官网发布合同收口（待新提交发布）
+
+- 双区 `e33f68d1 / 1.0.354` 应用部署及完整 VPS verifier 已通过；COM 保持 DOTH 受限 hosted pilot，CN 保持 RDS/direct-origin 全暗态。CN v2 dark canary 已通过并完成临时账号/设备清理，但官网 pointer 仍为 `1.0.332`。
+- 正式官网 owner 原来只接受全暗态 canary，与 COM 长期受限 pilot 冲突；禁止临时关闭 pilot、复用 CN 回执或手填 PASS。REL-04 producer 现保留原 v2 暗态字节，并为 COM 新增 v3 `SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY`：重读精确 owner/shop/device session、rollout/source policy 和 `IMAGE_TO_IMAGE/SUITE` 白名单，要求 FULL_EDIT/INPAINT、BYOK、Ozon publisher 关闭，只执行 readiness GET、临时设备生命周期和清理，不发送 Provider/Ozon/ingest 请求。
+- website approval、activation、probe 和最终 publication verifier 通过同一 canary SHA 接受 v2/v3，历史 v1/v2 保持兼容；pilot policy 同时修复为拒绝白名单外开启的图片操作。发布/canary 74 项（1 条平台跳过）、维护 51 项、QA04 48 项和受影响 ESLint 已通过。
+- 该改动会改变正式候选 package inputs，必须形成新 clean commit 后重跑 offline、重建/签名/部署双区 `1.0.354`、重新生成 VPS/canary/approval。`e33f68d1` 的签名、VPS 和 CN dark canary 只保留为本轮发现合同缺口的历史证据，不得重标用于新提交官网发布。
+
 ## 2026-09-20 MV3 1.0.354 UX 与真实套图验收已完成（官网待发布）
 
 - `68846923 / 1.0.354` 已在独立 MV3 专用 profile 完成新的两槽真实套图：suite `cmu9bfp8r000o5ohoh4kp9rwe` 为 `SUCCEEDED`、revision 9、2/2 attempt 1；两张 900x1200 PNG 经安全预览后审核通过，审核 mutation 后 UI 两次均立即显示“ERP 托管权威状态已更新”，关闭了原 authority refresh 假失败问题。

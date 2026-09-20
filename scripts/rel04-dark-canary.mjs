@@ -14,10 +14,14 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { publicOriginForPublication } from './extension-release-publication-contract.mjs';
 import { verifyAiMediaDarkPolicy } from './verify-ai-media-dark-policy.mjs';
+import {
+  normalizeAiMediaHostedPilotExpectation,
+  verifyAiMediaHostedPilotPolicy,
+} from './verify-ai-media-pilot-policy.mjs';
 import { verifyExtensionReleaseSignature } from './verify-extension-release-signature.mjs';
 import { readStablePublicationFile } from './extension-website-publication-approval.mjs';
 import {
@@ -67,6 +71,13 @@ export const REL04_DARK_CONFIG_KEYS = Object.freeze([
   'feature_extension_byok_ingest',
   'feature_extension_byok_publish',
   'extension_byok_admin_policy',
+]);
+export const REL04_PILOT_CONFIG_KEYS = Object.freeze([
+  ...new Set([
+    ...REL04_DARK_CONFIG_KEYS,
+    'feature_source_listing_workflow',
+    'source_workflow_rollout_policy',
+  ]),
 ]);
 
 const REQUEST_RULES = new Map([
@@ -237,6 +248,35 @@ function publishCapabilityExpectation(value) {
       'PUBLISH_CAPABILITY_LEGACY_ALLOWED',
     ),
   };
+}
+
+function aiMediaRolloutExpectation(environment) {
+  const expectation = String(environment.REL04_AI_MEDIA_ROLLOUT_EXPECTATION || 'off').trim();
+  const rawPilot = String(environment.REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON || '').trim();
+  if (expectation === 'off') {
+    if (rawPilot) fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+    return { expectation, hostedPilot: null };
+  }
+  if (expectation !== 'hosted-pilot' || !rawPilot || rawPilot.length > 65_536) {
+    fail('AI_MEDIA_ROLLOUT_EXPECTATION_INVALID');
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(rawPilot);
+  } catch {
+    fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+  }
+  try {
+    const hostedPilot = normalizeAiMediaHostedPilotExpectation(parsed);
+    if (hostedPilot.ownerUserIds.length !== 1
+      || JSON.stringify(hostedPilot.allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])) {
+      fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+    }
+    return { expectation, hostedPilot };
+  } catch (error) {
+    if (error instanceof Rel04CanaryError) throw error;
+    fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+  }
 }
 
 function pathInside(parent, candidate) {
@@ -503,6 +543,11 @@ export function parseRel04DarkCanaryEnvironment(
     revision: environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION,
     legacyAllowed: environment.REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED,
   });
+  const rollout = aiMediaRolloutExpectation(environment);
+  if (rollout.expectation === 'hosted-pilot'
+    && !rollout.hostedPilot.shopIds.includes(shopId)) {
+    fail('AI_MEDIA_PILOT_SHOP_MISMATCH');
+  }
   return {
     apiOrigin,
     expectedGitCommit,
@@ -514,6 +559,8 @@ export function parseRel04DarkCanaryEnvironment(
     publishReconciliationRegressionSha256: publishReconciliation.regressionSha256,
     publishReconciliationNotBefore: publishReconciliation.notBefore,
     expectedPublishCapability,
+    rolloutExpectation: rollout.expectation,
+    hostedPilotExpectation: rollout.hostedPilot,
     ownerToken: credential(environment, 'REL04_OWNER_TOKEN', trustedRepositoryRoot),
     adminToken: credential(environment, 'REL04_ADMIN_TOKEN', trustedRepositoryRoot),
     observedAt,
@@ -647,6 +694,23 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
     notBefore: input.publishReconciliationNotBefore,
   });
   const expectedPublishCapability = publishCapabilityExpectation(input.expectedPublishCapability);
+  const rolloutExpectation = input.rolloutExpectation || 'off';
+  let hostedPilotExpectation = null;
+  if (rolloutExpectation === 'hosted-pilot') {
+    try {
+      hostedPilotExpectation = normalizeAiMediaHostedPilotExpectation(input.hostedPilotExpectation);
+    } catch {
+      fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+    }
+    if (hostedPilotExpectation.ownerUserIds.length !== 1
+      || JSON.stringify(hostedPilotExpectation.allowedOperations)
+        !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
+      || !hostedPilotExpectation.shopIds.includes(shopId)) {
+      fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
+    }
+  } else if (rolloutExpectation !== 'off' || input.hostedPilotExpectation) {
+    fail('AI_MEDIA_ROLLOUT_EXPECTATION_INVALID');
+  }
   const { workflowId: publishWorkflowId, attemptId: publishAttemptId } = publishReconciliation;
   const ownerToken = exactToken(input.ownerToken, 'OWNER_TOKEN');
   const adminToken = exactToken(input.adminToken, 'ADMIN_TOKEN');
@@ -668,6 +732,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   let canaryDeviceId = null;
   let cleanupRequired = false;
   let cleanupCode = null;
+  let rolloutPolicyEvidence = null;
 
   async function requestJson(routeId, method, pathname, {
     token,
@@ -747,7 +812,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
     }
   }
 
-  async function verifyHostedRegression() {
+  async function verifyHostedState() {
     const hosted = await requestJson(
       'GET /api/ai-images/suites/readiness',
       'GET',
@@ -755,6 +820,26 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       { token: ownerToken },
     );
     const hostedData = exactObject(hosted.body?.data, 'HOSTED_READINESS');
+    if (rolloutExpectation === 'hosted-pilot') {
+      if (hosted.body?.code !== 1
+        || hostedData.suiteEnabled !== true
+        || hostedData.workflowEnabled !== true
+        || hostedData.webMediaEnabled !== true
+        || hostedData.ready !== true
+        || hostedData.reasonCode !== 'READY') {
+        fail('HOSTED_PILOT_READINESS_FAILED');
+      }
+      checks.push(checkResult('hosted-route-readiness', {
+        routeReachable: true,
+        providerDispatchMethodUsed: false,
+        suiteEnabled: true,
+        workflowEnabled: true,
+        webMediaEnabled: true,
+        ready: true,
+        reasonCode: hostedData.reasonCode,
+      }));
+      return;
+    }
     if (hosted.body?.code !== 1
       || hostedData.suiteEnabled !== false
       || hostedData.workflowEnabled !== false
@@ -846,6 +931,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
 
   async function normalChecks() {
     let activeCheck = 'deployment-and-publication-isolation';
+    let sessionRowsBefore = null;
     try {
       const ready = await requestJson('GET /ready', 'GET', '/ready');
       if (ready.body?.status !== 'ready'
@@ -891,9 +977,14 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
         extensionCorsPreflight: true,
       }));
 
-      activeCheck = 'default-off-policy';
+      activeCheck = rolloutExpectation === 'hosted-pilot'
+        ? 'restricted-pilot-policy'
+        : 'default-off-policy';
       const rows = [];
-      for (const key of REL04_DARK_CONFIG_KEYS) {
+      const configKeys = rolloutExpectation === 'hosted-pilot'
+        ? REL04_PILOT_CONFIG_KEYS
+        : REL04_DARK_CONFIG_KEYS;
+      for (const key of configKeys) {
         const response = await requestJson(
           'GET /api/admin/system-config/:key',
           'GET',
@@ -907,11 +998,47 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
         }
         rows.push({ key, value: data.value });
       }
-      const policy = verifyAiMediaDarkPolicy(rows);
+      let policy;
+      if (rolloutExpectation === 'hosted-pilot') {
+        const sessionsBefore = await requestJson(
+          'GET /api/extension-device/sessions',
+          'GET',
+          '/api/extension-device/sessions',
+          { token: ownerToken },
+        );
+        sessionRowsBefore = exactArray(sessionsBefore.body?.data, 'DEVICE_SESSIONS');
+        if (sessionsBefore.body?.code !== 1) fail('DEVICE_SESSION_READ_FAILED');
+        const selectedSessions = hostedPilotExpectation.deviceSessionIds.map((id) => {
+          const matches = sessionRowsBefore.filter((session) => session?.id === id);
+          if (matches.length !== 1) fail('PILOT_DEVICE_SESSION_MISMATCH');
+          const session = exactObject(matches[0], 'PILOT_DEVICE_SESSION');
+          return {
+            id,
+            status: session.status,
+            ownerUserId: hostedPilotExpectation.ownerUserIds[0],
+            actorUserId: hostedPilotExpectation.ownerUserIds[0],
+            scopes: exactArray(session.scopes, 'PILOT_DEVICE_SCOPES'),
+            shopIds: exactArray(session.shopIds, 'PILOT_DEVICE_SHOPS'),
+          };
+        });
+        try {
+          policy = verifyAiMediaHostedPilotPolicy({
+            configRows: rows,
+            deviceSessions: selectedSessions,
+          }, hostedPilotExpectation);
+        } catch {
+          fail('RESTRICTED_PILOT_POLICY_INVALID');
+        }
+        rolloutPolicyEvidence = policy;
+      } else {
+        policy = verifyAiMediaDarkPolicy(rows);
+      }
       checks.push(checkResult(activeCheck, policy));
 
-      activeCheck = 'hosted-route-regression';
-      await verifyHostedRegression();
+      activeCheck = rolloutExpectation === 'hosted-pilot'
+        ? 'hosted-route-readiness'
+        : 'hosted-route-regression';
+      await verifyHostedState();
 
       activeCheck = 'publish-reconciliation-read';
       await verifyPublishReconciliation();
@@ -919,14 +1046,18 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       activeCheck = 'device-pairing-active-lifecycle';
       const deviceId = `rel04-canary-${idFactory()}`;
       canaryDeviceId = deviceId;
-      const sessionsBefore = await requestJson(
-        'GET /api/extension-device/sessions',
-        'GET',
-        '/api/extension-device/sessions',
-        { token: ownerToken },
-      );
-      const sessionRowsBefore = exactArray(sessionsBefore.body?.data, 'DEVICE_SESSIONS');
-      if (sessionsBefore.body?.code !== 1
+      let sessionsBeforeCode = 1;
+      if (sessionRowsBefore === null) {
+        const sessionsBefore = await requestJson(
+          'GET /api/extension-device/sessions',
+          'GET',
+          '/api/extension-device/sessions',
+          { token: ownerToken },
+        );
+        sessionsBeforeCode = sessionsBefore.body?.code;
+        sessionRowsBefore = exactArray(sessionsBefore.body?.data, 'DEVICE_SESSIONS');
+      }
+      if (sessionsBeforeCode !== 1
         || sessionRowsBefore.some((value) => value?.deviceId === deviceId)) {
         fail('CANARY_DEVICE_ID_NOT_UNIQUE');
       }
@@ -1138,9 +1269,12 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   await normalChecks();
   await cleanup();
   const passed = checks.every((check) => check.status === 'PASS');
+  const hostedPilot = rolloutExpectation === 'hosted-pilot';
   const summary = {
-    schemaVersion: 2,
-    kind: 'SS_ERP_REL04_DARK_CANARY',
+    schemaVersion: hostedPilot ? 3 : 2,
+    kind: hostedPilot
+      ? 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY'
+      : 'SS_ERP_REL04_DARK_CANARY',
     status: passed ? 'PASS' : 'FAIL',
     observedAt,
     bindings: {
@@ -1149,6 +1283,14 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       release: releaseBinding,
       extensionOrigin,
       shopIdHash: identityHash('SHOP', shopId),
+      ...(hostedPilot ? {
+        rollout: {
+          expectation: 'hosted-pilot',
+          policySha256: rolloutPolicyEvidence
+            ? sha256(Buffer.from(canonicalJson(rolloutPolicyEvidence), 'utf8'))
+            : null,
+        },
+      } : {}),
       publishReconciliation: publishReconciliation.mode === 'LIVE_ATTEMPT'
         ? {
             mode: publishReconciliation.mode,
@@ -1225,7 +1367,7 @@ async function main() {
   if (summary.status !== 'PASS') process.exitCode = 1;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   try {
     await main();
   } catch {

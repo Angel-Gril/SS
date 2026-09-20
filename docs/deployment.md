@@ -453,9 +453,15 @@ shop、device session、Provider origin 和 operations；`maxConcurrency` 必须
 `sandbox-pilot` 精确要求生成开启、接收和发布关闭；`ingest-pilot` 精确要求生成和接收开启、
 发布关闭；只有 `publish-pilot` 可以让三项都开启。任一其他组合必须失败关闭。
 
-`REL-04` 还必须从受保护的 token 文件运行 `pnpm canary:rel04:dark`。脚本首先离线验证目标区域、
-版本、release evidence SHA-256、Ed25519 签名及完整 VPS verifier 回执，随后验证 `/ready`、
-extension CORS、全部默认关闭配置、Hosted readiness 和 publisher capability，再创建
+`REL-04` 还必须从受保护的 token 文件运行 `pnpm canary:rel04:dark`。默认 `off` 模式生成候选绑定的
+v2 全暗态回执；已批准且正在运行的受限 hosted pilot 必须显式设置
+`REL04_AI_MEDIA_ROLLOUT_EXPECTATION=hosted-pilot` 和精确的
+`REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON`，生成 v3 受限 pilot 回执。v3 逐项重验 owner、shop、现有
+active device session、AI/source policy revision 与 allowed operations，且拒绝白名单外开启的
+FULL_EDIT/INPAINT、BYOK 或 Ozon publisher。禁止为了生成 v2 回执临时关闭 pilot。
+
+两种模式都先离线验证目标区域、版本、release evidence SHA-256、Ed25519 签名及完整 VPS verifier
+回执，随后验证 `/ready`、extension CORS、对应 rollout、Hosted readiness 和 publisher capability，再创建
 仅含 `byok:media:ingest` 的临时设备配对，验证 refresh 与 BYOK disabled-path，最后撤销会话。
 claim 响应丢失时会按唯一 `deviceId` 找回并撤销已提交会话；任何清理失败都会使 canary 失败。
 它不发送 Provider 请求、不执行 ERP 图片 ingest，也不调用 Ozon 写接口。
@@ -468,9 +474,11 @@ claim 响应丢失时会按唯一 `deviceId` 找回并撤销已提交会话；�
 原有回执不可覆盖；warning 数量保留在回执中，远端备份或高可用缺口不会因此消失。
 扩展子 verifier 的进度日志写入 stderr，stdout 保持单一 JSON，供完整 verifier 绑定候选摘要。
 
-新 canary 回执为 `schemaVersion: 2`，其 `bindings.release` 绑定同一候选及 VPS 回执摘要。
+全暗态 canary 回执为 `schemaVersion: 2 / SS_ERP_REL04_DARK_CANARY`；受限 pilot 为
+`schemaVersion: 3 / SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY`。二者的 `bindings.release` 都绑定
+同一候选及 VPS 回执摘要；v3 还用 `bindings.rollout.policySha256` 绑定 producer 实际验证的 pilot policy。
 VPS 验证必须在该候选签名之后开始，完成时间不晚于 canary 开始，且相距不超过 24 小时。
-新 website approval 的签署只接受 v2；已经签署的 v1 回执仍可用于原有官网批准链的验证。
+新 website approval 的签署接受候选绑定的 v2 或 v3；已经签署的 v1 回执仍可用于原有官网批准链的验证。
 生产构建、签名、部署/canary、官网批准和真实 pilot 的独立授权继续适用。
 
 当生产库已有目标部署开始后完成的 `SUBMITTED/SUCCEEDED` 发布记录时，显式提供 workflow、attempt
@@ -516,6 +524,9 @@ export REL04_EXPECTED_PUBLISH_CAPABILITY_REASON=master_off
 export REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION=master-off
 export REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED=true
 export REL04_CANARY_OUTPUT=/operator-private/rel04-dark-canary.json
+# 仅 COM 等已批准受限 hosted pilot 使用；CN 全暗态不设置这两项。
+export REL04_AI_MEDIA_ROLLOUT_EXPECTATION=hosted-pilot
+export REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON='<exact owner/shop/device/revision/operations JSON>'
 pnpm canary:rel04:dark
 ```
 

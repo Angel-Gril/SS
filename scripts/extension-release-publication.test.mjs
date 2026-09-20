@@ -348,6 +348,44 @@ function bindCandidate(value) {
   value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
 }
 
+function bindRestrictedPilotCandidate(value) {
+  bindCandidate(value);
+  const policy = {
+    expectation: 'hosted-pilot',
+    ownerUserIds: ['owner-pilot-01'],
+    shopIds: ['shop-pilot-01'],
+    deviceSessionIds: ['device-session-01', 'device-session-02'],
+    rolloutRevision: 15,
+    sourcePolicyRevision: 'pilot-source-revision-15',
+    allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+  };
+  value.darkCanary.schemaVersion = 3;
+  value.darkCanary.kind = 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY';
+  value.darkCanary.bindings.rollout = {
+    expectation: 'hosted-pilot',
+    policySha256: sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8')),
+  };
+  value.darkCanary.checks = value.darkCanary.checks.map((check) => {
+    if (check.id === 'default-off-policy') {
+      return { id: 'restricted-pilot-policy', status: 'PASS', evidence: policy };
+    }
+    if (check.id === 'hosted-route-regression') {
+      return { id: 'hosted-route-readiness', status: 'PASS', evidence: {
+        routeReachable: true,
+        providerDispatchMethodUsed: false,
+        suiteEnabled: true,
+        workflowEnabled: true,
+        webMediaEnabled: true,
+        ready: true,
+        reasonCode: 'READY',
+      } };
+    }
+    return check;
+  });
+  writeFileSync(value.darkCanaryPath, `${JSON.stringify(value.darkCanary, null, 2)}\n`);
+  value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
+}
+
 function runSigner(value, overrides = {}) {
   return spawnSync(process.execPath, [
     'scripts/sign-extension-release.mjs',
@@ -367,7 +405,7 @@ function runSigner(value, overrides = {}) {
   });
 }
 
-function signedFixture() {
+function signedFixture({ restrictedPilot = false } = {}) {
   const value = fixture();
   const result = runSigner(value);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -375,7 +413,8 @@ function signedFixture() {
   value.signatureBytes = readFileSync(value.signaturePath);
   value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
   assert.equal(value.signatureBytes.toString('utf8'), canonicalReleaseSignatureJson(value.signature));
-  bindCandidate(value);
+  if (restrictedPilot) bindRestrictedPilotCandidate(value);
+  else bindCandidate(value);
   const approvalResult = runWebsiteApprovalSigner(value);
   assert.equal(approvalResult.status, 0, `${approvalResult.stdout}\n${approvalResult.stderr}`);
   assert.doesNotMatch(`${approvalResult.stdout}\n${approvalResult.stderr}`, /BEGIN PRIVATE KEY|MC4CAQ/iu);
@@ -548,6 +587,16 @@ test('signs the immutable release, probes both exact website downloads, and veri
   assert.equal(verified.distributionOrigin, origin);
   assert.equal(verified.keyId, keyId);
   assert.equal(verified.websitePublicationApprovalSha256, sha256(value.approvalBytes));
+  assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
+});
+
+test('signs, probes, and verifies a restricted hosted pilot publication canary', async () => {
+  const value = signedFixture({ restrictedPilot: true });
+  const { receipt } = await completePublication(value);
+  assert.equal(receipt.darkCanarySha256, sha256(value.darkCanaryBytes));
+  const verified = verifyExtensionPublication(verificationInput(value));
+  assert.equal(verified.version, value.version);
+  assert.equal(verified.gitCommit, value.gitCommit);
   assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
 });
 

@@ -26,6 +26,11 @@ function snapshot(overrides = {}) {
       'feature_source_listing_web_media'].map((key) => ({ key, value: 'true' })),
     { key: 'feature_source_ozon_publisher_v2', value: 'false' },
     { key: 'feature_extension_byok_ai', value: 'false' },
+    { key: 'extension_byok_admin_policy', value: JSON.stringify({
+      contractVersion: 'extension-byok-admin-policy/v1', revision: 0, mode: 'off',
+      ownerUserIds: [], shopIds: [], deviceSessionIds: [], allowedOrigins: [],
+      allowedOperations: [], maxConcurrency: 1,
+    }) },
     { key: 'ai_media_workflow_v2_rollout_policy', value: JSON.stringify({ revision: 15, tenantIds: [owner], mode: 'allowlist' }) },
     { key: 'source_workflow_rollout_policy', value: JSON.stringify({ revision: 'pilot-16', features: sourceFeatures }) },
   ];
@@ -46,6 +51,11 @@ for (const [label, mutate] of [
   ['wrong owner', (value) => { value.configRows.find((row) => row.key === 'ai_media_workflow_v2_rollout_policy').value = JSON.stringify({ revision: 15, tenantIds: ['other'], mode: 'allowlist' }); }],
   ['wrong source revision', (value) => { value.configRows.find((row) => row.key === 'source_workflow_rollout_policy').value = JSON.stringify({ revision: 'pilot-old', features: {} }); }],
   ['enabled publisher', (value) => { value.configRows.find((row) => row.key === 'feature_source_ozon_publisher_v2').value = 'true'; }],
+  ['enabled BYOK policy', (value) => { value.configRows.find((row) => row.key === 'extension_byok_admin_policy').value = JSON.stringify({
+    contractVersion: 'extension-byok-admin-policy/v1', revision: 1, mode: 'sandbox-pilot',
+    ownerUserIds: [owner], shopIds: [shop], deviceSessionIds: devices,
+    allowedOrigins: ['https://provider.example.com'], allowedOperations: ['TEXT_TO_IMAGE'], maxConcurrency: 1,
+  }); }],
   ['revoked device', (value) => { value.deviceSessions[0].status = 'REVOKED'; }],
   ['extra scope', (value) => { value.deviceSessions[0].scopes.push('listing:publish'); }],
   ['wrong shop', (value) => { value.deviceSessions[1].shopIds = ['shop-2']; }],
@@ -56,3 +66,13 @@ for (const [label, mutate] of [
     assert.throws(() => verifyAiMediaHostedPilotPolicy(value, expected), /pilot|source|publisher|scope|shop|owner|revision/iu);
   });
 }
+
+test('rejects an enabled operation outside the explicit pilot allowlist', () => {
+  const value = snapshot();
+  value.configRows.find((row) => row.key === 'feature_ai_media_full_edit').value = 'true';
+  value.configRows.find((row) => row.key === 'feature_ai_media_inpaint').value = 'false';
+  assert.throws(() => verifyAiMediaHostedPilotPolicy(value, {
+    ...expected,
+    allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+  }), /operation|FULL_EDIT|allowlist/iu);
+});

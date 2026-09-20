@@ -22,15 +22,25 @@ import {
   sha256,
   websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
+import { normalizeAiMediaHostedPilotExpectation } from './verify-ai-media-pilot-policy.mjs';
 
 const MAX_DARK_CANARY_BYTES = 256 * 1024;
 const MAX_DARK_CANARY_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
-const REL04_CHECK_IDS = Object.freeze([
+const REL04_DARK_CHECK_IDS = Object.freeze([
   'deployment-and-publication-isolation',
   'default-off-policy',
   'hosted-route-regression',
+  'publish-reconciliation-read',
+  'device-pairing-active-lifecycle',
+  'byok-disabled-path',
+  'device-session-cleanup',
+]);
+const REL04_PILOT_CHECK_IDS = Object.freeze([
+  'deployment-and-publication-isolation',
+  'restricted-pilot-policy',
+  'hosted-route-readiness',
   'publish-reconciliation-read',
   'device-pairing-active-lifecycle',
   'byok-disabled-path',
@@ -276,6 +286,37 @@ function validateDarkPolicyEvidence(value) {
   }
 }
 
+function validateRestrictedPilotEvidence(value, rollout) {
+  const policy = exactKeys(value, [
+    'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
+    'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
+  ], 'REL-04 restricted pilot policy evidence');
+  let normalized;
+  try {
+    normalized = normalizeAiMediaHostedPilotExpectation({
+      ownerUserIds: policy.ownerUserIds,
+      shopIds: policy.shopIds,
+      deviceSessionIds: policy.deviceSessionIds,
+      rolloutRevision: policy.rolloutRevision,
+      sourcePolicyRevision: policy.sourcePolicyRevision,
+      allowedOperations: policy.allowedOperations,
+    });
+  } catch {
+    fail('REL-04 restricted pilot policy evidence is invalid');
+  }
+  if (policy.expectation !== 'hosted-pilot'
+    || normalized.ownerUserIds.length !== 1
+    || JSON.stringify(normalized.allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])) {
+    fail('REL-04 restricted pilot scope is invalid');
+  }
+  const binding = exactKeys(rollout, ['expectation', 'policySha256'], 'REL-04 rollout binding');
+  if (binding.expectation !== 'hosted-pilot') fail('REL-04 rollout expectation is invalid');
+  rel04Digest(binding.policySha256, 'REL-04 restricted pilot policy SHA-256');
+  if (binding.policySha256 !== sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8'))) {
+    fail('REL-04 restricted pilot policy digest is invalid');
+  }
+}
+
 function validateReconciliationBinding(value) {
   const binding = exactKeys(value, [
     'attemptIdHash',
@@ -364,25 +405,29 @@ export function validateRel04DarkCanarySummary(summary, input) {
     'bindings', 'checks', 'cleanup', 'kind', 'observedAt', 'requestAudit',
     'schemaVersion', 'status',
   ], 'REL-04 dark canary evidence');
+  const restrictedPilot = value.schemaVersion === 3;
   const bindings = exactKeys(value.bindings, [
     'apiOrigin', 'expectedGitCommit', 'extensionOrigin', 'publishReconciliation',
-    'shopIdHash', ...(value.schemaVersion === 2 ? ['release'] : []),
+    'shopIdHash', ...([2, 3].includes(value.schemaVersion) ? ['release'] : []),
+    ...(restrictedPilot ? ['rollout'] : []),
   ], 'REL-04 dark canary bindings');
   const reconciliation = validateReconciliationBinding(bindings.publishReconciliation);
   const observedAt = canonicalTimestamp(value.observedAt, 'REL-04 dark canary observedAt');
   rel04Digest(bindings.shopIdHash, 'REL-04 shop hash');
-  if (![1, 2].includes(value.schemaVersion)
-    || value.kind !== 'SS_ERP_REL04_DARK_CANARY'
+  if (![1, 2, 3].includes(value.schemaVersion)
+    || value.kind !== (restrictedPilot
+      ? 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY'
+      : 'SS_ERP_REL04_DARK_CANARY')
     || value.status !== 'PASS'
     || bindings.expectedGitCommit !== expectedGitCommit
     || bindings.apiOrigin !== expectedApiOrigin
     || !/^chrome-extension:\/\/[a-p]{32}$/u.test(bindings.extensionOrigin)) {
     fail('REL-04 dark canary identity or bindings are invalid');
   }
-  if (input.requireReleaseBinding && value.schemaVersion !== 2) {
-    fail('REL-04 v2 candidate-bound evidence is required for a new website approval');
+  if (input.requireReleaseBinding && ![2, 3].includes(value.schemaVersion)) {
+    fail('REL-04 v2 candidate-bound or v3 restricted-pilot evidence is required for a new website approval');
   }
-  if (value.schemaVersion === 2) {
+  if ([2, 3].includes(value.schemaVersion)) {
     let candidate;
     try {
       const expected = input.expectedCandidate || {};
@@ -402,7 +447,8 @@ export function validateRel04DarkCanarySummary(summary, input) {
     validateRel04ReleaseBinding(bindings.release, candidate, observedAt, releaseSignedAt);
   }
 
-  if (!Array.isArray(value.checks) || value.checks.length !== REL04_CHECK_IDS.length) {
+  const expectedCheckIds = restrictedPilot ? REL04_PILOT_CHECK_IDS : REL04_DARK_CHECK_IDS;
+  if (!Array.isArray(value.checks) || value.checks.length !== expectedCheckIds.length) {
     fail('REL-04 dark canary check set is incomplete');
   }
   const checks = value.checks.map((check, index) => exactKeys(
@@ -410,7 +456,7 @@ export function validateRel04DarkCanarySummary(summary, input) {
     ['evidence', 'id', 'status'],
     `REL-04 dark canary check ${index}`,
   ));
-  if (JSON.stringify(checks.map((check) => check.id)) !== JSON.stringify(REL04_CHECK_IDS)
+  if (JSON.stringify(checks.map((check) => check.id)) !== JSON.stringify(expectedCheckIds)
     || checks.some((check) => check.status !== 'PASS')) {
     fail('REL-04 dark canary check set is invalid');
   }
@@ -430,16 +476,29 @@ export function validateRel04DarkCanarySummary(summary, input) {
     fail('REL-04 deployment isolation evidence is invalid');
   }
   validateExistingPublication(deployment.existingPublication);
-  validateDarkPolicyEvidence(evidence['default-off-policy']);
-
-  const hosted = exactKeys(evidence['hosted-route-regression'], [
-    'providerDispatchMethodUsed', 'reasonCode', 'routeReachable', 'suiteEnabled',
-    'workflowEnabled',
-  ], 'REL-04 hosted regression evidence');
-  if (hosted.routeReachable !== true || hosted.providerDispatchMethodUsed !== false
-    || hosted.suiteEnabled !== false || hosted.workflowEnabled !== false
-    || hosted.reasonCode !== 'AI_MEDIA_SUITE_DISABLED') {
-    fail('REL-04 hosted regression evidence is invalid');
+  if (restrictedPilot) {
+    validateRestrictedPilotEvidence(evidence['restricted-pilot-policy'], bindings.rollout);
+    const hosted = exactKeys(evidence['hosted-route-readiness'], [
+      'providerDispatchMethodUsed', 'ready', 'reasonCode', 'routeReachable',
+      'suiteEnabled', 'webMediaEnabled', 'workflowEnabled',
+    ], 'REL-04 hosted readiness evidence');
+    if (hosted.routeReachable !== true || hosted.providerDispatchMethodUsed !== false
+      || hosted.suiteEnabled !== true || hosted.workflowEnabled !== true
+      || hosted.webMediaEnabled !== true || hosted.ready !== true
+      || hosted.reasonCode !== 'READY') {
+      fail('REL-04 hosted readiness evidence is invalid');
+    }
+  } else {
+    validateDarkPolicyEvidence(evidence['default-off-policy']);
+    const hosted = exactKeys(evidence['hosted-route-regression'], [
+      'providerDispatchMethodUsed', 'reasonCode', 'routeReachable', 'suiteEnabled',
+      'workflowEnabled',
+    ], 'REL-04 hosted regression evidence');
+    if (hosted.routeReachable !== true || hosted.providerDispatchMethodUsed !== false
+      || hosted.suiteEnabled !== false || hosted.workflowEnabled !== false
+      || hosted.reasonCode !== 'AI_MEDIA_SUITE_DISABLED') {
+      fail('REL-04 hosted regression evidence is invalid');
+    }
   }
   validateReconciliationEvidence(
     evidence['publish-reconciliation-read'],

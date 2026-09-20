@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 
-import { realpathSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
-
 const REQUIRED_FLAGS = Object.freeze([
   'feature_ai_media_workflow_v2',
   'feature_ai_media_suite',
@@ -78,7 +74,7 @@ function parsePolicy(rows, key) {
   }
 }
 
-function parseExpected(expected) {
+export function normalizeAiMediaHostedPilotExpectation(expected) {
   exactObject(expected, [
     'ownerUserIds',
     'shopIds',
@@ -116,7 +112,7 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
   if (!Array.isArray(snapshot.configRows) || !Array.isArray(snapshot.deviceSessions)) {
     fail('pilot snapshot requires configRows and deviceSessions arrays');
   }
-  const expected = parseExpected(rawExpected);
+  const expected = normalizeAiMediaHostedPilotExpectation(rawExpected);
   const values = new Map();
   for (const row of snapshot.configRows) {
     if (!row || typeof row.key !== 'string' || typeof row.value !== 'string' || values.has(row.key)) {
@@ -127,14 +123,31 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
   for (const key of REQUIRED_FLAGS) {
     if (values.get(key)?.trim() !== 'true') fail(`${key} must be true for hosted pilot`);
   }
-  for (const operation of expected.allowedOperations) {
-    const key = OPERATION_FLAGS[operation];
-    if (key && values.get(key)?.trim() !== 'true') {
-      fail(`${key} must be true for the explicitly allowed ${operation} operation`);
+  for (const [operation, key] of Object.entries(OPERATION_FLAGS)) {
+    const enabled = values.get(key)?.trim() === 'true';
+    if (expected.allowedOperations.includes(operation)) {
+      if (!enabled) fail(`${key} must be true for the explicitly allowed ${operation} operation`);
+    } else if (enabled) {
+      fail(`${key} must remain false outside the explicit pilot operation allowlist`);
     }
   }
   for (const key of FORBIDDEN_FLAGS) {
     if (values.has(key) && values.get(key)?.trim() === 'true') fail(`${key} must remain false for hosted pilot`);
+  }
+  const byokPolicyRow = snapshot.configRows.find((row) => row.key === 'extension_byok_admin_policy');
+  if (byokPolicyRow) {
+    const byokPolicy = parsePolicy(snapshot.configRows, 'extension_byok_admin_policy');
+    exactObject(byokPolicy, [
+      'contractVersion', 'revision', 'mode', 'ownerUserIds', 'shopIds',
+      'deviceSessionIds', 'allowedOrigins', 'allowedOperations', 'maxConcurrency',
+    ], 'extension_byok_admin_policy');
+    if (byokPolicy.contractVersion !== 'extension-byok-admin-policy/v1'
+      || !Number.isSafeInteger(byokPolicy.revision) || byokPolicy.revision < 0
+      || byokPolicy.mode !== 'off' || byokPolicy.maxConcurrency !== 1
+      || ['ownerUserIds', 'shopIds', 'deviceSessionIds', 'allowedOrigins', 'allowedOperations']
+        .some((key) => !Array.isArray(byokPolicy[key]) || byokPolicy[key].length !== 0)) {
+      fail('extension_byok_admin_policy must remain off for hosted pilot');
+    }
   }
 
   const aiPolicy = parsePolicy(snapshot.configRows, 'ai_media_workflow_v2_rollout_policy');
@@ -191,8 +204,7 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
   };
 }
 
-if (process.argv[1]
-  && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))) {
+if (import.meta.main) {
   try {
     if (process.argv.length !== 4) fail('usage: verify-ai-media-pilot-policy.mjs <snapshot-json> <expectation-json>');
     const result = verifyAiMediaHostedPilotPolicy(JSON.parse(process.argv[2]), JSON.parse(process.argv[3]));
