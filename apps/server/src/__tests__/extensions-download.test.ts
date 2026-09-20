@@ -202,7 +202,7 @@ async function publishedFixture(input: {
   root: string;
   buildRoot: string;
   version?: string;
-  canaryVersion?: 1 | 2;
+  canaryVersion?: 1 | 2 | 3;
   mutateApproval?: (value: Record<string, unknown>) => void;
   mutateDarkCanary?: (value: Record<string, unknown>) => void;
 }) {
@@ -265,7 +265,7 @@ async function publishedFixture(input: {
   const releaseSignaturePath = path.join(input.root, signatureFilename);
   await writeFile(releaseSignaturePath, releaseSignatureBytes);
 
-  const darkCanary = {
+  const darkCanary: any = {
     schemaVersion: input.canaryVersion || 1,
     kind: 'SS_ERP_REL04_DARK_CANARY',
     status: 'PASS',
@@ -275,7 +275,7 @@ async function publishedFixture(input: {
       expectedGitCommit: gitCommit,
       extensionOrigin: `chrome-extension://${'a'.repeat(32)}`,
       shopIdHash: 'c'.repeat(64),
-      ...(input.canaryVersion === 2 ? {
+      ...([2, 3].includes(input.canaryVersion || 0) ? {
         release: {
           candidate: {
             gitCommit, apiOrigin: 'https://api.example.com', region: 'COM', version,
@@ -414,6 +414,40 @@ async function publishedFixture(input: {
     },
     cleanup: { completed: true, errorCode: null, required: true },
   };
+  if (input.canaryVersion === 3) {
+    const policy = {
+      expectation: 'hosted-pilot',
+      ownerUserIds: ['owner-pilot-01'],
+      shopIds: ['shop-pilot-01'],
+      deviceSessionIds: ['device-session-01', 'device-session-02'],
+      rolloutRevision: 15,
+      sourcePolicyRevision: 'pilot-source-revision-15',
+      allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+    };
+    darkCanary.schemaVersion = 3;
+    darkCanary.kind = 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY';
+    darkCanary.bindings.rollout = {
+      expectation: 'hosted-pilot',
+      policySha256: sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8')),
+    };
+    darkCanary.checks = darkCanary.checks.map((check: any) => {
+      if (check.id === 'default-off-policy') {
+        return { id: 'restricted-pilot-policy', status: 'PASS', evidence: policy };
+      }
+      if (check.id === 'hosted-route-regression') {
+        return { id: 'hosted-route-readiness', status: 'PASS', evidence: {
+          routeReachable: true,
+          providerDispatchMethodUsed: false,
+          suiteEnabled: true,
+          workflowEnabled: true,
+          webMediaEnabled: true,
+          ready: true,
+          reasonCode: 'READY',
+        } };
+      }
+      return check;
+    });
+  }
   input.mutateDarkCanary?.(darkCanary);
   const darkCanaryBytes = Buffer.from(canonical(darkCanary), 'utf8');
   const darkCanaryPath = path.join(input.root, darkCanaryFilename);
@@ -595,6 +629,26 @@ describe('extensionDownloadRoutes', () => {
     });
     expect(cloud.statusCode).toBe(200);
     expect(cloud.rawPayload.equals(published.release.cloudBytes)).toBe(true);
+    await app.close();
+  });
+
+  it('serves a signed v3 restricted hosted-pilot bundle with its exact allowlist', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3 });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM',
+      trustedOwnerUid: null,
+    })).resolves.toMatchObject({ approvalSha256: published.approvalSha256 });
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    const latest = await app.inject({ method: 'GET', url: '/latest' });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.json().data.publicationApprovalSha256).toBe(published.approvalSha256);
     await app.close();
   });
 

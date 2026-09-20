@@ -34,6 +34,15 @@ const REL04_CHECK_IDS = [
   'byok-disabled-path',
   'device-session-cleanup',
 ] as const;
+const REL04_PILOT_CHECK_IDS = [
+  'deployment-and-publication-isolation',
+  'restricted-pilot-policy',
+  'hosted-route-readiness',
+  'publish-reconciliation-read',
+  'device-pairing-active-lifecycle',
+  'byok-disabled-path',
+  'device-session-cleanup',
+] as const;
 const REL04_REQUIRED_REQUEST_ROUTES = [
   'GET /ready',
   'GET /api/extensions/latest',
@@ -438,6 +447,58 @@ function rel04Evidence(checks: Array<Record<string, unknown>>, id: string) {
   ), `REL-04 ${id} evidence`);
 }
 
+function identifierList(value: unknown, label: string) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 50) {
+    fail(`${label} is invalid`);
+  }
+  const result = value.map((item) => {
+    if (typeof item !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(item)) {
+      fail(`${label} is invalid`);
+    }
+    return item;
+  });
+  if (new Set(result).size !== result.length) fail(`${label} contains duplicates`);
+  return result;
+}
+
+function validateRestrictedPilotPolicy(value: unknown, rollout: unknown) {
+  const policy = exactObject(value, [
+    'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
+    'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
+  ], 'REL-04 restricted pilot policy evidence');
+  const ownerUserIds = identifierList(policy.ownerUserIds, 'REL-04 pilot ownerUserIds');
+  const shopIds = identifierList(policy.shopIds, 'REL-04 pilot shopIds');
+  const deviceSessionIds = identifierList(policy.deviceSessionIds, 'REL-04 pilot deviceSessionIds');
+  const allowedOperations = policy.allowedOperations;
+  if (policy.expectation !== 'hosted-pilot'
+    || !Array.isArray(allowedOperations)
+    || JSON.stringify(allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
+    || !Number.isSafeInteger(policy.rolloutRevision)
+    || Number(policy.rolloutRevision) < 0
+    || typeof policy.sourcePolicyRevision !== 'string'
+    || policy.sourcePolicyRevision.trim() !== policy.sourcePolicyRevision
+    || policy.sourcePolicyRevision.length < 1
+    || policy.sourcePolicyRevision.length > 200) {
+    fail('REL-04 restricted pilot scope is invalid');
+  }
+  const binding = exactObject(rollout, ['expectation', 'policySha256'], 'REL-04 rollout binding');
+  if (binding.expectation !== 'hosted-pilot') fail('REL-04 rollout expectation is invalid');
+  rel04Digest(binding.policySha256, 'REL-04 restricted pilot policy SHA-256');
+  const policyBytes = Buffer.from(`${JSON.stringify({
+    expectation: policy.expectation,
+    ownerUserIds,
+    shopIds,
+    deviceSessionIds,
+    rolloutRevision: policy.rolloutRevision,
+    sourcePolicyRevision: policy.sourcePolicyRevision,
+    allowedOperations,
+  }, null, 2)}\n`, 'utf8');
+  if (binding.policySha256 !== sha256(policyBytes)) {
+    fail('REL-04 restricted pilot policy digest is invalid');
+  }
+  return { ownerUserIds, shopIds, deviceSessionIds, allowedOperations };
+}
+
 function validateCanary(
   value: unknown,
   approval: WebsitePublicationApproval,
@@ -447,22 +508,27 @@ function validateCanary(
   const summary = exactObject(value, [
     'bindings', 'checks', 'cleanup', 'kind', 'observedAt', 'requestAudit', 'schemaVersion', 'status',
   ], 'REL-04 dark canary');
+  const restrictedPilot = summary.schemaVersion === 3;
   const bindings = exactObject(summary.bindings, [
     'apiOrigin', 'expectedGitCommit', 'extensionOrigin', 'publishReconciliation', 'shopIdHash',
-    ...(summary.schemaVersion === 2 ? ['release'] : []),
+    ...([2, 3].includes(Number(summary.schemaVersion)) ? ['release'] : []),
+    ...(restrictedPilot ? ['rollout'] : []),
   ], 'REL-04 dark canary bindings');
   const reconciliation = exactObject(bindings.publishReconciliation, [
     'attemptIdHash', 'mode', 'notBefore', 'regressionEvidenceSha256', 'workflowIdHash',
   ], 'REL-04 publish reconciliation binding');
   rel04Digest(bindings.shopIdHash, 'REL-04 shop hash');
-  if ((summary.schemaVersion !== 1 && summary.schemaVersion !== 2) || summary.kind !== 'SS_ERP_REL04_DARK_CANARY'
+  if (![1, 2, 3].includes(Number(summary.schemaVersion))
+    || summary.kind !== (restrictedPilot
+      ? 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY'
+      : 'SS_ERP_REL04_DARK_CANARY')
     || summary.status !== 'PASS' || !bindings || bindings.expectedGitCommit !== approval.gitCommit
     || bindings.apiOrigin !== apiOrigin
     || typeof bindings.extensionOrigin !== 'string'
     || !/^chrome-extension:\/\/[a-p]{32}$/u.test(bindings.extensionOrigin)) {
     fail('REL-04 dark canary does not authorize this website publication');
   }
-  if (summary.schemaVersion === 2) {
+  if ([2, 3].includes(Number(summary.schemaVersion))) {
     validateRel04ReleaseBinding(
       bindings.release,
       { ...approval, apiOrigin },
@@ -487,7 +553,8 @@ function validateCanary(
     fail('REL-04 reconciliation mode is invalid');
   }
 
-  if (!Array.isArray(summary.checks) || summary.checks.length !== REL04_CHECK_IDS.length) {
+  const expectedCheckIds = restrictedPilot ? REL04_PILOT_CHECK_IDS : REL04_CHECK_IDS;
+  if (!Array.isArray(summary.checks) || summary.checks.length !== expectedCheckIds.length) {
     fail('REL-04 dark canary check set is incomplete');
   }
   const checks = summary.checks.map((check, index) => exactObject(
@@ -495,7 +562,7 @@ function validateCanary(
     ['evidence', 'id', 'status'],
     `REL-04 dark canary check ${index}`,
   ));
-  if (JSON.stringify(checks.map((check) => check.id)) !== JSON.stringify(REL04_CHECK_IDS)
+  if (JSON.stringify(checks.map((check) => check.id)) !== JSON.stringify(expectedCheckIds)
     || checks.some((check) => check.status !== 'PASS')) {
     fail('REL-04 dark canary check set is invalid');
   }
@@ -527,55 +594,73 @@ function validateCanary(
     }
   }
 
-  const policy = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[1]), [
-    'extensionByok', 'extensionWorkbench', 'fullEdit', 'imageToImage', 'imageTranslation',
-    'inpaint', 'legacyGeneration', 'master', 'ozonPublisher', 'policy', 'suite', 'webMedia',
-  ], 'REL-04 default-off policy evidence');
-  for (const key of [
-    'extensionWorkbench', 'fullEdit', 'imageToImage', 'inpaint',
-    'master', 'ozonPublisher', 'suite', 'webMedia',
-  ]) {
-    if (policy[key] !== 'absent' && policy[key] !== 'false') {
-      fail(`REL-04 default-off policy ${key} is invalid`);
+  if (restrictedPilot) {
+    validateRestrictedPilotPolicy(
+      rel04Evidence(checks, REL04_PILOT_CHECK_IDS[1]),
+      bindings.rollout,
+    );
+    const hostedReady = exactObject(rel04Evidence(checks, REL04_PILOT_CHECK_IDS[2]), [
+      'providerDispatchMethodUsed', 'ready', 'reasonCode', 'routeReachable',
+      'suiteEnabled', 'webMediaEnabled', 'workflowEnabled',
+    ], 'REL-04 hosted readiness evidence');
+    if (hostedReady.routeReachable !== true || hostedReady.providerDispatchMethodUsed !== false
+      || hostedReady.suiteEnabled !== true || hostedReady.workflowEnabled !== true
+      || hostedReady.webMediaEnabled !== true || hostedReady.ready !== true
+      || hostedReady.reasonCode !== 'READY') {
+      fail('REL-04 hosted readiness evidence is invalid');
     }
   }
-  const extensionByok = exactObject(policy.extensionByok, [
-    'expectation', 'generation', 'hostedAi', 'ingest', 'policy', 'publish',
-  ], 'REL-04 extension BYOK policy');
-  if (extensionByok.expectation !== 'off'
-    || !['false', 'absent(default:false)'].includes(String(extensionByok.hostedAi))
-    || !['false', 'absent(default:false)'].includes(String(extensionByok.generation))
-    || !['false', 'absent(default:false)'].includes(String(extensionByok.ingest))
-    || !['false', 'absent(default:false)'].includes(String(extensionByok.publish))
-    || ![
-      'absent(default:off)',
-      'extension-byok-admin-policy/v1:revision:0,mode:off',
-    ].includes(String(extensionByok.policy))) {
-    fail('REL-04 extension BYOK policy is not dark');
-  }
-  if (typeof policy.legacyGeneration !== 'string'
-    || !policy.legacyGeneration.endsWith('/disabled')
-    || typeof policy.imageTranslation !== 'string'
-    || !policy.imageTranslation.endsWith('/disabled')
-    || typeof policy.policy !== 'string'
-    || (policy.policy !== 'absent'
-      && !/^revision:[0-9]+,tenantIds:0$/u.test(policy.policy))) {
-    fail('REL-04 default-off Provider or rollout policy is invalid');
-  }
 
-  const hosted = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[2]), [
-    'providerDispatchMethodUsed', 'reasonCode', 'routeReachable', 'suiteEnabled', 'workflowEnabled',
-  ], 'REL-04 hosted regression evidence');
-  if (hosted.routeReachable !== true || hosted.providerDispatchMethodUsed !== false
-    || hosted.suiteEnabled !== false || hosted.workflowEnabled !== false
-    || hosted.reasonCode !== 'AI_MEDIA_SUITE_DISABLED') {
-    fail('REL-04 hosted regression evidence is invalid');
+  if (!restrictedPilot) {
+    const policy = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[1]), [
+      'extensionByok', 'extensionWorkbench', 'fullEdit', 'imageToImage', 'imageTranslation',
+      'inpaint', 'legacyGeneration', 'master', 'ozonPublisher', 'policy', 'suite', 'webMedia',
+    ], 'REL-04 default-off policy evidence');
+    for (const key of [
+      'extensionWorkbench', 'fullEdit', 'imageToImage', 'inpaint',
+      'master', 'ozonPublisher', 'suite', 'webMedia',
+    ]) {
+      if (policy[key] !== 'absent' && policy[key] !== 'false') {
+        fail(`REL-04 default-off policy ${key} is invalid`);
+      }
+    }
+    const extensionByok = exactObject(policy.extensionByok, [
+      'expectation', 'generation', 'hostedAi', 'ingest', 'policy', 'publish',
+    ], 'REL-04 extension BYOK policy');
+    if (extensionByok.expectation !== 'off'
+      || !['false', 'absent(default:false)'].includes(String(extensionByok.hostedAi))
+      || !['false', 'absent(default:false)'].includes(String(extensionByok.generation))
+      || !['false', 'absent(default:false)'].includes(String(extensionByok.ingest))
+      || !['false', 'absent(default:false)'].includes(String(extensionByok.publish))
+      || ![
+        'absent(default:off)',
+        'extension-byok-admin-policy/v1:revision:0,mode:off',
+      ].includes(String(extensionByok.policy))) {
+      fail('REL-04 extension BYOK policy is not dark');
+    }
+    if (typeof policy.legacyGeneration !== 'string'
+      || !policy.legacyGeneration.endsWith('/disabled')
+      || typeof policy.imageTranslation !== 'string'
+      || !policy.imageTranslation.endsWith('/disabled')
+      || typeof policy.policy !== 'string'
+      || (policy.policy !== 'absent'
+        && !/^revision:[0-9]+,tenantIds:0$/u.test(policy.policy))) {
+      fail('REL-04 default-off Provider or rollout policy is invalid');
+    }
+    const hosted = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[2]), [
+      'providerDispatchMethodUsed', 'reasonCode', 'routeReachable', 'suiteEnabled', 'workflowEnabled',
+    ], 'REL-04 hosted regression evidence');
+    if (hosted.routeReachable !== true || hosted.providerDispatchMethodUsed !== false
+      || hosted.suiteEnabled !== false || hosted.workflowEnabled !== false
+      || hosted.reasonCode !== 'AI_MEDIA_SUITE_DISABLED') {
+      fail('REL-04 hosted regression evidence is invalid');
+    }
   }
 
   const observedAt = timestamp(summary.observedAt, 'REL-04 dark canary observedAt');
   if (reconciliation.mode === 'LIVE_ATTEMPT') {
     const reconciliationEvidence = exactObject(
-      rel04Evidence(checks, REL04_CHECK_IDS[3]),
+      rel04Evidence(checks, restrictedPilot ? REL04_PILOT_CHECK_IDS[3] : REL04_CHECK_IDS[3]),
       [
         'attemptIdHash', 'completedAt', 'lastReconciledAt', 'mode', 'notBefore',
         'ozonMutationRequestSentByCanary', 'reconcileAttemptCount', 'reconciliationState',
@@ -609,7 +694,7 @@ function validateCanary(
     }
   } else {
     const reconciliationEvidence = exactObject(
-      rel04Evidence(checks, REL04_CHECK_IDS[3]),
+      rel04Evidence(checks, restrictedPilot ? REL04_PILOT_CHECK_IDS[3] : REL04_CHECK_IDS[3]),
       [
         'capabilityEnabled', 'capabilityLegacyAllowed', 'capabilityReason',
         'capabilityRevision', 'liveAttemptRead', 'mode', 'ozonMutationRequestSentByCanary',
@@ -638,7 +723,8 @@ function validateCanary(
     }
   }
 
-  const lifecycle = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[4]), [
+  const lifecycle = exactObject(rel04Evidence(checks, restrictedPilot
+    ? REL04_PILOT_CHECK_IDS[4] : REL04_CHECK_IDS[4]), [
     'authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'refreshRotated', 'sessionIdHash',
   ], 'REL-04 device lifecycle evidence');
   for (const key of ['authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'sessionIdHash']) {
@@ -646,7 +732,8 @@ function validateCanary(
   }
   if (lifecycle.refreshRotated !== true) fail('REL-04 device refresh did not rotate');
 
-  const disabled = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[5]), [
+  const disabled = exactObject(rel04Evidence(checks, restrictedPilot
+    ? REL04_PILOT_CHECK_IDS[5] : REL04_CHECK_IDS[5]), [
     'erpIngestRequestSentByCanary', 'errorCode', 'providerRequestSentByCanary',
     'rejectedBeforeExecutionIntent', 'statusCode',
   ], 'REL-04 BYOK disabled evidence');
@@ -657,7 +744,8 @@ function validateCanary(
     fail('REL-04 BYOK disabled evidence is invalid');
   }
 
-  const cleanupCheck = exactObject(rel04Evidence(checks, REL04_CHECK_IDS[6]), [
+  const cleanupCheck = exactObject(rel04Evidence(checks, restrictedPilot
+    ? REL04_PILOT_CHECK_IDS[6] : REL04_CHECK_IDS[6]), [
     'action', 'revokedTokenRejected', 'sessionIdHash',
   ], 'REL-04 device cleanup evidence');
   rel04Digest(cleanupCheck.sessionIdHash, 'REL-04 cleanup session hash');
