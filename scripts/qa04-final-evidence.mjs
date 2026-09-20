@@ -186,14 +186,14 @@ export function jpegEvidence(reader, reference, code) {
   const bytes = reader.read(reference, 32 * 1024 * 1024);
   try {
     requireThat(bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8, code);
-    let cursor = 2, width, height, frameSeen = false, scanSeen = false, ended = false;
+    let cursor = 2, width, height, frameSeen = false, scanCount = 0, ended = false;
     while (cursor < bytes.length) {
       requireThat(bytes[cursor] === 0xff, code);
       while (cursor < bytes.length && bytes[cursor] === 0xff) cursor += 1;
       requireThat(cursor < bytes.length, code);
       const marker = bytes[cursor++];
       if (marker === 0xd9) {
-        requireThat(scanSeen && cursor === bytes.length, code);
+        requireThat(scanCount > 0 && cursor === bytes.length, code);
         ended = true;
         break;
       }
@@ -202,7 +202,7 @@ export function jpegEvidence(reader, reference, code) {
       const length = bytes.readUInt16BE(cursor);
       requireThat(length >= 2 && cursor + length <= bytes.length, code);
       const start = cursor + 2, end = cursor + length;
-      if (marker === 0xc0) {
+      if (marker === 0xc0 || marker === 0xc2) {
         requireThat(!frameSeen && length >= 11 && bytes[start] === 8, code);
         height = bytes.readUInt16BE(start + 1); width = bytes.readUInt16BE(start + 3);
         const components = bytes[start + 5];
@@ -212,10 +212,10 @@ export function jpegEvidence(reader, reference, code) {
       } else if ((marker >= 0xc1 && marker <= 0xcf) && ![0xc4, 0xc8, 0xcc].includes(marker)) {
         fail(code);
       } else if (marker === 0xda) {
-        requireThat(frameSeen && !scanSeen && length >= 8, code);
+        requireThat(frameSeen && scanCount < 64 && length >= 8, code);
         const components = bytes[start];
         requireThat((components === 1 || components === 3) && length === 6 + components * 2, code);
-        scanSeen = true;
+        scanCount += 1;
         cursor = end;
         let scanEnded = false;
         while (cursor < bytes.length) {
@@ -239,7 +239,7 @@ export function jpegEvidence(reader, reference, code) {
       }
       cursor = end;
     }
-    requireThat(frameSeen && scanSeen && ended && width && height, code);
+    requireThat(frameSeen && scanCount > 0 && ended && width && height, code);
     return { bytes: bytes.length, sha256: sha256(bytes), width, height, mimeType: 'image/jpeg' };
   } catch (error) {
     if (error.code?.startsWith('QA04_')) throw error;

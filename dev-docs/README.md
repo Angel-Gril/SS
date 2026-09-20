@@ -4,7 +4,7 @@
 
 - `68846923 / 1.0.354` 已在独立 MV3 专用 profile 完成新的两槽真实套图：suite `cmu9bfp8r000o5ohoh4kp9rwe` 为 `SUCCEEDED`、revision 9、2/2 attempt 1；两张 900x1200 PNG 经安全预览后审核通过，审核 mutation 后 UI 两次均立即显示“ERP 托管权威状态已更新”，关闭了原 authority refresh 假失败问题。
 - 新 DOTH QA 草稿 `draft-269de912-c844-41d6-9f52-1bf66a282817` 由 r1/v1 原子写入为 r2/v2，新增 SKU hero 与 PRODUCT gallery 两条 assignment；完全相同的 transport request replay 返回 `replayed=true`，assignment 仍为 2。两笔 reservation/settlement 均为 `SETTLED/CHARGE` CNY 0.14，总 CNY 0.28；Ozon publish attempt 为 0。
-- 目标提交完整 offline 已通过：server `6319 passed / 324 skipped`、AI Media PostgreSQL `196/196`、升级回放和三种扩展验证通过。实际生产证据同时确认 1688 原图为 JPEG、BullMQ completed job 按 `REMOVE_ON_COMPLETE` 清理、COM restricted pilot 前后配置不变；QA04 suite v2 producer 已以 RED -> GREEN 覆盖这些现行合同及 extension-only execution bridge，47 项回归通过。
+- 目标提交完整 offline 已通过：server `6319 passed / 324 skipped`、AI Media PostgreSQL `196/196`、升级回放和三种扩展验证通过。实际生产证据同时确认 1688 原图为 baseline JPEG、ERP normalized reference 为 progressive JPEG、BullMQ completed job 按 `REMOVE_ON_COMPLETE` 清理、COM restricted pilot 前后配置不变；QA04 suite v2 producer 已以 RED -> GREEN 覆盖这些现行合同及 extension-only execution bridge，48 项回归通过。
 - 官网 pointer 仍为 `1.0.332`。下一步是提交 producer 改动，以新提交重跑 fresh offline，重建/签名/部署双区 `1.0.354` 候选，再生成正式 QA04、区域 canary/approval 并通过 CAS 发布；不得复用 `68846923` 候选冒充新 commit。
 
 ## 2026-09-20 独立 MV3 全链与双区 1.0.353 已完成

@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { deflateSync } from 'node:zlib';
 import { QA04_OFFLINE_STEPS } from './qa04-offline-gate.mjs';
+import { evidenceReader, imageEvidence } from './qa04-final-evidence.mjs';
 import { suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
 
 let subject = {};
@@ -60,6 +61,20 @@ function jpeg(width, height) {
   const scan = Buffer.from([3, 1, 0, 2, 0, 3, 0, 0, 63, 0]);
   return Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xe0, app), segment(0xdb, quantization),
     segment(0xc0, frame), segment(0xda, scan), Buffer.from([0x01, 0xff, 0x00, 0x02, 0xff, 0xd9])]);
+}
+
+function progressiveJpeg(width, height) {
+  const segment = (marker, payload) => {
+    const length = Buffer.alloc(2); length.writeUInt16BE(payload.length + 2);
+    return Buffer.concat([Buffer.from([0xff, marker]), length, payload]);
+  };
+  const quantization = Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)]);
+  const frame = Buffer.alloc(15); frame[0] = 8; frame.writeUInt16BE(height, 1); frame.writeUInt16BE(width, 3); frame[5] = 3;
+  frame.set([1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0], 6);
+  const scan = Buffer.from([3, 1, 0, 2, 0, 3, 0, 0, 63, 0]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), segment(0xdb, quantization), segment(0xc2, frame),
+    segment(0xc4, Buffer.from([0, 0])), segment(0xda, scan), Buffer.from([1, 0xff, 0]),
+    segment(0xc4, Buffer.from([0, 0])), segment(0xda, scan), Buffer.from([2, 0xff, 0xd9])]);
 }
 
 function fixture(t) {
@@ -403,16 +418,17 @@ function historicalRestrictedSuiteFixture(t) {
       .replace(executionGitCommit, targetGitCommit).replace('459 pass(es)', '476 pass(es)')),
   };
   const source = f.put('suite-source.jpg', jpeg(1024, 1024));
+  const reference = source;
   f.change(manifest.workbench, value => { value.sourceSha256 = source.sha256; });
-  const updateDatabaseSource = reference => f.change(reference, value => {
+  const updateDatabaseSource = databaseReference => f.change(databaseReference, value => {
     const lineage = value.suiteReferences[0];
-    Object.assign(lineage, { assetSha256: source.sha256, rawSourceSha256: source.sha256,
-      sizeBytes: readFileSync(source.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
+    Object.assign(lineage, { assetSha256: reference.sha256, rawSourceSha256: source.sha256,
+      sizeBytes: readFileSync(reference.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
     for (const row of value.rows) {
-      Object.assign(row.job.frozenInputs[0], { sha256: source.sha256, sizeBytes: readFileSync(source.path).length });
-      row.workflow.inputs[0].assetSha256 = source.sha256;
-      Object.assign(row.workflow.inputAssets[0], { sourceSha256: source.sha256, sha256: source.sha256,
-        sizeBytes: readFileSync(source.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
+      Object.assign(row.job.frozenInputs[0], { sha256: reference.sha256, sizeBytes: readFileSync(reference.path).length });
+      row.workflow.inputs[0].assetSha256 = reference.sha256;
+      Object.assign(row.workflow.inputAssets[0], { sourceSha256: source.sha256, sha256: reference.sha256,
+        sizeBytes: readFileSync(reference.path).length, width: 1024, height: 1024, mimeType: 'image/jpeg' });
     }
   });
   updateDatabaseSource(f.input.normalErp.generated);
@@ -444,7 +460,7 @@ function historicalRestrictedSuiteFixture(t) {
   manifest.executionGitCommit = executionGitCommit;
   manifest.executionOfflineQa04 = executionOfflineQa04;
   manifest.source = source;
-  manifest.referenceImage = source;
+  manifest.referenceImage = reference;
   f.input.normalErp.acceptance = f.put('suite-v2-inputs.json', manifest);
   f.save();
   return { ...f, executionGitCommit, executionOfflineQa04, targetGitCommit };
@@ -889,7 +905,16 @@ test('derives current-source suite acceptance from two original jobs, PNGs, revi
 });
 
 test('suite v2 bridges a JPEG source execution with removed completed queue jobs and unchanged restricted pilot', t => {
-  const f = historicalRestrictedSuiteFixture(t), result = f.verify(), proof = result.report.provenance.normalErp;
+  const f = historicalRestrictedSuiteFixture(t), manifest = f.get(f.input.normalErp.acceptance);
+  const database = f.get(f.input.normalErp.generated), binding = f.get(manifest.workbench), ui = f.get(manifest.generatedUi);
+  const source = imageEvidence(evidenceReader(), manifest.source, 'QA04_SUITE_INVALID');
+  const reference = imageEvidence(evidenceReader(), manifest.referenceImage, 'QA04_SUITE_INVALID');
+  const lineage = database.suiteReferences[0];
+  assert.equal(lineage.suiteId, ui.suiteId); assert.equal(hash(lineage.ownerUserId), binding.ownerSha256);
+  assert.equal(lineage.candidateId, binding.sourceMediaKey); assert.equal(lineage.assetSha256, reference.sha256);
+  assert.equal(lineage.rawSourceSha256, source.sha256); assert.equal(lineage.sizeBytes, reference.bytes);
+  assert.equal(lineage.width, reference.width); assert.equal(lineage.height, reference.height); assert.equal(lineage.mimeType, reference.mimeType);
+  const result = f.verify(), proof = result.report.provenance.normalErp;
   assert.equal(result.report.decision, 'PASS');
   assert.equal(proof.executionCommit, f.executionGitCommit);
   assert.equal(proof.sourceBridge.kind, 'IDENTICAL_ERP_SOURCE_AND_DEPENDENCIES');
@@ -901,6 +926,17 @@ test('suite v2 bridges a JPEG source execution with removed completed queue jobs
     logSha256: f.executionOfflineQa04.log.sha256,
     startedAt: '2026-09-16T10:00:00.000Z',
     completedAt: '2026-09-16T10:20:00.000Z',
+  });
+});
+
+test('bounded image evidence parses a single-frame progressive JPEG with multiple scans', t => {
+  const f = fixture(t), reference = f.put('progressive-source.jpg', progressiveJpeg(1080, 1080));
+  assert.deepEqual(imageEvidence(evidenceReader(), reference, 'QA04_SUITE_INVALID'), {
+    bytes: readFileSync(reference.path).length,
+    sha256: reference.sha256,
+    width: 1080,
+    height: 1080,
+    mimeType: 'image/jpeg',
   });
 });
 
