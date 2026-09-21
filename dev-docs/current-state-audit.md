@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-21 `3fc4eb91` 已推送并完成 COM/CN 部署
+
+- 当前源码、COM/CN current 均为 `3fc4eb91f409f665b7a725cf9cbb1093dcfc5010 / 1.0.355`。COM 受限 hosted pilot 精确绑定 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `90238535-db06-4ce1-937a-854550c4d7c8`，只允许 `IMAGE_TO_IMAGE/SUITE`；CN 为 direct-origin、外部 RDS、AI/BYOK/Ozon 全暗。
+- fresh offline 已通过：server `6320/6320`（`324` 条条件 skipped）、AI Media PostgreSQL `196/196`、extension `463 pass / 0 failure / 0 warning`。COM/CN 候选和 detached signatures 均独立绑定该 commit 并通过 Ed25519 verifier，没有复用 `04f9ff9e` 原件。
+- COM 完整 verifier `0 failure / 1 warning`，canonical evidence SHA-256 `726208ba462db590f9ac435827918b6ffd61a00139fefea5b479634644182852`；CN direct/RDS 完整 verifier `0 failure / 1 warning`，canonical evidence SHA-256 `681f662530bc8f7e7cc5b7630d37fbfbc4045ee1c639759d15f553048f6cad7b`。两区唯一 warning 均为远端备份未配置；CN RDS restore 143 张 public 表、COM 本机 restore 144 张 public 表，临时恢复库已清理。
+- 官网 pointer 仍为旧 `b41097d6050cb3f5bdea0ae675b12ce7b0fd6dc4 / 1.0.354`，未执行官网 CAS 或 distribution probe；没有 Provider POST、Ozon 写入或新增费用。
+- CN 本轮两个临时高权限账号 `ss_erp_maint_20260921`、`ss_erp_maint_20260921b` 已锁定；阿里云删除触发安全验证而未完成，密码未持久化。该残留是待人工控制台清理项，不影响已经通过的目标提交 restore attestation。
+
 ## 2026-09-20 MV3 store-draft 已闭环并完成双区 1.0.353 部署
 
 - 当前源码和 COM/CN current 均为 `617e8518a9218422e1174fe193b493b4a38e42e7`，扩展候选 `1.0.353`。COM 保持精确 DOTH hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 保持 direct-origin、外部 RDS 和 AI/BYOK/Ozon 全暗态。两区三服务、150 migrations、post-migration guard 与公网 `/ready` 均通过。

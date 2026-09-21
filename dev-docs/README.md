@@ -1,13 +1,22 @@
 # SS ERP 内部开发真源
 
-## 2026-09-21 MV3 设备凭据业务 `410` 误清理修复（待部署）
+## 2026-09-21 `3fc4eb91` 双区部署完成，官网 pointer 保持旧版本
+
+- 修复提交 `3fc4eb91f409f665b7a725cf9cbb1093dcfc5010` 已推送到 `origin/feat/ai-media-prompt-registry`，并完成 fresh `pnpm qa:04:offline`：server `6320 passed / 324 skipped`、AI Media PostgreSQL `196/196`、扩展最终 `463 pass / 0 failure / 0 warning`。
+- COM 与 CN 均已切换到 `3fc4eb91 / 1.0.355`，三服务、150 migrations、post-migration suite guard 和公网 `/ready` 通过。COM 继续受限 hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`，owner/shop 为 `cmpsj2g6800005ow9rrtvqhay` / `cmq7r8n1700095o7exbet1xle`，active sessions 为 `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `90238535-db06-4ce1-937a-854550c4d7c8`。CN 使用 direct-origin、外部 RDS，AI/BYOK/Ozon 全暗。
+- 独立区域候选严格分区并使用同一 commit：COM cloud/local SHA-256 为 `3dc6bd6d5f4c196609d0d32402ad35f222e4677542bc796be4ca926a94a73f35` / `31bdf0b0b629671b97adf4de70614b8ea238512832270da42846d5b2026b9988`；CN cloud/local 为 `b1ea3b36fb40983a44925f76137300d5540563ec8240a19f95d276c7308d2c49` / `da99adfd269873225cf3bf3997313839ea3c406556c3054cf6b925f25e04a3fc`。两区 detached signature 均由 active Ed25519 key `ss-erp-extension-release-2026-09-05-01` 独立验签，COM/CN signature SHA-256 分别为 `69c59c091450f3acf0b388aeff626632a72702531197dcfdd97ba5a2e0c4757c` / `ba0ef6340589a696f03576fe7ed776d758c19e4d83e00d53b59920fc6299095f`。
+- 完整 VPS verifier：COM `0 failure / 1 warning`，canonical evidence SHA-256 `726208ba462db590f9ac435827918b6ffd61a00139fefea5b479634644182852`；CN direct/RDS `0 failure / 1 warning`，canonical evidence SHA-256 `681f662530bc8f7e7cc5b7630d37fbfbc4045ee1c639759d15f553048f6cad7b`。唯一 warning 均为既定未配置远端备份。CN RDS restore 通过 `143` 张 public 表；COM 本机 restore 通过 `144` 张 public 表，临时恢复库已清理。
+- 官网仍安全服务旧 pointer `b41097d6050cb3f5bdea0ae675b12ce7b0fd6dc4 / 1.0.354`，没有执行 website approval、canary、distribution probe 或 CAS。没有 Provider POST、Ozon 写入或新增业务费用。
+- 本轮为 CN RDS 恢复而创建的 `ss_erp_maint_20260921` 与 `ss_erp_maint_20260921b` 均已在控制台显示“锁定中”；删除操作触发阿里云安全验证，未将删除写成已完成，待人工完成安全验证后删除。密码未写入文件、Git、日志或 VPS。
+
+## 2026-09-21 MV3 设备凭据业务 `410` 误清理修复（已随 `1.0.355` 部署）
 
 - 受控 Chrome `Target.closeTarget -> Web bridge wake` 证明合法配对的 MV3 Service Worker 重启会保留同一 device session/JTI、local refresh credential 和 session access；原“Worker 重启丢失凭据”诊断不成立。COM 只读数据库同时证明故障 session 仍为 `ACTIVE`，refresh family 仍为 `ACTIVE`，generation 1 refresh credential 从未消费且没有 refresh/reuse event。
 - 根因位于 `source-workflow-device-session.js`：transport 原来把所有 HTTP `410` 都当成设备身份撤销并调用 `clearIfCurrent`，因此过期的 hosted candidate preview ticket 或 command grant 会删除仍有效的设备 refresh credential。修复后仅明确的设备身份错误码清 credential；业务资源 `401/410` 保留配对并返回 `http_error`，由上层重建工作台、preview ticket 或 command grant。
 - T2 门禁已按 RED -> GREEN 完成：新增 preview/grant 业务 `410` 负例和“合法配对 -> 业务 410 -> 新 Worker manager 仍可 beginOperation”的重启回归。credential/lifecycle/transport 48 项、hosted/ERP launch 15 项、`pnpm verify:extension` `462/462`、workspace typecheck 和定向 ESLint 通过。
 - 本轮没有 Provider POST、Ozon 写入、官网 CAS 或新增业务费用。源码随本节所在提交固化但尚未部署；受控 reauthorization 后 COM pilot 当前 active session 为 `42f4d334-...` 与 `90238535-...`，后续部署 expectation 必须重读这两个当前 ID。`04f9ff9e` 的 offline、签名、VPS、suite 原件和官网旧 pointer 均不得重标给后续提交；正式发布链必须从新 commit 重新运行。
 
-## 2026-09-21 `04f9ff9e` 双区部署完成，官网发布等待 fresh QA04
+## 2026-09-21 `04f9ff9e` 双区部署基线（历史）
 
 - `04f9ff9efc8f92427ef94046ea258c64555a8e5e` 已部署到 COM/CN，扩展版本均为 `1.0.354`；COM 保持受限 hosted pilot（仅 `IMAGE_TO_IMAGE/SUITE`），CN 保持 RDS/direct-origin 和全暗态。两区 API/Web/Worker 与公网 `/ready` 通过，150 migrations 无待执行项。
 - COM fresh VPS verifier 为 `0 failure / 1 warning`，CN direct-mode fresh verifier 为 `0 failure / 1 warning`；唯一 warning 是远端备份未配置。COM evidence SHA-256 为 `adb91045bd4bf995212d78a4471e9e965ad371f742ec1b94210c1e195a34b096`，CN evidence SHA-256 为 `74463c41aae3b9cac49567cf03549ee89320d2d54f11d7b86015993d8ab8472c`。
