@@ -49,6 +49,15 @@
   var HOSTED_PREVIEW_CONSUME_PATH = HOSTED_PREVIEW_PATH + '/consume';
   var SOURCE_MEDIA_PREVIEW_PATH =
     '/api/extension-device/source-workbench/media-preview';
+  var DEVICE_AUTHORIZATION_ERROR_CODES = new Set([
+    'byok_batch_ingest_session_invalid',
+    'byok_ingest_session_invalid',
+    'command_session_invalid',
+    'device_shop_revoked',
+    'device_token_required',
+    'invalid_device_context',
+    'invalid_device_token',
+  ]);
   var LARGE_PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
     WORKBENCH_PUBLISH_PREVIEW_PATH,
@@ -90,6 +99,23 @@
     error.requestDispatched = requestDispatched;
     if (requestDispatched) error.automaticRetryAllowed = false;
     return error;
+  }
+
+  function responseErrorCode(body) {
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? String(body.errorCode || '').normalize('NFKC').trim().toLowerCase()
+      : '';
+  }
+
+  function deviceAuthorizationRejected(status, body) {
+    var code = responseErrorCode(body);
+    if (status === 401) {
+      // An unreadable 401 must remain fail-closed. A readable business-level
+      // 401 (for example a missing command grant) must not erase the valid
+      // rotating device credential.
+      return !code || DEVICE_AUTHORIZATION_ERROR_CODES.has(code);
+    }
+    return status === 410 && DEVICE_AUTHORIZATION_ERROR_CODES.has(code);
   }
 
   function requiredText(value, label) {
@@ -658,9 +684,17 @@
             : bodyMode === 'hosted-preview'
               ? MAX_HOSTED_PREVIEW_RESPONSE_BYTES
               : MAX_RESPONSE_BYTES;
+          var authorizationErrorBody = null;
+          if (!response.ok && [401, 404, 410].includes(response.status)) {
+            try {
+              authorizationErrorBody = await readJsonResponse(
+                response,
+                maximumResponseBytes,
+              );
+            } catch {}
+          }
           if ((response.status === 401 || response.status === 410) && binaryRequest) {
-            var grantErrorBody = null;
-            try { grantErrorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
+            var grantErrorBody = authorizationErrorBody;
             if (grantErrorBody && [
               'byok_ingest_grant_required',
               'byok_ingest_grant_expired',
@@ -671,10 +705,7 @@
           }
           if ((response.status === 401 || response.status === 404 || response.status === 410)
             && path === OZON_PUBLISH_EXECUTE_PATH) {
-            var publishGrantErrorBody = null;
-            try {
-              publishGrantErrorBody = await readJsonResponse(response, maximumResponseBytes);
-            } catch {}
+            var publishGrantErrorBody = authorizationErrorBody;
             var publishGrantErrorCode = String(
               publishGrantErrorBody && publishGrantErrorBody.errorCode || '',
             );
@@ -692,7 +723,7 @@
               };
             }
           }
-          if (response.status === 401 || response.status === 410) {
+          if (deviceAuthorizationRejected(response.status, authorizationErrorBody)) {
             if (typeof credentials.clearIfCurrent === 'function') {
               var cleared = await credentials.clearIfCurrent(operation, {
                 status: response.status,
@@ -707,8 +738,10 @@
           }
           if (method === 'GET' && response.status === 404) return { state: 'not_found' };
           if (!response.ok) {
-            var errorBody = null;
-            try { errorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
+            var errorBody = authorizationErrorBody;
+            if (errorBody === null) {
+              try { errorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
+            }
             return { state: 'http_error', status: response.status, body: errorBody };
           }
           if (bodyMode === 'hosted-preview') {

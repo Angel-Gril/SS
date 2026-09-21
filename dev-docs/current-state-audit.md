@@ -689,3 +689,10 @@
 - COM/CN current 均为 `04f9ff9efc8f92427ef94046ea258c64555a8e5e / 1.0.354`；COM 为受限 hosted pilot，CN 为 RDS/direct-origin 全暗态。两区 `/ready`、150 migrations 和 fresh VPS verifier 已通过，各 `0 failure / 1 warning`，warning 均为远端备份未配置。
 - CN RDS fresh restore 通过 `143` 张 public 表；maintenance 账号和临时 canary sessions 已清理。没有 Provider/Ozon 写入。
 - 新候选签名已绑定该 commit，但官网仍服务旧 `b41097d6` pointer。`qa:04:offline` 当前 commit 已通过（`6320 passed / 324 skipped`、AI Media PostgreSQL `196/196`）；正式 QA04 final 因历史 normal ERP suite evidence 与新 server source 不一致而正确停止，错误码 `QA04_ERP_SOURCE_CHANGED`。不得重标旧 evidence，需 fresh normal ERP suite 后才能生成新 canary/approval 并执行 CAS。
+
+# 当前接续：MV3 设备 credential 误清理已本地修复，等待新提交发布链
+
+- 现场对照推翻了“Service Worker 重启丢凭据”：真实 `Target.closeTarget -> Web bridge wake` 前后 credential/session/JTI 不变；COM session 仍 `ACTIVE`，refresh family `ACTIVE`，generation 1 未消费，说明本地 credential 删除发生在 refresh 请求之前。
+- 已复现的 owner 缺口是 transport 将所有 HTTP `410` 无条件升级为设备撤销。hosted preview ticket、command grant 等业务资源过期会错误调用 `clearIfCurrent`；当前本地修复改为按服务端 `errorCode` 分类，明确 device identity 错误继续 fail-closed，业务 `401/410` 只返回 `http_error`。
+- 新增组合回归覆盖合法 claim、业务 `410`、Worker manager 重建和同一 credential 继续 `beginOperation`。定向 48 项、受影响 hosted/ERP 15 项、扩展 verifier `462/462`、workspace typecheck 与 ESLint 通过。
+- 本轮源码随本节所在提交固化但尚未部署；没有 Provider/Ozon 写入、官网 CAS 或新增费用。受控 reauthorization 后 COM pilot 当前 active session 为 `42f4d334-...` 与 `90238535-...`，后续部署 expectation 必须重读当前 ID。下一步从该 clean commit 重跑 offline、候选构建/签名/双区部署，再重新取得 normal ERP suite、QA04、区域 canary/approval；禁止复用 `04f9ff9e` 原件冒充新提交。

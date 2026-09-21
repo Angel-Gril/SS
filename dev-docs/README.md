@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-21 MV3 设备凭据业务 `410` 误清理修复（待部署）
+
+- 受控 Chrome `Target.closeTarget -> Web bridge wake` 证明合法配对的 MV3 Service Worker 重启会保留同一 device session/JTI、local refresh credential 和 session access；原“Worker 重启丢失凭据”诊断不成立。COM 只读数据库同时证明故障 session 仍为 `ACTIVE`，refresh family 仍为 `ACTIVE`，generation 1 refresh credential 从未消费且没有 refresh/reuse event。
+- 根因位于 `source-workflow-device-session.js`：transport 原来把所有 HTTP `410` 都当成设备身份撤销并调用 `clearIfCurrent`，因此过期的 hosted candidate preview ticket 或 command grant 会删除仍有效的设备 refresh credential。修复后仅明确的设备身份错误码清 credential；业务资源 `401/410` 保留配对并返回 `http_error`，由上层重建工作台、preview ticket 或 command grant。
+- T2 门禁已按 RED -> GREEN 完成：新增 preview/grant 业务 `410` 负例和“合法配对 -> 业务 410 -> 新 Worker manager 仍可 beginOperation”的重启回归。credential/lifecycle/transport 48 项、hosted/ERP launch 15 项、`pnpm verify:extension` `462/462`、workspace typecheck 和定向 ESLint 通过。
+- 本轮没有 Provider POST、Ozon 写入、官网 CAS 或新增业务费用。源码随本节所在提交固化但尚未部署；受控 reauthorization 后 COM pilot 当前 active session 为 `42f4d334-...` 与 `90238535-...`，后续部署 expectation 必须重读这两个当前 ID。`04f9ff9e` 的 offline、签名、VPS、suite 原件和官网旧 pointer 均不得重标给后续提交；正式发布链必须从新 commit 重新运行。
+
 ## 2026-09-21 `04f9ff9e` 双区部署完成，官网发布等待 fresh QA04
 
 - `04f9ff9efc8f92427ef94046ea258c64555a8e5e` 已部署到 COM/CN，扩展版本均为 `1.0.354`；COM 保持受限 hosted pilot（仅 `IMAGE_TO_IMAGE/SUITE`），CN 保持 RDS/direct-origin 和全暗态。两区 API/Web/Worker 与公网 `/ready` 通过，150 migrations 无待执行项。

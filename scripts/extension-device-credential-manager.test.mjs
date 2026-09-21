@@ -11,6 +11,10 @@ const serviceWorkerSource = fs.readFileSync(
   'extensions/ss-erp/background/service-worker.js',
   'utf8',
 );
+const transportSource = fs.readFileSync(
+  'extensions/ss-erp/shared/erp-adapter/source-workflow-device-session.js',
+  'utf8',
+);
 const LOCAL_CREDENTIAL_KEY = 'ss-erp:extension-device:credential:v1';
 const SESSION_ACCESS_KEY = 'ss-erp:extension-device:access:v1';
 const SESSION_ACCESS_VERSION = 'extension-device-session-access/v1';
@@ -164,6 +168,28 @@ function loadManager(options) {
   context.globalThis = context;
   vm.runInNewContext(source, context, { filename: 'device-credential-manager.js' });
   return context.SS_ERP_EXTENSION_DEVICE_CREDENTIALS.createManager(options);
+}
+
+function loadTransport(options) {
+  const context = {
+    AbortController, Array, ArrayBuffer, Boolean, Error, JSON, Math, Number, Object,
+    Set, String, TextDecoder, TextEncoder, TypeError, URL, Uint8Array,
+    clearTimeout, decodeURIComponent, encodeURIComponent, setTimeout,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(transportSource, context, {
+    filename: 'source-workflow-device-session.js',
+  });
+  return context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport(options);
+}
+
+function jsonResponseWithStatus(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get() { return null; } },
+    async text() { return JSON.stringify(body); },
+  };
 }
 
 test('pairing stores only the rotating refresh credential locally and exposes no secrets to UI', async () => {
@@ -351,6 +377,78 @@ test('a restarted worker reuses a claim access token from session storage withou
   });
 
   assert.equal(await workerB.getAccessToken(), accessToken);
+  assert.equal(refreshCalls, 0);
+});
+
+test('a business-resource 410 preserves pairing across an MV3 worker restart', async () => {
+  const localStorage = createStorage();
+  const sessionStorage = createStorage();
+  const lockManager = createLockManager();
+  const accessToken = deviceJwt({ scopes: ['listing:review', 'media:execute'] });
+  const workerA = loadManager({
+    localStorage,
+    sessionStorage,
+    lockManager,
+    fetchImpl: async (url) => {
+      assert.equal(url.endsWith('/pairing-claims'), true);
+      return response(201, {
+        code: 1,
+        data: {
+          session: {
+            id: 'session-1', deploymentId: 'local-dev', deviceId: 'device-1',
+            actorUserId: 'owner-1', ownerUserId: 'owner-1',
+            scopes: ['listing:review', 'media:execute'], currentJti: 'jti-1',
+            expiresAt: '2026-08-11T12:00:00.000Z',
+          },
+          accessToken,
+          refreshToken: 'r'.repeat(43),
+        },
+      });
+    },
+    now: () => new Date('2026-07-12T12:00:00.000Z'),
+  });
+  await workerA.claim({
+    baseUrl: 'https://erp.example', code: 'p'.repeat(22), deploymentId: 'local-dev',
+    deviceId: 'device-1', deviceLabel: 'MV3 business expiry regression',
+  });
+
+  const transport = loadTransport({
+    credentials: workerA,
+    fetchImpl: async () => jsonResponseWithStatus(410, {
+      code: 0,
+      errorCode: 'hosted_candidate_preview_token_invalid',
+    }),
+  });
+  assert.deepEqual(
+    clone(await transport.postRaw(
+      '/api/extension-device/source-workbench/ai-image-suite/candidate-preview/consume',
+      { binding: { planId: 'plan-1' }, token: 't'.repeat(43) },
+      { requiredScope: 'listing:review' },
+    )),
+    {
+      state: 'http_error',
+      status: 410,
+      body: { code: 0, errorCode: 'hosted_candidate_preview_token_invalid' },
+    },
+  );
+  assert.equal(localStorage.value(LOCAL_CREDENTIAL_KEY).sessionId, 'session-1');
+
+  let refreshCalls = 0;
+  const workerB = loadManager({
+    localStorage,
+    sessionStorage,
+    lockManager,
+    fetchImpl: async () => {
+      refreshCalls += 1;
+      throw new Error('restarted worker must retain the valid session access');
+    },
+    now: () => new Date('2026-07-12T12:01:00.000Z'),
+  });
+  const operation = await workerB.beginOperation();
+  assert.equal(operation.state, 'paired');
+  assert.equal(operation.sessionId, 'session-1');
+  assert.equal(operation.currentJti, 'jti-1');
+  assert.equal(operation.accessToken, accessToken);
   assert.equal(refreshCalls, 0);
 });
 

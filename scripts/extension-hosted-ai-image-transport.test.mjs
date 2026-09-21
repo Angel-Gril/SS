@@ -41,10 +41,10 @@ function binaryResponse(bytes = png, overrides = {}) {
   };
 }
 
-function jsonResponse(payload = { code: 1, data: {} }) {
+function jsonResponse(payload = { code: 1, data: {} }, status = 200) {
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     headers: headers(),
     async text() { return JSON.stringify(payload); },
   };
@@ -171,6 +171,53 @@ await assert.rejects(
     && error.automaticRetryAllowed === false,
 );
 assert.equal(dispatchedFetchCount, 1);
+
+for (const scenario of [
+  {
+    name: 'expired hosted candidate preview ticket',
+    invoke(transport) {
+      return transport.postRaw(previewPath, body, { requiredScope: 'listing:review' });
+    },
+    errorCode: 'hosted_candidate_preview_token_invalid',
+  },
+  {
+    name: 'expired media command grant',
+    invoke(transport) {
+      return transport.post(
+        '/api/extension-device/media-workflows/execute',
+        { contractVersion: 'fixture/v1' },
+        { requiredScope: 'media:execute' },
+      );
+    },
+    errorCode: 'COMMAND_GRANT_EXPIRED',
+  },
+]) {
+  let credentialClears = 0;
+  const businessExpiryTransport = api.createTransport({
+    credentials: {
+      ...credentials(),
+      async clearIfCurrent() { credentialClears += 1; return true; },
+    },
+    fetchImpl: async () => jsonResponse({
+      code: 0,
+      errorCode: scenario.errorCode,
+    }, 410),
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(await scenario.invoke(businessExpiryTransport))),
+    {
+      state: 'http_error',
+      status: 410,
+      body: { code: 0, errorCode: scenario.errorCode },
+    },
+    `${scenario.name} must remain a business-resource error`,
+  );
+  assert.equal(
+    credentialClears,
+    0,
+    `${scenario.name} must not revoke a valid device credential`,
+  );
+}
 
 const jsonTransport = api.createTransport({
   credentials: credentials(),

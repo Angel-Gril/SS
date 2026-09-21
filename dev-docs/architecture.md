@@ -35,6 +35,7 @@
 | 业务逻辑 | `services/`、`repositories/` 与局部领域 owner | 从超大 route 渐进提取 | typed service contract | UI、route handler、mock | repair |
 | 数据库/schema | Prisma schema + migrations | 同左 | Prisma model/SQL constraints | 前端对象或 Redis | keep |
 | 登录/权限 | auth/device-auth + route preHandler | 同左 | account/device token contracts | 隐藏按钮或客户端 role | repair |
+| 扩展设备凭据与 HTTP 授权分类 | `shared/logistics-rules/device-credential-manager.js` 持久化 refresh/access；`shared/erp-adapter/source-workflow-device-session.js` 分类 transport 错误；服务端 `extension-device-auth.ts` 定义身份错误码 | 同左 | local refresh + session access + epoch/JTI；只有明确 device identity error 可清 credential，业务 ticket/grant `401/410` 返回 `http_error` | 把任意 HTTP 410、preview/grant 过期或工作台 session 过期当设备解绑 | keep |
 | Web 读取与会话展示 | `apps/web/src/lib/api.ts`、`dashboard-session.ts`；图片刷新协调由 `source-ai-media-state.ts` 负责 | 同左 | JSON GET 期限与取消；成功身份/暂不可用/取消的客户端投影，真实 401 保留原跳转；按请求身份丢弃旧结果 | 布局把断网当退出、前端投影充当服务端权限、读取失败重发业务写入 | keep |
 | 图片公网下载 | `source-public-image-download.ts` | 所有用户 URL 下载统一消费它 | bounded downloaded image | route/watermark 裸 fetch | repair |
 | 上传配额 | `upload-limiter.ts` | Redis 原子配额 owner | allowed/denied result | 单进程 Map | repair |
