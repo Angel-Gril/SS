@@ -4,7 +4,7 @@
 
 - 修复提交已推送并完成 fresh offline、独立 COM/CN 候选构建、签名、预置和区域匹配部署。COM 通过受限 hosted-pilot contract（`IMAGE_TO_IMAGE/SUITE`、精确 owner/shop/session）；CN 通过 direct-origin/RDS dark contract，未启用 hosted pilot。
 - COM/CN 均已切换到 `3fc4eb91 / 1.0.355`，150 migrations、AI suite post-migration guard、服务重启和公网 readiness 通过。COM/CN 完整 VPS verifier 均为 `0 failure / 1 warning`，canonical evidence SHA-256 分别为 `726208ba462db590f9ac435827918b6ffd61a00139fefea5b479634644182852` 与 `681f662530bc8f7e7cc5b7630d37fbfbc4045ee1c639759d15f553048f6cad7b`；唯一 warning 为远端备份未配置。
-- CN RDS target-bound restore 通过 `143` 张 public 表，COM 本机 restore 通过 `144` 张 public 表。两个临时 CN maintenance 账号已锁定；删除受阿里云安全验证阻断，不能记录为已删除。没有 Provider POST、Ozon 写入或新增业务费用。
+- CN RDS target-bound restore 通过 `143` 张 public 表，COM 本机 restore 通过 `144` 张 public 表。三个临时 CN maintenance 账号已锁定；删除受阿里云安全验证阻断，不能记录为已删除。没有 Provider POST、Ozon 写入或新增业务费用。
 - 官网 pointer 仍保持 `b41097d6 / 1.0.354`；website approval、区域 canary、distribution probe 和 CAS 是后续独立 gate，本次不宣称官网发布完成。
 
 ## 2026-09-20 1.0.354 authority refresh 与第二次独立 MV3 全链

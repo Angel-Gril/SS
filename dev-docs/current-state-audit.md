@@ -6,7 +6,7 @@
 - fresh offline 已通过：server `6320/6320`（`324` 条条件 skipped）、AI Media PostgreSQL `196/196`、extension `463 pass / 0 failure / 0 warning`。COM/CN 候选和 detached signatures 均独立绑定该 commit 并通过 Ed25519 verifier，没有复用 `04f9ff9e` 原件。
 - COM 完整 verifier `0 failure / 1 warning`，canonical evidence SHA-256 `726208ba462db590f9ac435827918b6ffd61a00139fefea5b479634644182852`；CN direct/RDS 完整 verifier `0 failure / 1 warning`，canonical evidence SHA-256 `681f662530bc8f7e7cc5b7630d37fbfbc4045ee1c639759d15f553048f6cad7b`。两区唯一 warning 均为远端备份未配置；CN RDS restore 143 张 public 表、COM 本机 restore 144 张 public 表，临时恢复库已清理。
 - 官网 pointer 仍为旧 `b41097d6050cb3f5bdea0ae675b12ce7b0fd6dc4 / 1.0.354`，未执行官网 CAS 或 distribution probe；没有 Provider POST、Ozon 写入或新增费用。
-- CN 本轮两个临时高权限账号 `ss_erp_maint_20260921`、`ss_erp_maint_20260921b` 已锁定；阿里云删除触发安全验证而未完成，密码未持久化。该残留是待人工控制台清理项，不影响已经通过的目标提交 restore attestation。
+- CN 本轮三个临时高权限账号 `ss_erp_maint_20260921`、`ss_erp_maint_20260921b`、`ss_erp_maint_20260921c` 已锁定；阿里云删除触发安全验证而未完成，密码未持久化。该残留是待人工控制台清理项，不影响已经通过的目标提交 restore attestation。
 
 ## 2026-09-20 MV3 store-draft 已闭环并完成双区 1.0.353 部署
 

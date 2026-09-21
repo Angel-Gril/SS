@@ -7,7 +7,7 @@
 - 独立区域候选严格分区并使用同一 commit：COM cloud/local SHA-256 为 `3dc6bd6d5f4c196609d0d32402ad35f222e4677542bc796be4ca926a94a73f35` / `31bdf0b0b629671b97adf4de70614b8ea238512832270da42846d5b2026b9988`；CN cloud/local 为 `b1ea3b36fb40983a44925f76137300d5540563ec8240a19f95d276c7308d2c49` / `da99adfd269873225cf3bf3997313839ea3c406556c3054cf6b925f25e04a3fc`。两区 detached signature 均由 active Ed25519 key `ss-erp-extension-release-2026-09-05-01` 独立验签，COM/CN signature SHA-256 分别为 `69c59c091450f3acf0b388aeff626632a72702531197dcfdd97ba5a2e0c4757c` / `ba0ef6340589a696f03576fe7ed776d758c19e4d83e00d53b59920fc6299095f`。
 - 完整 VPS verifier：COM `0 failure / 1 warning`，canonical evidence SHA-256 `726208ba462db590f9ac435827918b6ffd61a00139fefea5b479634644182852`；CN direct/RDS `0 failure / 1 warning`，canonical evidence SHA-256 `681f662530bc8f7e7cc5b7630d37fbfbc4045ee1c639759d15f553048f6cad7b`。唯一 warning 均为既定未配置远端备份。CN RDS restore 通过 `143` 张 public 表；COM 本机 restore 通过 `144` 张 public 表，临时恢复库已清理。
 - 官网仍安全服务旧 pointer `b41097d6050cb3f5bdea0ae675b12ce7b0fd6dc4 / 1.0.354`，没有执行 website approval、canary、distribution probe 或 CAS。没有 Provider POST、Ozon 写入或新增业务费用。
-- 本轮为 CN RDS 恢复而创建的 `ss_erp_maint_20260921` 与 `ss_erp_maint_20260921b` 均已在控制台显示“锁定中”；删除操作触发阿里云安全验证，未将删除写成已完成，待人工完成安全验证后删除。密码未写入文件、Git、日志或 VPS。
+- 本轮为 CN RDS 恢复而创建的 `ss_erp_maint_20260921`、`ss_erp_maint_20260921b` 与 `ss_erp_maint_20260921c` 均已在控制台显示“锁定中”；删除操作触发阿里云安全验证，未将删除写成已完成，待人工完成安全验证后删除。密码未写入文件、Git、日志或 VPS。
 
 ## 2026-09-21 MV3 设备凭据业务 `410` 误清理修复（已随 `1.0.355` 部署）
 
