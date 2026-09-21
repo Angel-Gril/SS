@@ -1126,7 +1126,7 @@ test('a never-settling pairing request aborts at the configured deadline without
   assert.equal(localStorage.value('ss-erp:extension-device:credential:v1'), undefined);
 });
 
-test('a never-settling refresh request aborts and clears the possibly consumed refresh credential', async () => {
+test('a never-settling refresh request aborts without deleting the paired session', async () => {
   const localStorage = createStorage();
   const sessionStorage = createStorage();
   await localStorage.set({
@@ -1143,27 +1143,31 @@ test('a never-settling refresh request aborts and clears the possibly consumed r
   });
   await sessionStorage.set({ [SESSION_ACCESS_KEY]: { stale: true } });
   let requestSignal;
+  let refreshCalls = 0;
   const manager = loadManager({
     localStorage,
     sessionStorage,
     requestTimeoutMs: 15,
     fetchImpl: async (_url, init) => {
+      refreshCalls += 1;
       requestSignal = init.signal;
       return new Promise(() => {});
     },
     now: () => new Date('2026-07-12T12:00:00.000Z'),
   });
 
-  await assert.rejects(manager.getAccessToken(), /re-pairing required/);
+  await assert.rejects(manager.getAccessToken(), /explicit reauthorization required/);
 
   assert.equal(requestSignal instanceof AbortSignal, true);
   assert.equal(requestSignal.aborted, true);
-  assert.equal(localStorage.value('ss-erp:extension-device:credential:v1'), undefined);
+  await assert.rejects(manager.getAccessToken(), /explicit reauthorization required/);
+  assert.equal(refreshCalls, 1);
+  assert.equal(localStorage.value('ss-erp:extension-device:credential:v1')?.sessionId, 'session-1');
   assert.equal(sessionStorage.value(SESSION_ACCESS_KEY), undefined);
-  assert.deepEqual(clone(await manager.getStatus()), { state: 'unpaired' });
+  assert.deepEqual(clone(await manager.getStatus()), { state: 'paired', sessionId: 'session-1', deploymentId: 'local-dev', deviceId: 'device-1', ownerUserId: 'owner-1', scopes: ['logistics:read'], expiresAt: '2026-08-11T12:00:00.000Z' });
 });
 
-test('an ambiguous refresh JSON failure clears the old refresh credential', async () => {
+test('an ambiguous refresh JSON failure preserves the old refresh credential for recovery', async () => {
   const localStorage = createStorage();
   const sessionStorage = createStorage();
   await localStorage.set({
@@ -1174,20 +1178,25 @@ test('an ambiguous refresh JSON failure clears the old refresh credential', asyn
     },
   });
   await sessionStorage.set({ [SESSION_ACCESS_KEY]: { stale: true } });
+  let refreshCalls = 0;
   const manager = loadManager({
     localStorage,
     sessionStorage,
-    fetchImpl: async () => ({
+    fetchImpl: async () => {
+      refreshCalls += 1;
+      return ({
       status: 200,
       async json() { throw new SyntaxError('truncated JSON'); },
-    }),
+      });
+    },
     now: () => new Date('2026-07-12T12:00:00.000Z'),
   });
 
-  await assert.rejects(manager.getAccessToken(), /re-pairing required/);
-  assert.equal(localStorage.value('ss-erp:extension-device:credential:v1'), undefined);
-  assert.equal(sessionStorage.value(SESSION_ACCESS_KEY), undefined);
-  assert.deepEqual(clone(await manager.getStatus()), { state: 'unpaired' });
+  await assert.rejects(manager.getAccessToken(), /unknown|uncertain|retry|恢复/iu);
+  await assert.rejects(manager.getAccessToken(), /explicit reauthorization required/);
+  assert.equal(refreshCalls, 1);
+  assert.equal(localStorage.value('ss-erp:extension-device:credential:v1')?.sessionId, 'session-1');
+  assert.deepEqual(clone(await manager.getStatus()), { state: 'paired', sessionId: 'session-1', deploymentId: 'local-dev', deviceId: 'device-1', ownerUserId: 'owner-1', scopes: ['logistics:read'], expiresAt: '2026-08-11T12:00:00.000Z' });
 });
 
 for (const operation of ['status', 'connection', 'begin', 'refresh']) {

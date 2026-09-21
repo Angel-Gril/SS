@@ -177,6 +177,7 @@
     var access = null;
     var refreshInFlight = null;
     var credentialEpoch = 0;
+    var refreshRecoveryRequired = false;
 
     function withCredentialLock(operation) {
       if (!lockManager) return Promise.resolve().then(operation);
@@ -439,6 +440,7 @@
         [CREDENTIAL_KEY]: nextCredential,
       });
       assertCurrentEpoch(operationEpoch);
+      refreshRecoveryRequired = false;
       await rememberSessionAccess(nextCredential, accessToken);
       assertCurrentEpoch(operationEpoch);
       return publicSession({
@@ -544,6 +546,17 @@
         assertCurrentEpoch(operationEpoch);
         var baseUrl = trustedBaseUrl(credential.baseUrl);
         async function requireRepair(reason) {
+          // A timeout or malformed 200 response does not prove that the
+          // server rejected the session. Keep the pairing, discard only the
+          // short-lived access cache, and require an explicit recovery action
+          // before another refresh can be attempted.
+          if (reason === 'device_refresh_transport_ambiguous'
+            || reason === 'device_refresh_response_invalid') {
+            if (!await isOperationCurrent(refreshOperation)) throw supersededError();
+            refreshRecoveryRequired = true;
+            await invalidateSessionAccess();
+            throw new Error('device refresh result is uncertain; explicit reauthorization required');
+          }
           var cleared = await clearIfCurrent(refreshOperation, { reason: reason });
           if (!cleared) throw supersededError();
           throw new Error('device refresh result is uncertain; device re-pairing required');
@@ -633,6 +646,7 @@
           [CREDENTIAL_KEY]: nextCredential,
         });
         assertCurrentEpoch(operationEpoch);
+        refreshRecoveryRequired = false;
         await rememberSessionAccess(nextCredential, accessToken);
         assertCurrentEpoch(operationEpoch);
         return accessToken;
@@ -645,6 +659,9 @@
     }
 
     async function getAccessToken() {
+      if (refreshRecoveryRequired) {
+        throw new Error('device refresh result is uncertain; explicit reauthorization required');
+      }
       var operationEpoch = credentialEpoch;
       var credential = await getCompatibleStoredCredential(operationEpoch);
       if (!credential) throw new Error('device refresh credential is unavailable');
