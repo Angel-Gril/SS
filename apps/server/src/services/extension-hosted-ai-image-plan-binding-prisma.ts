@@ -544,5 +544,145 @@ export function createPrismaExtensionHostedAiImagePlanBindingStore(
       }
       return record;
     },
+
+    async adoptSessionSuccessor(rawInput) {
+      const input = exactLookupInput(rawInput);
+      return runExtensionCommandSerializableTransaction(client, async (tx) => {
+        const predecessorRows = await tx.$queryRawUnsafe<unknown[]>(
+          `WITH RECURSIVE replacement_lineage AS (
+             SELECT successor."id" AS "successorId",
+                    predecessor."id" AS "predecessorId",
+                    ARRAY[successor."id", predecessor."id"]::TEXT[] AS "path"
+             FROM "extension_device_sessions" successor
+             JOIN "extension_device_sessions" predecessor
+               ON successor."replaces_session_id" = predecessor."id"
+             WHERE successor."id" = $2
+               AND successor."owner_user_id" = $1
+               AND successor."actor_user_id" = $1
+               AND successor."status" = 'ACTIVE'
+               AND predecessor."owner_user_id" = $1
+               AND predecessor."actor_user_id" = $1
+               AND predecessor."status" = 'REVOKED'
+               AND predecessor."revoked_reason" = 'PAIRING_APPROVED'
+               AND successor."device_id" = predecessor."device_id"
+               AND successor."deployment_id" = predecessor."deployment_id"
+               AND successor."scopes" @> predecessor."scopes"
+               AND successor."scopes" <@ predecessor."scopes"
+               AND cardinality(successor."scopes") = cardinality(predecessor."scopes")
+             UNION ALL
+             SELECT descendant."id" AS "successorId",
+                    ancestor."id" AS "predecessorId",
+                    lineage."path" || ancestor."id"
+             FROM replacement_lineage lineage
+             JOIN "extension_device_sessions" descendant
+               ON descendant."id" = lineage."predecessorId"
+             JOIN "extension_device_sessions" ancestor
+               ON descendant."replaces_session_id" = ancestor."id"
+             WHERE descendant."owner_user_id" = $1
+               AND descendant."actor_user_id" = $1
+               AND descendant."status" = 'REVOKED'
+               AND descendant."revoked_reason" = 'PAIRING_APPROVED'
+               AND ancestor."owner_user_id" = $1
+               AND ancestor."actor_user_id" = $1
+               AND ancestor."status" = 'REVOKED'
+               AND ancestor."revoked_reason" = 'PAIRING_APPROVED'
+               AND descendant."device_id" = ancestor."device_id"
+               AND descendant."deployment_id" = ancestor."deployment_id"
+               AND descendant."scopes" @> ancestor."scopes"
+               AND descendant."scopes" <@ ancestor."scopes"
+               AND cardinality(descendant."scopes") = cardinality(ancestor."scopes")
+               AND cardinality(lineage."path") < 50
+               AND NOT ancestor."id" = ANY(lineage."path")
+           )
+           SELECT ${BINDING_COLUMNS}
+           FROM "extension_hosted_ai_image_plan_bindings" binding
+           JOIN replacement_lineage lineage
+             ON lineage."predecessorId" = binding."device_session_id"
+           WHERE binding."owner_user_id" = $1
+             AND binding."shop_id" = $3
+             AND binding."listing_workflow_id" = $4
+             AND binding."source_capture_snapshot_id" = $5
+             AND binding."supply_goods_id" = $6
+             AND binding."draft_revision" = $7
+             AND binding."draft_version" = $8
+             AND binding."selected_sku_hash" = $9
+             AND binding."candidate_media_hash" = $10
+           ORDER BY binding."updated_at" DESC, binding."id" DESC
+           LIMIT 2
+           FOR UPDATE OF binding`,
+          input.ownerUserId,
+          input.deviceSessionId,
+          input.shopId,
+          input.listingWorkflowId,
+          input.snapshotId,
+          input.supplyGoodsId,
+          input.draftRevision,
+          input.draftVersion,
+          input.selectedSkuHash,
+          input.candidateMediaHash,
+        );
+        const predecessor = rowOrNull(predecessorRows, 'successor lineage lookup');
+        if (!predecessor) return null;
+        const successorRecord = normalizedRecord({
+          ...predecessor,
+          deviceSessionId: input.deviceSessionId,
+          bindingHash: expectedBindingHash({
+            ...predecessor,
+            deviceSessionId: input.deviceSessionId,
+          }),
+        }, 'input');
+        const updated = await tx.$queryRawUnsafe<unknown[]>(
+          `UPDATE "extension_hosted_ai_image_plan_bindings"
+           SET "device_session_id" = $2,
+               "binding_hash" = $11,
+               "updated_at" = NOW()
+           WHERE "owner_user_id" = $1
+             AND "plan_id" = $3
+             AND "device_session_id" = $4
+             AND "shop_id" = $5
+             AND "listing_workflow_id" = $6
+             AND "source_capture_snapshot_id" = $7
+             AND "supply_goods_id" = $8
+             AND "draft_revision" = $9
+             AND "draft_version" = $10
+             AND "selected_sku_hash" = $12
+             AND "candidate_media_hash" = $13
+             AND NOT EXISTS (
+               SELECT 1
+               FROM "extension_hosted_ai_image_plan_bindings" existing
+               WHERE existing."owner_user_id" = $1
+                 AND existing."device_session_id" = $2
+                 AND existing."shop_id" = $5
+                 AND existing."listing_workflow_id" = $6
+                 AND existing."source_capture_snapshot_id" = $7
+                 AND existing."supply_goods_id" = $8
+                 AND existing."draft_revision" = $9
+                 AND existing."draft_version" = $10
+                 AND existing."selected_sku_hash" = $12
+                 AND existing."candidate_media_hash" = $13
+             )
+           RETURNING ${BINDING_COLUMNS}`,
+          predecessor.ownerUserId,
+          successorRecord.deviceSessionId,
+          predecessor.planId,
+          predecessor.deviceSessionId,
+          predecessor.shopId,
+          predecessor.listingWorkflowId,
+          predecessor.snapshotId,
+          predecessor.supplyGoodsId,
+          predecessor.draftRevision,
+          predecessor.draftVersion,
+          successorRecord.bindingHash,
+          predecessor.selectedSkuHash,
+          predecessor.candidateMediaHash,
+        );
+        const adopted = rowOrNull(updated, 'successor binding update');
+        if (!adopted) return null;
+        if (!sameRecord(adopted, successorRecord)) {
+          return invalidRow('Successor binding identity does not match the preserved plan');
+        }
+        return adopted;
+      });
+    },
   };
 }

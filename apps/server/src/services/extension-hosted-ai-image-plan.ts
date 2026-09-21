@@ -110,6 +110,15 @@ export interface ExtensionHostedAiImagePlanBindingStore {
   >): Promise<
     ExtensionHostedAiImagePlanBindingRecord | null
   >;
+  /**
+   * Re-attaches an existing binding to an approved same-device successor
+   * session. The implementation must verify the session lineage and preserve
+   * the existing plan identity; it must never create or retarget a plan.
+   */
+  adoptSessionSuccessor?(input: Omit<
+    ExtensionHostedAiImagePlanBindingRecord,
+    'planId' | 'authorityHash' | 'bindingHash'
+  >): Promise<ExtensionHostedAiImagePlanBindingRecord | null>;
 }
 
 export interface ExtensionHostedAiImagePlanningPort {
@@ -697,13 +706,17 @@ export function createExtensionHostedAiImagePlanService(
 
     async getCurrent(request: BoundRequest) {
       const authorized = await authorize(request);
-      const match = await options.bindings.find({
+      const lookup = {
         ownerUserId: authorized.identity.ownerUserId,
         deviceSessionId: authorized.identity.deviceSessionId,
         ...authorized.binding,
         selectedSkuHash: valuesHash(authorized.selectedSkuKeys),
         candidateMediaHash: valuesHash(authorized.candidateMediaKeys),
-      });
+      };
+      let match = await options.bindings.find(lookup);
+      if (!match && options.bindings.adoptSessionSuccessor) {
+        match = await options.bindings.adoptSessionSuccessor(lookup);
+      }
       if (!match) {
         return response(
           authorized.policyRevision,

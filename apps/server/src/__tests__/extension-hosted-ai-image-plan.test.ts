@@ -172,6 +172,7 @@ function setup(input: {
       planId === seededBinding.planId ? seededBinding : null
     )),
     find: vi.fn(async (): Promise<typeof seededBinding | null> => seededBinding),
+    adoptSessionSuccessor: vi.fn(async (): Promise<typeof seededBinding | null> => null),
   };
   return {
     service: createExtensionHostedAiImagePlanService({
@@ -214,6 +215,21 @@ describe('extension hosted AI image plan service', () => {
     });
     expect(fixture.planning.createRuleBased).toHaveBeenCalledOnce();
     expect(fixture.planning.review).toHaveBeenCalledOnce();
+  });
+
+  it('adopts an approved same-device successor for an existing suite binding', async () => {
+    const fixture = setup();
+    fixture.bindings.find.mockResolvedValueOnce(null);
+    fixture.bindings.adoptSessionSuccessor.mockResolvedValueOnce(fixture.seededBinding);
+
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { plan: { id: 'plan-1' } },
+    });
+    expect(fixture.bindings.adoptSessionSuccessor).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: identity.ownerUserId,
+      deviceSessionId: identity.deviceSessionId,
+      listingWorkflowId: binding.listingWorkflowId,
+    }));
   });
 
   it('preserves verified product-only SKU and media authority in an early draft plan', async () => {
