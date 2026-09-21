@@ -113,12 +113,163 @@ async function seedAuthority(client: PrismaClient, label: string) {
     ownerUserId,
     shopId,
     supplyGoodsId,
+    sourceSubjectId,
     snapshotId,
+    captureHash,
     listingWorkflowId: draft.id,
     draftRevision: draft.revision,
     draftVersion: draft.draftVersion,
     planIds,
   };
+}
+
+async function seedHostedSuiteMarker(
+  client: PrismaClient,
+  seed: Awaited<ReturnType<typeof seedAuthority>>,
+  planId: string,
+) {
+  const suffix = `${planId}_suite_marker`;
+  const planningRunId = `${suffix}_run`;
+  const planVersionId = `${suffix}_version`;
+  const digest = (label: string) => createHash('sha256').update(`${suffix}:${label}`).digest('hex');
+  const inputSnapshot = { fixture: 'explicit-launch-plan-rebind' };
+  await client.$transaction(async (tx) => {
+    const guardedTables = [
+      'ai_media_plans',
+      'ai_media_planning_runs',
+      'ai_media_plan_versions',
+      'ai_media_suites',
+    ];
+    for (const table of guardedTables) {
+      await tx.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
+    }
+    await tx.aiMediaPlanningRun.create({ data: {
+        id: planningRunId,
+        planId,
+        ownerUserId: seed.ownerUserId,
+        sourceSubjectId: seed.sourceSubjectId,
+        actorUserId: seed.ownerUserId,
+        sourceCaptureSnapshotId: seed.snapshotId,
+        attempt: 1,
+        mode: 'RULE_BASED',
+        engineVersion: 'explicit-launch-plan-rebind',
+        status: 'SUCCEEDED',
+        idempotencyKey: `${suffix}_run_key`,
+        requestFingerprint: digest('run-request'),
+        sourceCaptureHash: seed.captureHash,
+        sourceProfileHash: 'b'.repeat(64),
+        inputFingerprint: digest('input-fingerprint'),
+        inputSnapshot,
+        inputHash: digest('input-hash'),
+        inputBytes: JSON.stringify(inputSnapshot).length,
+        completedAt: new Date(),
+    } });
+    await tx.aiMediaPlanVersion.create({ data: {
+        id: planVersionId,
+        planId,
+        ownerUserId: seed.ownerUserId,
+        sourceSubjectId: seed.sourceSubjectId,
+        version: 1,
+        planningRunId,
+        sourceCaptureSnapshotId: seed.snapshotId,
+        sourceCaptureHash: seed.captureHash,
+        sourceProfileHash: 'b'.repeat(64),
+        sourceSchemaVersion: 'source-product-capture-v2',
+        selectedSkuHash: digest('selected-skus'),
+        inputAssetSetHash: digest('input-assets'),
+        inputFingerprint: digest('input-fingerprint'),
+        planSchemaVersion: 'explicit-launch-plan-rebind',
+        plannerVersion: 'explicit-launch-plan-rebind',
+        mode: 'RULE_BASED',
+        inputSnapshot,
+        inputHash: digest('input-hash'),
+        curation: {},
+        curationHash: digest('curation'),
+        visionEvidence: {},
+        visionEvidenceHash: digest('vision'),
+        planPayload: {},
+        planHash: digest('plan'),
+        planBytes: 2,
+        provenance: {},
+        provenanceHash: digest('provenance'),
+        actorUserId: seed.ownerUserId,
+    } });
+    await tx.aiMediaSuite.create({ data: {
+        id: `${suffix}_suite`,
+        ownerUserId: seed.ownerUserId,
+        actorUserId: seed.ownerUserId,
+        planId,
+        planVersionId,
+        sourceSubjectId: seed.sourceSubjectId,
+        sourceCaptureSnapshotId: seed.snapshotId,
+        sourceCaptureHash: seed.captureHash,
+        sourceProfileHash: 'b'.repeat(64),
+        sourceSchemaVersion: 'source-product-capture-v2',
+        contextType: 'collect',
+        contextId: seed.supplyGoodsId,
+        status: 'SUCCEEDED',
+        idempotencyKey: `${suffix}_suite_key`,
+        requestFingerprint: digest('suite-request'),
+        previewHash: digest('preview'),
+        provider: 'integration-provider',
+        model: 'integration-model',
+        providerConfigHash: digest('provider-config'),
+        pricingVersion: 'integration-pricing',
+        itemCount: 1,
+        estimatedCostCents: 1,
+        maximumCostCents: 1,
+        concurrencyLimit: 1,
+        completedAt: new Date(),
+    } });
+    for (const table of [...guardedTables].reverse()) {
+      await tx.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);
+    }
+  });
+}
+
+async function seedRefreshReuseRecoverySessions(
+  client: PrismaClient,
+  seed: Awaited<ReturnType<typeof seedAuthority>>,
+) {
+  const deploymentId = 'hosted-binding-integration';
+  const deviceId = `${seed.ownerUserId}_refresh_recovery_device`;
+  const scopes = ['capture:write', 'listing:write', 'listing:review', 'media:execute'];
+  const expiresAt = new Date(Date.now() + 86_400_000);
+  const now = new Date();
+  const predecessorSessionId = `${seed.ownerUserId}_refresh_reused`;
+  const successorSessionId = `${seed.ownerUserId}_refresh_recovered`;
+  for (const [index, sessionId] of [predecessorSessionId, successorSessionId].entries()) {
+    const pairingCodeId = `${sessionId}_pairing`;
+    await client.extensionDevicePairingCode.create({ data: {
+      id: pairingCodeId,
+      deploymentId,
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      codeDigest: createHash('sha256').update(pairingCodeId).digest('hex'),
+      shopIds: [seed.shopId],
+      scopes,
+      status: 'CLAIMED',
+      expiresAt,
+      claimedAt: now,
+    } });
+    await client.extensionDeviceSession.create({ data: {
+      id: sessionId,
+      pairingCodeId,
+      deploymentId,
+      deviceId,
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      status: index === 0 ? 'REVOKED' : 'ACTIVE',
+      scopes,
+      currentJti: `${sessionId}_jti`,
+      expiresAt,
+      ...(index === 0 ? {
+        revokedAt: now,
+        revokedReason: 'REFRESH_REUSE_DETECTED' as const,
+      } : {}),
+    } });
+  }
+  return { predecessorSessionId, successorSessionId };
 }
 
 function binding(
@@ -371,5 +522,33 @@ describePostgres('extension hosted plan binding PostgreSQL concurrency', () => {
 
     await expect(store.bind(predecessor)).resolves.toMatchObject({ kind: 'bound' });
     await expect(store.bind(successor)).resolves.toEqual({ kind: 'conflict' });
+  }, 30_000);
+
+  it('recovers a suite binding after an explicit launch grant on the same physical device', async () => {
+    const seed = await seedAuthority(first, 'explicit_launch_rebind');
+    const sessions = await seedRefreshReuseRecoverySessions(first, seed);
+    const store = createPrismaExtensionHostedAiImagePlanBindingStore(
+      first as unknown as ExtensionHostedAiImagePlanBindingPrismaClient,
+    );
+    const predecessor = binding(seed, seed.planIds[0]!, sessions.predecessorSessionId);
+    const successor = binding(seed, seed.planIds[0]!, sessions.successorSessionId);
+    await expect(store.bind(predecessor)).resolves.toMatchObject({ kind: 'bound' });
+    await seedHostedSuiteMarker(first, seed, predecessor.planId);
+    const {
+      planId: _planId,
+      authorityHash: _authorityHash,
+      bindingHash: _bindingHash,
+      ...lookup
+    } = successor;
+
+    await expect(store.rebindAfterExplicitLaunchGrant!({
+      ...lookup,
+      authorization: 'ERP_SOURCE_LAUNCH_GRANT',
+    })).resolves.toEqual(successor);
+
+    await expect(store.get({
+      ownerUserId: seed.ownerUserId,
+      planId: predecessor.planId,
+    })).resolves.toEqual(successor);
   }, 30_000);
 });

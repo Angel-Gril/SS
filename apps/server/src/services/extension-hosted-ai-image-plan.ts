@@ -119,6 +119,16 @@ export interface ExtensionHostedAiImagePlanBindingStore {
     ExtensionHostedAiImagePlanBindingRecord,
     'planId' | 'authorityHash' | 'bindingHash'
   >): Promise<ExtensionHostedAiImagePlanBindingRecord | null>;
+  /**
+   * Re-attaches a suite binding after the tenant owner explicitly launches
+   * the exact ERP draft on a newly paired instance of the same device.
+   */
+  rebindAfterExplicitLaunchGrant?(input: Omit<
+    ExtensionHostedAiImagePlanBindingRecord,
+    'planId' | 'authorityHash' | 'bindingHash'
+  > & {
+    authorization: 'ERP_SOURCE_LAUNCH_GRANT';
+  }): Promise<ExtensionHostedAiImagePlanBindingRecord | null>;
 }
 
 export interface ExtensionHostedAiImagePlanningPort {

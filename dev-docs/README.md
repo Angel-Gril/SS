@@ -1,5 +1,10 @@
 # SS ERP 内部开发真源
 
+## 2026-09-22 显式 launch grant 计划绑定恢复修复
+
+- 当前接续修复已完成本地实现与真实隔离 PostgreSQL 验证：新配对设备不会通过普通 successor lineage 跨过 `REFRESH_REUSE_DETECTED` 自动接管旧 suite binding；只有来源草稿页发出的、由同物理设备消费的 `ERP_SOURCE_LAUNCH_GRANT` 才能在精确 owner/device/deployment/scope/draft/suite/no-assignment 条件下恢复原 plan binding。
+- 定向 server `42/42`、全量 server `6324 passed / 324 skipped`、typecheck/lint 与真实 PostgreSQL `6/6` 通过。当前尚未提交、推送、部署或切换官网 pointer；生产写入/新增 Provider 费用均为 0。
+
 ## 2026-09-21 `3fc4eb91` 双区部署完成，官网 pointer 保持旧版本
 
 - 修复提交 `3fc4eb91f409f665b7a725cf9cbb1093dcfc5010` 已推送到 `origin/feat/ai-media-prompt-registry`，并完成 fresh `pnpm qa:04:offline`：server `6320 passed / 324 skipped`、AI Media PostgreSQL `196/196`、扩展最终 `463 pass / 0 failure / 0 warning`。

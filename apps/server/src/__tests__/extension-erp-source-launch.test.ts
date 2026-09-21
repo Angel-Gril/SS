@@ -23,6 +23,7 @@ function setup() {
     store, apiOrigin: 'https://ss-erp.com', deploymentId: 'com-production',
     loadDevice: vi.fn(async () => live), loadDraft: vi.fn(async () => draft), loadShop: vi.fn(async () => shop),
     loadMediaContext: vi.fn(async () => context), isEnabled: vi.fn(async () => true),
+    rebindHostedPlan: vi.fn(async () => undefined),
     now: () => new Date(now), createToken: () => 'a'.repeat(43),
   };
   return { service: createExtensionErpSourceLaunchService(dependencies), dependencies, store, live, draft, context, shop, values };
@@ -77,6 +78,52 @@ describe('ERP account to paired-device source image launch', () => {
     expect(result).toMatchObject({ provenance: 'ERP_SOURCE', ownerUserId: 'owner-a', deviceSessionId: 'device-a', mode: 'WORKBENCH', sourceMediaKeys: [], launchRequest: { sourcePlatform: '1688', sourceProductId: 'qa-owned-source', sourceCaptureSnapshotId: 'snapshot-a', supplyGoodsId: 'goods-a', shopId: 'shop-a', workflowId: 'draft-a', draftRevision: 7, draftVersion: 3 } });
     expect(result).not.toHaveProperty('launchToken');
     await expect(f.service.consume(device, issued.launchToken)).rejects.toMatchObject({ code: 'ERP_LAUNCH_GRANT_UNAVAILABLE' });
+  });
+
+  it('uses a consumed account-authorized workbench grant to recover its exact hosted plan binding', async () => {
+    const f = setup();
+    const issued = await f.service.issue(account, input);
+
+    await expect(f.service.consume(device, issued.launchToken)).resolves.toMatchObject({
+      mode: 'WORKBENCH',
+      deviceSessionId: 'device-a',
+    });
+
+    expect(f.dependencies.rebindHostedPlan).toHaveBeenCalledOnce();
+    expect(f.dependencies.rebindHostedPlan).toHaveBeenCalledWith({
+      ownerUserId: 'owner-a',
+      actorUserId: 'owner-a',
+      deviceSessionId: 'device-a',
+      snapshotId: 'snapshot-a',
+      supplyGoodsId: 'goods-a',
+      shopId: 'shop-a',
+      listingWorkflowId: 'draft-a',
+      draftRevision: 7,
+      draftVersion: 3,
+      authorization: 'ERP_SOURCE_LAUNCH_GRANT',
+    });
+  });
+
+  it('does not recover a hosted plan for editor grants or failed grant consumption', async () => {
+    const editor = setup();
+    const target = { skuKey: null, slotKey: 'product-main' };
+    Object.assign(editor.context, { target });
+    const editorGrant = await editor.service.issue(account, {
+      ...input,
+      mode: 'IMAGE_TO_IMAGE',
+      sourceMediaKeys: ['white-cup'],
+      target,
+    });
+    await editor.service.consume(device, editorGrant.launchToken);
+    expect(editor.dependencies.rebindHostedPlan).not.toHaveBeenCalled();
+
+    const wrongDevice = setup();
+    const workbenchGrant = await wrongDevice.service.issue(account, input);
+    await expect(wrongDevice.service.consume({
+      ...device,
+      sessionId: 'other-device',
+    }, workbenchGrant.launchToken)).rejects.toMatchObject({ code: 'ERP_LAUNCH_FORBIDDEN' });
+    expect(wrongDevice.dependencies.rebindHostedPlan).not.toHaveBeenCalled();
   });
 
   it('rejects Web owner B while the extension remains paired to owner A', async () => {

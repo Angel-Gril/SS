@@ -47,6 +47,22 @@ const BINDING_COLUMNS = `
   "authority_hash" AS "authorityHash",
   "binding_hash" AS "bindingHash"`;
 
+const BINDING_COLUMNS_FROM_BINDING = `
+  binding."id",
+  binding."plan_id" AS "planId",
+  binding."owner_user_id" AS "ownerUserId",
+  binding."device_session_id" AS "deviceSessionId",
+  binding."shop_id" AS "shopId",
+  binding."listing_workflow_id" AS "listingWorkflowId",
+  binding."source_capture_snapshot_id" AS "snapshotId",
+  binding."supply_goods_id" AS "supplyGoodsId",
+  binding."draft_revision" AS "draftRevision",
+  binding."draft_version" AS "draftVersion",
+  binding."selected_sku_hash" AS "selectedSkuHash",
+  binding."candidate_media_hash" AS "candidateMediaHash",
+  binding."authority_hash" AS "authorityHash",
+  binding."binding_hash" AS "bindingHash"`;
+
 interface RawBindingRow {
   id: unknown;
   planId: unknown;
@@ -302,6 +318,18 @@ function exactLookupInput(
     selectedSkuHash: exactHash(value.selectedSkuHash, 'selectedSkuHash'),
     candidateMediaHash: exactHash(value.candidateMediaHash, 'candidateMediaHash'),
   };
+}
+
+function exactExplicitLaunchRebindInput(
+  value: Omit<
+    ExtensionHostedAiImagePlanBindingRecord,
+    'planId' | 'authorityHash' | 'bindingHash'
+  > & { authorization: 'ERP_SOURCE_LAUNCH_GRANT' },
+) {
+  if (value?.authorization !== 'ERP_SOURCE_LAUNCH_GRANT') {
+    return invalidInput('authorization is invalid');
+  }
+  return exactLookupInput(value);
 }
 
 function rowOrNull(rows: unknown[], field: string): ExtensionHostedAiImagePlanBindingRecord | null {
@@ -682,6 +710,127 @@ export function createPrismaExtensionHostedAiImagePlanBindingStore(
           return invalidRow('Successor binding identity does not match the preserved plan');
         }
         return adopted;
+      });
+    },
+
+    async rebindAfterExplicitLaunchGrant(rawInput) {
+      const input = exactExplicitLaunchRebindInput(rawInput);
+      return runExtensionCommandSerializableTransaction(client, async (tx) => {
+        const predecessorRows = await tx.$queryRawUnsafe<unknown[]>(
+          `SELECT ${BINDING_COLUMNS_FROM_BINDING}
+           FROM "extension_hosted_ai_image_plan_bindings" binding
+           JOIN "extension_device_sessions" predecessor
+             ON predecessor."id" = binding."device_session_id"
+           JOIN "extension_device_sessions" successor
+             ON successor."id" = $2
+           WHERE binding."owner_user_id" = $1
+             AND binding."shop_id" = $3
+             AND binding."listing_workflow_id" = $4
+             AND binding."source_capture_snapshot_id" = $5
+             AND binding."supply_goods_id" = $6
+             AND binding."draft_revision" = $7
+             AND binding."draft_version" = $8
+             AND binding."selected_sku_hash" = $9
+             AND binding."candidate_media_hash" = $10
+             AND predecessor."owner_user_id" = $1
+             AND predecessor."actor_user_id" = $1
+             AND predecessor."status" = 'REVOKED'
+             AND predecessor."revoked_reason" = 'REFRESH_REUSE_DETECTED'
+             AND successor."owner_user_id" = $1
+             AND successor."actor_user_id" = $1
+             AND successor."status" = 'ACTIVE'
+             AND successor."device_id" = predecessor."device_id"
+             AND successor."deployment_id" = predecessor."deployment_id"
+             AND successor."scopes" @> predecessor."scopes"
+             AND successor."scopes" <@ predecessor."scopes"
+             AND cardinality(successor."scopes") = cardinality(predecessor."scopes")
+             AND EXISTS (
+               SELECT 1
+               FROM "ai_media_suites" suite
+               WHERE suite."owner_user_id" = binding."owner_user_id"
+                 AND suite."plan_id" = binding."plan_id"
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM "extension_hosted_ai_image_listing_assignments" assignment
+               WHERE assignment."owner_user_id" = binding."owner_user_id"
+                 AND assignment."plan_id" = binding."plan_id"
+             )
+           ORDER BY binding."updated_at" DESC, binding."id" DESC
+           LIMIT 2
+           FOR UPDATE OF binding`,
+          input.ownerUserId,
+          input.deviceSessionId,
+          input.shopId,
+          input.listingWorkflowId,
+          input.snapshotId,
+          input.supplyGoodsId,
+          input.draftRevision,
+          input.draftVersion,
+          input.selectedSkuHash,
+          input.candidateMediaHash,
+        );
+        const predecessor = rowOrNull(predecessorRows, 'explicit launch predecessor lookup');
+        if (!predecessor) return null;
+        const successorRecord = normalizedRecord({
+          ...predecessor,
+          deviceSessionId: input.deviceSessionId,
+          bindingHash: expectedBindingHash({
+            ...predecessor,
+            deviceSessionId: input.deviceSessionId,
+          }),
+        }, 'input');
+        const updated = await tx.$queryRawUnsafe<unknown[]>(
+          `UPDATE "extension_hosted_ai_image_plan_bindings"
+           SET "device_session_id" = $2,
+               "binding_hash" = $11,
+               "updated_at" = NOW()
+           WHERE "owner_user_id" = $1
+             AND "plan_id" = $3
+             AND "device_session_id" = $4
+             AND "shop_id" = $5
+             AND "listing_workflow_id" = $6
+             AND "source_capture_snapshot_id" = $7
+             AND "supply_goods_id" = $8
+             AND "draft_revision" = $9
+             AND "draft_version" = $10
+             AND "selected_sku_hash" = $12
+             AND "candidate_media_hash" = $13
+             AND NOT EXISTS (
+               SELECT 1
+               FROM "extension_hosted_ai_image_plan_bindings" existing
+               WHERE existing."owner_user_id" = $1
+                 AND existing."device_session_id" = $2
+                 AND existing."shop_id" = $5
+                 AND existing."listing_workflow_id" = $6
+                 AND existing."source_capture_snapshot_id" = $7
+                 AND existing."supply_goods_id" = $8
+                 AND existing."draft_revision" = $9
+                 AND existing."draft_version" = $10
+                 AND existing."selected_sku_hash" = $12
+                 AND existing."candidate_media_hash" = $13
+             )
+           RETURNING ${BINDING_COLUMNS}`,
+          predecessor.ownerUserId,
+          successorRecord.deviceSessionId,
+          predecessor.planId,
+          predecessor.deviceSessionId,
+          predecessor.shopId,
+          predecessor.listingWorkflowId,
+          predecessor.snapshotId,
+          predecessor.supplyGoodsId,
+          predecessor.draftRevision,
+          predecessor.draftVersion,
+          successorRecord.bindingHash,
+          predecessor.selectedSkuHash,
+          predecessor.candidateMediaHash,
+        );
+        const rebound = rowOrNull(updated, 'explicit launch binding update');
+        if (!rebound) return null;
+        if (!sameRecord(rebound, successorRecord)) {
+          return invalidRow('Explicit launch binding identity does not match the preserved plan');
+        }
+        return rebound;
       });
     },
   };

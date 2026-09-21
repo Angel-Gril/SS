@@ -1,5 +1,12 @@
 # SS ERP 当前状态审计
 
+## 2026-09-22 显式 ERP source launch 恢复 hosted plan binding
+
+- 根因已确认：新配对的 session `38c7ca76-2376-4931-a846-b02366b7ae31` 是独立根 session，而原套图 plan binding 仍绑定到曾触发 `REFRESH_REUSE_DETECTED` 的旧 session `90238535-db06-4ce1-937a-854550c4d7c8`；普通 `/plans/current` 保持 `plan=null` 是安全正确的拒绝，不应跨安全事件自动继承。
+- 新增受控 owner：只有当前租户 owner 从来源草稿页签发并由当前同物理设备成功消费 `ERP_SOURCE_LAUNCH_GRANT` 的 `WORKBENCH` grant，服务端才允许在同 owner、同 device、同 deployment、相同 scopes、同草稿/SKU/media hash、旧 session 为 `REFRESH_REUSE_DETECTED`、已有 suite 且尚无 listing assignment 的条件下迁移 binding；planId、suite、费用和候选均保持不变。编辑器 grant、错误 owner、错误设备、scope/deployment 变化均拒绝。
+- T2 RED -> GREEN：新增 source launch service 与 Prisma binding owner 测试；定向 server `42/42`、全量 server `6324 passed / 324 skipped`、server typecheck/lint、`git diff --check` 通过。真实隔离 PostgreSQL 新增恢复用例 `6/6 passed`，证明 150 migrations 后真实约束下迁移可用。
+- 当前代码尚未提交、推送或部署；下一步提交后重建 `1.0.358` 双区候选并部署，然后在专用 MV3 profile 从来源页重新签发/消费 grant，验证 `/plans/current` 返回原 plan，再完成审核、store-draft assignment 和幂等 replay。全量 AI PostgreSQL runner 另有一个既有 Wanx execution-lease 时间边界失败，未把它归因于本修复。
+
 ## 2026-09-21 `3fc4eb91` 已推送并完成 COM/CN 部署
 
 - 当前源码、COM/CN current 均为 `3fc4eb91f409f665b7a725cf9cbb1093dcfc5010 / 1.0.355`。COM 受限 hosted pilot 精确绑定 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、active sessions `42f4d334-07a9-4435-9ede-0e81786a80c8` 与 `90238535-db06-4ce1-937a-854550c4d7c8`，只允许 `IMAGE_TO_IMAGE/SUITE`；CN 为 direct-origin、外部 RDS、AI/BYOK/Ozon 全暗。

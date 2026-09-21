@@ -21,6 +21,18 @@ export interface ExtensionErpSourceLaunchOptions {
   loadDraft(input: { ownerUserId: string; workflowId: string }): Promise<ExtensionByokWorkbenchDraft | null>;
   loadMediaContext(input: { ownerUserId: string; listingWorkflowId: string; draftRevision: number; draftVersion: number; target?: SourceListingAiMediaTarget }): Promise<ExtensionMediaTranslationLaunchContext | null>;
   isEnabled?(input: { ownerUserId: string; deviceSessionId: string; shopId: string; mode: 'WORKBENCH' | 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT' }): Promise<boolean>;
+  rebindHostedPlan?(input: {
+    ownerUserId: string;
+    actorUserId: string;
+    deviceSessionId: string;
+    snapshotId: string;
+    supplyGoodsId: string;
+    shopId: string;
+    listingWorkflowId: string;
+    draftRevision: number;
+    draftVersion: number;
+    authorization: 'ERP_SOURCE_LAUNCH_GRANT';
+  }): Promise<void>;
   now?: () => Date;
   createToken?: () => string;
 }
@@ -204,6 +216,20 @@ export function createExtensionErpSourceLaunchService(options: ExtensionErpSourc
         const resolved = await resolve(grant.ownerUserId, grant.actorUserId, grant.request);
         if (JSON.stringify(resolved) !== JSON.stringify(grant.resolved)) return fail('ERP_LAUNCH_CONTEXT_STALE', 409);
         if (!await options.store.consume(digest, raw)) return fail('ERP_LAUNCH_GRANT_UNAVAILABLE', 409);
+        if (resolved.mode === 'WORKBENCH' && options.rebindHostedPlan) {
+          await options.rebindHostedPlan({
+            ownerUserId: grant.ownerUserId,
+            actorUserId: grant.actorUserId,
+            deviceSessionId: resolved.deviceSessionId,
+            snapshotId: resolved.launchRequest.sourceCaptureSnapshotId,
+            supplyGoodsId: resolved.launchRequest.supplyGoodsId,
+            shopId: resolved.launchRequest.shopId,
+            listingWorkflowId: resolved.launchRequest.workflowId,
+            draftRevision: resolved.launchRequest.draftRevision,
+            draftVersion: resolved.launchRequest.draftVersion,
+            authorization: 'ERP_SOURCE_LAUNCH_GRANT',
+          });
+        }
         return { ...resolved, grantSha256: digest };
       });
     },

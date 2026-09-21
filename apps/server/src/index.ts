@@ -2380,6 +2380,70 @@ if (isExtensionDeviceAuthEnabled()) {
       loadShop: loadExtensionCommandShop,
       loadDraft: loadExtensionByokWorkbenchDraft,
       loadMediaContext: loadExtensionMediaTranslationContext,
+      rebindHostedPlan: async (input) => {
+        if (input.authorization !== 'ERP_SOURCE_LAUNCH_GRANT'
+          || input.ownerUserId !== input.actorUserId) {
+          throw new Error('ERP source launch plan rebind authority is invalid');
+        }
+        const binding = {
+          snapshotId: input.snapshotId,
+          supplyGoodsId: input.supplyGoodsId,
+          shopId: input.shopId,
+          listingWorkflowId: input.listingWorkflowId,
+          draftRevision: input.draftRevision,
+          draftVersion: input.draftVersion,
+        };
+        const authority = await extensionHostedAiImageAuthority.loadPlanAuthority({
+          ownerUserId: input.ownerUserId,
+          listingWorkflowId: input.listingWorkflowId,
+        });
+        if (!authority
+          || authority.ownerUserId !== input.ownerUserId
+          || authority.snapshotId !== input.snapshotId
+          || authority.supplyGoodsId !== input.supplyGoodsId
+          || authority.shopId !== input.shopId
+          || authority.listingWorkflowId !== input.listingWorkflowId
+          || authority.draftRevision !== input.draftRevision
+          || authority.draftVersion !== input.draftVersion
+          || authority.sourceCaptureCurrent !== true
+          || authority.workflowStatus !== 'ACTIVE'
+          || !isExtensionHostedAiImageActiveDraftStage(authority.draftStage)) {
+          throw new Error('ERP source launch plan rebind context is stale');
+        }
+        const lookupRecord = createExtensionHostedAiImagePlanBindingRecord({
+          planId: 'hosted-plan-explicit-launch-rebind-lookup',
+          identity: {
+            ownerUserId: input.ownerUserId,
+            actorUserId: input.actorUserId,
+            deviceSessionId: input.deviceSessionId,
+          },
+          binding,
+          selectedSkuKeys: [...authority.selectedSkuKeys].sort(),
+          candidateMediaKeys: [...authority.candidateMediaKeys].sort(),
+        });
+        const {
+          planId: _lookupPlanId,
+          authorityHash: _lookupAuthorityHash,
+          bindingHash: _lookupBindingHash,
+          ...bindingLookup
+        } = lookupRecord;
+        let current = await extensionHostedAiImagePlanBindings.find(bindingLookup);
+        if (!current && extensionHostedAiImagePlanBindings.adoptSessionSuccessor) {
+          current = await extensionHostedAiImagePlanBindings.adoptSessionSuccessor(bindingLookup);
+        }
+        if (!current && extensionHostedAiImagePlanBindings.rebindAfterExplicitLaunchGrant) {
+          current = await extensionHostedAiImagePlanBindings.rebindAfterExplicitLaunchGrant({
+            ...bindingLookup,
+            authorization: 'ERP_SOURCE_LAUNCH_GRANT',
+          });
+        }
+        if (!current && await extensionHostedAiImageModeLockLoader.hasHostedSuite({
+          ownerUserId: input.ownerUserId,
+          binding,
+        })) {
+          throw new Error('ERP source launch could not safely recover the hosted plan binding');
+        }
+      },
       isEnabled: async (input) => {
         const [extension, webMedia, workflow] = await Promise.all([
           sourceWorkflowFeatureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', input),

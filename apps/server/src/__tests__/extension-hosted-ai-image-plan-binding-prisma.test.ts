@@ -288,6 +288,67 @@ describe('Prisma extension hosted AI image plan binding store', () => {
     ]);
   });
 
+  it('rebinds a suite only after an explicit ERP source launch grant recovers the same device', async () => {
+    const predecessor = binding({ deviceSessionId: 'device-session-reused' });
+    const successor = binding({ deviceSessionId: 'device-session-recovered' });
+    const {
+      planId: _planId,
+      authorityHash: _authorityHash,
+      bindingHash: _bindingHash,
+      ...lookup
+    } = successor;
+    const { store, transactionQuery } = fixture({
+      transactionResults: [[storedRow(predecessor)], [storedRow(successor)]],
+    });
+
+    await expect(store.rebindAfterExplicitLaunchGrant!({
+      ...lookup,
+      authorization: 'ERP_SOURCE_LAUNCH_GRANT',
+    })).resolves.toEqual(successor);
+
+    expect(transactionQuery).toHaveBeenCalledTimes(2);
+    const [selectSql, ...selectValues] = transactionQuery.mock.calls[0]!;
+    expect(selectSql).toMatch(/successor\."id" = \$2/u);
+    expect(selectSql).toMatch(/predecessor\."id" = binding\."device_session_id"/u);
+    expect(selectSql).toMatch(/predecessor\."revoked_reason" = 'REFRESH_REUSE_DETECTED'/u);
+    expect(selectSql).toMatch(/successor\."device_id" = predecessor\."device_id"/u);
+    expect(selectSql).toMatch(/successor\."deployment_id" = predecessor\."deployment_id"/u);
+    expect(selectSql).toMatch(/successor\."scopes" @> predecessor\."scopes"/u);
+    expect(selectSql).toMatch(/successor\."scopes" <@ predecessor\."scopes"/u);
+    expect(selectSql).toMatch(/EXISTS[\s\S]*FROM "ai_media_suites"/u);
+    expect(selectSql).toMatch(/NOT EXISTS[\s\S]*FROM "extension_hosted_ai_image_listing_assignments"/u);
+    expect(selectValues).toEqual([
+      successor.ownerUserId,
+      successor.deviceSessionId,
+      successor.shopId,
+      successor.listingWorkflowId,
+      successor.snapshotId,
+      successor.supplyGoodsId,
+      successor.draftRevision,
+      successor.draftVersion,
+      successor.selectedSkuHash,
+      successor.candidateMediaHash,
+    ]);
+    const [updateSql, ...updateValues] = transactionQuery.mock.calls[1]!;
+    expect(updateSql).toMatch(/UPDATE "extension_hosted_ai_image_plan_bindings"/u);
+    expect(updateSql).not.toMatch(/SET "plan_id"/u);
+    expect(updateValues).toEqual([
+      predecessor.ownerUserId,
+      successor.deviceSessionId,
+      predecessor.planId,
+      predecessor.deviceSessionId,
+      predecessor.shopId,
+      predecessor.listingWorkflowId,
+      predecessor.snapshotId,
+      predecessor.supplyGoodsId,
+      predecessor.draftRevision,
+      predecessor.draftVersion,
+      successor.bindingHash,
+      predecessor.selectedSkuHash,
+      predecessor.candidateMediaHash,
+    ]);
+  });
+
   it('returns null when an exact get or find has no binding', async () => {
     const record = binding();
     const {
