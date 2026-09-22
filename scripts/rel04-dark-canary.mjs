@@ -51,6 +51,7 @@ const QA04_REQUIRED_GATES = Object.freeze([
   'EXTENSION_CLOUD',
   'EXTENSION_LOCAL',
 ]);
+const CN_NO_SHOP_DARK_CANARY_SHOP_ID = 'cn-dark-no-shop';
 
 export const REL04_DARK_CONFIG_KEYS = Object.freeze([
   'feature_ai_media_workflow_v2',
@@ -120,6 +121,7 @@ const REQUEST_RULES = new Map([
   ['GET /api/ai-images/suites/readiness', {
     method: 'GET', path: /^\/api\/ai-images\/suites\/readiness$/u,
   }],
+  ['GET /api/shops', { method: 'GET', path: /^\/api\/shops$/u }],
   ['POST /api/extension-device/byok-media/readiness', {
     method: 'POST', path: /^\/api\/extension-device\/byok-media\/readiness$/u,
   }],
@@ -519,6 +521,17 @@ export function parseRel04DarkCanaryEnvironment(
   );
   const extensionOrigin = exactExtensionOrigin(environment.REL04_EXTENSION_ORIGIN);
   const shopId = exactIdentifier(environment.REL04_SHOP_ID, 'SHOP_ID');
+  const noShopDarkCanary = environment.REL04_NO_SHOP_DARK_CANARY === 'true';
+  if (environment.REL04_NO_SHOP_DARK_CANARY
+    && environment.REL04_NO_SHOP_DARK_CANARY !== 'true'
+    && environment.REL04_NO_SHOP_DARK_CANARY !== 'false') {
+    fail('NO_SHOP_DARK_CANARY_INVALID');
+  }
+  if (noShopDarkCanary
+    && (environment.REL04_REGION !== 'CN' || shopId !== CN_NO_SHOP_DARK_CANARY_SHOP_ID
+      || String(environment.REL04_AI_MEDIA_ROLLOUT_EXPECTATION || 'off') !== 'off')) {
+    fail('NO_SHOP_DARK_CANARY_SCOPE_INVALID');
+  }
   const publishReconciliation = publishReconciliationBinding({
     workflowId: environment.REL04_PUBLISH_WORKFLOW_ID,
     attemptId: environment.REL04_PUBLISH_ATTEMPT_ID,
@@ -538,11 +551,17 @@ export function parseRel04DarkCanaryEnvironment(
   } else if (String(environment.REL04_QA04_ACCEPTANCE_FILE || '').trim()) {
     fail('PUBLISH_RECONCILIATION_BINDING_INVALID');
   }
-  const expectedPublishCapability = publishCapabilityExpectation({
-    reason: environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REASON,
-    revision: environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION,
-    legacyAllowed: environment.REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED,
-  });
+  if (noShopDarkCanary && (publishReconciliation.mode !== 'TARGET_COMMIT_QA04_REGRESSION'
+    || environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REASON
+    || environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION
+    || environment.REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED)) {
+    fail('NO_SHOP_DARK_CANARY_PUBLISH_BINDING_INVALID');
+  }
+  const expectedPublishCapability = noShopDarkCanary ? null : publishCapabilityExpectation({
+        reason: environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REASON,
+        revision: environment.REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION,
+        legacyAllowed: environment.REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED,
+      });
   const rollout = aiMediaRolloutExpectation(environment);
   if (rollout.expectation === 'hosted-pilot'
     && !rollout.hostedPilot.shopIds.includes(shopId)) {
@@ -559,6 +578,7 @@ export function parseRel04DarkCanaryEnvironment(
     publishReconciliationRegressionSha256: publishReconciliation.regressionSha256,
     publishReconciliationNotBefore: publishReconciliation.notBefore,
     expectedPublishCapability,
+    noShopDarkCanary,
     rolloutExpectation: rollout.expectation,
     hostedPilotExpectation: rollout.hostedPilot,
     ownerToken: credential(environment, 'REL04_OWNER_TOKEN', trustedRepositoryRoot),
@@ -687,14 +707,24 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   const expectedGitCommit = exactGitCommit(input.expectedGitCommit);
   const extensionOrigin = exactExtensionOrigin(input.extensionOrigin);
   const shopId = exactIdentifier(input.shopId, 'SHOP_ID');
+  const noShopDarkCanary = input.noShopDarkCanary === true;
+  const rolloutExpectation = input.rolloutExpectation || 'off';
   const publishReconciliation = publishReconciliationBinding({
     workflowId: input.publishWorkflowId,
     attemptId: input.publishAttemptId,
     regressionSha256: input.publishReconciliationRegressionSha256,
     notBefore: input.publishReconciliationNotBefore,
   });
-  const expectedPublishCapability = publishCapabilityExpectation(input.expectedPublishCapability);
-  const rolloutExpectation = input.rolloutExpectation || 'off';
+  if (noShopDarkCanary
+    && (input.releaseBinding?.candidate?.region !== 'CN'
+      || rolloutExpectation !== 'off'
+      || shopId !== CN_NO_SHOP_DARK_CANARY_SHOP_ID
+      || publishReconciliation.mode !== 'TARGET_COMMIT_QA04_REGRESSION'
+      || input.expectedPublishCapability)) {
+    fail('NO_SHOP_DARK_CANARY_SCOPE_INVALID');
+  }
+  const expectedPublishCapability = noShopDarkCanary
+    ? null : publishCapabilityExpectation(input.expectedPublishCapability);
   let hostedPilotExpectation = null;
   if (rolloutExpectation === 'hosted-pilot') {
     try {
@@ -857,6 +887,23 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   }
 
   async function verifyPublishReconciliation() {
+    if (noShopDarkCanary) {
+      const inventory = await requestJson('GET /api/shops', 'GET', '/api/shops', {
+        token: ownerToken,
+      });
+      const shops = exactArray(inventory.body?.data, 'CN_OWNER_SHOP_INVENTORY');
+      if (inventory.body?.code !== 1 || shops.length !== 0) {
+        fail('CN_OWNER_SHOP_INVENTORY_NOT_EMPTY');
+      }
+      checks.push(checkResult('publish-reconciliation-read', {
+        mode: publishReconciliation.mode,
+        regressionEvidenceSha256: publishReconciliation.regressionSha256,
+        shopInventoryCount: 0,
+        publisherCapabilityChecked: false,
+        ozonMutationRequestSentByCanary: false,
+      }));
+      return;
+    }
     const capability = await requestJson(
       'GET /api/source-listing-workflows/publisher-capability',
       'GET',
@@ -1043,6 +1090,8 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       activeCheck = 'publish-reconciliation-read';
       await verifyPublishReconciliation();
 
+      if (noShopDarkCanary) return;
+
       activeCheck = 'device-pairing-active-lifecycle';
       const deviceId = `rel04-canary-${idFactory()}`;
       canaryDeviceId = deviceId;
@@ -1190,6 +1239,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   }
 
   async function cleanup() {
+    if (noShopDarkCanary) return;
     if (!cleanupRequired) {
       checks.push(checkResult('device-session-cleanup', { action: 'NOT_REQUIRED' }));
       return;
@@ -1283,6 +1333,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       release: releaseBinding,
       extensionOrigin,
       shopIdHash: identityHash('SHOP', shopId),
+      ...(noShopDarkCanary ? { noShopDarkCanary: true } : {}),
       ...(hostedPilot ? {
         rollout: {
           expectation: 'hosted-pilot',

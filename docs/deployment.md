@@ -463,6 +463,14 @@ FULL_EDIT/INPAINT、BYOK 或 Ozon publisher。禁止为了生成 v2 回执临时
 两种模式都先离线验证目标区域、版本、release evidence SHA-256、Ed25519 签名及完整 VPS verifier
 回执，随后验证 `/ready`、extension CORS、对应 rollout、Hosted readiness 和 publisher capability，再创建
 仅含 `byok:media:ingest` 的临时设备配对，验证 refresh 与 BYOK disabled-path，最后撤销会话。
+
+CN 账号确无店铺时，可显式设置 `REL04_NO_SHOP_DARK_CANARY=true`、`REL04_REGION=CN`、
+`REL04_AI_MEDIA_ROLLOUT_EXPECTATION=off` 和保留的哨兵 `REL04_SHOP_ID=cn-dark-no-shop`；
+此哨兵不创建真实店铺。该模式只读确认该账号 `/api/shops` 为空，并验证所有暗态开关及 Hosted
+suite disabled；不调用店铺级 publisher capability，不创建配对/设备 session，也不执行 BYOK readiness。
+回执明确记载 publisher capability 未验证，因此不构成实际店铺发布能力或设备授权的验收。
+COM、hosted pilot 及有真实店铺的暗态仍必须走原有完整设备生命周期，不能使用此开关。
+此模式不设置 `REL04_EXPECTED_PUBLISH_CAPABILITY_*`，并继续绑定目标提交的 QA04 回执。
 claim 响应丢失时会按唯一 `deviceId` 找回并撤销已提交会话；任何清理失败都会使 canary 失败。
 它不发送 Provider 请求、不执行 ERP 图片 ingest，也不调用 Ozon 写接口。
 

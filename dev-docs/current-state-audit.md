@@ -1,5 +1,12 @@
 # SS ERP 当前状态审计
 
+## 2026-09-23 CN 无店铺全暗态 REL-04 合同修复
+
+- CN 当前管理员店铺列表为空，无法用真实 shop 绑定 publisher capability；COM pilot 与普通 CN dark canary 仍必须使用真实 shop。
+- 新增显式 `REL04_NO_SHOP_DARK_CANARY=true` 合同，仅允许 `REL04_REGION=CN`、`REL04_AI_MEDIA_ROLLOUT_EXPECTATION=off`、QA04 regression 及 `REL04_SHOP_ID=cn-dark-no-shop` 哨兵。canary 只读确认当前账号 `/api/shops` 为空，跳过店铺级 publisher capability，并明确记录 `shopInventoryCount=0 / publisherCapabilityChecked=false`，不宣称店铺发布能力。
+- 无店铺模式验证公网 readiness、官网候选隔离、全暗 AI/BYOK/Ozon policy、suite disabled readiness 和零副作用；不创建 pairing code、设备 session 或 BYOK readiness 请求。网站签署端和 API 分发端都使用相同的 CN-only check/request、固定哨兵 hash 和严格空店铺证据合同，拒绝其它模式复用。
+- T2 RED -> GREEN：REL-04/approval `37/37`，API 分发侧 `33 passed / 3 skipped`，release publication `31 passed / 1 platform skip`，定向 ESLint、server typecheck 和 diff 检查通过。源码改动改变正式候选 inputs，必须形成新 commit 后重跑 offline、重建/签名/部署双区并重新生成 VPS evidence/canary；当前 `2f2f5bb9 / 1.0.360` 证据不得重标。
+
 ## 2026-09-22 `1570a17b / 1.0.359` fresh suite 与正式发布接续
 
 - `1570a17b99bd8c38b251282184a9d60322a72a5d` 的完整 offline、COM/CN 区域候选/签名、备份恢复、部署和完整 VPS verifier 已通过；COM/CN canonical VPS SHA-256 分别为 `0f875cbbcad1eaa005b92fadd993fa51742060c6076c30e0da14368df47a09e5`、`1e5c5bd9c75ea4bab72ff4fc76558b6707a5d35c4384d1b2057a9d6609669e71`，唯一 warning 为远端备份未配置。COM restricted pilot 仅 DOTH `IMAGE_TO_IMAGE/SUITE`，CN direct/RDS 保持 AI/BYOK/Ozon 全暗。

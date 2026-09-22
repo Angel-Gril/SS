@@ -226,6 +226,10 @@ function fixtureFetcher(options = {}) {
         ? jsonResponse({ code: 1, data: { key, value: config.get(key) } })
         : jsonResponse({ code: 0 }, 404);
     }
+    if (url.pathname === '/api/shops' && init.method === 'GET') {
+      assert.equal(init.headers.authorization, `Bearer ${ownerToken}`);
+      return jsonResponse({ code: 1, data: options.shopInventory || [] });
+    }
     if (url.pathname === '/api/extension-device/pairing-codes' && init.method === 'POST') {
       assert.equal(init.headers.authorization, `Bearer ${ownerToken}`);
       assert.deepEqual(body.shopIds, [shopId]);
@@ -415,7 +419,8 @@ function releaseBinding() {
   };
 }
 
-function signedCandidateEnvironment(repository, privateRoot) {
+function signedCandidateEnvironment(repository, privateRoot, region = 'COM') {
+  const candidateApiOrigin = region === 'CN' ? 'https://api.example.cn' : apiOrigin;
   const candidateRoot = path.join(repository, 'candidate');
   mkdirSync(candidateRoot);
   mkdirSync(path.join(repository, 'config'));
@@ -424,7 +429,7 @@ function signedCandidateEnvironment(repository, privateRoot) {
     schemaVersion: 1, gitCommit, version,
     provenance: { commitSource: 'GIT_HEAD', sourceMode: 'REPOSITORY_SOURCE', packageInputsSha256: 'a'.repeat(64) },
     expectedOrigins: {
-      web: 'https://app.example.com', admin: 'https://admin.example.com', api: apiOrigin,
+      web: 'https://app.example.com', admin: 'https://admin.example.com', api: candidateApiOrigin,
       local: 'http://127.0.0.1:3001',
     },
     artifacts: Object.fromEntries(['cloud', 'local'].map((target) => [target, {
@@ -457,14 +462,14 @@ function signedCandidateEnvironment(repository, privateRoot) {
     startedAt: '2030-01-01T23:58:00.000Z', completedAt: '2030-01-01T23:59:00.000Z',
     failures: 0, warnings: 1,
     candidate: {
-      gitCommit, apiOrigin, region: 'COM', version,
+      gitCommit, apiOrigin: candidateApiOrigin, region, version,
       releaseEvidenceSha256: sha256(evidenceBytes), releaseSignatureSha256: sha256(signatureBytes),
     },
   };
   const vpsBytes = Buffer.from(`${JSON.stringify(vps, null, 2)}\n`);
   writeFileSync(vpsFile, vpsBytes, { mode: 0o600 });
   return {
-    REL04_REGION: 'COM', REL04_VERSION: version, REL04_RELEASE_BUILD_ROOT: candidateRoot,
+    REL04_REGION: region, REL04_VERSION: version, REL04_RELEASE_BUILD_ROOT: candidateRoot,
     REL04_RELEASE_SIGNATURE_FILE: signatureFile, REL04_RELEASE_SIGNATURE_SHA256: sha256(signatureBytes),
     REL04_RELEASE_EVIDENCE_SHA256: sha256(evidenceBytes),
     REL04_VPS_VERIFICATION_FILE: vpsFile, REL04_VPS_VERIFICATION_SHA256: sha256(vpsBytes),
@@ -612,6 +617,94 @@ test('runs a candidate-bound restricted hosted pilot canary without Provider or 
   const tampered = structuredClone(summary);
   tampered.checks.find(({ id }) => id === 'restricted-pilot-policy').evidence.rolloutRevision += 1;
   assert.throws(() => validateRel04DarkCanarySummary(tampered, expected), /pilot|rollout|digest|policy/iu);
+});
+
+test('CN dark canary explicitly accepts an empty shop inventory without treating it as publisher success', async () => {
+  const binding = releaseBinding();
+  binding.candidate.apiOrigin = 'https://api.example.cn';
+  binding.candidate.region = 'CN';
+  const summary = await runRel04DarkCanary(input({
+    apiOrigin: 'https://api.example.cn',
+    releaseBinding: binding,
+    shopId: 'cn-dark-no-shop',
+    noShopDarkCanary: true,
+    publishWorkflowId: null,
+    publishAttemptId: null,
+    publishReconciliationRegressionSha256: 'e'.repeat(64),
+    publishReconciliationNotBefore: null,
+    expectedPublishCapability: null,
+  }), { fetcher: fixtureFetcher({ apiOrigin: 'https://api.example.cn', noShopDarkCanary: true }) });
+  assert.equal(summary.status, 'PASS', JSON.stringify(summary));
+  const evidence = summary.checks.find(({ id }) => id === 'publish-reconciliation-read').evidence;
+  assert.equal(evidence.shopInventoryCount, 0);
+  assert.equal(evidence.publisherCapabilityChecked, false);
+  assert.equal(summary.bindings.noShopDarkCanary, true);
+  assert.deepEqual(summary.checks.map(({ id }) => id), [
+    'deployment-and-publication-isolation', 'default-off-policy',
+    'hosted-route-regression', 'publish-reconciliation-read',
+  ]);
+  assert.equal(summary.requestAudit.requests.some(({ route }) => route.includes('publisher-capability')), false);
+  assert.equal(summary.requestAudit.requests.some(({ method }) => method !== 'GET' && method !== 'OPTIONS'), false);
+  assert.equal(summary.requestAudit.ozonMutationSent, false);
+  const expected = {
+    expectedGitCommit: gitCommit,
+    expectedApiOrigin: 'https://api.example.cn',
+    expectedCandidate: binding.candidate,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z',
+    requireReleaseBinding: true,
+  };
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, expected));
+  const forged = structuredClone(summary);
+  forged.checks.find(({ id }) => id === 'publish-reconciliation-read').evidence.publisherCapabilityChecked = true;
+  assert.throws(() => validateRel04DarkCanarySummary(forged, expected), /no-shop dark evidence/u);
+  const fakeShop = structuredClone(summary);
+  fakeShop.bindings.shopIdHash = 'f'.repeat(64);
+  assert.throws(() => validateRel04DarkCanarySummary(fakeShop, expected), /no-shop dark canary binding/u);
+  const fakeRequest = structuredClone(summary);
+  fakeRequest.requestAudit.requests.push({
+    route: 'GET /api/source-listing-workflows/publisher-capability',
+    method: 'GET', statusCode: 404,
+  });
+  assert.throws(() => validateRel04DarkCanarySummary(fakeRequest, expected), /not allowlisted/u);
+  assert.throws(() => validateRel04DarkCanarySummary(summary, {
+    ...expected, expectedCandidate: { ...binding.candidate, region: 'COM' },
+  }));
+});
+
+test('CN no-shop mode rejects a nonempty owner inventory and never pairs a device', async () => {
+  const binding = releaseBinding();
+  binding.candidate.apiOrigin = 'https://api.example.cn';
+  binding.candidate.region = 'CN';
+  const fetcher = fixtureFetcher({ apiOrigin: 'https://api.example.cn', noShopDarkCanary: true,
+    shopInventory: [{ id: 'existing-shop' }] });
+  const summary = await runRel04DarkCanary(input({
+    apiOrigin: 'https://api.example.cn', releaseBinding: binding,
+    shopId: 'cn-dark-no-shop', noShopDarkCanary: true,
+    publishWorkflowId: null, publishAttemptId: null,
+    publishReconciliationRegressionSha256: 'e'.repeat(64), publishReconciliationNotBefore: null,
+    expectedPublishCapability: null,
+  }), { fetcher });
+  assert.equal(summary.status, 'FAIL');
+  assert.equal(summary.checks.at(-1)?.errorCode, 'CN_OWNER_SHOP_INVENTORY_NOT_EMPTY');
+  assert.equal(fetcher.calls.some(({ path: route }) => route.includes('pairing-codes')), false);
+});
+
+test('CN no-shop mode fails before I/O outside its exact dark regional scope', async () => {
+  const binding = releaseBinding();
+  binding.candidate.apiOrigin = 'https://api.example.cn';
+  binding.candidate.region = 'CN';
+  for (const overrides of [
+    { noShopDarkCanary: true },
+    { noShopDarkCanary: true, shopId: 'cn-dark-no-shop' },
+    { noShopDarkCanary: true, shopId: 'cn-dark-no-shop',
+      apiOrigin: 'https://api.example.cn', releaseBinding: binding,
+      rolloutExpectation: 'hosted-pilot' },
+  ]) {
+    const fetcher = fixtureFetcher();
+    await assert.rejects(runRel04DarkCanary(input(overrides), { fetcher }),
+      /NO_SHOP_DARK_CANARY_SCOPE_INVALID/u);
+    assert.equal(fetcher.calls.length, 0);
+  }
 });
 
 test('binds exact-commit QA-04 reconciliation evidence when no live attempt exists', async () => {
@@ -901,6 +994,35 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
     ...environment,
     REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(pilotExpectation),
   }), /PILOT_EXPECTATION_INVALID/u);
+  const cnRepository = path.join(root, 'cn-repository');
+  const cnPrivate = path.join(root, 'cn-private');
+  mkdirSync(cnRepository);
+  mkdirSync(cnPrivate);
+  const cnEnvironment = {
+    ...environment, ...signedCandidateEnvironment(cnRepository, cnPrivate, 'CN'),
+    REL04_API_ORIGIN: 'https://api.example.cn',
+    REL04_SHOP_ID: 'cn-dark-no-shop', REL04_NO_SHOP_DARK_CANARY: 'true',
+    REL04_EXPECTED_PUBLISH_CAPABILITY_REASON: undefined,
+    REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION: undefined,
+    REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED: undefined,
+  };
+  const parseCn = (env) => parseRel04DarkCanaryEnvironment(
+    env, cnRepository, new Date('2030-01-02T00:00:00.000Z'),
+  );
+  const parsedCn = parseCn(cnEnvironment);
+  assert.equal(parsedCn.noShopDarkCanary, true);
+  assert.equal(parsedCn.expectedPublishCapability, null);
+  for (const changes of [
+    { REL04_NO_SHOP_DARK_CANARY: 'invalid' },
+    { REL04_REGION: 'COM' },
+    { REL04_SHOP_ID: shopId },
+    { REL04_AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot' },
+    { REL04_EXPECTED_PUBLISH_CAPABILITY_REASON: 'master_off' },
+    { REL04_PUBLISH_WORKFLOW_ID: workflowId, REL04_PUBLISH_ATTEMPT_ID: attemptId,
+      REL04_PUBLISH_RECONCILIATION_REGRESSION_SHA256: undefined,
+      REL04_PUBLISH_RECONCILIATION_NOT_BEFORE: '2029-12-31T23:57:00.000Z',
+      REL04_QA04_ACCEPTANCE_FILE: undefined },
+  ]) assert.throws(() => parseCn({ ...cnEnvironment, ...changes }));
   for (const kind of ['SS_ERP_QA04_OFFLINE_REHEARSAL', 'SS_ERP_DARK_MAINTENANCE_BASELINE',
     'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE', 'SS_ERP_DARK_MAINTENANCE_BACKUP']) {
     const bytes = Buffer.from(`${JSON.stringify({ ...acceptance, kind }, null, 2)}\n`);

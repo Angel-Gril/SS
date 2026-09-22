@@ -37,6 +37,12 @@ const REL04_DARK_CHECK_IDS = Object.freeze([
   'byok-disabled-path',
   'device-session-cleanup',
 ]);
+const REL04_NO_SHOP_DARK_CHECK_IDS = Object.freeze([
+  'deployment-and-publication-isolation',
+  'default-off-policy',
+  'hosted-route-regression',
+  'publish-reconciliation-read',
+]);
 const REL04_PILOT_CHECK_IDS = Object.freeze([
   'deployment-and-publication-isolation',
   'restricted-pilot-policy',
@@ -61,6 +67,14 @@ const REL04_REQUIRED_REQUEST_ROUTES = Object.freeze([
   'POST /api/extension-device/byok-media/readiness',
   'DELETE /api/extension-device/sessions/:sessionId',
   'GET /api/extension-device/shops (revoked)',
+]);
+const REL04_NO_SHOP_DARK_REQUIRED_REQUEST_ROUTES = Object.freeze([
+  'GET /ready',
+  'GET /api/extensions/latest',
+  'OPTIONS /api/extension-device/byok-media/readiness',
+  'GET /api/admin/system-config/:key',
+  'GET /api/ai-images/suites/readiness',
+  'GET /api/shops',
 ]);
 
 function fail(message) {
@@ -398,6 +412,21 @@ function validateReconciliationEvidence(value, binding, observedAt) {
   }
 }
 
+function validateNoShopDarkReconciliationEvidence(value, binding) {
+  const evidence = exactKeys(value, [
+    'mode', 'regressionEvidenceSha256', 'shopInventoryCount',
+    'publisherCapabilityChecked', 'ozonMutationRequestSentByCanary',
+  ], 'REL-04 CN no-shop dark evidence');
+  if (binding.mode !== 'TARGET_COMMIT_QA04_REGRESSION'
+    || evidence.mode !== binding.mode
+    || evidence.regressionEvidenceSha256 !== binding.regressionEvidenceSha256
+    || evidence.shopInventoryCount !== 0
+    || evidence.publisherCapabilityChecked !== false
+    || evidence.ozonMutationRequestSentByCanary !== false) {
+    fail('REL-04 CN no-shop dark evidence is invalid');
+  }
+}
+
 export function validateRel04DarkCanarySummary(summary, input) {
   const expectedGitCommit = String(input.expectedGitCommit || '');
   const expectedApiOrigin = String(input.expectedApiOrigin || '');
@@ -406,10 +435,12 @@ export function validateRel04DarkCanarySummary(summary, input) {
     'schemaVersion', 'status',
   ], 'REL-04 dark canary evidence');
   const restrictedPilot = value.schemaVersion === 3;
+  const noShopDarkCanary = value.bindings?.noShopDarkCanary === true;
   const bindings = exactKeys(value.bindings, [
     'apiOrigin', 'expectedGitCommit', 'extensionOrigin', 'publishReconciliation',
     'shopIdHash', ...([2, 3].includes(value.schemaVersion) ? ['release'] : []),
     ...(restrictedPilot ? ['rollout'] : []),
+    ...(noShopDarkCanary ? ['noShopDarkCanary'] : []),
   ], 'REL-04 dark canary bindings');
   const reconciliation = validateReconciliationBinding(bindings.publishReconciliation);
   const observedAt = canonicalTimestamp(value.observedAt, 'REL-04 dark canary observedAt');
@@ -426,6 +457,14 @@ export function validateRel04DarkCanarySummary(summary, input) {
   }
   if (input.requireReleaseBinding && ![2, 3].includes(value.schemaVersion)) {
     fail('REL-04 v2 candidate-bound or v3 restricted-pilot evidence is required for a new website approval');
+  }
+  if (noShopDarkCanary && (value.schemaVersion !== 2
+    || value.kind !== 'SS_ERP_REL04_DARK_CANARY'
+    || bindings.noShopDarkCanary !== true
+    || bindings.shopIdHash !== sha256(Buffer.from('SS_ERP_REL04_CANARY_SHOP\0cn-dark-no-shop', 'utf8'))
+    || reconciliation.mode !== 'TARGET_COMMIT_QA04_REGRESSION'
+    || input.expectedCandidate?.region !== 'CN')) {
+    fail('REL-04 no-shop dark canary binding is invalid');
   }
   if ([2, 3].includes(value.schemaVersion)) {
     let candidate;
@@ -447,7 +486,9 @@ export function validateRel04DarkCanarySummary(summary, input) {
     validateRel04ReleaseBinding(bindings.release, candidate, observedAt, releaseSignedAt);
   }
 
-  const expectedCheckIds = restrictedPilot ? REL04_PILOT_CHECK_IDS : REL04_DARK_CHECK_IDS;
+  const expectedCheckIds = noShopDarkCanary
+    ? REL04_NO_SHOP_DARK_CHECK_IDS
+    : (restrictedPilot ? REL04_PILOT_CHECK_IDS : REL04_DARK_CHECK_IDS);
   if (!Array.isArray(value.checks) || value.checks.length !== expectedCheckIds.length) {
     fail('REL-04 dark canary check set is incomplete');
   }
@@ -500,43 +541,45 @@ export function validateRel04DarkCanarySummary(summary, input) {
       fail('REL-04 hosted regression evidence is invalid');
     }
   }
-  validateReconciliationEvidence(
-    evidence['publish-reconciliation-read'],
-    reconciliation,
-    observedAt,
-  );
-
-  const lifecycle = exactKeys(evidence['device-pairing-active-lifecycle'], [
-    'authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'refreshRotated',
-    'sessionIdHash',
-  ], 'REL-04 device lifecycle evidence');
-  for (const key of ['authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'sessionIdHash']) {
-    rel04Digest(lifecycle[key], `REL-04 ${key}`);
-  }
-  if (lifecycle.refreshRotated !== true) fail('REL-04 device refresh did not rotate');
-
-  const disabled = exactKeys(evidence['byok-disabled-path'], [
-    'erpIngestRequestSentByCanary', 'errorCode', 'providerRequestSentByCanary',
-    'rejectedBeforeExecutionIntent', 'statusCode',
-  ], 'REL-04 BYOK disabled evidence');
-  if (disabled.rejectedBeforeExecutionIntent !== true
-    || disabled.providerRequestSentByCanary !== false
-    || disabled.erpIngestRequestSentByCanary !== false
-    || disabled.statusCode !== 409
-    || disabled.errorCode !== 'byok_readiness_not_ready') {
-    fail('REL-04 BYOK disabled evidence is invalid');
+  if (noShopDarkCanary) {
+    validateNoShopDarkReconciliationEvidence(evidence['publish-reconciliation-read'], reconciliation);
+  } else {
+    validateReconciliationEvidence(evidence['publish-reconciliation-read'], reconciliation, observedAt);
   }
 
-  const cleanupCheck = exactKeys(evidence['device-session-cleanup'], [
-    'action', 'revokedTokenRejected', 'sessionIdHash',
-  ], 'REL-04 device cleanup evidence');
-  rel04Digest(cleanupCheck.sessionIdHash, 'REL-04 cleanup session hash');
-  if ((cleanupCheck.action === 'OWNER_REVOKED'
-      && cleanupCheck.revokedTokenRejected !== true)
-    || (cleanupCheck.action === 'OWNER_RECOVERED_AND_REVOKED'
-      && cleanupCheck.revokedTokenRejected !== false)
-    || !['OWNER_REVOKED', 'OWNER_RECOVERED_AND_REVOKED'].includes(cleanupCheck.action)) {
-    fail('REL-04 device cleanup evidence is invalid');
+  if (!noShopDarkCanary) {
+    const lifecycle = exactKeys(evidence['device-pairing-active-lifecycle'], [
+      'authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'refreshRotated',
+      'sessionIdHash',
+    ], 'REL-04 device lifecycle evidence');
+    for (const key of ['authorizedShopIdHash', 'deploymentIdHash', 'deviceIdHash', 'sessionIdHash']) {
+      rel04Digest(lifecycle[key], `REL-04 ${key}`);
+    }
+    if (lifecycle.refreshRotated !== true) fail('REL-04 device refresh did not rotate');
+
+    const disabled = exactKeys(evidence['byok-disabled-path'], [
+      'erpIngestRequestSentByCanary', 'errorCode', 'providerRequestSentByCanary',
+      'rejectedBeforeExecutionIntent', 'statusCode',
+    ], 'REL-04 BYOK disabled evidence');
+    if (disabled.rejectedBeforeExecutionIntent !== true
+      || disabled.providerRequestSentByCanary !== false
+      || disabled.erpIngestRequestSentByCanary !== false
+      || disabled.statusCode !== 409
+      || disabled.errorCode !== 'byok_readiness_not_ready') {
+      fail('REL-04 BYOK disabled evidence is invalid');
+    }
+
+    const cleanupCheck = exactKeys(evidence['device-session-cleanup'], [
+      'action', 'revokedTokenRejected', 'sessionIdHash',
+    ], 'REL-04 device cleanup evidence');
+    rel04Digest(cleanupCheck.sessionIdHash, 'REL-04 cleanup session hash');
+    if ((cleanupCheck.action === 'OWNER_REVOKED'
+        && cleanupCheck.revokedTokenRejected !== true)
+      || (cleanupCheck.action === 'OWNER_RECOVERED_AND_REVOKED'
+        && cleanupCheck.revokedTokenRejected !== false)
+      || !['OWNER_REVOKED', 'OWNER_RECOVERED_AND_REVOKED'].includes(cleanupCheck.action)) {
+      fail('REL-04 device cleanup evidence is invalid');
+    }
   }
 
   const requestAudit = exactKeys(value.requestAudit, [
@@ -552,7 +595,9 @@ export function validateRel04DarkCanarySummary(summary, input) {
     fail('REL-04 request audit is invalid');
   }
   if (requestAudit.requests.length > 128) fail('REL-04 request audit is too large');
-  const requiredRoutes = reconciliation.mode === 'LIVE_ATTEMPT'
+  const requiredRoutes = noShopDarkCanary
+    ? new Set(REL04_NO_SHOP_DARK_REQUIRED_REQUEST_ROUTES)
+    : reconciliation.mode === 'LIVE_ATTEMPT'
     ? new Set([
         ...REL04_REQUIRED_REQUEST_ROUTES,
         'GET /api/source-listing-workflows/:workflowId/publish-attempts/:attemptId',
@@ -580,7 +625,9 @@ export function validateRel04DarkCanarySummary(summary, input) {
     ['completed', 'errorCode', 'required'],
     'REL-04 cleanup summary',
   );
-  if (cleanup.required !== true || cleanup.completed !== true || cleanup.errorCode !== null) {
+  if (cleanup.completed !== true || cleanup.errorCode !== null
+    || (!noShopDarkCanary && cleanup.required !== true)
+    || (noShopDarkCanary && cleanup.required !== false)) {
     fail('REL-04 cleanup summary is invalid');
   }
   return {

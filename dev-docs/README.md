@@ -1,5 +1,10 @@
 # SS ERP 内部开发真源
 
+## 2026-09-23 CN 无店铺 REL-04 暗态验收
+
+- CN 当前账号无 shop，因此新增显式 `REL04_NO_SHOP_DARK_CANARY=true` 的 CN-only 全暗态 canary 合同；只读确认账号店铺列表为空，不读取店铺级 publisher capability、不创建 shop 或设备 session。回执不证明店铺级发布/设备能力；COM pilot 和普通 dark canary 不变。实现、验证和发布后果见[当前状态审计](current-state-audit.md#2026-09-23-cn-无店铺全暗态-rel-04-合同修复)。
+- 本改动尚未形成新 clean commit、offline、签名候选、部署和新 VPS/canary 回执。官网继续保持 `b41097d6 / 1.0.354`；旧 `2f2f5bb9 / 1.0.360` 的 QA04、VPS/canary 不能重标给新提交。
+
 ## 2026-09-22 `1.0.359` fresh suite 与 QA04 事后只读取证
 
 - `1570a17b99bd8c38b251282184a9d60322a72a5d` 已推送并部署 COM/CN，扩展版本 `1.0.359`；目标 commit 的完整 offline、双区候选/签名、备份恢复与完整 VPS verifier 已通过。COM 继续只允许 DOTH `IMAGE_TO_IMAGE/SUITE`，CN 继续 direct/RDS 全暗；两区唯一 warning 仍为未配置远端备份。

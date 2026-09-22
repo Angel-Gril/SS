@@ -203,6 +203,7 @@ async function publishedFixture(input: {
   buildRoot: string;
   version?: string;
   canaryVersion?: 1 | 2 | 3;
+  region?: 'COM' | 'CN';
   mutateApproval?: (value: Record<string, unknown>) => void;
   mutateDarkCanary?: (value: Record<string, unknown>) => void;
 }) {
@@ -212,7 +213,10 @@ async function publishedFixture(input: {
   const bundlesRoot = path.join(publicationRoot, 'bundles');
   await mkdir(candidateRoot, { recursive: true });
   await mkdir(bundlesRoot, { recursive: true });
-  const release = await writeRelease({ buildRoot: candidateRoot, version });
+  const release = await writeRelease({ buildRoot: candidateRoot, version,
+    ...(input.region === 'CN' ? { mutateEvidence(value) {
+      (value.expectedOrigins as Record<string, unknown>).api = 'https://api.example.cn';
+    } } : {}) });
   const evidenceFilename = `ss-erp-extension-${version}.release-evidence.json`;
   const signatureFilename = `ss-erp-extension-${version}.release-signature.json`;
   const approvalFilename = `ss-erp-extension-${version}.website-publication-approval.json`;
@@ -271,14 +275,18 @@ async function publishedFixture(input: {
     status: 'PASS',
     observedAt: '2030-01-01T00:05:00.000Z',
     bindings: {
-      apiOrigin: 'https://api.example.com',
+      apiOrigin: input.region === 'CN' ? 'https://api.example.cn' : 'https://api.example.com',
       expectedGitCommit: gitCommit,
       extensionOrigin: `chrome-extension://${'a'.repeat(32)}`,
-      shopIdHash: 'c'.repeat(64),
+      shopIdHash: input.region === 'CN'
+        ? sha256(Buffer.from('SS_ERP_REL04_CANARY_SHOP\0cn-dark-no-shop', 'utf8'))
+        : 'c'.repeat(64),
       ...([2, 3].includes(input.canaryVersion || 0) ? {
         release: {
           candidate: {
-            gitCommit, apiOrigin: 'https://api.example.com', region: 'COM', version,
+            gitCommit,
+            apiOrigin: input.region === 'CN' ? 'https://api.example.cn' : 'https://api.example.com',
+            region: input.region || 'COM', version,
             releaseEvidenceSha256: sha256(release.evidenceBytes),
             releaseSignatureSha256: sha256(releaseSignatureBytes),
           },
@@ -448,6 +456,26 @@ async function publishedFixture(input: {
       return check;
     });
   }
+  if (input.region === 'CN') {
+    darkCanary.bindings.noShopDarkCanary = true;
+    darkCanary.checks = darkCanary.checks.slice(0, 4);
+    darkCanary.checks[3].evidence = {
+      mode: 'TARGET_COMMIT_QA04_REGRESSION',
+      regressionEvidenceSha256: 'b'.repeat(64),
+      shopInventoryCount: 0,
+      publisherCapabilityChecked: false,
+      ozonMutationRequestSentByCanary: false,
+    };
+    const noShopRoutes = new Set([
+      'GET /ready', 'GET /api/extensions/latest',
+      'OPTIONS /api/extension-device/byok-media/readiness',
+      'GET /api/admin/system-config/:key', 'GET /api/ai-images/suites/readiness',
+    ]);
+    darkCanary.requestAudit.requests = darkCanary.requestAudit.requests
+      .filter((row: { route: string }) => noShopRoutes.has(row.route));
+    darkCanary.requestAudit.requests.push({ method: 'GET', route: 'GET /api/shops', statusCode: 200 });
+    darkCanary.cleanup.required = false;
+  }
   input.mutateDarkCanary?.(darkCanary);
   const darkCanaryBytes = Buffer.from(canonical(darkCanary), 'utf8');
   const darkCanaryPath = path.join(input.root, darkCanaryFilename);
@@ -459,11 +487,11 @@ async function publishedFixture(input: {
     channel: 'FIRST_PARTY_WEBSITE',
     darkCanaryFilename,
     darkCanarySha256: sha256(darkCanaryBytes),
-    distributionOrigin: 'https://api.example.com',
+    distributionOrigin: input.region === 'CN' ? 'https://api.example.cn' : 'https://api.example.com',
     gitCommit,
     keyId,
     kind: 'SS_ERP_EXTENSION_WEBSITE_PUBLICATION_APPROVAL',
-    region: 'COM',
+    region: input.region || 'COM',
     releaseEvidenceFilename: evidenceFilename,
     releaseEvidenceSha256: sha256(release.evidenceBytes),
     releaseSignatureFilename: signatureFilename,
@@ -630,6 +658,51 @@ describe('extensionDownloadRoutes', () => {
     expect(cloud.statusCode).toBe(200);
     expect(cloud.rawPayload.equals(published.release.cloudBytes)).toBe(true);
     await app.close();
+  });
+
+  it('serves a signed CN no-shop dark canary but rejects forged inventory evidence', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const cn = await publishedFixture({ ...value, canaryVersion: 2, region: 'CN' });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: cn.publicationRoot, keyringPath: cn.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.cn', expectedRegion: 'CN',
+      trustedOwnerUid: null,
+    })).resolves.toMatchObject({ approvalSha256: cn.approvalSha256 });
+    const forged = await publishedFixture({ ...value, canaryVersion: 2,
+      region: 'CN', version: '1.0.266',
+      mutateDarkCanary(canary) {
+        const checks = canary.checks as Array<{ id: string; evidence: Record<string, unknown> }>;
+        checks.find(check => check.id === 'publish-reconciliation-read')!.evidence.shopInventoryCount = 1;
+      },
+    });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: forged.publicationRoot, keyringPath: forged.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.cn', expectedRegion: 'CN',
+      trustedOwnerUid: null,
+    })).rejects.toThrow(/no-shop|canary/u);
+  });
+
+  it.each([
+    ['missing CN binding', (canary: any) => { delete canary.bindings.noShopDarkCanary; }],
+    ['wrong shop hash', (canary: any) => { canary.bindings.shopIdHash = 'f'.repeat(64); }],
+    ['forged capability check', (canary: any) => {
+      canary.checks[3].evidence.publisherCapabilityChecked = true;
+    }],
+    ['forbidden publisher request', (canary: any) => {
+      canary.requestAudit.requests.push({ method: 'GET',
+        route: 'GET /api/source-listing-workflows/publisher-capability', statusCode: 404 });
+    }],
+  ])('rejects a signed CN no-shop canary with %s', async (_label, mutateDarkCanary) => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const forged = await publishedFixture({ ...value, canaryVersion: 2,
+      region: 'CN', mutateDarkCanary });
+    await expect(loadPublishedExtensionRelease({
+      publicationRoot: forged.publicationRoot, keyringPath: forged.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.cn', expectedRegion: 'CN',
+      trustedOwnerUid: null,
+    })).rejects.toThrow(/canary|no-shop|not allowlisted/u);
   });
 
   it('serves a signed v3 restricted hosted-pilot bundle with its exact allowlist', async () => {
