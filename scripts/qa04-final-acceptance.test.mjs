@@ -92,7 +92,10 @@ function fixture(t) {
     return result.stdout.trim();
   };
   git('init', '-q');
-  for (const name of ['apps/server/src/rule.ts', 'apps/server/prisma/schema.prisma', 'apps/server/package.json', 'packages/shared/src/contracts.ts', 'packages/shared/package.json', 'pnpm-lock.yaml', 'tsconfig.base.json']) {
+  for (const name of ['apps/server/src/rule.ts', 'apps/server/prisma/schema.prisma', 'apps/server/package.json',
+    'apps/server/src/services/extension-website-publication.ts',
+    'apps/server/src/__tests__/extensions-download.test.ts',
+    'packages/shared/src/contracts.ts', 'packages/shared/package.json', 'pnpm-lock.yaml', 'tsconfig.base.json']) {
     mkdirSync(path.dirname(path.join(repositoryRoot, name)), { recursive: true });
     writeFileSync(path.join(repositoryRoot, name), 'fixture\n');
   }
@@ -670,6 +673,29 @@ test('checks historical offline freshness at execution while requiring a fresh i
   assert.throws(() => f.verify({ now: '2026-09-18T12:00:00.000Z' }), error => error.code === 'QA04_OFFLINE_INVALID');
   f.input.offline = structuredClone(f.executionOfflineQa04);
   assert.throws(() => f.verify({ now }), error => error.code === 'QA04_OFFLINE_INVALID');
+});
+
+test('bridges historical suite evidence across website-publication-only server changes', t => {
+  const f = historicalRestrictedSuiteFixture(t);
+  const advance = message => {
+    const previous = f.input.targetGitCommit;
+    f.git('add', '--', 'apps/server'); f.git('commit', '-qm', message);
+    f.input.targetGitCommit = f.git('rev-parse', 'HEAD');
+    f.change(f.input.offline.receipt, value => { value.gitCommit = f.input.targetGitCommit; });
+    Object.assign(f.input.offline.log, f.put(path.basename(f.input.offline.log.path),
+      readFileSync(f.input.offline.log.path, 'utf8').replace(previous, f.input.targetGitCommit)));
+  };
+  writeFileSync(path.join(f.repositoryRoot, 'apps/server/src/services/extension-website-publication.ts'),
+    'changed website publication validation\n');
+  writeFileSync(path.join(f.repositoryRoot, 'apps/server/src/__tests__/extensions-download.test.ts'),
+    'changed website publication tests\n');
+  advance('change website publication validation');
+  const result = f.verify();
+  assert.equal(result.report.provenance.normalErp.sourceBridge.kind,
+    'IDENTICAL_ERP_EXECUTION_SOURCE_AND_DEPENDENCIES');
+  writeFileSync(path.join(f.repositoryRoot, 'apps/server/src/rule.ts'), 'changed production behavior\n');
+  advance('change protected ERP source');
+  assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
 });
 
 for (const filename of ['apps/server/src/rule.ts', 'packages/shared/src/contracts.ts', 'pnpm-lock.yaml']) {

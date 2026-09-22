@@ -506,8 +506,10 @@ pnpm qa:04:final --input <私有输入文件> --input-sha256 <输入摘要>
 pnpm qa:04:final --input <私有输入文件> --input-sha256 <输入摘要> --output <新的私有回执文件>
 ```
 
-入口核对当前 Git、九步原生日志、实际扩展检查计数及原件链；历史 ERP 证据仅在服务端、shared、
-schema 和依赖完全一致时可引用，仅允许根 package 新增本次两个固定 QA 命令；其他构建或安装脚本必须一致。输出保留真实执行提交和质量
+入口核对当前 Git、九步原生日志、实际扩展检查计数及原件链；历史 ERP 证据默认要求服务端、shared、
+schema 和依赖完全一致。唯一执行中立例外是固定的官网发布 validator 及其测试；producer 会逐 Git object
+比较其它全部 server 文件，并在回执中记录受保护 inventory 摘要和例外文件的前后 object ID，调用者不能指定或扩大例外。
+根 package 仅允许新增两个固定 QA 命令；其他依赖、构建或安装脚本必须一致。输出保留真实执行提交和质量
 反例，明确新目标 Web、生产 MV3 与官网分发的未验证范围。它不查询供应商账单、不发网络请求、
 不改变配置；当前验收决定见[生图计费阶段](../dev-docs/stages/ai-image-billing-closure-2026-09.md)。
 

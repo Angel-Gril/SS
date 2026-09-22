@@ -21,6 +21,10 @@ const GATES = ['QA04_OFFLINE_CONTRACT', 'GIT_DIFF_CHECK', 'WORKSPACE_LINT', 'WOR
   'FULL_PREFLIGHT_BUILD', 'SCOPE_REVOCATION_POSTGRES', 'AI_MEDIA_POSTGRES', 'EXTENSION_CLOUD', 'EXTENSION_LOCAL'];
 const ERP_TREES = ['apps/server', 'packages/shared', 'pnpm-lock.yaml', 'tsconfig.base.json', 'pnpm-workspace.yaml'];
 const OPTIONAL_DEPENDENCY_TREES = ['.npmrc', '.pnpmfile.cjs', 'patches'];
+const ERP_EXECUTION_NEUTRAL_SERVER_FILES = [
+  'apps/server/src/services/extension-website-publication.ts',
+  'apps/server/src/__tests__/extensions-download.test.ts',
+];
 const QA04_SCRIPT_REGISTRATIONS = {
   'qa:04:final': 'node scripts/qa04-final-acceptance.mjs',
   'test:qa04:final': 'node --test scripts/qa04-final-acceptance.test.mjs',
@@ -308,7 +312,44 @@ function verifyErpSource(root, executionCommit, targetCommit) {
       }));
     };
     const before = objects(executionCommit), after = objects(targetCommit);
-    requireThat(ERP_TREES.every(name => before[name] && after[name]) && equal(before, after), code);
+    requireThat(ERP_TREES.every(name => before[name] && after[name]), code);
+    let sourceBridge;
+    if (equal(before, after)) {
+      sourceBridge = { kind: 'IDENTICAL_ERP_SOURCE_AND_DEPENDENCIES', objects: before };
+    } else {
+      const withoutServer = value => Object.fromEntries(
+        Object.entries(value).filter(([name]) => name !== 'apps/server'),
+      );
+      requireThat(equal(withoutServer(before), withoutServer(after)), code);
+      const serverFiles = commit => {
+        const output = git(['ls-tree', '-r', '-z', commit, '--', 'apps/server']);
+        return Object.fromEntries(output.split('\0').filter(Boolean).map(line => {
+          const match = line.match(/^(100644 blob|100755 blob) ([a-f0-9]{40})\t(.+)$/u);
+          requireThat(Boolean(match), code);
+          return [match[3], { mode: match[1], objectId: match[2] }];
+        }));
+      };
+      const executionServerFiles = serverFiles(executionCommit);
+      const targetServerFiles = serverFiles(targetCommit);
+      const neutral = ERP_EXECUTION_NEUTRAL_SERVER_FILES.map(filename => {
+        const execution = executionServerFiles[filename], target = targetServerFiles[filename];
+        requireThat(execution?.mode === '100644 blob' && target?.mode === '100644 blob', code);
+        return { path: filename, executionObjectId: execution.objectId, targetObjectId: target.objectId };
+      });
+      const excluded = new Set(ERP_EXECUTION_NEUTRAL_SERVER_FILES);
+      const protectedFiles = value => Object.fromEntries(
+        Object.entries(value).filter(([filename]) => !excluded.has(filename)),
+      );
+      const executionProtectedFiles = protectedFiles(executionServerFiles);
+      requireThat(equal(executionProtectedFiles, protectedFiles(targetServerFiles))
+        && neutral.some(file => file.executionObjectId !== file.targetObjectId), code);
+      sourceBridge = {
+        kind: 'IDENTICAL_ERP_EXECUTION_SOURCE_AND_DEPENDENCIES',
+        objects: withoutServer(before),
+        protectedServerSourceSha256: sha256(sortedJson(executionProtectedFiles)),
+        executionNeutralServerFiles: neutral,
+      };
+    }
     const rootDependencies = commit => {
       const manifest = JSON.parse(git(['show', `${commit}:package.json`]));
       requireThat(isRecord(manifest) && isRecord(manifest.scripts), code);
@@ -320,7 +361,7 @@ function verifyErpSource(root, executionCommit, targetCommit) {
     };
     const original = rootDependencies(executionCommit), current = rootDependencies(targetCommit);
     requireThat(equal(original, current), code);
-    return { kind: 'IDENTICAL_ERP_SOURCE_AND_DEPENDENCIES', objects: before,
+    return { ...sourceBridge,
       rootPackageWithoutQa04RegistrationsSha256: sha256(sortedJson(original)),
       excludedRootScripts: Object.keys(QA04_SCRIPT_REGISTRATIONS) };
   });

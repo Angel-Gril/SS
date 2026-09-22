@@ -1,11 +1,18 @@
 # SS ERP 当前状态审计
 
+## 2026-09-23 QA04 官网发布 validator 与 ERP 执行 source bridge 解耦
+
+- `6aba7a8cd616dcbf64dca34c4c3cea6474bd6059` 已推送并完成 fresh offline：回执/日志 SHA-256 分别为 `bb9283d7c125813fe59bc86d35a66b971c53da3a85f29e259060bc301ebd7daf`、`8576d6986a9e25cca88d1aa16f1f2d9d8b2fd0ae54160746ea80ece7dc69dbfd`；server `6329 passed / 325 skipped`、AI Media PostgreSQL `197/197`，source/cloud/local verifier 为 `462/467/463`，均零 failure/warning。
+- 使用原 `1570a17b` suite v3 execution bridge 生成正式 QA04 时收到 `QA04_ERP_SOURCE_CHANGED`。直接 Git 对比证明 `1570a17b..6aba7a8c` 在 ERP source 范围内只改了 `apps/server/src/services/extension-website-publication.ts` 与其 `extensions-download.test.ts`；它们验证官网分发回执，不参与 suite 计划、生成、计费、审核或草稿 assignment。旧 bridge 把整个 `apps/server` tree 当一个 object，因而错误耦合了两个独立 owner。
+- bridge 仍先要求整树完全一致；只有整树不同时，才允许上述两个固定、两边均存在的普通文件变化，并逐文件比较其余 `apps/server`，同时继续精确锁定 `packages/shared`、Prisma/schema/migrations、lockfile、workspace、TypeScript 配置、可选补丁和根构建/安装合同。正式回执使用 `IDENTICAL_ERP_EXECUTION_SOURCE_AND_DEPENDENCIES`，记录受保护 server inventory SHA-256 和两个执行中立文件的前后 Git object ID，不接受调用者自报排除路径。
+- T2 RED -> GREEN：新增 suite v3 历史 bridge 正例及受保护 `apps/server/src/rule.ts` 负例；定向三项、完整 producer `51/51` 和定向 ESLint 通过。该 producer 改动必须形成新的 clean commit，再重新执行完整 offline 与正式 QA04；`6aba7a8c` 回执仅保留为诊断证据，不能重标。没有 Provider POST、Ozon 写入、生产部署或新增费用。
+
 ## 2026-09-23 CN 无店铺全暗态 REL-04 合同修复
 
 - CN 当前管理员店铺列表为空，无法用真实 shop 绑定 publisher capability；COM pilot 与普通 CN dark canary 仍必须使用真实 shop。
 - 新增显式 `REL04_NO_SHOP_DARK_CANARY=true` 合同，仅允许 `REL04_REGION=CN`、`REL04_AI_MEDIA_ROLLOUT_EXPECTATION=off`、QA04 regression 及 `REL04_SHOP_ID=cn-dark-no-shop` 哨兵。canary 只读确认当前账号 `/api/shops` 为空，跳过店铺级 publisher capability，并明确记录 `shopInventoryCount=0 / publisherCapabilityChecked=false`，不宣称店铺发布能力。
 - 无店铺模式验证公网 readiness、官网候选隔离、全暗 AI/BYOK/Ozon policy、suite disabled readiness 和零副作用；不创建 pairing code、设备 session 或 BYOK readiness 请求。网站签署端和 API 分发端都使用相同的 CN-only check/request、固定哨兵 hash 和严格空店铺证据合同，拒绝其它模式复用。
-- T2 RED -> GREEN：REL-04/approval `37/37`，API 分发侧 `33 passed / 3 skipped`，release publication `31 passed / 1 platform skip`，定向 ESLint、server typecheck 和 diff 检查通过。源码改动改变正式候选 inputs，必须形成新 commit 后重跑 offline、重建/签名/部署双区并重新生成 VPS evidence/canary；当前 `2f2f5bb9 / 1.0.360` 证据不得重标。
+- T2 RED -> GREEN：REL-04/approval `37/37`，API 分发侧 `33 passed / 3 skipped`，release publication `31 passed / 1 platform skip`，定向 ESLint、server typecheck 和 diff 检查通过。实现提交为 `6aba7a8c`，该提交 fresh offline 结果见上节；后续 source bridge commit 仍须重建/签名/部署双区并重新生成 VPS evidence/canary，当前 `2f2f5bb9 / 1.0.360` 与 `6aba7a8c` 证据均不得重标。
 
 ## 2026-09-22 `1570a17b / 1.0.359` fresh suite 与正式发布接续
 

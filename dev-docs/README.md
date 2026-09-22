@@ -1,9 +1,14 @@
 # SS ERP 内部开发真源
 
+## 2026-09-23 QA04 发布验证隔离边界
+
+- `6aba7a8c` 的 CN no-shop 实现已推送，目标 commit 完整 offline 已通过；但正式 QA04 正确暴露旧 source bridge 以整棵 `apps/server` 为粒度，导致仅官网发布 validator 的变化也被误判为 ERP suite 执行源码变化。
+- source bridge 现仅对两个固定官网发布文件使用执行中立例外，其余 server/shared/schema/依赖仍逐 Git object 严格相同；回执记录受保护 server inventory 摘要及两个排除文件的前后 object ID。完整 producer `51/51` 与 ESLint 通过。该 follow-up 必须形成新 clean commit 后重新取得 offline 和正式 QA04；不重跑 Provider suite，不复用 `6aba7a8c` offline 冒充新提交。
+
 ## 2026-09-23 CN 无店铺 REL-04 暗态验收
 
 - CN 当前账号无 shop，因此新增显式 `REL04_NO_SHOP_DARK_CANARY=true` 的 CN-only 全暗态 canary 合同；只读确认账号店铺列表为空，不读取店铺级 publisher capability、不创建 shop 或设备 session。回执不证明店铺级发布/设备能力；COM pilot 和普通 dark canary 不变。实现、验证和发布后果见[当前状态审计](current-state-audit.md#2026-09-23-cn-无店铺全暗态-rel-04-合同修复)。
-- 本改动尚未形成新 clean commit、offline、签名候选、部署和新 VPS/canary 回执。官网继续保持 `b41097d6 / 1.0.354`；旧 `2f2f5bb9 / 1.0.360` 的 QA04、VPS/canary 不能重标给新提交。
+- 实现提交 `6aba7a8cd616dcbf64dca34c4c3cea6474bd6059` 已推送；完整 offline 九步通过，server `6329 passed / 325 skipped`、AI Media PostgreSQL `197/197`、source/cloud/local 扩展分别 `462/467/463` 且零 failure/warning。尚未为后续 bridge commit 生成 offline、签名候选、部署或新 VPS/canary 回执。官网继续保持 `b41097d6 / 1.0.354`；旧 `2f2f5bb9 / 1.0.360` 及 `6aba7a8c` 的证据都不能重标给后续提交。
 
 ## 2026-09-22 `1.0.359` fresh suite 与 QA04 事后只读取证
 
