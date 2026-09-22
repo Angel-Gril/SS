@@ -47,7 +47,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit, binding.launchedAt) : null;
   const commit = executionCommit, offline = executionOffline?.receipt ?? reader.json(input.offline.receipt, CODE), owner = binding.ownerSha256;
   const native = (value, kind) => check(value?.kind === kind && value.gitCommit === commit);
-  native(ui, 'REAL_HOSTED_SUITE_UI_GET_READBACK'); native(applied, 'REAL_HOSTED_SUITE_ERP_DRAFT_ASSIGNMENT');
+  native(ui, derivedGeneratedPhase ? 'REAL_HOSTED_SUITE_GENERATED_READBACK' : 'REAL_HOSTED_SUITE_UI_GET_READBACK');
+  native(applied, 'REAL_HOSTED_SUITE_ERP_DRAFT_ASSIGNMENT');
   native(queue, 'REAL_HOSTED_SUITE_QUEUE_READBACK'); native(browser, 'NORMAL_IMAGE_SUITE_BROWSER_EXECUTION');
   check(binding.gitCommit === commit && isSha256(owner) && binding.caseId === 'suite' && binding.operation === 'IMAGE_TO_IMAGE'
     && binding.launch === 'ACTUAL_ERP_DRAFT_BUTTON' && binding.sourceSha256 === source.sha256

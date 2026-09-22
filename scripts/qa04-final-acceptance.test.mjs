@@ -471,6 +471,7 @@ function postApplicationDerivedSuiteFixture(t) {
   const applied = f.get(f.input.normalErp.applied), binding = f.get(manifest.workbench);
   manifest.schemaVersion = 3;
   manifest.databaseEvidenceMode = 'POST_APPLICATION_EVENT_DERIVATION_V1';
+  f.change(manifest.generatedUi, value => { value.kind = 'REAL_HOSTED_SUITE_GENERATED_READBACK'; });
   const event = (row, eventType, createdAt, payload, assetId = null) => ({
     eventKey: `${row.workflow.id}:${eventType}:${row.job.id}`,
     eventType,
