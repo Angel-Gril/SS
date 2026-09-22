@@ -466,6 +466,82 @@ function historicalRestrictedSuiteFixture(t) {
   return { ...f, executionGitCommit, executionOfflineQa04, targetGitCommit };
 }
 
+function postApplicationDerivedSuiteFixture(t) {
+  const f = historicalRestrictedSuiteFixture(t), manifest = f.get(f.input.normalErp.acceptance);
+  const applied = f.get(f.input.normalErp.applied), binding = f.get(manifest.workbench);
+  manifest.schemaVersion = 3;
+  manifest.databaseEvidenceMode = 'POST_APPLICATION_EVENT_DERIVATION_V1';
+  const event = (row, eventType, createdAt, payload, assetId = null) => ({
+    eventKey: `${row.workflow.id}:${eventType}:${row.job.id}`,
+    eventType,
+    jobId: row.job.id,
+    assetId,
+    payload,
+    payloadHash: hash(sortedJson(payload)),
+    createdAt,
+  });
+  for (const [phase, observedAt] of [['generated', '2026-09-16T10:36:30.000Z'], ['restored', '2026-09-16T10:37:00.000Z']]) {
+    f.change(f.input.normalErp[phase], database => {
+      database.observedAt = observedAt;
+      database.rows = database.rows.map((row, index) => {
+        const output = row.outputs[0], slotId = `suite-slot-${index}`;
+        const events = [
+          event(row, 'CREATED', `2026-09-16T10:29:1${index}.000Z`, { suiteId: 'private-suite', slotId }),
+          event(row, 'JOB_STARTED', `2026-09-16T10:30:0${index}.000Z`, { attempt: 1 }),
+          event(row, 'PROVIDER_DISPATCH_STARTED', `2026-09-16T10:30:1${index}.000Z`, { attempt: 1 }),
+          event(row, 'PROVIDER_SUBMITTED', `2026-09-16T10:30:2${index}.000Z`, { providerJobIdSha256: row.job.providerJobIdSha256 }),
+          event(row, 'PROVIDER_OUTPUT_PERSISTED', `2026-09-16T10:30:5${index}.000Z`, { outputAssetId: output.id, sha256: output.sha256 }),
+          event(row, 'JOB_SUCCEEDED', row.job.completedAt, { outputAssetId: output.id }),
+          event(row, 'REVIEW_APPROVED', index === 0 ? '2026-09-16T10:33:59.500Z' : '2026-09-16T10:34:00.500Z', {
+            version: 'ai-image-suite-candidate-review/v1',
+            suiteId: 'private-suite',
+            slotId,
+            workflowId: row.workflow.id,
+            jobId: row.job.id,
+            outputAssetId: output.id,
+            actorUserId: 'private-suite-owner',
+            decision: 'APPROVE',
+            expectedWorkflowRevision: 3,
+          }, output.id),
+        ];
+        return { ...row, workflow: { ...row.workflow, reviewStatus: 'APPROVED', revision: 4,
+          selectedOutputAssetId: output.id, eventTypes: events.map(value => value.eventType), events } };
+      });
+      database.draftVersions = [
+        { revision: applied.before.revision, draftVersion: applied.before.draftVersion, parentRevision: null,
+          payload: applied.before, payloadHash: hash(sourceDraftJson(applied.before)), createdAt: '2026-09-16T10:24:00.000Z' },
+        { revision: applied.after.revision, draftVersion: applied.after.draftVersion, parentRevision: applied.before.revision,
+          payload: applied.after, payloadHash: hash(sourceDraftJson(applied.after)), createdAt: applied.at },
+      ];
+      database.draftSnapshot = { id: binding.draftId, currentRevision: applied.after.revision,
+        currentDraftVersion: applied.after.draftVersion, payload: applied.after, payloadHash: hash(sourceDraftJson(applied.after)) };
+      database.listingAssignments = applied.items.map((item, index) => ({
+        assignmentId: applied.response.body.data.assignments[index].assignmentId,
+        batchId: applied.response.body.data.batchId,
+        batchItemOrdinal: index,
+        listingWorkflowId: binding.draftId,
+        skuKey: item.skuKey,
+        slotKey: item.slotKey,
+        assignmentScope: applied.response.body.data.assignments[index].assignmentScope,
+        assignmentOrdinal: applied.response.body.data.assignments[index].assignmentOrdinal,
+        assetId: item.outputAssetId,
+        assetSha256: database.rows[index].outputs[0].sha256,
+        suiteSlotId: item.suiteSlotId,
+        childWorkflowId: item.childWorkflowId,
+        jobId: database.rows[index].job.id,
+        sourceDraftRevision: applied.before.revision,
+        sourceDraftVersion: applied.before.draftVersion,
+        boundDraftRevision: applied.after.revision,
+        boundDraftVersion: applied.after.draftVersion,
+      }));
+      database.ozonPublishAttempts = 0;
+    });
+  }
+  f.input.normalErp.acceptance = f.put('suite-v3-inputs.json', manifest);
+  f.save();
+  return f;
+}
+
 for (const operation of ['IMAGE_TO_IMAGE', 'INPAINT']) {
   test(`derives current-code ${operation} draft acceptance from original records and pointer bindings`, t => {
     const f = draftFlowFixture(t, operation), result = f.verify();
@@ -927,6 +1003,28 @@ test('suite v2 bridges a JPEG source execution with removed completed queue jobs
     startedAt: '2026-09-16T10:00:00.000Z',
     completedAt: '2026-09-16T10:20:00.000Z',
   });
+});
+
+test('suite v3 derives the missed pre-review database phase from immutable events and draft versions', t => {
+  const f = postApplicationDerivedSuiteFixture(t), result = f.verify(), proof = result.report.provenance.normalErp;
+  assert.equal(result.report.decision, 'PASS');
+  assert.equal(proof.workflowKind, 'SUITE');
+  assert.equal(proof.generatedPhaseEvidence, 'POST_APPLICATION_EVENT_DERIVATION_V1');
+  assert.equal(proof.actualCostMinor, 28);
+  assert.equal(proof.applicationCount, 2);
+});
+
+test('suite v3 rejects review events before the pending UI, changed event hashes, draft history drift, and Ozon writes', t => {
+  for (const mutate of [
+    database => { database.rows[0].workflow.events.at(-1).createdAt = '2026-09-16T10:31:00.000Z'; },
+    database => { database.rows[0].workflow.events.at(-1).payloadHash = hash('changed'); },
+    database => { database.draftVersions[0].payload.media.assignments.push({ assetId: 'fabricated' }); },
+    database => { database.ozonPublishAttempts = 1; },
+  ]) {
+    const f = postApplicationDerivedSuiteFixture(t);
+    f.change(f.input.normalErp.generated, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
 });
 
 test('bounded image evidence parses a single-frame progressive JPEG with multiple scans', t => {

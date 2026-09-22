@@ -1,5 +1,12 @@
 # 生图与计费链路收口（2026-09）
 
+## 2026-09-22 `1570a17b / 1.0.359` fresh suite 与 suite v3 证据合同
+
+- COM/CN 已部署 `1570a17b / 1.0.359` 并通过区域签名、备份恢复和完整 VPS verifier。COM 只允许 DOTH `IMAGE_TO_IMAGE/SUITE`，CN direct/RDS 全暗；官网仍为旧 `b41097d6 / 1.0.354` pointer。
+- COM fresh suite `cmuc7p053001r5olq8wssceqa` 绑定 snapshot `a8f4ee01-93e1-4e1a-9a01-8348f7dbe964` 与草稿 `draft-fdf62d87-5b9d-424c-9870-8c05414ae7ab`，两张 900x1200 PNG 均 attempt 1 并真实审核通过。assignment 使草稿 `r1/v1 -> r2/v2`，原请求幂等重放保持两条；两笔唯一 CHARGE 共 CNY 0.28，没有重试或 Ozon publish。
+- 审核前数据库 phase 未及时读取，不能把当前 APPROVED 行改写成历史 PENDING。suite v3 `POST_APPLICATION_EVENT_DERIVATION_V1` 改为交叉验证原始 PENDING UI、不可变 workflow event payload/hash 与时间线、两个 source draft 版本及 payload hash、持久 assignment 外键、两份稳定 repeatable-read 快照和 Ozon 零写入。任何审核事件早于 PENDING UI、事件哈希变化、草稿历史漂移或 Ozon 计数非零均拒绝；完整 QA04 producer `50/50` 与 ESLint 通过，v1/v2 保持兼容。
+- 本节所在 producer 新提交仍需 fresh offline 和正式 QA04；其 normal suite 通过显式 execution commit/offline bridge 绑定 `1570a17b` 原件。正式回执通过后才能继续双区 canary、website approval、distribution probe 和官网 `1.0.359` CAS；不再执行新的 Provider 请求。
+
 ## 2026-09-21 `3fc4eb91 / 1.0.355` 双区部署与受限 gate 验收
 
 - 修复提交已推送并完成 fresh offline、独立 COM/CN 候选构建、签名、预置和区域匹配部署。COM 通过受限 hosted-pilot contract（`IMAGE_TO_IMAGE/SUITE`、精确 owner/shop/session）；CN 通过 direct-origin/RDS dark contract，未启用 hosted pilot。

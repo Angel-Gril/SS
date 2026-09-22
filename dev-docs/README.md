@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-22 `1.0.359` fresh suite 与 QA04 事后只读取证
+
+- `1570a17b99bd8c38b251282184a9d60322a72a5d` 已推送并部署 COM/CN，扩展版本 `1.0.359`；目标 commit 的完整 offline、双区候选/签名、备份恢复与完整 VPS verifier 已通过。COM 继续只允许 DOTH `IMAGE_TO_IMAGE/SUITE`，CN 继续 direct/RDS 全暗；两区唯一 warning 仍为未配置远端备份。
+- COM 原 1688 收纳盒 v4 快照 `a8f4ee01-93e1-4e1a-9a01-8348f7dbe964`、隔离草稿 `draft-fdf62d87-5b9d-424c-9870-8c05414ae7ab` 已完成唯一一次两图 SUITE `cmuc7p053001r5olq8wssceqa`。两槽均 attempt 1、900x1200 PNG，经安全预览与真实批准后原子写入 SKU hero 和 PRODUCT gallery；草稿 `r1/v1 -> r2/v2`，相同 assignment 请求 replay 保持两条。两笔唯一 `SETTLED/CHARGE` 各 CNY 0.14，总计 CNY 0.28；无 Provider 重试，Ozon publish attempt 为 0。
+- 执行时保留了生成完成且审核前的原始 MV3 UI、预览和审核记录，但遗漏同期数据库读取。生产库仍保留完整不可变 workflow events、审核 payload/hash、草稿 `r1/v1` 与 `r2/v2`、assignment 外键及 Ozon 零写入。正式 QA04 suite v3 producer 按 T2 RED -> GREEN 新增 `POST_APPLICATION_EVENT_DERIVATION_V1`：只在两份事后只读数据库快照完全稳定、事件哈希与时间线能证明 UI 读取时尚未审核、草稿历史和 assignment 全部相互绑定时接受；不允许调用者 PASS、重写历史状态或复用旧摘要。完整 producer `50/50` 与 ESLint 已通过。
+- 官网仍服务旧 pointer `b41097d6 / 1.0.354`。本节 producer 改动需要形成新的 clean commit，重新取得该提交的 offline，再以 `1570a17b` 作为显式 execution bridge 生成正式 QA04；之后才可执行 COM v3/CN v2 canary、website approval、distribution probe 和 CAS 到 `1.0.359`。当前不得再执行 Provider suite，本次 CNY 0.28 授权已用完。
+
 ## 2026-09-22 `1.0.358` 双区暗部署与 fresh suite 前置
 
 - `9634f8b69b6616295cb0fb36001289a8af9873f9` 已推送并部署 COM/CN；独立 MV3 原套图完成安全预览、两槽审核、DOTH store-draft assignment 与原请求幂等重放，未执行 Ozon publish。两区完整 VPS verifier 均为 `0 failure / 1 warning`，仅远端备份未配置；COM/CN 备份恢复分别验证 144/143 张表并清理临时库。

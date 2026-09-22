@@ -11,15 +11,24 @@ const single = values => { check(Array.isArray(values) && values.length === 1 &&
 const unique = values => check(values.every(text) && new Set(values).size === values.length);
 const success = response => check(response?.status >= 200 && response.status < 300 && response.body?.code === 1);
 
+// Source listing drafts use locale ordering in their database hash owner.
+const sourceDraftJson = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+  : Array.isArray(value) ? `[${value.map(sourceDraftJson).join(',')}]`
+    : `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${sourceDraftJson(item)}`).join(',')}}`;
+
 // This variant consumes only original local records. It cannot create tasks,
 // rewrite old evidence, bridge historical execution, or grant production access.
 export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
-  const explicitExecution = manifest.schemaVersion === 2;
+  const derivedGeneratedPhase = manifest.schemaVersion === 3;
+  const explicitExecution = manifest.schemaVersion === 2 || derivedGeneratedPhase;
   exactKeys(manifest, ['schemaVersion', 'kind', 'operation', 'source', 'referenceImage', 'secondImage', 'workbench', 'generatedUi',
     'submitted', 'startRequest', 'startResponse', 'continueRequest', 'continueResponse', 'applyRequest', 'queue', 'browser', 'previews', 'reviews',
-    ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : [])], CODE);
+    ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : []),
+    ...(derivedGeneratedPhase ? ['databaseEvidenceMode'] : [])], CODE);
   check((manifest.schemaVersion === 1 || explicitExecution)
     && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
+  if (derivedGeneratedPhase) check(manifest.databaseEvidenceMode === 'POST_APPLICATION_EVENT_DERIVATION_V1');
   const executionCommit = explicitExecution ? manifest.executionGitCommit : input.targetGitCommit;
   const executionOfflineRefs = explicitExecution ? manifest.executionOfflineQa04 : input.offline;
   check(/^[a-f0-9]{40}$/u.test(executionCommit));
@@ -33,6 +42,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   const controllerRecord = read(refs.controllerStatus), controller = controllerRecord?.result?.qualification ?? controllerRecord;
   const source = imageEvidence(reader, manifest.source, CODE), reference = imageEvidence(reader, manifest.referenceImage, CODE);
   const images = [pngEvidence(reader, refs.image, CODE), pngEvidence(reader, manifest.secondImage, CODE)];
+  const previews = manifest.previews.map(read), reviews = manifest.reviews.map(read);
   check(images.every(image => image.width === 900 && image.height === 1200) && images[0].sha256 !== images[1].sha256);
   const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit, binding.launchedAt) : null;
   const commit = executionCommit, offline = executionOffline?.receipt ?? reader.json(input.offline.receipt, CODE), owner = binding.ownerSha256;
@@ -41,7 +51,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   native(queue, 'REAL_HOSTED_SUITE_QUEUE_READBACK'); native(browser, 'NORMAL_IMAGE_SUITE_BROWSER_EXECUTION');
   check(binding.gitCommit === commit && isSha256(owner) && binding.caseId === 'suite' && binding.operation === 'IMAGE_TO_IMAGE'
     && binding.launch === 'ACTUAL_ERP_DRAFT_BUTTON' && binding.sourceSha256 === source.sha256
-    && text(binding.sourceMediaKey) && text(binding.sourceAssetId) && text(binding.snapshotId) && text(binding.draftId)
+    && text(binding.sourceMediaKey) && (text(binding.sourceAssetId) || (derivedGeneratedPhase && binding.sourceAssetId === null))
+    && text(binding.snapshotId) && text(binding.draftId)
     && text(binding.shopId) && text(binding.collectId) && positive(binding.revision) && positive(binding.draftVersion)
     && /^[0-9A-F]{32}$/u.test(binding.workbenchTargetId) && /^[0-9A-F]{32}$/u.test(binding.ownedWebTargetId)
     && binding.workbenchTargetId !== binding.ownedWebTargetId && /^\d+\.\d+\.\d+$/u.test(binding.extensionVersion));
@@ -96,6 +107,33 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && time(start.at) <= time(startResponse.at) && time(startResponse.at) <= time(continueRequest.at)
     && time(continueRequest.at) <= time(continueResponse.at) && time(continueResponse.at) <= time(submitted.at)
     && time(submitted.at) <= time(generated.observedAt));
+  const verifyDerivedEvents = (database, row, slot, output) => {
+    const events = row.workflow.events;
+    check(Array.isArray(events) && events.length >= 7 && equal(row.workflow.eventTypes, events.map(event => event.eventType)));
+    let previousAt = 0;
+    for (const event of events) {
+      const createdAt = time(event.createdAt);
+      check(text(event.eventKey) && text(event.eventType) && isRecord(event.payload) && isSha256(event.payloadHash)
+        && event.payloadHash === sha256(sortedJson(event.payload)) && createdAt >= previousAt && createdAt <= time(database.observedAt));
+      previousAt = createdAt;
+    }
+    const succeeded = single(events.filter(event => event.eventType === 'JOB_SUCCEEDED'));
+    const approved = single(events.filter(event => event.eventType === 'REVIEW_APPROVED'));
+    const preview = previews.find(value => value.slotId === slot.id), review = reviews.find(value => value.slotId === slot.id);
+    check(!events.some(event => event.eventType === 'REVIEW_REJECTED')
+      && succeeded.jobId === row.job.id && succeeded.payload.outputAssetId === output.id
+      && time(succeeded.createdAt) >= time(row.job.completedAt) && time(succeeded.createdAt) <= time(ui.at)
+      && approved.jobId === row.job.id && approved.assetId === output.id
+      && approved.payload.version === 'ai-image-suite-candidate-review/v1'
+      && approved.payload.suiteId === ui.suiteId && approved.payload.slotId === slot.id
+      && approved.payload.workflowId === row.workflow.id && approved.payload.jobId === row.job.id
+      && approved.payload.outputAssetId === output.id && approved.payload.decision === 'APPROVE'
+      && sha256(approved.payload.actorUserId) === owner && positive(approved.payload.expectedWorkflowRevision)
+      && row.workflow.revision === approved.payload.expectedWorkflowRevision + 1
+      && row.workflow.reviewStatus === 'APPROVED' && row.workflow.selectedOutputAssetId === output.id
+      && preview && review && time(approved.createdAt) >= time(preview.at)
+      && time(approved.createdAt) > time(ui.at) && time(approved.createdAt) <= time(review.at));
+  };
   const originalRows = pair(generated.rows), restoredRows = pair(restored.rows), seenJobs = [], seenProviders = [], seenCharges = [], seenOutputs = [], seenReservations = [];
   const rows = [];
   for (const [phase, database] of [['generated', generated], ['restored', restored]]) {
@@ -125,8 +163,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       const slot = slots.find(slot => slot.workflowId === flow?.id), image = images.find(image => image.sha256 === output.sha256);
       check(slot && image && flow.idSha256 === sha256(flow.id) && flow.operation === 'IMAGE_TO_IMAGE' && flow.status === 'SUCCEEDED'
         && flow.contextType === 'collect' && flow.contextId === binding.collectId && flow.contextSlotKey === slot.slotKey
-        && flow.reviewStatus === (phase === 'generated' ? 'PENDING' : 'APPROVED')
-        && flow.selectedOutputAssetId === (phase === 'generated' ? null : output.id)
+        && flow.reviewStatus === (phase === 'generated' && !derivedGeneratedPhase ? 'PENDING' : 'APPROVED')
+        && flow.selectedOutputAssetId === (phase === 'generated' && !derivedGeneratedPhase ? null : output.id)
         && slot.status === 'SUCCEEDED' && slot.attempt === 1 && slot.output?.assetId === output.id
         && slot.output.width === 900 && slot.output.height === 1200);
       check(output.idSha256 === sha256(output.id) && output.jobIdSha256 === job.idSha256 && output.kind === 'AI_GENERATED'
@@ -143,22 +181,29 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       check(Array.isArray(flow.eventTypes) && ['CREATED', 'JOB_STARTED', 'PROVIDER_DISPATCH_STARTED', 'PROVIDER_SUBMITTED',
         'PROVIDER_OUTPUT_PERSISTED', 'JOB_SUCCEEDED'].every(type => flow.eventTypes.includes(type)));
       if (phase === 'generated') {
-        check(!flow.eventTypes.includes('REVIEW_APPROVED') && !flow.eventTypes.includes('REVIEW_REJECTED'));
+        if (derivedGeneratedPhase) verifyDerivedEvents(database, row, slot, output);
+        else check(!flow.eventTypes.includes('REVIEW_APPROVED') && !flow.eventTypes.includes('REVIEW_REJECTED'));
         seenJobs.push(job.id); seenProviders.push(job.providerJobIdSha256); seenCharges.push(charge.chargeIdSha256); seenOutputs.push(output.id); seenReservations.push(cost.idSha256);
         rows.push({ job, flow, output, slot, image });
       } else {
         const original = originalRows.find(value => value.job.id === job.id);
         check(original && equal(original.job, job) && equal(original.cost, cost) && equal(original.outputs, row.outputs)
           && equal(original.workflow.inputs, flow.inputs) && equal(original.workflow.inputAssets, flow.inputAssets)
-          && flow.revision === original.workflow.revision + 1 && flow.eventTypes.includes('REVIEW_APPROVED')
+          && flow.revision === original.workflow.revision + (derivedGeneratedPhase ? 0 : 1) && flow.eventTypes.includes('REVIEW_APPROVED')
           && !flow.eventTypes.includes('REVIEW_REJECTED'));
+        if (derivedGeneratedPhase) {
+          check(equal(flow.events, original.workflow.events));
+          verifyDerivedEvents(database, row, slot, output);
+        }
       }
     }
   }
   unique(seenJobs); unique(seenProviders); unique(seenCharges); unique(seenOutputs); unique(seenReservations);
   unique(restoredRows.map(row => row.job.id));
   check(rows.every(row => time(ui.at) >= time(row.job.completedAt)) && time(ui.at) <= time(applied.at)
-    && time(generated.observedAt) <= time(applied.at) && time(applied.at) <= time(restored.observedAt));
+    && (derivedGeneratedPhase
+      ? time(applied.at) <= time(generated.observedAt) && time(generated.observedAt) <= time(restored.observedAt)
+      : time(generated.observedAt) <= time(applied.at) && time(applied.at) <= time(restored.observedAt)));
   const before = applied.before, after = applied.after, items = pair(applied.items);
   check(applied.suiteId === suiteId && applied.assignmentPosts === 1 && applied.ozonProductWrites === 0 && applied.actualUi === true);
   check(before?.id === binding.draftId && after?.id === before.id && sha256(before.ownerUserId) === owner && after.ownerUserId === before.ownerUserId
@@ -180,10 +225,45 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && command?.contractVersion === result.contractVersion && command.shopId === binding.shopId && command.listingWorkflowId === binding.draftId
     && command.expectedDraftRevision === before.revision && command.expectedDraftVersion === before.draftVersion
     && command.sourceCaptureSnapshotId === binding.snapshotId && command.assignmentStartOrdinal === before.media.assignments.length
-    && command.planId === plan.id && command.planVersionId === plan.versionId && command.expectedPlanRevision === plan.revision
+      && command.planId === plan.id && command.planVersionId === plan.versionId && command.expectedPlanRevision === plan.revision
       && command.suiteId === suiteId && positive(command.expectedSuiteRevision) && text(command.idempotencyKey) && equal(command.items, items)
     && time(applyRequest.at) >= time(ui.at) && time(applyRequest.at) <= time(applied.at));
-  const previews = manifest.previews.map(read), reviews = manifest.reviews.map(read);
+  if (derivedGeneratedPhase) {
+    const verifyDatabaseHistory = database => {
+      const versions = pair(database.draftVersions), beforeVersion = versions.find(value => value.revision === before.revision),
+        afterVersion = versions.find(value => value.revision === after.revision);
+      check(beforeVersion && afterVersion && beforeVersion.draftVersion === before.draftVersion
+        && afterVersion.draftVersion === after.draftVersion && beforeVersion.parentRevision === null
+        && afterVersion.parentRevision === before.revision && equal(beforeVersion.payload, before) && equal(afterVersion.payload, after)
+        && beforeVersion.payloadHash === sha256(sourceDraftJson(beforeVersion.payload))
+        && afterVersion.payloadHash === sha256(sourceDraftJson(afterVersion.payload))
+        && time(beforeVersion.createdAt) <= time(binding.launchedAt)
+        && time(afterVersion.createdAt) >= time(applyRequest.at) && time(afterVersion.createdAt) <= time(applied.at));
+      const draft = database.draftSnapshot;
+      check(draft?.id === binding.draftId && draft.currentRevision === after.revision
+        && draft.currentDraftVersion === after.draftVersion && equal(draft.payload, after)
+        && draft.payloadHash === afterVersion.payloadHash && database.ozonPublishAttempts === 0);
+      const persisted = pair(database.listingAssignments);
+      unique(persisted.map(value => value.assignmentId));
+      for (const [index, item] of items.entries()) {
+        const receipt = returned[index], row = rows.find(value => value.flow.id === item.childWorkflowId),
+          assignment = persisted.find(value => value.assignmentId === receipt.assignmentId);
+        check(row && assignment && assignment.batchId === result.batchId && assignment.batchItemOrdinal === index
+          && assignment.listingWorkflowId === binding.draftId && assignment.skuKey === item.skuKey
+          && assignment.slotKey === item.slotKey && assignment.assignmentScope === receipt.assignmentScope
+          && assignment.assignmentOrdinal === before.media.assignments.length + index
+          && assignment.assetId === item.outputAssetId && assignment.assetSha256 === row.output.sha256
+          && assignment.suiteSlotId === item.suiteSlotId && assignment.childWorkflowId === item.childWorkflowId
+          && assignment.jobId === row.job.id && assignment.sourceDraftRevision === before.revision
+          && assignment.sourceDraftVersion === before.draftVersion && assignment.boundDraftRevision === after.revision
+          && assignment.boundDraftVersion === after.draftVersion);
+      }
+    };
+    verifyDatabaseHistory(generated); verifyDatabaseHistory(restored);
+    check(equal(generated.draftVersions, restored.draftVersions)
+      && equal(generated.draftSnapshot, restored.draftSnapshot)
+      && equal(generated.listingAssignments, restored.listingAssignments));
+  }
   unique(previews.map(value => value.slotId)); unique(reviews.map(value => value.slotId));
   for (const row of rows) {
     const { job, flow, output, slot } = row, preview = previews.find(value => value.slotId === slot.id), review = reviews.find(value => value.slotId === slot.id);
@@ -194,7 +274,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       && review.decision === 'APPROVE' && review.viewedSha256 === output.sha256 && text(review.visualObservation)
       && preview.extensionVersion === binding.extensionVersion && review.extensionVersion === binding.extensionVersion
       && time(preview.at) >= time(ui.at) && time(review.at) >= time(preview.at)
-      && time(review.at) >= time(generated.observedAt) && time(review.at) <= time(applyRequest.at));
+      && (derivedGeneratedPhase || time(review.at) >= time(generated.observedAt)) && time(review.at) <= time(applyRequest.at));
     success(review.response);
     check(review.projection?.suite?.id === suiteId && review.projection.suite.slots.find(value => value.id === slot.id)?.reviewStatus === 'APPROVED');
     const item = items.find(item => item.suiteSlotId === slot.id), added = after.media.assignments.filter(item => item.assetId === output.id);
@@ -210,7 +290,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       || (receipt.assignmentScope === 'PRODUCT' && added[0].scope === 'PRODUCT' && !Object.hasOwn(added[0], 'skuKey')));
   }
   check(queue.suiteId === suiteId && queue.readOnly === true && queue.databaseId === 'production-com-primary' && queue.ownerSha256 === owner
-    && queue.queueName === 'ai-image-suite-generation' && time(queue.observedAt) >= time(generated.observedAt) && time(queue.observedAt) <= time(now));
+    && queue.queueName === 'ai-image-suite-generation'
+    && time(queue.observedAt) >= time(derivedGeneratedPhase ? applied.at : generated.observedAt) && time(queue.observedAt) <= time(now));
   const removedCompletedJobs = explicitExecution && queue.retentionPolicy === 'REMOVE_ON_COMPLETE';
   check(Array.isArray(queue.jobs) && (removedCompletedJobs ? queue.jobs.length === 0 : queue.jobs.length === 2));
   pair(queue.slots); unique(queue.jobs.map(job => job.id)); unique(queue.slots.map(slot => slot.id));
@@ -269,13 +350,15 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && positive(browser.isolation.debuggingPort) && browser.isolation.debuggingPort <= 65535
     && positive(browser.isolation.protectedDebuggingPort) && browser.isolation.protectedDebuggingPort <= 65535
     && browser.isolation.debuggingPort !== browser.isolation.protectedDebuggingPort
-    && time(browser.startedAt) <= time(binding.launchedAt) && time(browser.completedAt) >= time(restored.observedAt) && time(browser.completedAt) <= time(now));
+    && time(browser.startedAt) <= time(binding.launchedAt)
+    && time(browser.completedAt) >= time(derivedGeneratedPhase ? applied.at : restored.observedAt) && time(browser.completedAt) <= time(now));
   const sourceBridge = verifySource(commit, input.targetGitCommit);
   return { executionCommit: commit, completedAt: browser.completedAt, operation: 'IMAGE_TO_IMAGE', workflowKind: 'SUITE',
     provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', currency: 'CNY', unitCostMinor: 14,
     successfulImages: 2, actualCostMinor: 28, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
     configurationRestored: true, image: images[0], images, source, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
     sourceSha256: source.sha256, referenceSha256: reference.sha256,
+    ...(derivedGeneratedPhase ? { generatedPhaseEvidence: manifest.databaseEvidenceMode } : {}),
     ...(executionOffline ? { executionOfflineQa04: { gitCommit: executionCommit,
       receiptSha256: executionOfflineRefs.receipt.sha256, logSha256: executionOfflineRefs.log.sha256,
       startedAt: executionOffline.receipt.startedAt, completedAt: executionOffline.receipt.completedAt } } : {}),

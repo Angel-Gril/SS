@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-22 `1570a17b / 1.0.359` fresh suite 与正式发布接续
+
+- `1570a17b99bd8c38b251282184a9d60322a72a5d` 的完整 offline、COM/CN 区域候选/签名、备份恢复、部署和完整 VPS verifier 已通过；COM/CN canonical VPS SHA-256 分别为 `0f875cbbcad1eaa005b92fadd993fa51742060c6076c30e0da14368df47a09e5`、`1e5c5bd9c75ea4bab72ff4fc76558b6707a5d35c4384d1b2057a9d6609669e71`，唯一 warning 为远端备份未配置。COM restricted pilot 仅 DOTH `IMAGE_TO_IMAGE/SUITE`，CN direct/RDS 保持 AI/BYOK/Ozon 全暗。
+- fresh v4 来源 snapshot `a8f4ee01-93e1-4e1a-9a01-8348f7dbe964` 与隔离草稿 `draft-fdf62d87-5b9d-424c-9870-8c05414ae7ab` 绑定 suite `cmuc7p053001r5olq8wssceqa`。两槽均 attempt 1、900x1200 PNG；安全预览后分别 APPROVE，草稿通过 assignment batch `hosted-assignment-batch:29f0bff8a06061b32cad377fb45d390f0dfd4a44c05c02c5` 从 `r1/v1` 原子变为 `r2/v2`，原请求幂等重放 `replayed=true` 且仍为两条。两笔真实费用各 CNY 0.14、总计 CNY 0.28；没有重试、未知结果或 Ozon publish attempt。
+- 执行阶段原始 `generated.json` 明确记录 suite SUCCEEDED、两槽 `PENDING`、workflow revision 3，随后预览/审核原件与数据库不可变 `REVIEW_APPROVED` 事件对齐；但审核前未及时抓取数据库 phase。生产只读复核证明两条 `JOB_SUCCEEDED` 均早于 PENDING UI，两条审核事件均晚于预览并带 canonical payload hash；草稿数据库保留精确 `r1/v1` 空 assignment 和 `r2/v2` 两 assignment 版本，两个连续 read-only repeatable-read 快照除观察时间外逐字面稳定，Ozon 计数均为 0。
+- QA04 suite v3 owner 新增 `POST_APPLICATION_EVENT_DERIVATION_V1`，只接受上述原始 UI、完整事件、两份稳定数据库快照、草稿 payload/hash、assignment 外键和 Ozon 零写入的交叉证明；`sourceAssetId=null` 只在同 snapshot/media key/source SHA 唯一 internalized lineage asset 下接受。T2 RED -> GREEN 后完整 producer `50/50`、修改文件 ESLint 和 diff 检查通过，旧 v1/v2 与正式消费者保持兼容。
+- 官网 pointer 仍为 `b41097d6050cb3f5bdea0ae675b12ce7b0fd6dc4 / 1.0.354`。本节所在新 producer commit 尚需 fresh offline 与正式 QA04，之后才可生成 COM restricted-pilot canary、CN dark canary、website approval、distribution probe 并执行官网 CAS。不得再次运行 Provider suite；CNY 0.28 授权已经用完。
+
 ## 2026-09-22 COM 新 normal suite 与官网发布接续
 
 - COM/CN 当前运行 `9634f8b69b6616295cb0fb36001289a8af9873f9 / 1.0.358`。`1.0.358` 专用 MV3 profile 的原 plan/suite 通过受限来源 launch grant 恢复，两张真实 900x1200 PNG 安全预览后分别批准，DOTH 草稿 `draft-d8c45a42-eb2c-4460-9d0c-f82e2120545c` 从 `r1/v1` 到 `r2/v2`，新增 SKU hero 与 PRODUCT gallery 两条 assignment；相同请求 replay 返回 `replayed=true`，数据库仍为两条、Ozon publish attempt 为 0。旧 suite 原价 CNY 0.28，恢复阶段没有新增 Provider POST 或费用。
