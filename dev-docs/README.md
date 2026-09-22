@@ -1,9 +1,15 @@
 # SS ERP 内部开发真源
 
+## 2026-09-22 `1.0.358` 双区暗部署与 fresh suite 前置
+
+- `9634f8b69b6616295cb0fb36001289a8af9873f9` 已推送并部署 COM/CN；独立 MV3 原套图完成安全预览、两槽审核、DOTH store-draft assignment 与原请求幂等重放，未执行 Ozon publish。两区完整 VPS verifier 均为 `0 failure / 1 warning`，仅远端备份未配置；COM/CN 备份恢复分别验证 144/143 张表并清理临时库。
+- 官网仍服务已批准旧 pointer `b41097d6 / 1.0.354`。为当前源码取得 fresh normal suite，已在真实 1688 收纳盒页取得 v3 快照 `4484986b-72b2-4d1d-8673-31d37ae74329`，并通过 Web 创建 DOTH 隔离草稿 `draft-fb93d3ff-a5d7-4a3c-a04c-9dd543274433`；草稿 `r1/v1`、空 assignment，目前尚无新 Provider POST、费用或 Ozon 写入。
+- `9634f8b6` 的 offline 因 Windows/PostgreSQL 时钟差导致 Wanx 租约测试失败。测试 owner 已在真实隔离 PostgreSQL 下按 RED -> GREEN 改为用数据库时钟等待租约，AI PostgreSQL 与升级回放通过；本节所在新提交仍需取得正式 offline 证据。必须完成新提交的 offline、双区区域候选/签名/部署和新的 suite 后，才能生成正式 QA04、canary、website approval 与官网 CAS；不得复用旧 commit 原件。
+
 ## 2026-09-22 显式 launch grant 计划绑定恢复修复
 
 - 当前接续修复已完成本地实现与真实隔离 PostgreSQL 验证：新配对设备不会通过普通 successor lineage 跨过 `REFRESH_REUSE_DETECTED` 自动接管旧 suite binding；只有来源草稿页发出的、由同物理设备消费的 `ERP_SOURCE_LAUNCH_GRANT` 才能在精确 owner/device/deployment/scope/draft/suite/no-assignment 条件下恢复原 plan binding。
-- 定向 server `42/42`、全量 server `6324 passed / 324 skipped`、typecheck/lint 与真实 PostgreSQL `6/6` 通过。当前尚未提交、推送、部署或切换官网 pointer；生产写入/新增 Provider 费用均为 0。
+- 定向 server `42/42`、全量 server `6324 passed / 324 skipped`、typecheck/lint 与真实 PostgreSQL `6/6` 通过。此段记录修复的提交前状态；后续部署与 MV3 验收结果以上方新状态为准。
 
 ## 2026-09-21 `3fc4eb91` 双区部署完成，官网 pointer 保持旧版本
 

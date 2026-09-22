@@ -1,11 +1,19 @@
 # SS ERP 当前状态审计
 
+## 2026-09-22 COM 新 normal suite 与官网发布接续
+
+- COM/CN 当前运行 `9634f8b69b6616295cb0fb36001289a8af9873f9 / 1.0.358`。`1.0.358` 专用 MV3 profile 的原 plan/suite 通过受限来源 launch grant 恢复，两张真实 900x1200 PNG 安全预览后分别批准，DOTH 草稿 `draft-d8c45a42-eb2c-4460-9d0c-f82e2120545c` 从 `r1/v1` 到 `r2/v2`，新增 SKU hero 与 PRODUCT gallery 两条 assignment；相同请求 replay 返回 `replayed=true`，数据库仍为两条、Ozon publish attempt 为 0。旧 suite 原价 CNY 0.28，恢复阶段没有新增 Provider POST 或费用。
+- 双区针对 `9634f8b6` 的备份/恢复和完整 VPS verifier 已重新执行：COM 恢复 144 张表，canonical verifier SHA-256 `9ac3529c91f63162ab567ce93825d27ee19cc9ef6c4bff29461d78f31d095808`；CN RDS 临时库恢复 143 张表并删除，canonical verifier SHA-256 `e018144bb5049caf42de29987c320565520d3f976c8ce596c042885eb748b1ad`。两区 `0 failure / 1 warning`，唯一 warning 是未配置远端备份。CN 运行备份曾仍绑定旧 commit，已通过受控备份和恢复入口取得当前 commit 认证，未提升账号权限。
+- 当前账号 DOTH 受限 pilot 的两条 active device sessions 为 `38c7ca76-2376-4931-a846-b02366b7ae31` 与 `42f4d334-07a9-4435-9ede-0e81786a80c8`，仅开启 `IMAGE_TO_IMAGE/SUITE`，FULL_EDIT/INPAINT/BYOK/Ozon publisher 均关闭，读取时无未决作业与预留费用。官网 COM/CN pointer 仍是旧 `b41097d6 / 1.0.354`，未执行新 website approval/canary/CAS。
+- 用户新授权仅限 COM 原 1688 收纳盒、DOTH、已配对设备的一次两图 SUITE，新增费用最高 CNY 0.28，未知结果不重试；官网公开发布仍必须通过正式 QA04 与双区 canary/approval。真实来源采集生成 v3 快照 `4484986b-72b2-4d1d-8673-31d37ae74329`（capture hash `dda195d2b3df0f0faa09075ff814e034fd48a5c3965bf4e23e28e8acbc8f21c8`），Web 通过 owner 创建草稿 `draft-fb93d3ff-a5d7-4a3c-a04c-9dd543274433`，精确 owner/shop/SKU、`r1/v1`、空 assignment。误选的另一商品草稿没有执行计划或费用，不用作本次 QA04 原件。
+- 新 commit 的 offline 尚未取得：现有 `9634f8b6` 两次本地 offline/AI PostgreSQL 尝试中 Wanx execution-lease 测试因 Windows/PostgreSQL 时钟先后相差约 10 秒、其后跨过 50ms 读取窗口而失败。T1 原门禁 RED 后，测试改用 PostgreSQL `statement_timestamp()` 建立与等待真实租约，隔离 AI PostgreSQL 全组 `197/197`、升级回放通过；没有改生产执行 owner。提交后必须重跑完整 offline，重建/签名/部署双区候选，再从新提交开始真实 suite，不能把 `9634f8b6` 原件重标为新提交。
+
 ## 2026-09-22 显式 ERP source launch 恢复 hosted plan binding
 
 - 根因已确认：新配对的 session `38c7ca76-2376-4931-a846-b02366b7ae31` 是独立根 session，而原套图 plan binding 仍绑定到曾触发 `REFRESH_REUSE_DETECTED` 的旧 session `90238535-db06-4ce1-937a-854550c4d7c8`；普通 `/plans/current` 保持 `plan=null` 是安全正确的拒绝，不应跨安全事件自动继承。
 - 新增受控 owner：只有当前租户 owner 从来源草稿页签发并由当前同物理设备成功消费 `ERP_SOURCE_LAUNCH_GRANT` 的 `WORKBENCH` grant，服务端才允许在同 owner、同 device、同 deployment、相同 scopes、同草稿/SKU/media hash、旧 session 为 `REFRESH_REUSE_DETECTED`、已有 suite 且尚无 listing assignment 的条件下迁移 binding；planId、suite、费用和候选均保持不变。编辑器 grant、错误 owner、错误设备、scope/deployment 变化均拒绝。
 - T2 RED -> GREEN：新增 source launch service 与 Prisma binding owner 测试；定向 server `42/42`、全量 server `6324 passed / 324 skipped`、server typecheck/lint、`git diff --check` 通过。真实隔离 PostgreSQL 新增恢复用例 `6/6 passed`，证明 150 migrations 后真实约束下迁移可用。
-- 当前代码尚未提交、推送或部署；下一步提交后重建 `1.0.358` 双区候选并部署，然后在专用 MV3 profile 从来源页重新签发/消费 grant，验证 `/plans/current` 返回原 plan，再完成审核、store-draft assignment 和幂等 replay。全量 AI PostgreSQL runner 另有一个既有 Wanx execution-lease 时间边界失败，未把它归因于本修复。
+- 本段为当时提交前的判断。`1.0.358` 的双区部署、MV3 审核及 assignment 验收和 execution-lease 测试收口以后续上方当前节为准。
 
 ## 2026-09-21 `3fc4eb91` 已推送并完成 COM/CN 部署
 

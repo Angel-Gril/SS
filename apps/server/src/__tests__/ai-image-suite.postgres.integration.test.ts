@@ -506,9 +506,18 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       loadInputBuffer: async input => { const bytes = input.storageKey ? stored.get(input.storageKey) : null; if (!bytes) throw new Error('Source not in trusted test storage'); return bytes; },
       createWanxProvider: options => createDashScopeWanx21ImageEditProvider({ ...options, pollIntervalMs: 0, fetch: fetchProvider }),
     });
-    // The Windows host and local PostgreSQL container may differ by a few seconds.
-    // Keep a real future lease and wait for natural expiry without changing either clock.
-    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, { executionLeaseMs: 10_000,
+    const postgresNow = async () => {
+      const [row] = await client.$queryRawUnsafe<Array<{ dbNow: Date }>>(
+        'SELECT statement_timestamp() AS "dbNow"',
+      );
+      if (!row) throw new Error('PostgreSQL clock is unavailable');
+      return row.dbNow;
+    };
+    // Size the real lease against PostgreSQL's clock, which owns the expiry constraint.
+    const claimDbNow = await postgresNow();
+    const executionLeaseMs = 12_000 + Math.max(0, claimDbNow.getTime() - Date.now());
+    expect(executionLeaseMs).toBeLessThanOrEqual(60_000);
+    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, { executionLeaseMs,
       runtimeReady: async suite => aiImageSuiteProviderRuntimeMatches(suite, runtime),
       getRuntimeEvidence: async () => runtime.capability!.evidenceLevel, outputStorageReady: async () => true,
       getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'READY', reason: 'test grant' }), uploadBuffer,
@@ -527,7 +536,10 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     expect(accepted).toMatchObject({ providerJobId, status: 'RUNNING', billedUnits: 0, actualCostCents: null,
       costReservation: { currency: 'CNY', status: 'RESERVED', maximumCostMinor: 14 } });
     const waiting = await client.aiMediaSuiteSlot.findUniqueOrThrow({ where: { id: task.slotId } });
-    await new Promise(resolve => setTimeout(resolve, Math.max(0, waiting.executionLeaseExpiresAt!.getTime() - Date.now() + 50)));
+    const waitDbNow = await postgresNow();
+    await new Promise(resolve => setTimeout(resolve,
+      Math.max(0, waiting.executionLeaseExpiresAt!.getTime() - waitDbNow.getTime() + 250)));
+    const takeoverDbNow = await postgresNow();
     settings.costPerImageCents = 99; // The confirmed task still settles its frozen 14-fen price.
     const leaseChecks = await client.$queryRawUnsafe<Array<Record<string, unknown>>>(`
       WITH candidate AS (
@@ -547,7 +559,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         job.provider_job_id IS NOT NULL AS accepted, suite.revision >= 5 AS dispatched
       FROM candidate JOIN ai_media_suites suite ON suite.id = (candidate.old_slot).suite_id
       JOIN ai_image_jobs job ON job.workflow_id = (candidate.old_slot).child_workflow_id AND job.workflow_attempt = (candidate.old_slot).attempt`,
-      task.slotId, digest('diagnostic-recovery-token'), new Date(Date.now() + 10_000), new Date());
+      task.slotId, digest('diagnostic-recovery-token'), new Date(takeoverDbNow.getTime() + 10_000), new Date());
     expect(leaseChecks).toEqual([expect.objectContaining({ allowed: true, expired: true, future: true, updated_forward: true,
       frozen_equal: true, runtime_valid: true, accepted: true, dispatched: true })]);
     const recoveryClaim = await coordinator.revalidateAndClaim(task);
@@ -567,7 +579,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     await expect(coordinator.revalidateAndClaim(task)).resolves.toEqual({ kind: 'ignored' });
     expect(creates).toBe(1);
     expect(lookups).toBe(2);
-  }, 30_000);
+  }, 75_000);
 
   it('rejects a direct suite insert whose frozen source authority is false', async () => {
     await expect(client.aiMediaSuite.create({ data: {
