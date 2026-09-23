@@ -1,5 +1,14 @@
 # SS ERP 内部开发真源
 
+## 2026-09-23 `4a801476 / 1.0.361` 官网公开发布完成
+
+- `4a801476c6be26e169053f088a90378f9010cce0` 已在 COM/CN 运行并通过发布后 verifier。COM 继续是受限 hosted pilot，仅 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin/RDS、AI/BYOK/Ozon 全暗。
+- COM REL-04 v3 受限 pilot canary 通过，回执 SHA-256 为 `74aec87bca2729739771f1d654e69050c7d69d33ed4e35414fcf8ecb337ebd9d`；CN v2 no-shop dark canary 通过，回执 SHA-256 为 `665719571a7f6e2e36faa9d056d47ee54f0b2e8b5e4a9da39778f470fea5069a`。COM 重新读取的 active sessions 为 `42f4d334-07a9-4435-9ede-0e81786a80c8`、`4326ce27-4a51-459a-bf71-3a639133494b`；此前报告的 session 顺序拒绝已由按服务端当前顺序重读关闭。
+- 官网 approval/CAS 已分别完成：COM approval `4f6e6dd0a760032bc80949ce85b79a94626318aae938ac720b87d2ec681a57ad`，CN approval `bad88575d7216060be01a59676a4abccf9acd3cfaf32dcd261fbb098fc7b64d9`。两区 distribution probe 与 final publication verifier 均通过，官网 pointer 现为 `4a801476 / 1.0.361`。
+- 区域 distribution receipt：COM `9ca6a933b71eac54b5026c917f23413074d4ccc30b922c332f6ecbee7e180db9`，CN `4a3afa9619c6bd01da7387e806be0df9348138aeb7763a8ea3fbe8d139182092`。两区发布后 VPS verifier 均 `0 failure / 1 warning`，唯一 warning 仍为远端备份未配置。
+- 官网同路径 live 验收已完成：固定目录 `C:\Users\550W\AppData\Local\SS-ERP\managed-extensions\cloud-com\ss-erp-cloud` 从 `1.0.334` 原子替换为 `1.0.361`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变；reload 后 active-worker 回执 SHA-256 为 `7e3a9ae61fd4d28ad99f2a5d4e8adbaf33cb82098e1ecd6ca002830fa1b7afc6`，Unicode smoke 回执 SHA-256 为 `14c4302151b23446341c251476bd4d060b495191655eaf2028036e8d7b889d3e`。旧目录保留为同级可恢复备份；9222/9444 未触碰。
+- 本轮没有 Provider POST、ERP ingest、Ozon 写入或新增费用。canary 短时 account token 已从两区 root-only 文件删除；VPS publication bundle 与本机私有发布证据保留供审计。
+
 ## 2026-09-23 QA04 发布验证隔离边界
 
 - `6aba7a8c` 的 CN no-shop 实现已推送，目标 commit 完整 offline 已通过；但正式 QA04 正确暴露旧 source bridge 以整棵 `apps/server` 为粒度，导致仅官网发布 validator 的变化也被误判为 ERP suite 执行源码变化。

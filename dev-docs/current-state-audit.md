@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-23 `4a801476 / 1.0.361` COM/CN 官网发布闭环
+
+- 双区部署、COM v3 restricted-pilot canary、CN v2 no-shop dark canary、website approval、CAS、匿名 distribution probe、final publication verifier 均已绑定同一目标 commit `4a801476c6be26e169053f088a90378f9010cce0`，官网两区现公开服务 `1.0.361`。COM canary SHA-256 为 `74aec87bca2729739771f1d654e69050c7d69d33ed4e35414fcf8ecb337ebd9d`，CN canary SHA-256 为 `665719571a7f6e2e36faa9d056d47ee54f0b2e8b5e4a9da39778f470fea5069a`。
+- COM approval/distribution receipt SHA-256 为 `4f6e6dd0a760032bc80949ce85b79a94626318aae938ac720b87d2ec681a57ad` / `9ca6a933b71eac54b5026c917f23413074d4ccc30b922c332f6ecbee7e180db9`；CN 为 `bad88575d7216060be01a59676a4abccf9acd3cfaf32dcd261fbb098fc7b64d9` / `4a3afa9619c6bd01da7387e806be0df9348138aeb7763a8ea3fbe8d139182092`。两区发布后 VPS verifier 均 `0 failure / 1 warning`，唯一 warning 是既定远端备份未配置。
+- COM pilot 的旧失败根因已关闭：canary 在运行前重新读取服务端 active session 顺序，使用 `42f4d334-07a9-4435-9ede-0e81786a80c8`、`4326ce27-4a51-459a-bf71-3a639133494b`，不再使用反序 expectation。CN 首次尝试只读失败是误用 COM extension origin，服务端 CORS 正确拒绝；改为 CN 实际 origin `chrome-extension://bfpadpmmgokbblmlmobpndbaaeknfncd` 后通过，无 Provider/Ozon/ingest 副作用。
+- 官网固定受管目录已从 `1.0.334` 原子替换为 `1.0.361`，保留旧目录 `ss-erp-cloud.backup-1.0.334-before-1.0.361-4a801476`；reload 后 active-worker 与磁盘 worker 字节一致，active-worker 回执 SHA-256 `7e3a9ae61fd4d28ad99f2a5d4e8adbaf33cb82098e1ecd6ca002830fa1b7afc6`，Unicode smoke 回执 SHA-256 `14c4302151b23446341c251476bd4d060b495191655eaf2028036e8d7b889d3e`。专用 9455 实例已关闭，9222/9444 未修改。
+- 远端 canary 使用的短时 account token 文件已经删除；正式 QA04、VPS evidence、canary、approval、receipt 仍只保留在 operator-private/VPS publication bundle。没有 Provider POST、ERP ingest、Ozon 写入或新增费用。
+
 ## 2026-09-23 QA04 官网发布 validator 与 ERP 执行 source bridge 解耦
 
 - `6aba7a8cd616dcbf64dca34c4c3cea6474bd6059` 已推送并完成 fresh offline：回执/日志 SHA-256 分别为 `bb9283d7c125813fe59bc86d35a66b971c53da3a85f29e259060bc301ebd7daf`、`8576d6986a9e25cca88d1aa16f1f2d9d8b2fd0ae54160746ea80ece7dc69dbfd`；server `6329 passed / 325 skipped`、AI Media PostgreSQL `197/197`，source/cloud/local verifier 为 `462/467/463`，均零 failure/warning。
