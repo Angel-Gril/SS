@@ -1,10 +1,12 @@
 # SS ERP 内部开发真源
 
-## 2026-09-24 双域登录隔离与首页扩展入口（本地待发布）
+## 2026-09-25 `403c1ed4 / 1.0.363` 双区应用部署与双域登录验收完成
 
-- CN 首页偶发进入登录页的 owner 根因已确认：`app.ss-erp.cn` 与 `admin.ss-erp.cn` 曾通过 `.ss-erp.cn` 共享同名 `sserp_token`，两端登录会互相覆盖，任一端退出会清除另一端会话。COM 有相同潜在边界，修复覆盖两区，不做 CN 特判。
-- 活动账号 Cookie 已改为 host-only；旧 `AUTH_COOKIE_DOMAIN` 仅用于登录/退出时过期历史父域 Cookie。官方及显式配置的自定义 user/admin Web 主机都使用自身 `/api/*` 反代，用户端认证面单下载也复用该 transport；canonical API origin 仍供扩展配对和公开地址使用。live/remote smoke 只接受非空、未过期、无 `Domain` 的活动 Cookie，并用 cookie-only 身份检查防止 Bearer 掩盖问题。首页新增第一方 `/download` 扩展下载入口。
-- T2 Cookie owner、认证 transport、smoke 与首页入口均已完成 RED -> GREEN；429 保持会话属于新增基线 characterization，不冒充实现 RED。认证定向 `20/20`、Web transport/dashboard/双域合同、面单与 smoke transport 合同、Web 生产 build、Web/Server typecheck 与定向 lint 通过。COM/CN 管理员域只读探测均为 `/ready=200`、匿名 `/api/user/me=401`。真实 CDP 390x844 首页为 `scrollWidth=390`、零越界、入口可见、零运行时错误。最终完整 Server 套件为 `6332 passed / 325 skipped / 0 failed`。当前尚未提交、推送或部署，COM/CN 生产仍运行 `6e38f907 / 1.0.362`。
+- 双域 Cookie、认证 transport、面单下载和首页扩展入口修复提交 `403c1ed4637777998ae688a7f9395579f2d101be` 已推送并部署到 COM/CN。COM 继续绑定既有 DOTH 受限 hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin、外部 RDS、AI/BYOK/Ozon 全暗。两区三服务、公网 `/ready`、150 migrations 和 post-migration suite guard 均通过。
+- fresh offline 回执 SHA-256 为 `713170f30b54172f5070cd8f6a4c8f35cc543a12a56258673decb276801397c9`，最终 Server 为 `6332 passed / 325 skipped / 0 failed`，扩展 source 为 `463 pass / 0 failure / 0 warning`。`1.0.363` COM/CN release evidence 分别为 `d832fc694e4f3fa40fc6bfbddec7973596435877b650644989936b79ce7fcdcb`、`35997fa39f7c621dfd3d24b027999f9e80752c15409f537b5d337155d778589e`，签名分别为 `b8549e8ea40d137ed071340fbccdc1949186b6ca086c8da7fd8e3eb8743c40df`、`fcccd9ccb23e4c1cd728f8499aa3a3ff4bd50d15555fad80d0ffdf0f0b03c337`。
+- 部署前 COM 本机 PostgreSQL 恢复 `144` 张表，CN RDS 恢复 `143` 张表，临时库均已清理。发布后完整 VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 是既定未配置远端备份；canonical evidence SHA-256 为 COM `e555fc6c5db102ab2a613e67cd092a3dca325298e9fae4a9bb1679b42fa6635c`、CN `4909601fdad60f5ced294155d4f3d1a53730fb0bb8e851cd41899879408d8a1b`。
+- 真实 Chrome incognito context 分别以临时 USER/ADMIN 完成 COM/CN 登录。两区都只产生 `app` 与 `admin` 两个 host-only `sserp_token`，均为 `HttpOnly + Secure + SameSite=Lax`；管理员退出后 admin `/me=401`，user `/me=200`。COM/CN 浏览器证据 SHA-256 为 `978607c8f2e7bd7c383135753a4a79787087e8a91b7d74acf92fd0d81bd89020`、`b7c37a607f3a9fe236ed5699f11641e1a442e586d7e0d5ffdd45e700668bcecc`。CN 用户首页保持 `/`，扩展入口可见且 `/download=200`；临时账号及 session 已删除，现有 9222 profile Cookie 未修改。
+- 官网 extension pointer 未包含在本次授权中，COM/CN 仍安全服务 `6e38f907 / 1.0.362`；没有 website approval、canary、distribution probe 或 CAS。生产 Turnstile 会正确拒绝不携带 challenge token 的 CLI live/remote smoke，因此本轮用真实浏览器 token 完成双域验收，不把两次 CLI 拒绝写成通过。没有 Provider POST、ERP ingest、Ozon 写入或新增费用。
 
 ## 2026-09-24 `6e38f907 / 1.0.362` 双区官网公开发布完成
 
