@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
+import { prisma } from '../lib/prisma.js';
 import {
   createExtensionDeviceSessionService,
   EXTENSION_DEVICE_SCOPES,
@@ -17,6 +18,7 @@ import { ExtensionDeviceShopConfigConflictError } from '../services/extension-de
 import {
   productSelectionRuleSchema,
   toggleProductSelectionRuleSchema,
+  createPrismaProductSelectionRuleRepository,
   type ProductSelectionRuleRepository,
 } from '../services/product-selection-rule.js';
 
@@ -354,9 +356,13 @@ export async function extensionDeviceRoutes(
   options: ExtensionDeviceRoutesOptions,
 ) {
   const authenticateAccount = options.authenticateAccount || authenticate;
+  const authenticateProductSelectionDevice = options.authenticateProductSelectionDevice
+    || options.authenticateDevice;
+  const productSelectionRepository = options.productSelectionRepository
+    || createPrismaProductSelectionRuleRepository(prisma);
 
-  if (options.authenticateProductSelectionDevice && options.productSelectionRepository) {
-    const preHandler = [options.authenticateProductSelectionDevice];
+  if (authenticateProductSelectionDevice) {
+    const preHandler = [authenticateProductSelectionDevice];
     app.get('/product-selection/rules', { preHandler }, async (request, reply) => {
       const device = deviceScopeContext(request, reply, 'listing:review');
       if (!device) return reply;
@@ -364,7 +370,7 @@ export async function extensionDeviceRoutes(
       return reply.send({
         code: 1,
         msg: 'ok',
-        data: { rules: await options.productSelectionRepository!.listRules(device.ownerUserId) },
+        data: { rules: await productSelectionRepository.listRules(device.ownerUserId) },
       });
     });
     app.post('/product-selection/rules', { preHandler }, async (request, reply) => {
@@ -375,7 +381,7 @@ export async function extensionDeviceRoutes(
       return reply.send({
         code: 1,
         msg: '已保存',
-        data: { rule: await options.productSelectionRepository!.saveRule(device.ownerUserId, parsed.data) },
+        data: { rule: await productSelectionRepository.saveRule(device.ownerUserId, parsed.data) },
       });
     });
     app.post('/product-selection/rules/:id/toggle', { preHandler }, async (request, reply) => {
@@ -384,7 +390,7 @@ export async function extensionDeviceRoutes(
       const id = String((request.params as any).id || '').trim();
       const parsed = toggleProductSelectionRuleSchema.safeParse(request.body || {});
       if (!id || !parsed.success) return invalidInput(reply);
-      const result = await options.productSelectionRepository!.toggleRule(device.ownerUserId, id, parsed.data.enabled);
+      const result = await productSelectionRepository.toggleRule(device.ownerUserId, id, parsed.data.enabled);
       if (!result) return reply.status(404).send({ code: 0, errorCode: 'rule_not_found', msg: '规则不存在' });
       return reply.send({ code: 1, msg: '已更新', data: result });
     });
@@ -393,7 +399,7 @@ export async function extensionDeviceRoutes(
       if (!device) return reply;
       const id = String((request.params as any).id || '').trim();
       if (!id) return invalidInput(reply);
-      await options.productSelectionRepository!.deleteRule(device.ownerUserId, id);
+      await productSelectionRepository.deleteRule(device.ownerUserId, id);
       return reply.send({ code: 1, msg: '已删除', data: { id } });
     });
   }
