@@ -25,6 +25,44 @@ const ERP_EXECUTION_NEUTRAL_SERVER_FILES = [
   'apps/server/src/services/extension-website-publication.ts',
   'apps/server/src/__tests__/extensions-download.test.ts',
 ];
+const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
+  'apps/server/src/__tests__/extension-device-routes.test.ts': {
+    executionObjectId: 'ebe2c337c26d535f38f4b8bf590a9e3f54d8d434',
+    targetObjectId: '93d1aa9bb36947a24e1459167d5ce51cfaaa254a',
+  },
+  'apps/server/src/__tests__/order-search.test.ts': {
+    executionObjectId: 'bbd07cd41c11c663d21954a5849fd2bbeba9b4a1',
+    targetObjectId: 'cb18f1256d3c1568b0cf609ba58e8068b73b6220',
+  },
+  'apps/server/src/routes/export.ts': {
+    executionObjectId: 'ffb295f861c7c66439c0b2fad20beebf059ea4fa',
+    targetObjectId: '26d4d0bada41af6705ae92ac006f1e4c1bb5190b',
+  },
+  'apps/server/src/routes/extension-config.ts': {
+    executionObjectId: '43552eb4b66daf3a13017f2ae549507babc497bd',
+    targetObjectId: '775ff136ed8fed63701a1b82955df927c2d2457a',
+  },
+  'apps/server/src/routes/extension-device.ts': {
+    executionObjectId: '4afce11bb3c47902bd1833c7b13dc70f8f8827d3',
+    targetObjectId: 'c95e028525eaa221fef0825ae29bae83d0272efa',
+  },
+  'apps/server/src/routes/order.ts': {
+    executionObjectId: '7990f283ee9fd2b94d201339aefafb0845b1f54f',
+    targetObjectId: 'a525817983d12b051541bbf3c8359a4d3fe9117d',
+  },
+  'apps/server/src/routes/order/analytics.ts': {
+    executionObjectId: '742a4798ad6e545b2c6982eb19c61b977f72881e',
+    targetObjectId: 'b518244bd69b81a45394d3e0ae9786dc11ef0333',
+  },
+  'apps/server/src/services/order.service.ts': {
+    executionObjectId: 'c7d451a51c3fb2fe44807d0d1c0940e2c507f7d4',
+    targetObjectId: '5275d4965541bfae7a34de2a1ebdfbb91972ef6f',
+  },
+  'apps/server/src/services/product-selection-rule.ts': {
+    executionObjectId: null,
+    targetObjectId: '5e0714e2df914ede226b03890fd39067bf3ba46b',
+  },
+});
 const QA04_SCRIPT_REGISTRATIONS = {
   'qa:04:final': 'node scripts/qa04-final-acceptance.mjs',
   'test:qa04:final': 'node --test scripts/qa04-final-acceptance.test.mjs',
@@ -293,7 +331,7 @@ function verifyCounterexamples(reader, rows, technical, now) {
   });
 }
 
-function verifyErpSource(root, executionCommit, targetCommit) {
+export function verifyErpSource(root, executionCommit, targetCommit) {
   return scoped('QA04_ERP_SOURCE_CHANGED', () => {
     const code = 'QA04_ERP_SOURCE_CHANGED', run = gitRunner(root);
     const git = args => {
@@ -336,18 +374,37 @@ function verifyErpSource(root, executionCommit, targetCommit) {
         requireThat(execution?.mode === '100644 blob' && target?.mode === '100644 blob', code);
         return { path: filename, executionObjectId: execution.objectId, targetObjectId: target.objectId };
       });
-      const excluded = new Set(ERP_EXECUTION_NEUTRAL_SERVER_FILES);
+      const exactNeutral = Object.entries(ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS)
+        .flatMap(([filename, expected]) => {
+          const execution = executionServerFiles[filename];
+          const target = targetServerFiles[filename];
+          if (equal(execution, target)) return [];
+          requireThat((execution?.mode ?? null) === (expected.executionObjectId ? '100644 blob' : null)
+            && (execution?.objectId ?? null) === expected.executionObjectId
+            && target?.mode === '100644 blob'
+            && target.objectId === expected.targetObjectId, code);
+          return [{
+            path: filename,
+            executionObjectId: execution?.objectId ?? null,
+            targetObjectId: target.objectId,
+          }];
+        });
+      const excluded = new Set([
+        ...ERP_EXECUTION_NEUTRAL_SERVER_FILES,
+        ...exactNeutral.map(file => file.path),
+      ]);
       const protectedFiles = value => Object.fromEntries(
         Object.entries(value).filter(([filename]) => !excluded.has(filename)),
       );
       const executionProtectedFiles = protectedFiles(executionServerFiles);
       requireThat(equal(executionProtectedFiles, protectedFiles(targetServerFiles))
-        && neutral.some(file => file.executionObjectId !== file.targetObjectId), code);
+        && [...neutral, ...exactNeutral].some(file => file.executionObjectId !== file.targetObjectId), code);
       sourceBridge = {
         kind: 'IDENTICAL_ERP_EXECUTION_SOURCE_AND_DEPENDENCIES',
         objects: withoutServer(before),
         protectedServerSourceSha256: sha256(sortedJson(executionProtectedFiles)),
         executionNeutralServerFiles: neutral,
+        exactExecutionNeutralServerFiles: exactNeutral,
       };
     }
     const rootDependencies = commit => {

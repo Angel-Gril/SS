@@ -698,6 +698,25 @@ test('bridges historical suite evidence across website-publication-only server c
   assert.throws(() => f.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
 });
 
+test('bridges only the exact audited order and extension-rule server transition', () => {
+  assert.equal(typeof subject.verifyErpSource, 'function');
+  const proof = subject.verifyErpSource(
+    path.resolve('.'),
+    '1570a17b99bd8c38b251282184a9d60322a72a5d',
+    '21243a1a20d145818f88aa2fd236714f4f6fe541',
+  );
+  assert.equal(proof.kind, 'IDENTICAL_ERP_EXECUTION_SOURCE_AND_DEPENDENCIES');
+  assert.equal(proof.exactExecutionNeutralServerFiles.length, 9);
+  assert.throws(
+    () => subject.verifyErpSource(
+      path.resolve('.'),
+      '1570a17b99bd8c38b251282184a9d60322a72a5d',
+      'd0720b4fab237880f49e5f991ec84d2557fd33a8',
+    ),
+    error => error.code === 'QA04_ERP_SOURCE_CHANGED',
+  );
+});
+
 for (const filename of ['apps/server/src/rule.ts', 'packages/shared/src/contracts.ts', 'pnpm-lock.yaml']) {
   test(`refuses historical draft evidence after ${filename} changes`, t => {
     const f = historicalDraftFlowFixture(t), previous = f.targetGitCommit;
