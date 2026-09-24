@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-24 `6e38f907 / 1.0.362` 双区官网公开发布完成
+
+- 订单/扩展体验修复目标提交 `6e38f90732d704ccc6d7d596c59d1a1e49592fd4` 已部署到 COM/CN；COM 保持 DOTH 受限 hosted pilot，仅 `IMAGE_TO_IMAGE/SUITE`，CN 保持 direct-origin/RDS、AI/BYOK/Ozon 全暗。双区发布后 VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 仍为远端备份未配置；正式 pre-publication VPS evidence SHA-256 为 COM `ae305fcf312aa34a0d3e7ac05dc7d9b24307c73a2d4c6292ce1d140831280577`、CN `464eab60ed2eaeafbcaa44ab12ede9d1f8caebbbb35d608a6ee0a2413c8da7fc`。
+- COM/CN `1.0.362` 候选已改为串行、独立输出目录构建，关闭并行共享 build 状态导致的 `.com/.cn` origin 污染；release evidence SHA-256 分别为 `dc1d00304e362ccd90ba08c94692291cacb30715ee40279fb22888c4fe036496`、`9efbaed9084be4a009056a1f928a2a134091bbc835a60d3cb1e3784fc6f52c3f`，detached signature SHA-256 分别为 `d175afb18f01767ecf08f298f1e143777a80d5aa2bdb4e00712559a07706b2d8`、`79e665ba6244a8fbbac505cba5848f302bee5d65a3be273114d72b19a7adb45a`。
+- COM REL-04 v3 restricted-pilot canary SHA-256 为 `ad640caaf20df2d1dd66a0c9f8b8f487b9d6a761746b8197fdafe1de0e020544`；CN v2 no-shop dark canary SHA-256 为 `2eb537e7dce19e11379799c005c0529b668fb60882214546d8946ad2e84f235b`。官网 approval/CAS 分别为 COM `e6ce583821a41384e853c8cd6cfda70c17aa26f3afc2fa2dc45b430385949d1e`、CN `7a4dd5214725235fd54d9dfbb77a5dabf63e7c99be9175b042a5b3fa3afeeeac`；两区 pointer 现均为 `6e38f907 / 1.0.362`。
+- 匿名 distribution probe 与正式 final publication verifier 均通过；COM/CN receipt SHA-256 分别为 `34970df0ae279cd0899d8877ebdd3e28f7e85c3ba7b5c4e70b4dc1eb5657a31a`、`b83491cbd214605aa4baa5b68681108f68ad861c117cdffad0bcdcd0c1aee5d6`。本机固定目录从 `1.0.361` 可恢复升级到 `1.0.362`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 不变；明确 reload 后 active-worker 与 Unicode smoke 回执 SHA-256 为 `702e34406593d020be1ff017bda27d81e159339d9e2a3f5c93e77e916cdeee8c`、`93b27833aad8cbf6bd32340a6ee633c6b1adcd6e417251ce0446f591f8ea0302`。
+- 本轮没有 Provider POST、ERP ingest、Ozon 写入或新增费用。账号 token 仅在 canary 进程内存中使用，未落盘；COM canary 临时设备已撤销，CN no-shop canary 未创建设备或店铺。
+
 ## 2026-09-24 订单与 Ozon 扩展体验修复
 
 - Ozon 选品规则保存已统一经过设备 owner：已配对设备使用 `/api/extension-device/product-selection/rules`，按 `listing:review/listing:write` 校验；只有完全没有设备 authority 的旧兼容安装才回退 legacy ERP token。修复了“扩展显示 ERP 已连接，但保存提示请配置 ERP 连接”的双通道误报。
