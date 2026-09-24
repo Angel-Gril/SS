@@ -20,7 +20,7 @@ export async function exportRoutes(app: FastifyInstance) {
     const where: Record<string, unknown> = {};
 
     if (role !== 'ADMIN') {
-      const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+      const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
       const shopIds = userShops.map((s) => s.id);
       if (query.shopId) {
         if (!shopIds.includes(query.shopId)) {
@@ -33,6 +33,7 @@ export async function exportRoutes(app: FastifyInstance) {
     } else if (query.shopId) {
       where.shopId = query.shopId;
     }
+    where.shop = { status: { not: 'DISABLED' } };
 
     if (query.startDate) where.createdAt = { ...(where.createdAt as any || {}), gte: new Date(query.startDate) };
     if (query.endDate) {

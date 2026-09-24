@@ -5,7 +5,11 @@ import test from 'node:test';
 const schema = fs.readFileSync('apps/server/prisma/schema.prisma', 'utf8');
 const index = fs.readFileSync('apps/server/src/index.ts', 'utf8');
 const route = fs.readFileSync('apps/server/src/routes/extension-config.ts', 'utf8');
+const ruleService = fs.readFileSync('apps/server/src/services/product-selection-rule.ts', 'utf8');
+const deviceRoute = fs.readFileSync('apps/server/src/routes/extension-device.ts', 'utf8');
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+const transport = fs.readFileSync('extensions/ss-erp/shared/erp-adapter/source-workflow-device-session.js', 'utf8');
 const overlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
 
 test('server exposes a user-scoped product selection rule center for the extension', () => {
@@ -19,12 +23,12 @@ test('server exposes a user-scoped product selection rule center for the extensi
   assert.match(route, /app\.delete\('\/product-selection\/rules\/:id'/, 'route should delete rules');
   assert.match(route, /WHERE\s+"user_id"\s*=\s*\$\{userId\}/, 'raw SQL should always constrain queries by userId');
   assert.match(
-    route,
+    ruleService,
     /function\s+normalizeProductSelectionRuleBoolean/,
     'rule center should normalize boolean-like rule flags from extension snapshots',
   );
   assert.match(
-    route,
+    ruleService,
     /autoFavorite:\s*normalizeProductSelectionRuleBoolean\([\s\S]*input\.autoFavorite[\s\S]*input\.auto_favorite[\s\S]*\)\s*===\s*true/,
     'rule center should accept Maozi-style numeric/string auto_favorite values',
   );
@@ -39,7 +43,7 @@ test('server exposes a user-scoped product selection rule center for the extensi
     'minSearchCatalogAddToCartRate',
     'priority',
   ]) {
-    assert.match(route, new RegExp(`'${conditionKey}'`), `rule center should allow ${conditionKey} conditions`);
+    assert.match(ruleService, new RegExp(`'${conditionKey}'`), `rule center should allow ${conditionKey} conditions`);
   }
 });
 
@@ -53,6 +57,14 @@ test('extension proxies cloud rules and persists the enabled snapshot locally', 
     assert.match(background, new RegExp(type), `background should proxy ${type}`);
   }
   assert.match(background, /\/api\/extension-config\/product-selection\/rules/, 'background should use our ERP rule center endpoint');
+  assert.match(deviceRoute, /product-selection\/rules/, 'paired devices should have a scoped rule-center route');
+  assert.match(serviceWorker, /SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION/, 'service worker should expose the paired rule-center transport');
+  assert.match(transport, /PRODUCT_SELECTION_RULES_PATH/, 'device transport should allow the rule-center path');
+  assert.match(
+    background,
+    /SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION[\s\S]*legacyFallbackAllowed/,
+    'a paired device should use device auth and only fall back when the credential owner allows it',
+  );
   assert.match(overlay, /chrome\.storage\.local/, 'content script should use extension local storage for active rule snapshots');
   assert.match(overlay, /productSelectionRules/, 'content script should keep a Maozi-style enabled rule snapshot key');
   assert.match(overlay, /syncProductSelectionRulesFromCloud/, 'selection modal should pull cloud rules before editing');

@@ -43,6 +43,7 @@ type OrderShipmentUrgencyInput = OrderFulfillmentStageInput & {
 const orderQuerySchema = z.object({
   shopId: z.string().optional(),
   status: z.string().optional(),
+  subStatus: z.string().trim().min(1).max(120).optional(),
   fulfillmentStage: z.enum(fulfillmentStageKeys).optional(),
   search: z.string().optional(),
   searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(),
@@ -50,6 +51,12 @@ const orderQuerySchema = z.object({
   userColorTagId: z.string().optional(),
   shipmentUrgency: z.enum(['overdue', 'today', 'tomorrow', 'within3d']).optional(),
   hasTracking: z.enum(['yes', 'no']).optional(),
+  purchaseState: z.enum(['linked', 'unlinked']).optional(),
+  shippingMethod: z.string().trim().min(1).max(120).optional(),
+  sort: z.enum([
+    'created_desc', 'created_asc', 'shipment_asc', 'shipment_desc',
+    'amount_desc', 'amount_asc',
+  ]).default('created_desc'),
   offset: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(20),
   startDate: z.string().optional(),
@@ -210,6 +217,17 @@ function escapePostgresLike(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
 }
 
+function orderSort(sort: z.infer<typeof orderQuerySchema>['sort']) {
+  switch (sort) {
+    case 'created_asc': return [{ createdAt: 'asc' as const }];
+    case 'shipment_asc': return [{ shipmentDate: 'asc' as const }, { createdAt: 'desc' as const }];
+    case 'shipment_desc': return [{ shipmentDate: 'desc' as const }, { createdAt: 'desc' as const }];
+    case 'amount_desc': return [{ totalAmount: 'desc' as const }, { createdAt: 'desc' as const }];
+    case 'amount_asc': return [{ totalAmount: 'asc' as const }, { createdAt: 'desc' as const }];
+    default: return [{ createdAt: 'desc' as const }];
+  }
+}
+
 type OrderItemSearchField = 'all' | 'sku' | 'product';
 
 /**
@@ -304,10 +322,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true } } },
+      include: { shop: { select: { userId: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -346,7 +364,10 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '请提供订单ID和标签ID' });
     }
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const userShops = await prisma.shop.findMany({
+      where: { userId, status: { not: 'DISABLED' } },
+      select: { id: true },
+    });
     const shopIds = userShops.map((s) => s.id);
 
     const orders = await prisma.order.findMany({
@@ -389,9 +410,9 @@ export async function orderRoutes(app: FastifyInstance) {
     const tagIds = Array.from(new Set(parsed.data.tagIds.filter(Boolean)));
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true } } },
+      include: { shop: { select: { userId: true, status: true } } },
     });
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -436,7 +457,10 @@ export async function orderRoutes(app: FastifyInstance) {
       }
     }
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const userShops = await prisma.shop.findMany({
+      where: { userId, status: { not: 'DISABLED' } },
+      select: { id: true },
+    });
     const shopIds = userShops.map((s) => s.id);
     const orders = await prisma.order.findMany({
       where: { id: { in: orderIds }, shopId: { in: shopIds } },
@@ -464,7 +488,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const query = orderQuerySchema.parse(request.query);
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
     const shopIds = userShops.map((s) => s.id);
@@ -481,6 +505,12 @@ export async function orderRoutes(app: FastifyInstance) {
 
     if (query.status) {
       where.status = query.status;
+    }
+    if (query.subStatus) where.subStatus = query.subStatus;
+    if (query.purchaseState === 'linked') where.purchaseOrderId = { not: null };
+    if (query.purchaseState === 'unlinked') where.purchaseOrderId = null;
+    if (query.shippingMethod) {
+      where.shippingMethod = { contains: query.shippingMethod, mode: 'insensitive' };
     }
 
     if (query.search) {
@@ -612,7 +642,7 @@ export async function orderRoutes(app: FastifyInstance) {
         where: where as any,
         skip: query.offset,
         take: query.limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderSort(query.sort),
         select: {
           id: true,
           shopId: true,
@@ -678,7 +708,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const query = labelPrintLogsQuerySchema.parse(request.query);
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
     const shopIds = userShops.map((shop) => shop.id);
@@ -732,10 +762,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { id: true, name: true, platform: true, userId: true } } },
+      include: { shop: { select: { id: true, name: true, platform: true, userId: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -768,9 +798,9 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true } } },
+      include: { shop: { select: { userId: true, status: true } } },
     });
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -831,7 +861,7 @@ export async function orderRoutes(app: FastifyInstance) {
     }
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true, clientId: true, apiKeyEncrypted: true, platform: true },
     });
     const shopMap = new Map(userShops.map((s) => [s.id, s]));
@@ -896,10 +926,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { id: true, userId: true, clientId: true, apiKeyEncrypted: true, platform: true } } },
+      include: { shop: { select: { id: true, userId: true, clientId: true, apiKeyEncrypted: true, platform: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -958,10 +988,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { id: true, userId: true, clientId: true, apiKeyEncrypted: true, platform: true } } },
+      include: { shop: { select: { id: true, userId: true, clientId: true, apiKeyEncrypted: true, platform: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -1002,10 +1032,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true, clientId: true, apiKeyEncrypted: true, platform: true } } },
+      include: { shop: { select: { userId: true, clientId: true, apiKeyEncrypted: true, platform: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -1124,11 +1154,11 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const orders = await prisma.order.findMany({
       where: { id: { in: body.orderIds } },
-      include: { shop: { select: { userId: true, clientId: true, apiKeyEncrypted: true, platform: true } } },
+      include: { shop: { select: { userId: true, clientId: true, apiKeyEncrypted: true, platform: true, status: true } } },
     });
 
     const valid = orders.filter(
-      (o) => o.shop.userId === userId && o.shop.platform === 'OZON' && o.postingNumber,
+      (o) => o.shop.userId === userId && o.shop.status !== 'DISABLED' && o.shop.platform === 'OZON' && o.postingNumber,
     );
 
     if (valid.length === 0) {
@@ -1206,10 +1236,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true } } },
+      include: { shop: { select: { userId: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -1242,10 +1272,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true } } },
+      include: { shop: { select: { userId: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
@@ -1284,7 +1314,7 @@ export async function orderRoutes(app: FastifyInstance) {
     }
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
     const shopIds = userShops.map((s) => s.id);
@@ -1337,10 +1367,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { shop: { select: { userId: true, name: true, platform: true } } },
+      include: { shop: { select: { userId: true, name: true, platform: true, status: true } } },
     });
 
-    if (!order || order.shop.userId !== userId) {
+    if (!order || order.shop.userId !== userId || order.shop.status === 'DISABLED') {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 

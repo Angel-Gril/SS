@@ -272,6 +272,39 @@ function loadScanSchedulerRuntime() {
   return { body, scanned, scheduled, schedule: sandbox.scheduleScanRoot };
 }
 
+function loadExpandedPortalRuntime() {
+  const functions = sliceBetween(
+    overlay,
+    '  function positionExpandedPanel',
+    '\n\n  function ensureExpandedPanelListeners',
+  );
+  const expanded = {
+    isConnected: true,
+    style: { display: 'block' },
+    setAttribute(name, value) { this[name] = value; },
+  };
+  const wrap = {
+    isConnected: true,
+    style: { zIndex: '4' },
+    classList: { remove() {} },
+    getBoundingClientRect: () => ({ left: 200, right: 500, top: -420, bottom: -120, width: 300, height: 300 }),
+  };
+  const expandBtn = { textContent: '收起' };
+  const sandbox = {
+    document: { documentElement: { clientHeight: 900, clientWidth: 1440 } },
+    window: { innerHeight: 900, innerWidth: 1440 },
+    wrap,
+    expanded,
+    expandBtn,
+  };
+  vm.runInNewContext(
+    `var activeExpandedPanel = { wrap: wrap, expanded: expanded, expandBtn: expandBtn };\n${functions}`,
+    sandbox,
+    { filename: 'ozon-expanded-portal.js' },
+  );
+  return { sandbox, wrap, expanded, expandBtn };
+}
+
 function loadSellerCookieChangeRuntime() {
   const calls = {
     broadcast: 0,
@@ -583,6 +616,14 @@ test('an added Ozon node detached before the debounce is never scanned', () => {
   root.isConnected = false;
   runtime.scheduled.shift()();
   assert.deepEqual(runtime.scanned, []);
+});
+
+test('an expanded portal closes when its card anchor leaves the viewport', () => {
+  const runtime = loadExpandedPortalRuntime();
+  runtime.sandbox.repositionActiveExpandedPanel();
+  assert.equal(runtime.expanded.style.display, 'none');
+  assert.equal(runtime.expanded['aria-hidden'], 'true');
+  assert.equal(runtime.expandBtn.textContent, '展开');
 });
 
 test('Seller Cookie changes route company replacement and auth refresh without duplicate maintenance', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, TestTube2, Package, Trash2, Loader2, Pencil } from 'lucide-react';
+import { Plus, RefreshCw, TestTube2, Package, CircleOff, Loader2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -103,9 +103,9 @@ export default function OzonShopsPage() {
 
   async function handleDelete(id: string) {
     const confirmed = await systemDialog.confirm({
-      title: '删除 Ozon 店铺',
-      message: '确认删除此店铺？此操作会删除该店铺下所有商品和订单数据。',
-      confirmText: '删除店铺',
+      title: '停用 Ozon 店铺',
+      message: '停用后将撤销设备和物流授权，商品与订单不再出现在日常运营视图。历史记录仍保留用于费用、物流和审计追溯。',
+      confirmText: '停用店铺',
       tone: 'destructive',
     });
     if (!confirmed) return;
@@ -113,12 +113,12 @@ export default function OzonShopsPage() {
     try {
       const res = await api.delete(`/api/shops/${id}`);
       toast({
-        title: res.code === 1 ? '删除成功' : (res.msg || '删除失败'),
+        title: res.code === 1 ? '店铺已停用' : (res.msg || '停用失败'),
         variant: res.code === 1 ? 'default' : 'destructive',
       });
       if (res.code === 1) loadShops();
     } catch (e: any) {
-      toast({ title: `删除失败: ${e.message || '网络错误'}`, variant: 'destructive' });
+      toast({ title: `停用失败: ${e.message || '网络错误'}`, variant: 'destructive' });
     }
     setActionLoading((s) => { const { [id]: _, ...rest } = s; return rest; });
   }
@@ -232,9 +232,9 @@ export default function OzonShopsPage() {
                           size="sm"
                           variant="ghost"
                           onClick={() => handleDelete(shop.id)}
-                          title="删除"
+                          title="停用店铺"
                         >
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          <CircleOff className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
                     </TableCell>

@@ -24,6 +24,17 @@ assert.match(
   /采购备货/,
   'orders page should rename purchased stage to purchase stocking',
 );
+for (const expected of [
+  '高级筛选',
+  '保存筛选',
+  '已保存筛选',
+  'purchaseState',
+  'shippingMethod',
+  'subStatus',
+  'savedOrderFilters',
+]) {
+  assert.match(ordersPage, new RegExp(expected), `orders page should expose ${expected}`);
+}
 assert.doesNotMatch(
   ordersPage,
   /inspecting|awaiting_label|验视\/打包|采购下单/,

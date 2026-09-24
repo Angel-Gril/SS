@@ -95,6 +95,10 @@ describe('order item search', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ code: 1, data: { total: 1 } });
+    expect(mocks.shopFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', status: { not: 'DISABLED' } },
+      select: { id: true },
+    });
     expect(mocks.queryRaw).toHaveBeenCalledTimes(1);
     const sql = JSON.stringify(mocks.queryRaw.mock.calls[0]?.[0]);
     expect(sql).toContain('jsonb_array_elements');
@@ -104,6 +108,30 @@ describe('order item search', () => {
       where: expect.objectContaining({ id: { in: ['order-1'] } }),
     }));
     expect(mocks.orderFindMany.mock.calls[0]?.[0]?.where).not.toHaveProperty('items');
+
+    await app.close();
+  });
+
+  it('applies operational filters and an explicit shipment sort', async () => {
+    setup();
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/orders?subStatus=posting_created&purchaseState=unlinked&shippingMethod=FBS&sort=shipment_asc',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.orderCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        subStatus: 'posting_created',
+        purchaseOrderId: null,
+        shippingMethod: { contains: 'FBS', mode: 'insensitive' },
+      }),
+    });
+    expect(mocks.orderFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: [{ shipmentDate: 'asc' }, { createdAt: 'desc' }],
+    }));
 
     await app.close();
   });

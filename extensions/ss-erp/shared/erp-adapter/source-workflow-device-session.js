@@ -41,6 +41,7 @@
   var BROWSER_ONE_CLICK_STATUS_PATH = '/api/extension-device/browser-one-click/status/read';
   var BROWSER_ONE_CLICK_WATERMARK_PATH =
     '/api/extension-device/browser-one-click/watermark-templates/read';
+  var PRODUCT_SELECTION_RULES_PATH = '/api/extension-device/product-selection/rules';
   var HOSTED_PLAN_PATH = '/api/extension-device/source-workbench/plans';
   var HOSTED_LISTING_ASSIGNMENT_PATH =
     '/api/extension-device/source-workbench/ai-image-suite/listing-assignments';
@@ -249,7 +250,8 @@
         && exactEncodedIdentifier(remainder.slice(0, -suffix.length)));
     }
     function allowedGetPath(candidate) {
-      return candidate.startsWith('/api/extension-device/source-workbench/')
+      return candidate === PRODUCT_SELECTION_RULES_PATH
+        || candidate.startsWith('/api/extension-device/source-workbench/')
         || byokExecutionBatchReadPath(candidate);
     }
     function allowedPostPath(candidate) {
@@ -259,7 +261,9 @@
         || byokExecutionBatchMutationPath(candidate)
         || shopAnalyticsWritePath(candidate)
         || browserOneClickJobWritePath(candidate)
-        || browserOneClickJobReadPath(candidate);
+        || browserOneClickJobReadPath(candidate)
+        || candidate === PRODUCT_SELECTION_RULES_PATH
+        || /^\/api\/extension-device\/product-selection\/rules\/[^/]+\/(?:toggle|delete)$/u.test(candidate);
     }
     var parsed;
     try { parsed = new URL(path, 'https://ss-erp.invalid'); } catch {

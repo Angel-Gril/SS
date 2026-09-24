@@ -113,6 +113,7 @@ import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/
 import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
 import { createOzonPublisherEntrypointRolloutService } from './services/ozon-publisher-entrypoint-rollout.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
+import { createPrismaProductSelectionRuleRepository } from './services/product-selection-rule.js';
 import { extensionErpSourceLaunchRoutes } from './routes/extension-erp-source-launch.js';
 import { createExtensionErpSourceLaunchService, createRedisErpSourceLaunchGrantStore } from './services/extension-erp-source-launch.js';
 import { authenticate } from './lib/auth.js';
@@ -2232,6 +2233,11 @@ if (isExtensionDeviceAuthEnabled()) {
       requiredScopes: ['capture:write'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
+    authenticateProductSelectionDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    productSelectionRepository: createPrismaProductSelectionRuleRepository(prisma),
     shopRepository: createPrismaExtensionDeviceShopRepository(prisma),
     shopAnalyticsRepository: {
       createSnapshot: async ({ ownerUserId, shopId, snapshot }) => {

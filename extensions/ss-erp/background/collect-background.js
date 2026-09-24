@@ -4733,16 +4733,40 @@ async function requestProductSelectionRuleCenter(path, options = {}) {
 }
 
 async function listProductSelectionRules() {
+  const device = globalThis.SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION;
+  if (device && typeof device.list === "function") {
+    const paired = await Promise.resolve(typeof device.status === "function" ? device.status() : null).catch(() => null);
+    if (paired && paired.ok === true) return await device.list();
+    if (paired && paired.legacyFallbackAllowed !== true) {
+      return { ok: false, error: paired.error || "设备授权不可用", errorCode: paired.errorCode };
+    }
+  }
   return await requestProductSelectionRuleCenter("", { method: "GET" });
 }
 
 async function saveProductSelectionRule(rule) {
+  const device = globalThis.SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION;
+  if (device && typeof device.save === "function") {
+    const paired = await Promise.resolve(typeof device.status === "function" ? device.status() : null).catch(() => null);
+    if (paired && paired.ok === true) return await device.save(rule);
+    if (paired && paired.legacyFallbackAllowed !== true) {
+      return { ok: false, error: paired.error || "设备授权不可用", errorCode: paired.errorCode };
+    }
+  }
   return await requestProductSelectionRuleCenter("", { method: "POST", body: rule || {} });
 }
 
 async function toggleProductSelectionRule(ruleId, enabled) {
   const id = String(ruleId || "").trim();
   if (!id) return { ok: false, error: "缺少规则 ID" };
+  const device = globalThis.SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION;
+  if (device && typeof device.toggle === "function") {
+    const paired = await Promise.resolve(typeof device.status === "function" ? device.status() : null).catch(() => null);
+    if (paired && paired.ok === true) return await device.toggle(id, enabled);
+    if (paired && paired.legacyFallbackAllowed !== true) {
+      return { ok: false, error: paired.error || "设备授权不可用", errorCode: paired.errorCode };
+    }
+  }
   return await requestProductSelectionRuleCenter("/" + encodeURIComponent(id) + "/toggle", {
     method: "POST",
     body: enabled == null ? {} : { enabled: enabled === true },
@@ -4752,6 +4776,14 @@ async function toggleProductSelectionRule(ruleId, enabled) {
 async function deleteProductSelectionRule(ruleId) {
   const id = String(ruleId || "").trim();
   if (!id) return { ok: false, error: "缺少规则 ID" };
+  const device = globalThis.SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION;
+  if (device && typeof device.delete === "function") {
+    const paired = await Promise.resolve(typeof device.status === "function" ? device.status() : null).catch(() => null);
+    if (paired && paired.ok === true) return await device.delete(id);
+    if (paired && paired.legacyFallbackAllowed !== true) {
+      return { ok: false, error: paired.error || "设备授权不可用", errorCode: paired.errorCode };
+    }
+  }
   return await requestProductSelectionRuleCenter("/" + encodeURIComponent(id), { method: "DELETE" });
 }
 

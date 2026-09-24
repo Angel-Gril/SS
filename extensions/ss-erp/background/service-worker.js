@@ -1588,6 +1588,82 @@ function getByokDeviceTransport() {
   return byokDeviceTransport;
 }
 
+function productSelectionDeviceResult(result, label) {
+  if (result && result.state === 'response' && result.body && result.body.code === 1) {
+    return { ok: true, data: result.body.data || {}, msg: result.body.msg || 'ok' };
+  }
+  if (result && result.state === 'scope_required') {
+    return { ok: false, errorCode: 'device_rule_scope_required', error: '当前设备缺少选品规则权限' };
+  }
+  if (result && (result.state === 'authorization_required' || result.state === 'unpaired')) {
+    return { ok: false, errorCode: 'device_authorization_required', error: '设备授权已失效，请重新连接 ERP' };
+  }
+  return {
+    ok: false,
+    errorCode: result && result.body && result.body.errorCode || result && result.state || 'device_request_failed',
+    error: result && result.body && (result.body.msg || result.body.error) || label + '失败',
+  };
+}
+
+async function readProductSelectionRulesThroughDevice() {
+  const result = await getByokDeviceTransport().get(
+    '/api/extension-device/product-selection/rules',
+    { requiredScope: 'listing:review' },
+  );
+  return productSelectionDeviceResult(result, '设备规则读取');
+}
+
+async function readProductSelectionDeviceStatus() {
+  const status = await readExtensionDeviceStatusAfterClaims(false);
+  const authority = await readExtensionDeviceAuthority();
+  return {
+    ok: Boolean(status && status.state === 'paired'),
+    state: status && status.state || 'unpaired',
+    scopes: status && Array.isArray(status.scopes) ? status.scopes.slice() : [],
+    legacyFallbackAllowed: authority === null,
+    error: status && status.state === 'paired' ? null : '设备授权不可用',
+  };
+}
+
+async function saveProductSelectionRuleThroughDevice(rule) {
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/product-selection/rules',
+    rule || {},
+    { requiredScope: 'listing:write' },
+  );
+  return productSelectionDeviceResult(result, '设备规则保存');
+}
+
+async function toggleProductSelectionRuleThroughDevice(ruleId, enabled) {
+  const id = encodeURIComponent(String(ruleId || '').trim());
+  if (!id) return { code: 0, errorCode: 'invalid_rule_id', msg: '缺少规则 ID' };
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/product-selection/rules/' + id + '/toggle',
+    enabled == null ? {} : { enabled: enabled === true },
+    { requiredScope: 'listing:write' },
+  );
+  return productSelectionDeviceResult(result, '设备规则更新');
+}
+
+async function deleteProductSelectionRuleThroughDevice(ruleId) {
+  const id = encodeURIComponent(String(ruleId || '').trim());
+  if (!id) return { code: 0, errorCode: 'invalid_rule_id', msg: '缺少规则 ID' };
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/product-selection/rules/' + id + '/delete',
+    {},
+    { requiredScope: 'listing:write' },
+  );
+  return productSelectionDeviceResult(result, '设备规则删除');
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_PRODUCT_SELECTION = Object.freeze({
+  status: readProductSelectionDeviceStatus,
+  list: readProductSelectionRulesThroughDevice,
+  save: saveProductSelectionRuleThroughDevice,
+  toggle: toggleProductSelectionRuleThroughDevice,
+  delete: deleteProductSelectionRuleThroughDevice,
+});
+
 function getShopAnalyticsDeviceWriter() {
   if (shopAnalyticsDeviceWriter) return shopAnalyticsDeviceWriter;
   const api = globalThis.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER;

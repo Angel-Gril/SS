@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-24 订单与 Ozon 扩展体验修复
+
+- Ozon 选品规则保存已统一经过设备 owner：已配对设备使用 `/api/extension-device/product-selection/rules`，按 `listing:review/listing:write` 校验；只有完全没有设备 authority 的旧兼容安装才回退 legacy ERP token。修复了“扩展显示 ERP 已连接，但保存提示请配置 ERP 连接”的双通道误报。
+- 订单日常视图、统计、pipeline、导出及详情/物流/发货/取消/面单/批量操作均排除 `DISABLED` 店铺；停用店铺的历史订单仍保留在数据库用于费用、物流与审计，不再出现在日常运营集合。店铺页面文案同步改为“停用”，不再声称物理删除订单。
+- 订单管理新增高级筛选：Ozon 子状态、采购单关联、物流方式、排序，以及浏览器本地保存/恢复筛选方案；表格将平台 Ozon 状态与 ERP 仓储履约阶段明确分开。未接入入库/出库时，ERP 履约阶段不会伪造仓库事实；截图中“待打包”和“已取消”是不同订单的平台状态，不是同一状态重复计算。
+- Ozon 列表扩展的展开 portal 在卡片离开视口、滚动导致锚点完全不可见时自动关闭，避免固定定位残留造成“尸体窗口”。
+- 定向验证：server `32/32`（含设备规则与禁用店铺订单隔离）、扩展 UI/runtime/security `23/23`、Web orders contract 通过、server/web typecheck、定向 ESLint、`pnpm verify:extension` `462/462`、`pnpm --filter web build` 通过。独立 headless UI smoke 在 1440px 与 390px 下均无横向溢出。
+
 ## 2026-09-23 `4a801476 / 1.0.361` 官网公开发布完成
 
 - `4a801476c6be26e169053f088a90378f9010cce0` 已在 COM/CN 运行并通过发布后 verifier。COM 继续是受限 hosted pilot，仅 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin/RDS、AI/BYOK/Ozon 全暗。

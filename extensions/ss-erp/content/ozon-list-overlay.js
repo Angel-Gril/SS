@@ -1809,6 +1809,13 @@
       closeActiveExpandedPanel();
       return;
     }
+    const rect = activeExpandedPanel.wrap.getBoundingClientRect();
+    const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    const viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+    if (rect.bottom <= 0 || rect.top >= viewportHeight || rect.right <= 0 || rect.left >= viewportWidth) {
+      closeActiveExpandedPanel();
+      return;
+    }
     positionExpandedPanel(activeExpandedPanel.wrap, activeExpandedPanel.expanded);
   }
 

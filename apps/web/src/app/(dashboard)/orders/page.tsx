@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette } from 'lucide-react';
+import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -96,6 +96,37 @@ interface Shop {
   id: string;
   name: string;
   platform: string;
+}
+
+interface SavedOrderFilter {
+  id: string;
+  name: string;
+  status: string;
+  shopId: string;
+  search: string;
+  searchField: 'all' | 'posting' | 'tracking' | 'sku' | 'product' | 'purchase';
+  serviceTagId: string;
+  userColorTagId: string;
+  shipmentUrgency: '' | 'overdue' | 'today' | 'tomorrow' | 'within3d';
+  hasTracking: '' | 'yes' | 'no';
+  subStatus: string;
+  purchaseState: '' | 'linked' | 'unlinked';
+  shippingMethod: string;
+  sort: 'created_desc' | 'created_asc' | 'shipment_asc' | 'shipment_desc' | 'amount_desc' | 'amount_asc';
+  startDate: string;
+  endDate: string;
+}
+
+const SAVED_ORDER_FILTERS_KEY = 'savedOrderFilters';
+
+function defaultOrderStartDate() {
+  const d = new Date();
+  d.setDate(d.getDate() - 14);
+  return d.toISOString().slice(0, 10);
+}
+
+function defaultOrderEndDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 type ShipmentCountdownOrder = Pick<Order, 'status' | 'subStatus' | 'shipmentDate' | 'deliveringDate' | 'deliveredAt'>;
@@ -315,11 +346,15 @@ export default function OrdersPage() {
   const [userColorTagId, setUserColorTagId] = useState('');
   const [shipmentUrgency, setShipmentUrgency] = useState<'' | 'overdue' | 'today' | 'tomorrow' | 'within3d'>('');
   const [hasTracking, setHasTracking] = useState<'' | 'yes' | 'no'>('');
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 14);
-    return d.toISOString().slice(0, 10);
-  });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [subStatus, setSubStatus] = useState('');
+  const [purchaseState, setPurchaseState] = useState<'' | 'linked' | 'unlinked'>('');
+  const [shippingMethod, setShippingMethod] = useState('');
+  const [sort, setSort] = useState<SavedOrderFilter['sort']>('created_desc');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [savedOrderFilters, setSavedOrderFilters] = useState<SavedOrderFilter[]>([]);
+  const [savedFilterName, setSavedFilterName] = useState('');
+  const [startDate, setStartDate] = useState(defaultOrderStartDate);
+  const [endDate, setEndDate] = useState(defaultOrderEndDate);
   const [page, setPage] = useState(0);
   const [shipOrder, setShipOrder] = useState<Order | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
@@ -346,6 +381,10 @@ export default function OrdersPage() {
     api.get<UserColorTag[]>('/api/user-service-tags').then((res) => {
       if (res.code === 1 && res.data) setUserColorTags(res.data);
     });
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SAVED_ORDER_FILTERS_KEY) || '[]');
+      if (Array.isArray(parsed)) setSavedOrderFilters(parsed.slice(0, 20));
+    } catch {}
   }, [loadPipeline]);
 
   async function loadOrders() {
@@ -362,6 +401,10 @@ export default function OrdersPage() {
     if (userColorTagId) params.set('userColorTagId', userColorTagId);
     if (shipmentUrgency) params.set('shipmentUrgency', shipmentUrgency);
     if (hasTracking) params.set('hasTracking', hasTracking);
+    if (subStatus) params.set('subStatus', subStatus);
+    if (purchaseState) params.set('purchaseState', purchaseState);
+    if (shippingMethod) params.set('shippingMethod', shippingMethod);
+    params.set('sort', sort);
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
     if (pipelineActive) params.set('fulfillmentStage', pipelineActive);
@@ -376,7 +419,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, page, startDate, endDate, pipelineActive]);
+  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, subStatus, purchaseState, shippingMethod, sort, page, startDate, endDate, pipelineActive]);
 
   function handleSync(fullSync = false) {
     if (!shopId && shops.length === 0) {
@@ -418,6 +461,76 @@ export default function OrdersPage() {
     } else {
       setSelectedOrders(new Set(orders.map((o) => o.id)));
     }
+  }
+
+  function currentSavedFilter(name: string): SavedOrderFilter {
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      status,
+      shopId,
+      search,
+      searchField,
+      serviceTagId,
+      userColorTagId,
+      shipmentUrgency,
+      hasTracking,
+      subStatus,
+      purchaseState,
+      shippingMethod,
+      sort,
+      startDate,
+      endDate,
+    };
+  }
+
+  function saveCurrentFilter() {
+    const name = savedFilterName.trim() || `筛选方案 ${new Date().toLocaleDateString('zh-CN')}`;
+    const next = [currentSavedFilter(name), ...savedOrderFilters.filter((item) => item.name !== name)].slice(0, 20);
+    setSavedOrderFilters(next);
+    localStorage.setItem(SAVED_ORDER_FILTERS_KEY, JSON.stringify(next));
+    setSavedFilterName('');
+    toast({ title: `已保存筛选：${name}` });
+  }
+
+  function applySavedFilter(filter: SavedOrderFilter) {
+    setStatus(filter.status || '');
+    setShopId(filter.shopId || '');
+    setSearch(filter.search || '');
+    setSearchInput(filter.search || '');
+    setSearchField(filter.searchField || 'all');
+    setServiceTagId(filter.serviceTagId || '');
+    setUserColorTagId(filter.userColorTagId || '');
+    setShipmentUrgency(filter.shipmentUrgency || '');
+    setHasTracking(filter.hasTracking || '');
+    setSubStatus(filter.subStatus || '');
+    setPurchaseState(filter.purchaseState || '');
+    setShippingMethod(filter.shippingMethod || '');
+    setSort(filter.sort || 'created_desc');
+    setStartDate(filter.startDate || defaultOrderStartDate());
+    setEndDate(filter.endDate || defaultOrderEndDate());
+    setPipelineActive(null);
+    setPage(0);
+  }
+
+  function resetOrderFilters() {
+    setStatus('');
+    setShopId('');
+    setSearch('');
+    setSearchInput('');
+    setSearchField('all');
+    setServiceTagId('');
+    setUserColorTagId('');
+    setShipmentUrgency('');
+    setHasTracking('');
+    setSubStatus('');
+    setPurchaseState('');
+    setShippingMethod('');
+    setSort('created_desc');
+    setStartDate(defaultOrderStartDate());
+    setEndDate(defaultOrderEndDate());
+    setPipelineActive(null);
+    setPage(0);
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -640,8 +753,105 @@ export default function OrdersPage() {
               <option value="no">未填单号</option>
             </select>
 
+            <Button
+              type="button"
+              size="sm"
+              variant={advancedOpen ? 'secondary' : 'outline'}
+              onClick={() => setAdvancedOpen((value) => !value)}
+              aria-expanded={advancedOpen}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              高级筛选
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', advancedOpen && 'rotate-180')} />
+            </Button>
+
             <span className="ml-auto text-sm text-muted-foreground">共 {total} 条</span>
           </div>
+
+          {advancedOpen && (
+            <div className="border-t pt-3 space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <select
+                  value={subStatus}
+                  onChange={(e) => { setSubStatus(e.target.value); setPage(0); }}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  title="Ozon 子状态"
+                >
+                  <option value="">全部 Ozon 子状态</option>
+                  <option value="posting_created">订单已创建</option>
+                  <option value="posting_awaiting_passport_data">待护照信息</option>
+                  <option value="posting_sent_by_seller">卖家已发货</option>
+                  <option value="posting_canceled_by_client">买家已取消</option>
+                </select>
+                <select
+                  value={purchaseState}
+                  onChange={(e) => { setPurchaseState(e.target.value as SavedOrderFilter['purchaseState']); setPage(0); }}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  title="采购单关联状态"
+                >
+                  <option value="">采购关联</option>
+                  <option value="unlinked">未关联采购单</option>
+                  <option value="linked">已关联采购单</option>
+                </select>
+                <Input
+                  value={shippingMethod}
+                  onChange={(e) => { setShippingMethod(e.target.value); setPage(0); }}
+                  className="h-9"
+                  placeholder="物流方式，如 FBS"
+                />
+                <select
+                  value={sort}
+                  onChange={(e) => { setSort(e.target.value as SavedOrderFilter['sort']); setPage(0); }}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  title="排序"
+                >
+                  <option value="created_desc">下单时间：最新</option>
+                  <option value="created_asc">下单时间：最早</option>
+                  <option value="shipment_asc">发货截止：最近</option>
+                  <option value="shipment_desc">发货截止：最晚</option>
+                  <option value="amount_desc">订单金额：从高到低</option>
+                  <option value="amount_asc">订单金额：从低到高</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Bookmark className="h-4 w-4 text-muted-foreground" />
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    const filter = savedOrderFilters.find((item) => item.id === e.target.value);
+                    if (filter) applySavedFilter(filter);
+                    e.target.value = '';
+                  }}
+                  className="h-9 min-w-[160px] rounded-md border border-input bg-background px-3 text-sm"
+                  title="已保存筛选"
+                >
+                  <option value="">已保存筛选</option>
+                  {savedOrderFilters.map((filter) => (
+                    <option key={filter.id} value={filter.id}>{filter.name}</option>
+                  ))}
+                </select>
+                <Input
+                  value={savedFilterName}
+                  onChange={(e) => setSavedFilterName(e.target.value)}
+                  className="h-9 w-[180px]"
+                  placeholder="筛选方案名称"
+                  maxLength={40}
+                />
+                <Button type="button" size="sm" variant="outline" onClick={saveCurrentFilter}>
+                  <Save className="h-3.5 w-3.5" />
+                  保存筛选
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={resetOrderFilters}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  重置
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  平台订单状态与 ERP 履约阶段分开筛选；未接入仓储时不会推断入库或出库。
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* 批量操作栏 */}
           {selectedOrders.size > 0 && (
@@ -783,6 +993,7 @@ export default function OrdersPage() {
                       </TableCell>
                       <TableCell className="px-2.5 py-2">
                         <div className="flex flex-col items-start gap-1 whitespace-nowrap">
+                          <span className="text-[9px] font-medium uppercase text-muted-foreground">Ozon 状态</span>
                           <OrderStatusBadge status={order.status} className="h-5 px-1.5 text-[10px]" />
                           <ShipmentCountdownMini order={order} />
                         </div>
@@ -872,6 +1083,7 @@ export default function OrdersPage() {
 
                           return (
                             <div className="min-w-0 space-y-1">
+                              <div className="text-[9px] font-medium uppercase text-muted-foreground">ERP 履约</div>
                               <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
                                 <Badge variant={fulfillmentStage.variant} className="h-5 shrink-0 px-1.5 text-[10px]">{fulfillmentStage.label}</Badge>
                                 {showStatus && formattedTime && (

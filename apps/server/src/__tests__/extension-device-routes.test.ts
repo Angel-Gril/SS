@@ -70,6 +70,61 @@ async function buildApp(options: { staff?: boolean; rootStaff?: boolean } = {}) 
 }
 
 describe('extension device routes', () => {
+  it('persists product selection rules through the paired device owner', async () => {
+    const deps = dependencies();
+    const authenticateProductSelectionDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-2',
+        actorUserId: 'owner-2',
+        allowedShopIds: ['shop-2'],
+        scopes: ['listing:review', 'listing:write'],
+      };
+    });
+    const productSelectionRepository = {
+      listRules: vi.fn(async () => [{
+        id: 'rule-1', name: 'Potential', tag: 'Potential', color: '#2563eb',
+        enabled: true, autoFavorite: false, conditions: { minSoldCount: 10 },
+        createdAt: NOW, updatedAt: NOW,
+      }]),
+      saveRule: vi.fn(async (_ownerUserId: string, rule: any) => ({
+        ...rule, id: rule.id || 'rule-2', createdAt: NOW, updatedAt: NOW,
+      })),
+      toggleRule: vi.fn(),
+      deleteRule: vi.fn(),
+    };
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateProductSelectionDevice,
+      productSelectionRepository,
+    } as any);
+
+    const listed = await app.inject({ method: 'GET', url: '/product-selection/rules' });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ code: 1, data: { rules: [{ id: 'rule-1' }] } });
+    expect(productSelectionRepository.listRules).toHaveBeenCalledWith('owner-2');
+
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/product-selection/rules',
+      payload: {
+        ownerUserId: 'attacker-owner',
+        name: 'High intent',
+        tag: 'Intent',
+        color: '#0f766e',
+        enabled: true,
+        autoFavorite: true,
+        conditions: { minSoldCount: 20 },
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ code: 1, data: { rule: { id: 'rule-2' } } });
+    expect(productSelectionRepository.saveRule).toHaveBeenCalledWith(
+      'owner-2',
+      expect.objectContaining({ name: 'High intent', autoFavorite: true }),
+    );
+  });
+
   it('keeps the Fastify claim bucket keyed only by IP when device IDs change', () => {
     const first = extensionDeviceClaimRateLimitKey({ ip: '127.0.0.1', body: { deviceId: 'device-a' } } as any);
     const second = extensionDeviceClaimRateLimitKey({ ip: '127.0.0.1', body: { deviceId: 'device-b' } } as any);

@@ -11,7 +11,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
   app.get('/stats', async (request) => {
     const { userId } = (request as any).user;
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
     const shopIds = userShops.map((s) => s.id);
@@ -67,7 +67,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const query = request.query as { startDate?: string; endDate?: string };
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: { id: true, name: true, platform: true, balance: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -117,7 +117,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
 
   app.get('/pipeline', async (request) => {
     const { userId } = (request as any).user;
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { stages: [] } };
 
@@ -191,7 +191,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const query = request.query as { days?: string; shopId?: string };
     const days = parseInt(query.days || '30', 10);
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
     const shopIds = query.shopId ? [query.shopId] : userShops.map((s) => s.id);
 
     const startDate = new Date();
@@ -229,7 +229,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true, name: true, platform: true } });
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true, name: true, platform: true } });
     const shopStats = await Promise.all(
       userShops.map(async (shop) => {
         const [orderCount, revenue, delivered, cancelled] = await Promise.all([

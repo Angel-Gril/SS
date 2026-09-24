@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-24 订单/扩展 UI 与连接链路修复
+
+- 扩展选品规则的 owner 已从 legacy token 兼容通道补齐到 scoped device 通道：设备 authority 存在时，规则读写/切换/删除只能走设备 access token，并严格检查 `listing:review` 或 `listing:write`；仅未建立 authority 的旧安装允许回退。这样 ERP 设备连接成功与规则保存状态一致，不再出现“云端保存失败，请配置 ERP 连接”的错误提示。
+- 订单集合统一排除停用店铺：普通列表、stats、pipeline、stats-by-shop、导出、订单详情、物流、发货、取消、面单、采购/跟踪写入均不再把 `ShopStatus.DISABLED` 当作日常可操作资源。停用店铺及其历史订单不物理删除，保留审计和对账。
+- Ozon posting `status/subStatus` 仍由 Ozon 同步 owner 写入；仓储 `fulfillmentStage` 由 ERP 仓储事实推导，两者不互相覆盖。现有截图 2/3 中不同订单分别出现在“已取消”和“待打包”属于不同平台状态，不是仓储未接入导致同一订单双状态；新增筛选与列标签明确分层。
+- 扩展列表页的 fixed expanded portal 新增视口边界检查，锚点完全滚出 viewport 时自动关闭，并保留原有 detached-node cleanup。
+- UI 合同与截图证据在本机私有目录 `C:\Users\550W\AppData\Local\SS-ERP\private\ui-qa-20260924`：桌面与移动 orders 高级筛选截图、无横向溢出审计。没有 Provider POST、Ozon 写入或新增费用。
+
 ## 2026-09-23 `4a801476 / 1.0.361` COM/CN 官网发布闭环
 
 - 双区部署、COM v3 restricted-pilot canary、CN v2 no-shop dark canary、website approval、CAS、匿名 distribution probe、final publication verifier 均已绑定同一目标 commit `4a801476c6be26e169053f088a90378f9010cce0`，官网两区现公开服务 `1.0.361`。COM canary SHA-256 为 `74aec87bca2729739771f1d654e69050c7d69d33ed4e35414fcf8ecb337ebd9d`，CN canary SHA-256 为 `665719571a7f6e2e36faa9d056d47ee54f0b2e8b5e4a9da39778f470fea5069a`。

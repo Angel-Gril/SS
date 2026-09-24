@@ -14,6 +14,11 @@ import {
   type ShopAnalyticsSnapshotData,
 } from '../services/shop-analytics-snapshot.js';
 import { ExtensionDeviceShopConfigConflictError } from '../services/extension-device-shop-prisma.js';
+import {
+  productSelectionRuleSchema,
+  toggleProductSelectionRuleSchema,
+  type ProductSelectionRuleRepository,
+} from '../services/product-selection-rule.js';
 
 type ExtensionDeviceSessionService = ReturnType<typeof createExtensionDeviceSessionService>;
 
@@ -108,6 +113,11 @@ export interface ExtensionDeviceRoutesOptions {
     request: FastifyRequest,
     reply: FastifyReply,
   ) => Promise<unknown>;
+  authenticateProductSelectionDevice?: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<unknown>;
+  productSelectionRepository?: ProductSelectionRuleRepository;
   shopAnalyticsRepository?: ExtensionDeviceShopAnalyticsRepository;
   collectBatch?: (input: {
     ownerUserId: string;
@@ -287,6 +297,24 @@ function deviceShopContext(
   return device;
 }
 
+function deviceScopeContext(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  requiredScope: string | null = null,
+): ReturnType<typeof deviceContext> {
+  const device = deviceContext(request);
+  if (!device) {
+    reply.status(401).send({ code: 0, errorCode: 'invalid_device_context', msg: '无效的设备令牌' });
+    return null;
+  }
+  const scopes = (request as any).device?.scopes;
+  if (requiredScope && (!Array.isArray(scopes) || !scopes.includes(requiredScope))) {
+    reply.status(403).send({ code: 0, errorCode: 'insufficient_scope', msg: '设备权限不足' });
+    return null;
+  }
+  return device;
+}
+
 function invalidAnalyticsPayload(reply: FastifyReply) {
   return reply.status(400).send({
     code: 0,
@@ -326,6 +354,49 @@ export async function extensionDeviceRoutes(
   options: ExtensionDeviceRoutesOptions,
 ) {
   const authenticateAccount = options.authenticateAccount || authenticate;
+
+  if (options.authenticateProductSelectionDevice && options.productSelectionRepository) {
+    const preHandler = [options.authenticateProductSelectionDevice];
+    app.get('/product-selection/rules', { preHandler }, async (request, reply) => {
+      const device = deviceScopeContext(request, reply, 'listing:review');
+      if (!device) return reply;
+      reply.header('Cache-Control', 'no-store');
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: { rules: await options.productSelectionRepository!.listRules(device.ownerUserId) },
+      });
+    });
+    app.post('/product-selection/rules', { preHandler }, async (request, reply) => {
+      const device = deviceScopeContext(request, reply, 'listing:write');
+      if (!device) return reply;
+      const parsed = productSelectionRuleSchema.safeParse(request.body);
+      if (!parsed.success) return invalidInput(reply);
+      return reply.send({
+        code: 1,
+        msg: '已保存',
+        data: { rule: await options.productSelectionRepository!.saveRule(device.ownerUserId, parsed.data) },
+      });
+    });
+    app.post('/product-selection/rules/:id/toggle', { preHandler }, async (request, reply) => {
+      const device = deviceScopeContext(request, reply, 'listing:write');
+      if (!device) return reply;
+      const id = String((request.params as any).id || '').trim();
+      const parsed = toggleProductSelectionRuleSchema.safeParse(request.body || {});
+      if (!id || !parsed.success) return invalidInput(reply);
+      const result = await options.productSelectionRepository!.toggleRule(device.ownerUserId, id, parsed.data.enabled);
+      if (!result) return reply.status(404).send({ code: 0, errorCode: 'rule_not_found', msg: '规则不存在' });
+      return reply.send({ code: 1, msg: '已更新', data: result });
+    });
+    app.post('/product-selection/rules/:id/delete', { preHandler }, async (request, reply) => {
+      const device = deviceScopeContext(request, reply, 'listing:write');
+      if (!device) return reply;
+      const id = String((request.params as any).id || '').trim();
+      if (!id) return invalidInput(reply);
+      await options.productSelectionRepository!.deleteRule(device.ownerUserId, id);
+      return reply.send({ code: 1, msg: '已删除', data: { id } });
+    });
+  }
 
   // A paired extension must not fall back to a tenant account token just to
   // populate its shop selector. This read-only endpoint is explicitly scoped

@@ -46,7 +46,7 @@ export async function getOrders(options: GetOrdersOptions): Promise<OrderListRes
   }
 
   if (userId) {
-    where.shop = { userId };
+    where.shop = { userId, status: { not: 'DISABLED' } };
   }
 
   if (status) {
@@ -134,6 +134,7 @@ export async function getOrderStats(shopId: string, startDate: Date, endDate: Da
   const orders = await prisma.order.findMany({
     where: {
       shopId,
+      shop: { status: { not: 'DISABLED' } },
       createdAt: { gte: startDate, lte: endDate },
     },
     select: {
@@ -166,7 +167,7 @@ export async function checkOrderOwnership(orderId: string, userId: string): Prom
   const order = await prisma.order.findFirst({
     where: {
       id: orderId,
-      shop: { userId },
+      shop: { userId, status: { not: 'DISABLED' } },
     },
   });
   return !!order;
