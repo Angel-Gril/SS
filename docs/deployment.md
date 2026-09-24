@@ -125,6 +125,8 @@ OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见�
 
 `HUMAN_CHALLENGE_PROVIDER`、`TURNSTILE_*` 和 PoW 环境变量显式设置后优先于管理员后台；未设置时才读取 `SystemConfig`。部署前必须确认最终生效来源，避免环境变量和后台保存两套冲突值。旧部署若仍使用 `FEATURE_TURNSTILE_LOGIN=true`，同样必须配置 Turnstile 两把 key 与 `TURNSTILE_ALLOWED_HOSTNAMES`。
 
+账号会话 Cookie 固定为 host-only，`app` 与 `admin` 子域必须分别持有自己的 `sserp_token`；两个 Web 主机的浏览器 API 请求都必须走当前主机的 `/api/*` 反代，公开下载地址和扩展配对仍使用 canonical API origin。旧部署若曾设置 `AUTH_COOKIE_DOMAIN=.example.com`，升级时暂时保留该变量：服务端只用它过期旧父域 Cookie，新登录不会继续写父域 Cookie。至少保留到最长旧 Cookie 生命周期结束并完成两端重新登录验收后再删除；首次迁移时其中一端可能需要重新登录一次。
+
 Turnstile 依赖浏览器访问 `https://challenges.cloudflare.com`。如果登录页显示错误码（例如 `300030`）或持续提示加载失败，先在普通的最新版 Chrome/Edge 中关闭广告拦截、脚本拦截和严格隐私扩展，并确认该域名可访问；CDP、无头浏览器和部分企业代理会被 Cloudflare 拒绝，反复点击重试不会生成有效 token。中国大陆或无法稳定访问 Cloudflare 的部署应改用 `builtin-pow`，配置至少 32 位的 `HUMAN_CHALLENGE_SIGNING_SECRET` 后重启 API/Web，而不是把 Turnstile 密钥留空。
 
 首个超级管理员只允许通过 `/setup` 引导流程创建。公开注册只创建普通 `USER`，且在系统没有任何 `ADMIN` 前会被后端拒绝。生产环境必须配置 `SETUP_TOKEN`，防止公网首次访问者抢占管理员账号。

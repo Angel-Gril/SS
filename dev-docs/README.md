@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-24 双域登录隔离与首页扩展入口（本地待发布）
+
+- CN 首页偶发进入登录页的 owner 根因已确认：`app.ss-erp.cn` 与 `admin.ss-erp.cn` 曾通过 `.ss-erp.cn` 共享同名 `sserp_token`，两端登录会互相覆盖，任一端退出会清除另一端会话。COM 有相同潜在边界，修复覆盖两区，不做 CN 特判。
+- 活动账号 Cookie 已改为 host-only；旧 `AUTH_COOKIE_DOMAIN` 仅用于登录/退出时过期历史父域 Cookie。官方及显式配置的自定义 user/admin Web 主机都使用自身 `/api/*` 反代，用户端认证面单下载也复用该 transport；canonical API origin 仍供扩展配对和公开地址使用。live/remote smoke 只接受非空、未过期、无 `Domain` 的活动 Cookie，并用 cookie-only 身份检查防止 Bearer 掩盖问题。首页新增第一方 `/download` 扩展下载入口。
+- T2 Cookie owner、认证 transport、smoke 与首页入口均已完成 RED -> GREEN；429 保持会话属于新增基线 characterization，不冒充实现 RED。认证定向 `20/20`、Web transport/dashboard/双域合同、面单与 smoke transport 合同、Web 生产 build、Web/Server typecheck 与定向 lint 通过。COM/CN 管理员域只读探测均为 `/ready=200`、匿名 `/api/user/me=401`。真实 CDP 390x844 首页为 `scrollWidth=390`、零越界、入口可见、零运行时错误。最终完整 Server 套件为 `6332 passed / 325 skipped / 0 failed`。当前尚未提交、推送或部署，COM/CN 生产仍运行 `6e38f907 / 1.0.362`。
+
 ## 2026-09-24 `6e38f907 / 1.0.362` 双区官网公开发布完成
 
 - 订单/扩展体验修复目标提交 `6e38f90732d704ccc6d7d596c59d1a1e49592fd4` 已部署到 COM/CN；COM 保持 DOTH 受限 hosted pilot，仅 `IMAGE_TO_IMAGE/SUITE`，CN 保持 direct-origin/RDS、AI/BYOK/Ozon 全暗。双区发布后 VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 仍为远端备份未配置；正式 pre-publication VPS evidence SHA-256 为 COM `ae305fcf312aa34a0d3e7ac05dc7d9b24307c73a2d4c6292ce1d140831280577`、CN `464eab60ed2eaeafbcaa44ab12ede9d1f8caebbbb35d608a6ee0a2413c8da7fc`。

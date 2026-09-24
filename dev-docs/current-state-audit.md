@@ -1,5 +1,14 @@
 # SS ERP 当前状态审计
 
+## 2026-09-24 双域账号 Cookie 隔离与首页扩展入口（本地）
+
+- 真实 CN 浏览器循环中，首页链接本身稳定指向 `/`；高频导航曾单独触发 `/api/user/me` `429`，现有 Web owner正确保留为“暂时无法确认登录状态”的可重试状态，不会主动跳转登录。用户复核进一步确认管理员页操作后更容易复现登录跳转。
+- 根因是 COM/CN 都把普通端与管理员端的同名 `sserp_token` 写到父域：`app` 登录、`admin` 登录和任一端退出会覆盖或删除另一端会话。活动 Cookie 现固定为 host-only；旧 `AUTH_COOKIE_DOMAIN` 只作为迁移清理值，使登录和退出响应同时过期旧父域 Cookie，不再影响新 Cookie 的作用域。升级后首次迁移可能要求其中一端重新登录一次，之后两端会话独立。
+- 消费者复核发现管理员 Web 及用户端两个面单下载入口过去仍跨域请求 canonical 根 API，父域 Cookie 掩盖了该依赖。COM/CN 官方域和显式配置的自定义 user/admin hostname 现在都把浏览器 transport 与认证面单下载发往当前主机 `/api/*` 反代；`getApiBase()/apiUrl()` 继续返回 canonical API origin，跨区、HTTP、未配置自定义域和非标准端口负例不变。线上无 Cookie 只读探测确认两区 `admin /ready=200`、`admin /api/user/me=401`，没有账号或生产写入。
+- live/remote smoke 过去会取登录响应第一条旧父域删除 Cookie，并由 Bearer token 掩盖空 Cookie。共享 smoke parser 现只接受非空、未过期、无 `Domain` 的活动 Cookie；live smoke 用 cookie-only 分别读取 USER/ADMIN，并在管理员退出后确认用户 Cookie 仍有效。登录后首页标题区新增带下载图标的“下载浏览器扩展”入口，复用区域当前 origin 的第一方 `/download` 页面，不改扩展下载 API、公开 pointer、签名或发布权限。
+- 定向 RED -> GREEN 覆盖 Cookie owner、官方/自定义 transport、smoke parser 与首页入口；429 保持会话是新增基线 characterization，不列为实现 RED。认证 `20/20`，Web transport/dashboard/session、双域、面单和 smoke 合同、Web 生产 build、Web/Server typecheck 和定向 lint 通过。最终完整 Server Vitest 为 `6332 passed / 325 skipped / 0 failed`；此前与 Web build 并发运行时两个未修改 Wanx 夹具触发 5 秒 timeout 的记录不作为最终门禁。合成本地会话下真实 CDP 390x844 验收为 `document/body scrollWidth=390`、越界元素 0、入口可见、运行时错误 0；operator-private `ui-qa-20260924-auth-download/acceptance.json` SHA-256 为 `7e768ea56adb3632a185a7c65c54851bd3df580165b5796cf7481af93a2519fd`，源码绑定摘要为 `d0e8d97c46989d079ab46f0241db63589a3122a0e9c2fb8936cd4356220dca6b`，并分别绑定桌面/移动截图摘要。
+- 本节仍是本地源码状态，尚未提交、推送、部署或发布；COM/CN 仍运行 `6e38f907 / 1.0.362`。没有 Provider POST、ERP ingest、Ozon 写入或新增费用。
+
 ## 2026-09-24 `6e38f907 / 1.0.362` 发布闭环
 
 - 最终源码 `6e38f90732d704ccc6d7d596c59d1a1e49592fd4` 已推送，并以 `1.0.362` 部署到 COM/CN。COM 继续绑定 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle` 和当前合法 MV3 session `689b6f06-c2a2-4086-837e-92867b466870`，只允许 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin、外部 RDS、AI/BYOK/Ozon 全暗。两区 150 migrations 无 pending，post-migration guard、systemd、API/Web/Worker 和公网 `/ready` 均通过。

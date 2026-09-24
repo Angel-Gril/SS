@@ -8,6 +8,7 @@ import {
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  Download,
   ExternalLink,
   Loader2,
   Package,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { formatCurrency, convertToCny } from '@/lib/utils';
 import { OrderChart } from '@/components/dashboard/order-chart';
@@ -174,7 +176,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 max-w-full space-y-5">
       <section className="rounded-lg border bg-card px-5 py-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -187,6 +189,12 @@ export default function DashboardPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               {content.banner?.subtitle || '围绕店铺同步、商品上架、发货履约和利润复盘组织你的日常操作。'}
             </p>
+            <Button asChild variant="outline" size="sm" className="mt-3 h-8 gap-2">
+              <Link href="/download">
+                <Download className="h-3.5 w-3.5" />
+                下载浏览器扩展
+              </Link>
+            </Button>
           </div>
           <div className="grid grid-cols-2 gap-4 text-right sm:grid-cols-4 lg:min-w-[560px]">
             <Metric label="店铺" value={stats?.shopCount ?? 0} />
@@ -197,8 +205,8 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
-        <div className="grid gap-4 lg:grid-cols-3">
+      <section className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
+        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
           {content.steps.map((group, index) => (
             <StepPanel key={`${group.title}-${index}`} group={group} index={index} />
           ))}
@@ -206,7 +214,7 @@ export default function DashboardPage() {
         <QuickLinks links={content.links} />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
+      <section className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
         <OrderChart />
 
         <div className="space-y-4">

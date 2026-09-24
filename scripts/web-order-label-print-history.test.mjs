@@ -5,6 +5,7 @@ import ts from 'typescript';
 
 const orderRoute = fs.readFileSync('apps/server/src/routes/order.ts', 'utf8');
 const printPage = fs.readFileSync('apps/web/src/app/(dashboard)/warehouse/print/page.tsx', 'utf8');
+const scanOutPage = fs.readFileSync('apps/web/src/app/(dashboard)/warehouse/scan-out/page.tsx', 'utf8');
 const ordersPage = fs.readFileSync('apps/web/src/app/(dashboard)/orders/page.tsx', 'utf8');
 
 assert.match(
@@ -26,6 +27,16 @@ assert.match(
   printPage,
   /面单打印时间/,
   'warehouse print history should label the persisted print time',
+);
+assert.match(
+  printPage,
+  /fetchLabelBlob\(orderId, null, apiRequestUrl\(''\)\)/,
+  'warehouse printing should use the authenticated same-origin API transport',
+);
+assert.match(
+  scanOutPage,
+  /fetch\(apiRequestUrl\(`\/api\/orders\/\$\{orderId\}\/label`\)/,
+  'scan-out label printing should use the authenticated same-origin API transport',
 );
 assert.match(
   ordersPage,

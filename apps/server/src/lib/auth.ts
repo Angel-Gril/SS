@@ -226,16 +226,26 @@ const AUTH_COOKIE_SECURE =
   process.env.AUTH_COOKIE_SECURE !== undefined
     ? process.env.AUTH_COOKIE_SECURE === 'true'
     : process.env.NODE_ENV === 'production';
-const AUTH_COOKIE_DOMAIN = process.env.AUTH_COOKIE_DOMAIN?.trim() || undefined;
 const AUTH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   path: '/',
-  ...(AUTH_COOKIE_DOMAIN ? { domain: AUTH_COOKIE_DOMAIN } : {}),
 };
+// Active sessions are host-only so app/admin logins cannot overwrite each other.
+// Keep the old setting only long enough to expire cookies created by older releases.
+const LEGACY_AUTH_COOKIE_DOMAIN = process.env.AUTH_COOKIE_DOMAIN?.trim() || undefined;
+
+function clearLegacyParentDomainCookie(reply: FastifyReply) {
+  if (!LEGACY_AUTH_COOKIE_DOMAIN) return;
+  reply.clearCookie(AUTH_COOKIE_NAME, {
+    ...AUTH_COOKIE_OPTIONS,
+    domain: LEGACY_AUTH_COOKIE_DOMAIN,
+  });
+}
 
 export function setAuthCookie(reply: FastifyReply, token: string, maxAgeSeconds?: number) {
+  clearLegacyParentDomainCookie(reply);
   reply.setCookie(AUTH_COOKIE_NAME, token, {
     ...AUTH_COOKIE_OPTIONS,
     ...(typeof maxAgeSeconds === 'number' ? { maxAge: maxAgeSeconds } : {}),
@@ -244,6 +254,7 @@ export function setAuthCookie(reply: FastifyReply, token: string, maxAgeSeconds?
 
 export function clearAuthCookie(reply: FastifyReply) {
   reply.clearCookie(AUTH_COOKIE_NAME, AUTH_COOKIE_OPTIONS);
+  clearLegacyParentDomainCookie(reply);
 }
 
 /**

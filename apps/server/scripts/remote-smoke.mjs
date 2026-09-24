@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
 import dotenv from 'dotenv';
+import { activeHostOnlyAuthCookie, authCookieHeaderFromSetCookie } from './smoke-auth-cookie.mjs';
 
 const envCandidates = [
   process.env.SMOKE_ENV_FILE,
@@ -44,6 +45,7 @@ const tempPassword = `Smoke${tempSuffix}Aa1`;
 let userToken = process.env.SMOKE_USER_TOKEN || '';
 let userCookie = process.env.SMOKE_USER_COOKIE || '';
 let tempUserMode = 'none';
+let adminCredentialMode = adminToken || adminCookie ? 'provided' : 'none';
 
 const checks = [];
 
@@ -84,7 +86,7 @@ async function resolveAdminCredentials() {
   if (adminToken || adminCookie) return;
   if (!adminPhone || !adminPassword) return;
 
-  const login = await request(`${apiBaseUrl}/api/admin/auth/login`, {
+  const login = await request(`${adminWebBaseUrl}/api/admin/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ phone: adminPhone, password: adminPassword }),
@@ -93,19 +95,19 @@ async function resolveAdminCredentials() {
     throw new Error(`admin login failed: ${login.status} ${JSON.stringify(login.body)}`);
   }
 
-  const setCookie = login.headers.get('set-cookie') || '';
-  const cookie = setCookie.split(';')[0];
-  if (cookie) {
-    adminCookie = cookie;
-  }
+  const activeCookie = activeHostOnlyAuthCookie(login.headers);
+  const cookie = authCookieHeaderFromSetCookie(login.headers);
+  if (!activeCookie || !cookie) throw new Error('admin login did not return one active host-only cookie');
+  adminCookie = cookie;
   adminToken = login.body.data.token;
+  adminCredentialMode = 'login';
 }
 
 async function resolveUserCredentials() {
   if (userToken || userCookie) return;
 
   if (userPhone && userPassword) {
-    const login = await request(`${apiBaseUrl}/api/auth/login`, {
+    const login = await request(`${userWebBaseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ phone: userPhone, password: userPassword }),
@@ -113,9 +115,9 @@ async function resolveUserCredentials() {
     if (login.status !== 200 || login.body?.code !== 1) {
       throw new Error(`user login failed: ${login.status} ${JSON.stringify(login.body)}`);
     }
-    const setCookie = login.headers.get('set-cookie') || '';
-    const cookie = setCookie.split(';')[0];
-    if (cookie) userCookie = cookie;
+    const cookie = authCookieHeaderFromSetCookie(login.headers);
+    if (!cookie) throw new Error('user login did not return one active host-only cookie');
+    userCookie = cookie;
     userToken = login.body?.data?.token || '';
     tempUserMode = 'provided';
     return;
@@ -123,15 +125,16 @@ async function resolveUserCredentials() {
 
   if (!createTempUser) return;
 
-  const loginFirst = await request(`${apiBaseUrl}/api/auth/login`, {
+  const loginFirst = await request(`${userWebBaseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ phone: tempPhone, password: tempPassword }),
   });
   if (loginFirst.status === 200 && loginFirst.body?.code === 1) {
     userToken = loginFirst.body?.data?.token || '';
-    const loginCookie = (loginFirst.headers.get('set-cookie') || '').split(';')[0];
-    if (loginCookie) userCookie = loginCookie;
+    const loginCookie = authCookieHeaderFromSetCookie(loginFirst.headers);
+    if (!loginCookie) throw new Error('reused user login did not return one active host-only cookie');
+    userCookie = loginCookie;
     tempUserMode = 'reused';
     return;
   }
@@ -140,7 +143,7 @@ async function resolveUserCredentials() {
     throw new Error(`temp user pre-login failed: ${loginFirst.status} ${JSON.stringify(loginFirst.body)}`);
   }
 
-  const register = await request(`${apiBaseUrl}/api/auth/register`, {
+  const register = await request(`${userWebBaseUrl}/api/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ phone: tempPhone, password: tempPassword, nickname: 'Remote Smoke User' }),
@@ -148,20 +151,21 @@ async function resolveUserCredentials() {
   if (register.status !== 201 || register.body?.code !== 1) {
     throw new Error(`temp user register failed: ${register.status} ${JSON.stringify(register.body)}`);
   }
-  const setCookie = register.headers.get('set-cookie') || '';
-  const cookie = setCookie.split(';')[0];
-  if (cookie) userCookie = cookie;
+  const cookie = authCookieHeaderFromSetCookie(register.headers);
+  if (!cookie) throw new Error('user registration did not return one active host-only cookie');
+  userCookie = cookie;
   tempUserMode = 'created';
 
-  const login = await request(`${apiBaseUrl}/api/auth/login`, {
+  const login = await request(`${userWebBaseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ phone: tempPhone, password: tempPassword }),
   });
   if (login.status === 200 && login.body?.code === 1) {
     userToken = login.body?.data?.token || '';
-    const loginCookie = (login.headers.get('set-cookie') || '').split(';')[0];
-    if (loginCookie) userCookie = loginCookie;
+    const loginCookie = authCookieHeaderFromSetCookie(login.headers);
+    if (!loginCookie) throw new Error('created user login did not return one active host-only cookie');
+    userCookie = loginCookie;
   }
 }
 
@@ -228,6 +232,34 @@ push('setup status reports initialized', async () => {
     throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
   }
   return out.body.data;
+});
+
+push('admin cookie-only identity is accepted on the admin host', async () => {
+  await resolveAdminCredentials();
+  if (!adminCookie) {
+    if (adminPhone && adminPassword) throw new Error('admin login credentials produced no host-only cookie');
+    return { skipped: 'no admin login cookie available' };
+  }
+  const out = await request(`${adminWebBaseUrl}/api/admin/auth/me`, { headers: { cookie: adminCookie } });
+  if (out.status !== 200 || out.body?.code !== 1 || out.body?.data?.role !== 'ADMIN') {
+    throw new Error(`admin cookie-only identity failed: ${out.status} ${JSON.stringify(out.body)}`);
+  }
+  return { status: out.status, role: out.body.data.role };
+});
+
+push('user cookie-only identity is accepted on the user host', async () => {
+  await resolveUserCredentials();
+  if (!userCookie) {
+    if ((userPhone && userPassword) || createTempUser) {
+      throw new Error('user login credentials produced no host-only cookie');
+    }
+    return { skipped: 'no user login cookie available' };
+  }
+  const out = await request(`${userWebBaseUrl}/api/user/me`, { headers: { cookie: userCookie } });
+  if (out.status !== 200 || out.body?.code !== 1 || !out.body?.data?.id) {
+    throw new Error(`user cookie-only identity failed: ${out.status} ${JSON.stringify(out.body)}`);
+  }
+  return { status: out.status, role: out.body.data.role || null };
 });
 
 push('public pages render', async () => {
@@ -682,6 +714,32 @@ push('authenticated upload stores image in expected backend', async () => {
     runtimeImageUpload: runtime.body?.data?.capabilities?.imageUpload || null,
     runtimeMode,
   };
+});
+
+push('admin logout preserves user cookie session', async () => {
+  if (adminCredentialMode !== 'login' || !adminCookie || !userCookie) {
+    return { skipped: 'independent login cookies were not created by this smoke run' };
+  }
+  const logout = await request(`${adminWebBaseUrl}/api/auth/logout`, {
+    method: 'POST',
+    headers: { cookie: adminCookie },
+  });
+  if (logout.status !== 200 || logout.body?.code !== 1) {
+    throw new Error(`admin cookie logout failed: ${logout.status} ${JSON.stringify(logout.body)}`);
+  }
+  const adminMe = await request(`${adminWebBaseUrl}/api/admin/auth/me`, {
+    headers: { cookie: adminCookie },
+  });
+  if (adminMe.status !== 401) {
+    throw new Error(`admin cookie remained valid after logout: ${adminMe.status}`);
+  }
+  const userMe = await request(`${userWebBaseUrl}/api/user/me`, {
+    headers: { cookie: userCookie },
+  });
+  if (userMe.status !== 200 || userMe.body?.code !== 1 || !userMe.body?.data?.id) {
+    throw new Error(`admin logout invalidated user cookie: ${userMe.status} ${JSON.stringify(userMe.body)}`);
+  }
+  return { logoutStatus: logout.status, adminStatus: adminMe.status, userStatus: userMe.status };
 });
 
 for (const { name, fn } of checks) {

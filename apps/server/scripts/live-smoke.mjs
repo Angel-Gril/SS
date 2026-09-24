@@ -6,6 +6,12 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import Redis from 'ioredis';
 import jwt from 'jsonwebtoken';
+import {
+  activeHostOnlyAuthCookie,
+  authCookieHeaderFromSetCookie,
+  clearedAuthCookies,
+  setCookieDomain,
+} from './smoke-auth-cookie.mjs';
 
 const envCandidates = [
   process.env.SMOKE_ENV_FILE,
@@ -58,6 +64,8 @@ const maintenanceKeys = ['maintenance_enabled', 'maintenance_message', 'maintena
 let adminToken = '';
 let oldMaintenanceRows = null;
 let adminCookie = '';
+let userCookie = '';
+const legacyAuthCookieDomain = String(process.env.AUTH_COOKIE_DOMAIN || '').trim().toLowerCase();
 
 async function record(name, fn) {
   try {
@@ -93,32 +101,25 @@ async function web(path, options = {}) {
   return { status: response.status, body: text, headers: response.headers };
 }
 
-function getSetCookies(headers) {
-  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie();
-  const cookie = headers.get('set-cookie');
-  return cookie ? [cookie] : [];
-}
-
 function assertSecureAuthCookie(headers, context) {
-  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
-  if (!cookie) throw new Error(`${context} did not set sserp_token cookie`);
+  const cookie = activeHostOnlyAuthCookie(headers);
+  if (!cookie) throw new Error(`${context} did not set one active host-only sserp_token cookie`);
   const requiredAttrs = [/;\s*HttpOnly/i, /;\s*SameSite=Lax/i, /;\s*Path=\//i];
   for (const attr of requiredAttrs) {
-    if (!attr.test(cookie)) throw new Error(`${context} cookie missing ${attr}: ${cookie}`);
+    if (!attr.test(cookie)) throw new Error(`${context} cookie missing ${attr}`);
   }
   if (expectSecureCookie && !/;\s*Secure/i.test(cookie)) {
-    throw new Error(`${context} cookie missing /;\\s*Secure/i: ${cookie}`);
+    throw new Error(`${context} cookie is not Secure`);
   }
   if (!expectSecureCookie && /;\s*Secure/i.test(cookie)) {
-    throw new Error(`${context} cookie unexpectedly Secure for non-HTTPS smoke: ${cookie}`);
+    throw new Error(`${context} cookie is unexpectedly Secure for non-HTTPS smoke`);
+  }
+  if (legacyAuthCookieDomain) {
+    const legacyClear = clearedAuthCookies(headers)
+      .find((candidate) => setCookieDomain(candidate) === legacyAuthCookieDomain);
+    if (!legacyClear) throw new Error(`${context} did not expire the legacy parent-domain cookie`);
   }
   return cookie;
-}
-
-function cookieHeaderFromSetCookie(headers) {
-  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
-  if (!cookie) return '';
-  return cookie.split(';')[0];
 }
 
 function authHeaders(extra = {}) {
@@ -134,12 +135,14 @@ function findCheck(checks, key) {
 }
 
 function assertClearedAuthCookie(headers, context) {
-  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
-  if (!cookie) throw new Error(`${context} did not clear sserp_token cookie`);
-  if (!/;\s*Max-Age=0/i.test(cookie) && !/;\s*Expires=/i.test(cookie)) {
-    throw new Error(`${context} clear cookie missing expiry: ${cookie}`);
+  const cookies = clearedAuthCookies(headers);
+  const hostOnly = cookies.find((cookie) => !setCookieDomain(cookie));
+  if (!hostOnly) throw new Error(`${context} did not clear the host-only sserp_token cookie`);
+  if (legacyAuthCookieDomain
+    && !cookies.some((cookie) => setCookieDomain(cookie) === legacyAuthCookieDomain)) {
+    throw new Error(`${context} did not clear the legacy parent-domain sserp_token cookie`);
   }
-  return cookie;
+  return hostOnly;
 }
 
 async function expectOkJson(path) {
@@ -348,7 +351,7 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     assertSecureAuthCookie(out.headers, 'admin login');
-    adminCookie = cookieHeaderFromSetCookie(out.headers);
+    adminCookie = authCookieHeaderFromSetCookie(out.headers);
     adminToken = out.body.data.token;
     return { status: out.status, role: out.body.data.user.role };
   });
@@ -361,6 +364,14 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     return out.body.data;
+  });
+
+  await record('admin cookie-only identity remains valid on the admin API', async () => {
+    const out = await api('/api/admin/auth/me', { headers: { cookie: adminCookie } });
+    if (out.status !== 200 || out.body?.code !== 1 || out.body?.data?.role !== 'ADMIN') {
+      throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
+    }
+    return { status: out.status, role: out.body.data.role };
   });
 
   await record('orders stats empty state returns complete fields', async () => {
@@ -491,6 +502,10 @@ async function main() {
     if (expectRuntime !== 'cloud' && register.status !== 201) {
       throw new Error(`local register without sms should be allowed, got ${register.status}: ${JSON.stringify(register.body)}`);
     }
+    if (expectRuntime !== 'cloud') {
+      assertSecureAuthCookie(register.headers, 'local user registration');
+      userCookie = authCookieHeaderFromSetCookie(register.headers);
+    }
 
     const existing = await prisma.user.findUnique({ where: { phone: userPhone }, select: { id: true } });
     if (expectRuntime === 'cloud' && existing) throw new Error(`user was created without SMS proof: ${existing.id}`);
@@ -517,6 +532,7 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     assertSecureAuthCookie(out.headers, 'user registration');
+    userCookie = authCookieHeaderFromSetCookie(out.headers);
     const user = await prisma.user.findUnique({
       where: { phone: userPhone },
       select: { id: true, role: true, isSuperAdmin: true },
@@ -526,6 +542,14 @@ async function main() {
     }
     createdUserIds.add(user.id);
     return { role: user.role, isSuperAdmin: user.isSuperAdmin };
+  });
+
+  await record('user cookie-only identity remains valid on the user API', async () => {
+    const out = await api('/api/user/me', { headers: { cookie: userCookie } });
+    if (out.status !== 200 || out.body?.code !== 1 || out.body?.data?.role !== 'USER') {
+      throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
+    }
+    return { status: out.status, role: out.body.data.role };
   });
 
   await record('normal user cannot use admin login or admin APIs', async () => {
@@ -607,10 +631,10 @@ async function main() {
     return { blockedStatus: blocked.status, adminStatus: adminRoute.status };
   });
 
-  await record('logout clears cookie and invalidates session token', async () => {
+  await record('admin logout preserves user cookie session and invalidates admin token', async () => {
     const logout = await api('/api/auth/logout', {
       method: 'POST',
-      headers: authHeaders(),
+      headers: { cookie: adminCookie },
     });
     if (logout.status !== 200 || logout.body?.code !== 1) {
       throw new Error(`logout failed: ${logout.status} ${JSON.stringify(logout.body)}`);
@@ -623,7 +647,11 @@ async function main() {
     if (me.status !== 401) {
       throw new Error(`logged out token still accepted: ${me.status} ${JSON.stringify(me.body)}`);
     }
-    return { logoutStatus: logout.status, meAfterLogoutStatus: me.status };
+    const userMe = await api('/api/user/me', { headers: { cookie: userCookie } });
+    if (userMe.status !== 200 || userMe.body?.code !== 1 || userMe.body?.data?.role !== 'USER') {
+      throw new Error(`admin logout invalidated user cookie session: ${userMe.status} ${JSON.stringify(userMe.body)}`);
+    }
+    return { logoutStatus: logout.status, meAfterLogoutStatus: me.status, userStatus: userMe.status };
   });
 }
 

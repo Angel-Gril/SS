@@ -3,6 +3,14 @@
 import { normalizeLoginReturnTo } from '@/lib/auth-return-to';
 
 const LOCAL_API_PORT = '3001';
+const CONFIGURED_USER_HOSTNAME = String(process.env.NEXT_PUBLIC_USER_HOSTNAME || '').trim().toLowerCase();
+const CONFIGURED_ADMIN_HOSTNAME = String(process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || '').trim().toLowerCase();
+const OFFICIAL_WEB_ORIGINS = new Set([
+  'https://app.ss-erp.com',
+  'https://admin.ss-erp.com',
+  'https://app.ss-erp.cn',
+  'https://admin.ss-erp.cn',
+]);
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
@@ -49,14 +57,23 @@ export function apiUrl(path: string): string {
   return `${getApiBase()}${path}`;
 }
 
-function apiRequestUrl(path: string): string {
+export function apiRequestUrl(path: string): string {
   const base = getApiBase();
   if (typeof window !== 'undefined') {
-    const { origin } = window.location;
+    const { hostname, origin } = window.location;
     // Use the existing regional Web proxy only for browser transport. Published
     // URLs and extension pairing still use getApiBase()/apiUrl() unchanged.
-    if ((origin === 'https://app.ss-erp.com' && base === 'https://ss-erp.com')
-      || (origin === 'https://app.ss-erp.cn' && base === 'https://ss-erp.cn')) {
+    const configuredCustomWebHost = window.location.protocol === 'https:'
+      && window.location.port === ''
+      && !OFFICIAL_WEB_ORIGINS.has(origin)
+      && [CONFIGURED_USER_HOSTNAME, CONFIGURED_ADMIN_HOSTNAME]
+        .filter(Boolean)
+        .includes(hostname.toLowerCase());
+    if (configuredCustomWebHost
+      || ((['https://app.ss-erp.com', 'https://admin.ss-erp.com'].includes(origin)
+      && base === 'https://ss-erp.com')
+      || (['https://app.ss-erp.cn', 'https://admin.ss-erp.cn'].includes(origin)
+        && base === 'https://ss-erp.cn'))) {
       return `${origin}${path}`;
     }
   }

@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
-import { api, getApiBase } from '@/lib/api';
+import { api, apiRequestUrl } from '@/lib/api';
 import {
   PrintAgentConfig,
   DEFAULT_PRINT_AGENT_CONFIG,
@@ -151,7 +151,7 @@ export default function PrintPage() {
   }
 
   async function doPrint(orderId: string, postingNumber: string) {
-    const blob = await fetchLabelBlob(orderId, null, getApiBase());
+    const blob = await fetchLabelBlob(orderId, null, apiRequestUrl(''));
 
     if (printMode === 'agent' && agentConfig.enabled) {
       const online = await checkAgent(agentConfig.url);

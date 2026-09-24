@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const redisMocks = vi.hoisted(() => ({
   scan: vi.fn(),
@@ -13,6 +13,10 @@ import { setAuthCookie } from '../lib/auth.js';
 describe('auth cookie persistence', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('creates a session cookie when no persistence duration is requested', () => {
     const setCookie = vi.fn();
     setAuthCookie({ setCookie } as any, 'token-value');
@@ -26,6 +30,34 @@ describe('auth cookie persistence', () => {
     setAuthCookie({ setCookie } as any, 'token-value', 604800);
 
     expect(setCookie.mock.calls[0]?.[2]).toMatchObject({ maxAge: 604800 });
+  });
+
+  it('keeps app and admin sessions host-only while removing a legacy parent-domain cookie', async () => {
+    vi.stubEnv('AUTH_COOKIE_DOMAIN', '.ss-erp.cn');
+    vi.resetModules();
+    const auth = await import('../lib/auth.js');
+    const setCookie = vi.fn();
+    const clearCookie = vi.fn();
+
+    auth.setAuthCookie({ setCookie, clearCookie } as any, 'token-value');
+
+    expect(clearCookie).toHaveBeenCalledOnce();
+    expect(clearCookie).toHaveBeenCalledWith('sserp_token', expect.objectContaining({
+      domain: '.ss-erp.cn',
+      path: '/',
+    }));
+    expect(setCookie).toHaveBeenCalledOnce();
+    expect(setCookie.mock.calls[0]?.[2]).not.toHaveProperty('domain');
+
+    setCookie.mockClear();
+    clearCookie.mockClear();
+    auth.clearAuthCookie({ setCookie, clearCookie } as any);
+
+    expect(clearCookie).toHaveBeenCalledTimes(2);
+    expect(clearCookie.mock.calls.map((call) => call[1])).toEqual(expect.arrayContaining([
+      expect.not.objectContaining({ domain: expect.anything() }),
+      expect.objectContaining({ domain: '.ss-erp.cn' }),
+    ]));
   });
 });
 

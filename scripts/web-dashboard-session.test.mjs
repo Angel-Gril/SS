@@ -179,6 +179,15 @@ test('dashboard 503 maintenance preserves session state and is distinguished fro
   });
 });
 
+test('dashboard 429 rate limit stays retryable without clearing session state or redirecting', { timeout: 5_000 }, async () => {
+  await withSessionServer((_request, response) => json(response, 429, { code: 0, msg: 'Synthetic rate limit' }), async fixture => {
+    const result = await bounded(fixture.loadDashboardSession({ timeoutMs: 500 }), 'rate-limited identity');
+    assert.deepEqual(plain(result), { status: 'unavailable', reason: 'response' });
+    fixture.assertSessionUntouched();
+    fixture.assertSingleGet();
+  });
+});
+
 test('dashboard missing identity or non-success business code never grants user access', { timeout: 5_000 }, async () => {
   for (const body of [
     { code: 1 }, { code: 1, data: null }, { code: 1, data: {} }, { code: 1, data: [] },
