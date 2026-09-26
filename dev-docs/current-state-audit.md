@@ -1,5 +1,14 @@
 # SS ERP 当前状态审计
 
+## 2026-09-26 `6378b62e / 1.0.364` OpenAI-compatible 网关 URL 修复与双区部署
+
+- 根因是网关 Base URL 填入 `/v1/images/` 时，客户端会继续拼接 `/v1/models`，实际请求变成 `/v1/images/v1/models` 并返回 404。服务端现在拒绝 `/image`、`/images`、`/images/generations` 等接口路径；Web 在保存和“检查供应商配置”前直接提示应填写不带接口路径的 `https://host/v1`。用户已实际用 `https://image.xiaoyiapi.xyz/v1` 验证生图成功。
+- 实现提交 `6378b62ee9f452702c4c695485a795bba8d78fbd` 已推送到 `origin/feat/ai-media-prompt-registry`。fresh offline 回执位于 `C:\Users\550W\AppData\Local\SS-ERP\private\release-6378b62e\qa04-offline.json`，SHA-256 为 `95f563894d2eec8730461c25691e3732a2236401fe23358923f75419f98bc95a`；Server `6335 passed / 325 skipped / 0 failed`、AI Media PostgreSQL `197/197`、扩展 `463 pass / 0 failure / 0 warning`。完整 offline 结果不等同于正式 QA04 或官网发布批准。
+- COM 候选 `1.0.364`：cloud/local ZIP SHA-256 `b2fb86105896761f670241f69b5e910b94770f0d4e2d3cf587429ff2c2cc4943` / `574a91e6411ed1601bd0a0235ec99c2ccad4fa8c6667d2eb0ad86dc45a1b4b76`；release evidence/signature SHA-256 `4322414877b1112f7658a3453c2e670036259ba7b53f7dadf224bed8bf73b9af` / `3fc5eea081a33ae7dd1cdb8fe72f40233e0a67c2138a1856c05481db8e47b786`。部署合同严格绑定单一 DOTH 店铺 `cmq7r8n1700095o7exbet1xle`、owner `cmpsj2g6800005ow9rrtvqhay`、当前配对设备与 `IMAGE_TO_IMAGE/SUITE`，没有扩大到 BINI 或全店权限。
+- CN 候选 `1.0.364`：cloud/local ZIP SHA-256 `033abd6fbce95d5ce86de3a95ab4cf1f3e4b29beb5d8e0f54d09a98580c39cdd` / `485a5c73deb8c9f7385809de9c0b90488143c956994ac0fcb5d9c47b3329e6dc`；release evidence/signature SHA-256 `5f8393b55b78ed77c79a91d17601bde7e8c5ff0e91af22f97fda05512de80708` / `fc9fe1bf4cfe38051ded5e6e280b1d636fb8b7d5ac5d8e1ed47b7fa150559e2f`。CN 继续 direct-origin/RDS、AI/BYOK/Ozon 全暗。
+- 两区发布后 canonical VPS evidence 分别为 `C:\Users\550W\AppData\Local\SS-ERP\private\release-6378b62e\vps\COM.json` 与 `CN.json`：均 `status=PASS`、`failures=0`、`warnings=1`，唯一 warning 为未配置远程备份；两区当前均运行 `6378b62e / 1.0.364`，公网 `/ready`、150 migrations、post-migration suite guard 和部署隔离检查通过。
+- 官网 extension pointer 仍为旧 `6e38f907 / 1.0.362`，因为本次授权和回执只覆盖应用部署；fresh normal ERP suite evidence 尚未绑定 `6378b62e`，因此尚未生成正式 QA04、COM REL-04 v3 DOTH canary、CN dark canary、website approval、distribution probe 或 CAS。offline 回执、VPS verifier 和应用部署成功均不能替代这些独立 gate。没有 Provider POST、ERP ingest、Ozon 写入或新增费用。
+
 ## 2026-09-25 双域账号 Cookie 隔离与首页扩展入口（已部署）
 
 - 真实 CN 浏览器循环中，首页链接本身稳定指向 `/`；高频导航曾单独触发 `/api/user/me` `429`，现有 Web owner正确保留为“暂时无法确认登录状态”的可重试状态，不会主动跳转登录。用户复核进一步确认管理员页操作后更容易复现登录跳转。

@@ -1,5 +1,14 @@
 # SS ERP 内部开发真源
 
+## 2026-09-26 `6378b62e / 1.0.364` 双区应用部署完成（官网 pointer 未切换）
+
+- OpenAI-compatible 生图网关 Base URL 校验已修复：服务端拒绝把 `/image`、`/images`、`/images/generations` 等接口路径当作网关根地址，Web 在保存/检查前直接提示使用 `https://host/v1` 形式。用户已用 `https://image.xiaoyiapi.xyz/v1` 实际验证生图成功。实现提交 `6378b62ee9f452702c4c695485a795bba8d78fbd` 已推送到 `origin/feat/ai-media-prompt-registry`。
+- fresh offline 回执 SHA-256 为 `95f563894d2eec8730461c25691e3732a2236401fe23358923f75419f98bc95a`；最终 Server 为 `6335 passed / 325 skipped / 0 failed`，AI Media PostgreSQL `197/197`，扩展 `463 pass / 0 failure / 0 warning`。回执位于 operator-private `C:\Users\550W\AppData\Local\SS-ERP\private\release-6378b62e`，不进入 Git。
+- COM `1.0.364` 候选 cloud/local ZIP SHA-256 为 `b2fb86105896761f670241f69b5e910b94770f0d4e2d3cf587429ff2c2cc4943` / `574a91e6411ed1601bd0a0235ec99c2ccad4fa8c6667d2eb0ad86dc45a1b4b76`，release evidence/signature SHA-256 为 `4322414877b1112f7658a3453c2e670036259ba7b53f7dadf224bed8bf73b9af` / `3fc5eea081a33ae7dd1cdb8fe72f40233e0a67c2138a1856c05481db8e47b786`。COM 已按受限 pilot 合同运行，仅 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle` 和明确配对设备，允许操作仍为 `IMAGE_TO_IMAGE/SUITE`。
+- CN `1.0.364` 候选 cloud/local ZIP SHA-256 为 `033abd6fbce95d5ce86de3a95ab4cf1f3e4b29beb5d8e0f54d09a98580c39cdd` / `485a5c73deb8c9f7385809de9c0b90488143c956994ac0fcb5d9c47b3329e6dc`，release evidence/signature SHA-256 为 `5f8393b55b78ed77c79a91d17601bde7e8c5ff0e91af22f97fda05512de80708` / `fc9fe1bf4cfe38051ded5e6e280b1d636fb8b7d5ac5d8e1ed47b7fa150559e2f`。CN 继续 direct-origin/RDS、AI/BYOK/Ozon 全暗。
+- 两区部署后的 canonical VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 仍为既定的远程备份未配置；COM/CN 当前服务版本均为 `6378b62e / 1.0.364`，`/ready`、150 migrations 和 post-migration suite guard 通过。
+- 官网 extension pointer 仍安全保持 `6e38f907 / 1.0.362`。本轮尚未执行正式 QA04、COM REL-04 v3 canary、CN dark canary、website approval、distribution probe 或 CAS；这些 gate 必须绑定 fresh normal ERP suite evidence 和同一 `6378b62e`，不能用 offline 回执或部署成功替代。没有 Provider POST、ERP ingest、Ozon 写入或新增费用。
+
 ## 2026-09-25 `403c1ed4 / 1.0.363` 双区应用部署与双域登录验收完成
 
 - 双域 Cookie、认证 transport、面单下载和首页扩展入口修复提交 `403c1ed4637777998ae688a7f9395579f2d101be` 已推送并部署到 COM/CN。COM 继续绑定既有 DOTH 受限 hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin、外部 RDS、AI/BYOK/Ozon 全暗。两区三服务、公网 `/ready`、150 migrations 和 post-migration suite guard 均通过。
