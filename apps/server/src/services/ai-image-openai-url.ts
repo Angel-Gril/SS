@@ -69,6 +69,11 @@ export function normalizeOpenAiImagesApiBase(baseUrl: string) {
       'OpenAI-compatible API base URL must not include an image endpoint path',
     );
   }
+  if (/(?:^|\/)images?$/i.test(path)) {
+    invalidProviderUrl(
+      'OpenAI-compatible API base URL must stop before /image or /images; use the API root such as https://host/v1',
+    );
+  }
   const normalizedPath = /\/v1$/i.test(path) ? path : `${path}/v1`;
   if (normalizedPath.length > 240) {
     invalidProviderUrl('OpenAI-compatible API base URL path is too long');

@@ -2274,6 +2274,24 @@ function isOfficialOpenAiImagesBaseUrl(value: string): boolean {
   }
 }
 
+function openAiCompatibleBaseUrlProblem(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  try {
+    const parsed = new URL(normalized);
+    const path = parsed.pathname.replace(/\/+$/u, '');
+    if (/(?:^|\/)images?$/iu.test(path)) {
+      return 'Base URL 不能包含 /image 或 /images；请填写 API 根地址，例如 https://image.xiaoyiapi.xyz/v1。';
+    }
+    if (/\/images\/(?:generations|edits|tasks)(?:\/|$)/iu.test(path)) {
+      return 'Base URL 不能包含 /images/generations、/images/edits 等具体接口路径；请填写 API 根地址。';
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const AI_IMAGE_TRANSLATION_PROVIDER_PRESETS = [
   {
     value: 'disabled',
@@ -2338,9 +2356,13 @@ function AiSettingsPanel({
   const imageProviderEndpointMismatch = imageProvider === 'openai-images'
     && Boolean((editing.ai_image_base_url || '').trim())
     && !isOfficialOpenAiImagesBaseUrl(editing.ai_image_base_url || '');
+  const imageProviderBaseUrlProblem = imageProvider === 'custom'
+    ? openAiCompatibleBaseUrlProblem(editing.ai_image_base_url || '')
+    : null;
   const imageProviderReady =
     imageProvider !== 'disabled' &&
     !imageProviderEndpointMismatch &&
+    !imageProviderBaseUrlProblem &&
     Boolean((editing.ai_image_base_url || '').trim()) &&
     Boolean((editing.ai_image_api_key || '').trim()) &&
     Boolean((editing.ai_image_model || '').trim());
@@ -2591,7 +2613,7 @@ function AiSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
-                    disabled={savingKey !== null || imageProviderEndpointMismatch}
+                    disabled={savingKey !== null || imageProviderEndpointMismatch || Boolean(imageProviderBaseUrlProblem)}
                   >
                     {savingKey === 'group:AI 生图服务' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2639,6 +2661,12 @@ function AiSettingsPanel({
                   >
                     切换为自定义网关
                   </Button>
+                </div>
+              )}
+
+              {imageProviderBaseUrlProblem && (
+                <div className="rounded-md border border-red-300 bg-red-50 p-3 text-xs leading-5 text-red-900">
+                  {imageProviderBaseUrlProblem}
                 </div>
               )}
 
