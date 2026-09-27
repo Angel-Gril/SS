@@ -153,7 +153,8 @@ async function run() {
   if (process.argv.includes('--require-clean')) assert.equal(worktreeClean, true, 'canary requires a clean worktree');
   const summary = {
     contractVersion: 'ss-erp-donor-workbench-mv3-acceptance/v2', ok: false,
-    artifacts, screenshot: null, extensionId: null, sourceTitle: null,
+    artifacts, receipt: path.join(artifacts, 'summary.json'),
+    screenshot: null, extensionId: null, sourceTitle: null,
     sourceCommit, extensionTreeSha256: await extensionTreeSha256(EXTENSION_ROOT), worktreeClean,
     allowlistKey: ALLOWLIST_KEY, allowedSourceKey: ALLOWED_SOURCE_KEY,
     negativeSourceKey: NEGATIVE_SOURCE_KEY, negativeSourceBlocked: false,
@@ -347,6 +348,7 @@ async function run() {
     await terminateProfileChromium(profile);
     await rm(profile, { recursive: true, force: true, maxRetries: 6, retryDelay: 200 });
   }
+  await writeFile(summary.receipt, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(JSON.stringify(summary, null, 2));
 }
 
