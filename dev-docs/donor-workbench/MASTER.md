@@ -16,14 +16,15 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 - [x] Phase 0: Foundation and Safety (3/3 tasks) [details](./phase-0-foundation.md)
 - [x] Phase 1: Donor Workbench Shell (3/3 tasks) [details](./phase-1-shell.md)
 - [x] Phase 2: Draft and Media Parity (4/4 tasks) [details](./phase-2-parity.md)
-- [ ] Phase 3: Shop, Billing, Publish (2/3 tasks) [details](./phase-3-operations.md)
+- [x] Phase 3: Shop, Billing, Publish (3/3 tasks) [details](./phase-3-operations.md)
 - [ ] Phase 4: Release and Cutover (0/3 tasks) [details](./phase-4-cutover.md)
 
 ## Current Status
 
-Phase 2 is complete and Phase 3 is active with `D3.1-D3.2` complete. The donor shop picker is device-only. ERP-hosted quote/reservation/latest-settlement summaries are now server-derived and double-sanitized into the media stage without billing IDs or command authority; the self-supplied API Key path truthfully displays zero ERP generation charge. The 1.0.365 localhost handoff hotfix remains separate in `e83f4e57`; donor migration work is not deployed or published.
+Phases 0-3 are complete locally. The donor shop picker is device-only; hosted billing is server-derived and double-sanitized; review/apply/task recovery retain their existing owners. The donor review stage opens the established extension workbench for publish preview, explicit confirmation, receipt and recovery, and contains no Ozon command or direct API path itself. The 1.0.365 localhost handoff hotfix remains separate in `e83f4e57`; donor migration work is not deployed or published.
 
 ## Next Steps
 
-1. Surface controlled Ozon publish only through the existing publisher receipt/reconciliation owner.
-2. Keep the production entrypoint unchanged until an allowlisted real-product canary passes.
+1. Add donor-specific package/security verification coverage for the complete migrated surface.
+2. Run an allowlisted real-product canary while the production entrypoint remains unchanged.
+3. Cut over only after separate package, canary and publication approvals with rollback evidence.

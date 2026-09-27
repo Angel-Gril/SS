@@ -11,7 +11,7 @@
 | Store manager | `store-manager-controller.js`, `ui/modules/ozon/store-config.js` | Rebuilt as a device-only shop picker/read-only grant projection; legacy account-token fallback is forbidden for donor | Device shop grants and server shop owner |
 | Billing | donor task estimates/local Provider accounting | Replace with read-only frozen quote, reservation status and latest settlement summary; never expose ledger IDs or make iframe state authoritative | SS ERP suite pricing, cost reservation and settlement owners |
 | Provider settings | donor provider controllers/adapters | Do not copy key storage or direct calls | Existing SS ERP self-supplied API Key settings/background worker; key remains session-only |
-| Ozon upload | donor `ui/modules/ozon/*`, `ozon-upload-workflow.js` | Do not copy direct API writer | Existing SS ERP publisher grant/receipt/reconciliation |
+| Ozon upload | donor `ui/modules/ozon/*`, `ozon-upload-workflow.js` | Remove direct writer; donor only opens the exact extension publish-review workbench and never carries a publish payload | Existing SS ERP publisher preview/grant/receipt/reconciliation |
 | License/update | donor license and update-checker | Remove | SS ERP auth, version/publication contracts |
 
 The donor UI has roughly 80 relevant shared/app/presentation files. Porting it wholesale would also import secret-bearing and direct-write modules, so the first implementation should copy only shell/editor/state/image/process layers and replace adapters before packaging.

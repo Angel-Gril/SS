@@ -512,6 +512,15 @@ async function run() {
     await evaluate(`window.postMessage(${JSON.stringify(taskReceiptMessage)}, ${JSON.stringify(PAGE_ORIGIN)})`);
     await until(() => evaluate('document.querySelector("[data-role=process-receipt]")?.textContent.includes("安全重试")'),
       'task command receipt');
+    await click('[data-action="open-publish-review"]');
+    const publishReviewCommand = await until(async () => {
+      const command = await evaluate(`window.__donorCommands.filter((item) => item.type === 'OPEN_MEDIA_WORKBENCH').at(1) || null`);
+      return command || null;
+    }, 'controlled publish review handoff');
+    assert.equal(publishReviewCommand.listingWorkflowId, 'draft-fixture');
+    assert.equal(publishReviewCommand.promptDraft, null);
+    assert.equal(Object.hasOwn(publishReviewCommand, 'publish'), false);
+    assert.equal(JSON.stringify(publishReviewCommand).includes('OZON_PUBLISH'), false);
     await screenshot('review-desktop');
 
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });
@@ -519,6 +528,7 @@ async function run() {
     const mobileWidth = await evaluate('({viewport:innerWidth,document:document.documentElement.scrollWidth,body:document.body.scrollWidth})');
     assert.ok(mobileWidth.document <= mobileWidth.viewport && mobileWidth.body <= mobileWidth.viewport,
       `Mobile horizontal overflow: ${JSON.stringify(mobileWidth)}`);
+    await screenshot('review-mobile');
     await click('[data-stage="media"]');
     await screenshot('media-mobile');
 

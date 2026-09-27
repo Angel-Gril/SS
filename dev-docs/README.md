@@ -5,7 +5,9 @@
 - Phase 3 的 `D3.1` 已完成本地实现。donor 店铺选择器只接收设备 session 返回的 `{id,name,status}`，新 bridge 显式发送 `deviceOnly:true`；设备 shop reader 缺失或失败时在 legacy account-token 分支前直接拒绝，不会因旧兼容逻辑扩大店铺可见范围。
 - 建草稿仍只发送投影内 shop ID、snapshot 与所选来源 SKU，owner/active grant/shop membership/scopes/draft facts 由设备 transport 和服务端重算。donor shell、logistics scoped-auth 与 unpacked MV3 验收通过；真实 Provider、Ozon 和生产 mutation 为 0。
 - `D3.2` 现已完成：服务端 suite projection 对每槽仅输出币种、冻结预估/最高 minor units、reservation 状态及最新 settlement kind/实际金额/计量单位；repository 不为该表面选择 reservation/settlement ID。币种、金额或终态结算不一致按 stale context 拒绝，扩展 wire/donor 再次精确净化且 billing 不进入 hosted 命令 authority。
-- donor 图片页同时显示 ERP 托管报价/逐槽结算与“自带 API Key · ERP 生图费 0.00”；桌面/移动无溢出，完整 preflight 为 Server `6339 passed / 325 skipped`、extension `475/475`。下一步仅剩 `D3.3` 受控 Ozon publisher 回执接线；本轮真实费用、Provider/Ozon 请求和生产 mutation 仍为 0。
+- donor 图片页同时显示 ERP 托管报价/逐槽结算与“自带 API Key · ERP 生图费 0.00”；桌面/移动无溢出，完整 preflight 为 Server `6339 passed / 325 skipped`、extension `475/475`；本轮真实费用、Provider/Ozon 请求和生产 mutation 仍为 0。
+- `D3.3` 现已完成本地接线：donor 审核页只发送无 publish 字段的 source/listing/SKU-bound 工作台 handoff；现有 AI 工作台继续独占 publisher preview、显式确认、`listing:publish`/`OZON_PUBLISH` grant、receipt、未知结果恢复和 reconciliation。donor iframe 中没有 Ozon payload、凭据、endpoint 或直接 publish command。
+- Phase 3 已本地完成；桌面/390px、unpacked MV3、publish controller/coordinator 与 extension verifier 通过。生产入口仍为原工作台，donor preview flag 默认关闭；Phase 4 的 package/security、allowlist canary、切换与 rollback 尚未执行，本轮 Ozon/Provider/生产写入均为 0。
 
 ## 2026-09-27 donor 工作台 Phase 2 草稿与生图接线
 

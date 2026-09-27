@@ -606,6 +606,11 @@
     summary.appendChild(reviewMetric('图片', listing ? listing.mediaAssignmentCount : 0));
     summary.appendChild(reviewMetric('版本', listing ? 'v' + listing.draftVersion + ' / r' + listing.revision : '--'));
     one('[data-role="review-state"]').textContent = listing ? listing.stage : '等待草稿';
+    var publishReview = one('[data-action="open-publish-review"]');
+    publishReview.disabled = projection.busy || !listing;
+    one('[data-role="publish-review-state"]').textContent = listing
+      ? (listing.blockerCount > 0 ? listing.blockerCount + ' 项阻断待处理' : '由 ERP 重新核对发布条件')
+      : '等待草稿';
     var issues = [];
     if (listing) {
       listing.blockers.forEach(function (issue) { issues.push({ blocker: true, issue: issue }); });
@@ -720,6 +725,22 @@
     };
   }
 
+  function openCurrentAiWorkbench(promptDraft) {
+    var listing = currentListing();
+    if (!listing) {
+      showToast('请先创建店铺草稿', true);
+      return;
+    }
+    var preferredSkuKey = selectedMediaSkuKey || null;
+    send('OPEN_MEDIA_WORKBENCH', {
+      listingWorkflowId: listing.id,
+      preferredSkuKey: preferredSkuKey,
+      sourceSelectionKey: projection.source.preferredSkuKey || null,
+      choiceBinding: null,
+      promptDraft: promptDraft,
+    });
+  }
+
   function showToast(message, error) {
     var toast = one('[data-role="toast"]');
     toast.textContent = String(message || '操作完成');
@@ -790,19 +811,11 @@
   });
   one('[data-action="open-ai-workbench"]').addEventListener('click', function (event) {
     if (!event.isTrusted || projection.busy) return;
-    var listing = currentListing();
-    if (!listing) {
-      showToast('请先创建店铺草稿', true);
-      return;
-    }
-    var preferredSkuKey = selectedMediaSkuKey || null;
-    send('OPEN_MEDIA_WORKBENCH', {
-      listingWorkflowId: listing.id,
-      preferredSkuKey: preferredSkuKey,
-      sourceSelectionKey: projection.source.preferredSkuKey || null,
-      choiceBinding: null,
-      promptDraft: buildCurrentPromptDraft(),
-    });
+    openCurrentAiWorkbench(buildCurrentPromptDraft());
+  });
+  one('[data-action="open-publish-review"]').addEventListener('click', function (event) {
+    if (!event.isTrusted || projection.busy || event.currentTarget.disabled) return;
+    openCurrentAiWorkbench(null);
   });
   one('[data-role="media-sku-select"]').addEventListener('change', function (event) {
     selectedMediaSkuKey = String(event.target.value || '');

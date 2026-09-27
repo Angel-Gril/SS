@@ -376,10 +376,12 @@ assert.match(page, /source-workbench-shell\.css/);
 assert.match(page, /shared\/donor-workbench\/workspace-contract\.js/);
 assert.match(page, /source-workbench-shell\.js/);
 assert.match(page, /data-action="open-ai-workbench"/);
+assert.match(page, /data-action="open-publish-review"/);
 assert.match(page, /data-role="prompt-text"/);
 assert.match(page, /data-role="negative-prompt-text"/);
 assert.doesNotMatch(page, /<script(?![^>]*\bsrc=)/i);
 assert.doesNotMatch(pageScript, /chrome\.runtime/);
+assert.doesNotMatch(pageScript, /OZON_PUBLISH|ozon-publish|api\.ozon\.ru/iu);
 
 const migratedText = [contractPath, bridgePath, pagePath, pageCssPath, pageScriptPath]
   .map((path) => fs.readFileSync(path, 'utf8'))
