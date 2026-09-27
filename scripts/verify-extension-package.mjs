@@ -4,6 +4,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
   EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
   parseExpectedReleaseOrigins,
   parseExtensionDeploymentDefaults,
@@ -720,14 +721,6 @@ const requiredDonorWorkbenchFiles = [
   'pages/source-workbench-shell.js',
 ];
 
-const donorSourceMatches = [
-  'https://detail.1688.com/*',
-  'https://*.pinduoduo.com/*',
-  'https://*.yangkeduo.com/*',
-  'https://item.taobao.com/*',
-  'https://detail.tmall.com/*',
-];
-
 const requiredByokPages = [
   'pages/ai-provider-settings.html',
   'pages/ai-provider-settings.css',
@@ -825,7 +818,10 @@ const donorResourceGroup = (manifest.web_accessible_resources || []).find((group
 ));
 if (!donorResourceGroup
   || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/source-workbench-shell.html'])
-  || !containsExactUniqueSet(donorResourceGroup.matches, donorSourceMatches)) {
+  || !containsExactUniqueSet(
+    donorResourceGroup.matches,
+    EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
+  )) {
   fail('donor workbench web-accessible boundary is not exact');
 } else {
   pass('donor workbench web-accessible boundary is exact');

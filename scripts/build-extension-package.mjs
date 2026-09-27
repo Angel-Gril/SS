@@ -2,7 +2,10 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES } from './extension-release-contract.mjs';
+import {
+  EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
+  EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
+} from './extension-release-contract.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const sourceDir = path.resolve(process.env.EXTENSION_SOURCE_DIR || 'extensions/ss-erp');
@@ -304,6 +307,14 @@ function stripLocalAndBroad(values) {
   )));
 }
 
+function webResourceMatches(group, fallback) {
+  return Array.isArray(group.resources)
+    && group.resources.length === 1
+    && group.resources[0] === 'pages/source-workbench-shell.html'
+    ? EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES
+    : fallback;
+}
+
 if (target === 'cloud') {
   manifest.name = `${manifest.name} (Cloud)`;
   manifest.short_name = 'SS ERP Cloud';
@@ -332,7 +343,7 @@ if (target === 'cloud') {
 
   manifest.web_accessible_resources = (manifest.web_accessible_resources || []).map((group) => ({
     ...group,
-    matches: CLOUD_WEB_RESOURCE_MATCHES,
+    matches: webResourceMatches(group, CLOUD_WEB_RESOURCE_MATCHES),
   }));
 } else {
   manifest.name = `${manifest.name} (Local)`;
@@ -340,7 +351,7 @@ if (target === 'cloud') {
   manifest.host_permissions = LOCAL_HOST_PERMISSIONS;
   manifest.web_accessible_resources = (manifest.web_accessible_resources || []).map((group) => ({
     ...group,
-    matches: LOCAL_WEB_RESOURCE_MATCHES,
+    matches: webResourceMatches(group, LOCAL_WEB_RESOURCE_MATCHES),
   }));
 }
 

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES } from './extension-release-contract.mjs';
 
 function read(path) {
   return fs.readFileSync(path, 'utf8');
@@ -193,14 +194,22 @@ test('cloud extension packaging rejects mixed SS ERP roots without blocking cust
   const customManifest = JSON.parse(read(path.join(customPackageDir, 'manifest.json')));
   const customErpBridge = customManifest.content_scripts.find((entry) =>
     entry.js.includes('content/erp-collect-bridge.js'));
+  const customDonorResources = customManifest.web_accessible_resources.find((group) =>
+    group.resources.includes('pages/source-workbench-shell.html'));
   assert.ok(customErpBridge);
+  assert.deepEqual(
+    customDonorResources?.matches,
+    [...EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES],
+  );
   for (const match of [
     'https://erp.internal.example/*',
     'https://admin.internal.example/*',
   ]) {
     assert.ok(customManifest.externally_connectable.matches.includes(match));
     assert.ok(customErpBridge.matches.includes(match));
-    assert.ok(customManifest.web_accessible_resources.every((group) => group.matches.includes(match)));
+    assert.ok(customManifest.web_accessible_resources
+      .filter((group) => group !== customDonorResources)
+      .every((group) => group.matches.includes(match)));
   }
   assert.ok(customManifest.host_permissions.includes('https://api.internal.example/*'));
   assert.equal(JSON.stringify(customManifest).includes('*.internal.example'), false);
@@ -218,6 +227,13 @@ test('cloud extension packaging rejects mixed SS ERP roots without blocking cust
     EXTENSION_LOCAL_BASE_URL: 'http://127.0.0.1:3001',
   });
   assert.equal(local.status, 0, `${local.stdout}\n${local.stderr}`);
+  const localManifest = JSON.parse(read(path.join(outRoot, 'ss-erp-local/manifest.json')));
+  const localDonorResources = localManifest.web_accessible_resources.find((group) =>
+    group.resources.includes('pages/source-workbench-shell.html'));
+  assert.deepEqual(
+    localDonorResources?.matches,
+    [...EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES],
+  );
 });
 
 test('deployment validation accepts a complete host set or no host overrides', () => {

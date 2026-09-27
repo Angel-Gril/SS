@@ -17,6 +17,13 @@ const PROVENANCE_KEYS = Object.freeze([
 ]);
 const PUBLIC_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 export const EXTENSION_RELEASE_LOCAL_ORIGIN = 'http://127.0.0.1:3001';
+export const EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES = Object.freeze([
+  'https://detail.1688.com/*',
+  'https://*.pinduoduo.com/*',
+  'https://*.yangkeduo.com/*',
+  'https://item.taobao.com/*',
+  'https://detail.tmall.com/*',
+]);
 export const EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES = Object.freeze([
   'https://seller.ozon.ru/*',
   'https://globalcalculator.ozon.ru/*',
