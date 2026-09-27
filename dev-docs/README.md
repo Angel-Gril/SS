@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 `6378b62e / 1.0.364` fresh suite 与双区官网公开发布完成
+
+- COM DOTH 隔离草稿 `draft-cf60f546-ac0b-4a4a-bafa-2d6c5aa93a87` 已通过独立 MV3 `1.0.364` 完成两图 SUITE `cmuj52iu3001a5obzxyn5pxis`：两槽均 attempt 1、900x1200 PNG、人工审核 APPROVED；两笔唯一 `SETTLED/CHARGE` 各 CNY 0.14，总计 CNY 0.28。store-draft assignment 将草稿 `r1/v1 -> r2/v2`，新增 SKU hero 与 PRODUCT gallery 两条，exact replay 返回同一 batch 且 `replayed=true`，草稿及 assignment 未重复；Ozon publish attempt 为 0。
+- `POST_APPLICATION_EVENT_DERIVATION_V1` 从原始 Codex 会话找回审核前真实 workbench GET：`2026-09-27T01:29:28.681Z` 时 suite 已 `SUCCEEDED` 且两槽仍为 `PENDING`；两次只读 RepeatableRead 数据库快照稳定一致，并绑定不可变审核事件、两条 job/费用、草稿历史、assignment 与 Ozon 零写入。正式 QA04 在 detached clean `6378b62e` worktree 通过，SHA-256 为 `10f6779d1c171b9bbff65253699411880278925095012a2fa78878cda62b1958`。
+- COM REL-04 v3 restricted-pilot canary SHA-256 为 `edcef573dbced0a605355f91d248ddf634dafa45a040e81a8dd3df0cf5ec1873`；CN v2 no-shop dark canary 为 `2370d1faaf406f03f305ca00e116083f5df4de3465a9af55a46851371ef008ee`。两区均无 Provider/ERP ingest/Ozon 请求；COM 临时 canary device 已撤销，CN 临时 admin session 已从 Redis 清理且 token 文件删除。
+- website approval 为 COM `85ce390a3fb92b62958a5328c510c4a69e4f7a234b644690e50efbe4d6b2bdc4`、CN `0b84c7f387a265ac7e842595d24876f0346e2d319cb79b1ec762cfbbc03aa864`。两区 pointer 已从 `6e38f907 / 1.0.362` CAS 到 `6378b62e / 1.0.364`；匿名 distribution probe receipt 为 COM `c7601f3497ca56cbc3d12dec0486d600ebe727702240fed7c35e5c181478edb9`、CN `b48836043ff4959082fc37cbb0b026043bf11fec709fec85e34085eac0310648`，四个 ZIP 字节摘要与区域候选完全一致，双区 final publication verifier 通过。
+- Suite 和 COM canary readiness 窗口曾以独立 CAS 临时切换已验证 Wanx 配置；两个窗口均恢复原 Xiaoyi `custom / https://image.xiaoyiapi.xyz/v1 / gpt-image-2.5 / CNY 0.14` 配置。最终只读状态为 active jobs/suites/reservations 全 0。除已授权 fresh suite 的两个 Provider POST 与 CNY 0.28 外，发布阶段没有新增 Provider POST、ERP ingest、Ozon 写入或费用。
+
 ## 2026-09-26 `6378b62e / 1.0.364` 双区应用部署完成（官网 pointer 未切换）
 
 - OpenAI-compatible 生图网关 Base URL 校验已修复：服务端拒绝把 `/image`、`/images`、`/images/generations` 等接口路径当作网关根地址，Web 在保存/检查前直接提示使用 `https://host/v1` 形式。用户已用 `https://image.xiaoyiapi.xyz/v1` 实际验证生图成功。实现提交 `6378b62ee9f452702c4c695485a795bba8d78fbd` 已推送到 `origin/feat/ai-media-prompt-registry`。

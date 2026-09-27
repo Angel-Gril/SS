@@ -1,5 +1,14 @@
 # SS ERP 当前状态审计
 
+## 2026-09-27 `6378b62e / 1.0.364` fresh normal suite 与官网发布闭环
+
+- fresh normal ERP suite 使用来源商品 `4487e388-ec89-4a18-bd0d-d1dc50e5a64a`、v5 snapshot `dd3a12c9-1c1b-4c64-8267-a7e4de609598`、DOTH 草稿 `draft-cf60f546-ac0b-4a4a-bafa-2d6c5aa93a87` 和独立 MV3 session `6db47dad-483b-4859-83c9-970e7ae52a98`。计划 `cmuikkxui00105obz88grv3r2` 只含 `sku_hero + scene`；suite `cmuj52iu3001a5obzxyn5pxis` 两槽均 attempt 1、900x1200 PNG、人工审核 APPROVED。两条 job 唯一 Provider submission 和唯一 `SETTLED/CHARGE` 各 CNY 0.14，总费用 CNY 0.28，无 unknown outcome 或重试。
+- store-draft assignment batch `hosted-assignment-batch:8ef7e7dcee47eaeff876f570b65a94cfc6764a0d51e4fdf4` 将草稿从 `r1/v1` 原子推进到 `r2/v2`，新增 SKU hero 与 PRODUCT gallery 两条。原 idempotency key 的 exact replay 返回 HTTP 200、`replayed=true`、同一 batch，草稿仍为 `r2/v2` 且 assignment 仍为两条；Ozon publish attempt 为 0。
+- 审核前真实 workbench GET 从原始会话日志恢复：`2026-09-27T01:29:28.681Z` 时 suite `SUCCEEDED`，两槽 `PENDING`，早于 `REVIEW_APPROVED` 事件 `01:33:57Z / 01:34:37Z`。两次生产 RepeatableRead 只读快照稳定一致，`POST_APPLICATION_EVENT_DERIVATION_V1` 同时校验 event hash、job/settlement、草稿 `r1/v1 -> r2/v2`、持久 assignment 与 Ozon 零写入。正式 QA04 在 detached clean `6378b62e` worktree 通过，SHA-256 `10f6779d1c171b9bbff65253699411880278925095012a2fa78878cda62b1958`。
+- COM REL-04 v3 restricted-pilot canary `edcef573dbced0a605355f91d248ddf634dafa45a040e81a8dd3df0cf5ec1873` 与 CN v2 no-shop dark canary `2370d1faaf406f03f305ca00e116083f5df4de3465a9af55a46851371ef008ee` 通过。COM canary 临时 device 已撤销；CN 临时 admin session 已从 Redis 撤销并删除远端/本机 token。两区 canary 的 request audit 均为 Provider dispatch 0、ERP ingest 0、Ozon mutation 0。
+- 双区 website approval 分别为 COM `85ce390a3fb92b62958a5328c510c4a69e4f7a234b644690e50efbe4d6b2bdc4`、CN `0b84c7f387a265ac7e842595d24876f0346e2d319cb79b1ec762cfbbc03aa864`。部署锁下 CAS 已将官网 pointer 从 `6e38f907 / 1.0.362` 切到 `6378b62e / 1.0.364`；匿名 distribution receipt 为 COM `c7601f3497ca56cbc3d12dec0486d600ebe727702240fed7c35e5c181478edb9`、CN `b48836043ff4959082fc37cbb0b026043bf11fec709fec85e34085eac0310648`。双区 `/api/extensions/latest`、四个公网 ZIP 摘要及 final publication verifier 全部通过。
+- 原生产 Provider 配置为 Xiaoyi custom gateway，不满足 REL-04 hosted suite readiness 的 Wanx runtime；suite 和 COM canary 分别使用独立 root-only CAS journal 临时切换 Wanx，完成后均恢复 Xiaoyi `custom / https://image.xiaoyiapi.xyz/v1 / gpt-image-2.5 / CNY 0.14`，最终活动 job/suite/reservation 全 0。发布阶段未新增 Provider 请求或费用；本轮业务费用仅为已明确授权的 suite CNY 0.28，未执行 Ozon 发布。
+
 ## 2026-09-26 `6378b62e / 1.0.364` OpenAI-compatible 网关 URL 修复与双区部署
 
 - 根因是网关 Base URL 填入 `/v1/images/` 时，客户端会继续拼接 `/v1/models`，实际请求变成 `/v1/images/v1/models` 并返回 404。服务端现在拒绝 `/image`、`/images`、`/images/generations` 等接口路径；Web 在保存和“检查供应商配置”前直接提示应填写不带接口路径的 `https://host/v1`。用户已实际用 `https://image.xiaoyiapi.xyz/v1` 验证生图成功。
