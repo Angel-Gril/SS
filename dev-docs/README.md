@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 `e83f4e57` Cloud handoff localhost 热修与旧扩展复用裁决
+
+- `e83f4e57 fix(extension): bind cloud source handoff to packaged origin` 已推送。Cloud 扩展打开来源工作流时现在使用签名包内的 `deployment-defaults.erpBaseUrl`，忽略空配置和残留 `127.0.0.1`；Local/source 构建继续使用本地配置。popup 与来源页状态改为“已创建 ERP 标签页，请确认页面加载后继续创建草稿”，不再把 `chrome.tabs.create` 成功误报为 ERP 页面已可用。
+- 定向 handoff/source-workbench、完整 lint/typecheck、`pnpm preflight` 和 extension verifier 通过。隔离串行生成的 `1.0.365` 候选：Cloud ZIP SHA-256 `6b1315ffc56877c783256e845c036f8e00dfb48184f226fc5aa6f0a32f8adbc4`（467 pass）、Local ZIP SHA-256 `e70d306151a78c2cfaa02871983e609a5fdf2f0284378079ac5936b6052d7ca5`（463 pass）。本轮尚未部署、签名、website approval 或 CAS。
+- 用户授权将 `C:\Users\550W\Downloads\jp20260803` 作为可复用 donor。迁移裁决：复用其全屏 iframe 工作台、商品编辑器、SKU/类目选择、图片队列、JSON 视觉描述/提示词、过程面板、暂停恢复和多语言结构；替换其本地 license、扩展内 Ozon/Provider 明文凭据、直连 Ozon/Provider 和宽权限。SS ERP 继续由服务端拥有设备、店铺、草稿版本、费用、审核、幂等 assignment 与发布权限。
+- 当前偏差不是 CSS，而是 owner/流程边界：SS ERP 来源面板只负责采集和 handoff，创建 listing draft 仍只有 Web `/api/source-listing-workflows POST /`；扩展 device workbench 目前只有 status/media/history，没有“按 snapshot + shop + selectedSkuKeys 创建草稿”的受控命令，因此用户必须跳 Web。下一阶段应以 donor 工作台为前端骨架，先补 server-owned `CREATE_DRAFT` device command，再迁移类目、属性、SKU、图片和计费状态投影；不复制 donor 的客户端密钥或 Ozon 直写。
+
 ## 2026-09-27 `6378b62e / 1.0.364` fresh suite 与双区官网公开发布完成
 
 - COM DOTH 隔离草稿 `draft-cf60f546-ac0b-4a4a-bafa-2d6c5aa93a87` 已通过独立 MV3 `1.0.364` 完成两图 SUITE `cmuj52iu3001a5obzxyn5pxis`：两槽均 attempt 1、900x1200 PNG、人工审核 APPROVED；两笔唯一 `SETTLED/CHARGE` 各 CNY 0.14，总计 CNY 0.28。store-draft assignment 将草稿 `r1/v1 -> r2/v2`，新增 SKU hero 与 PRODUCT gallery 两条，exact replay 返回同一 batch 且 `replayed=true`，草稿及 assignment 未重复；Ozon publish attempt 为 0。

@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-27 `e83f4e57` Cloud source handoff 热修与 donor 工作台迁移边界
+
+- 根因：Cloud 扩展 source-workflow handoff 由通用 mutable runtime endpoint 决定；空值回退 local `127.0.0.1:3001`，再被 Web URL 逻辑映射成 `127.0.0.1:3000`。Cloud 包本身的签名 `deployment-defaults.erpBaseUrl` 未被使用。修复后 Cloud 强制使用打包 Web origin；Local/source 保持可配置本地行为。popup/source panel 仅报告标签页创建，不声称页面可达。
+- 回归已先 RED 后 GREEN：`scripts/extension-source-workflow-handoff.test.mjs` 覆盖 Cloud 空 endpoint、残留 localhost、危险协议和 truthful UI 文案；source workbench 合同、完整 preflight、Server `6335 passed / 325 skipped`、extension verifier `462 pass / 0 warning` 通过。提交已推送，尚未部署。
+- 隔离串行构建的 1.0.365 Cloud/Local 候选分别为 `6b1315ffc56877c783256e845c036f8e00dfb48184f226fc5aa6f0a32f8adbc4` / `e70d306151a78c2cfaa02871983e609a5fdf2f0284378079ac5936b6052d7ca5`。禁止并行复用共享 `build/extensions`，否则 Cloud/Local 会互相读取版本候选。
+- `jp20260803` 已确认是可复用的完整工作台实现：content injector 将 iframe panel 注入 marketplace 页面，`postMessage` 将采集结果直接送入 panel；`state-store + run-workflow` 串联采集、类目、视觉 JSON、文本、图片队列、暂停恢复和导出。其交互优于当前 SS ERP 来源面板，但其客户端保存 Ozon/Provider 凭据并直接调用第三方，不能原样并入云端。
+- 迁移 owner：新 extension workbench 前端负责 donor UI/状态投影；`apps/server/src/routes/source-listing-workflows.ts` 与 Prisma service 继续负责草稿/类目/属性/版本 owner；`apps/server/src/routes/extension-source-workbench.ts` 负责新增 device `CREATE_DRAFT` 和后续 draft commands；现有 hosted/BYOK media/publish contracts 不改写。第一阶段目标不是复刻所有 donor 功能，而是让采集结果在扩展内选择 SKU、创建受控草稿并进入现有图片工作台，整个过程不依赖 Web tab 跳转。
+
 ## 2026-09-27 `6378b62e / 1.0.364` fresh normal suite 与官网发布闭环
 
 - fresh normal ERP suite 使用来源商品 `4487e388-ec89-4a18-bd0d-d1dc50e5a64a`、v5 snapshot `dd3a12c9-1c1b-4c64-8267-a7e4de609598`、DOTH 草稿 `draft-cf60f546-ac0b-4a4a-bafa-2d6c5aa93a87` 和独立 MV3 session `6db47dad-483b-4859-83c9-970e7ae52a98`。计划 `cmuikkxui00105obz88grv3r2` 只含 `sku_hero + scene`；suite `cmuj52iu3001a5obzxyn5pxis` 两槽均 attempt 1、900x1200 PNG、人工审核 APPROVED。两条 job 唯一 Provider submission 和唯一 `SETTLED/CHARGE` 各 CNY 0.14，总费用 CNY 0.28，无 unknown outcome 或重试。
