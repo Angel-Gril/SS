@@ -155,10 +155,19 @@ function projection({ withDraft, preferredSkuKey = '', history = null }) {
           }] : [],
         },
         media: {
-          actionableCount: withDraft ? 1 : 0,
+          actionableCount: withDraft ? 3 : 0,
           items: withDraft ? [{
             id: 'task-fixture', operation: 'IMAGE_TO_IMAGE', status: 'SUCCEEDED',
-            reviewStatus: 'PENDING', actionable: true, updatedAt: '2026-09-27T07:00:00.000Z',
+            reviewStatus: 'PENDING', revision: 3, actionable: true, allowedActions: [],
+            updatedAt: '2026-09-27T07:00:00.000Z',
+          }, {
+            id: 'task-retry', operation: 'FULL_EDIT', status: 'FAILED',
+            reviewStatus: 'NOT_READY', revision: 5, actionable: true, allowedActions: ['RETRY'],
+            updatedAt: '2026-09-27T07:00:01.000Z',
+          }, {
+            id: 'task-cancel', operation: 'INPAINT', status: 'RUNNING',
+            reviewStatus: 'NOT_READY', revision: 2, actionable: true, allowedActions: ['CANCEL'],
+            updatedAt: '2026-09-27T07:00:02.000Z',
           }] : [],
         },
       },
@@ -315,9 +324,11 @@ async function run() {
       'selected SKU prompt refresh');
 
     await postProjection(projection({ withDraft: true }));
-    await until(() => evaluate('document.querySelectorAll(".queue-row").length === 1'), 'server task projection');
+    await until(() => evaluate('document.querySelectorAll(".queue-row").length === 3'), 'server task projection');
     assert.equal(await evaluate('document.querySelector("[data-action=create-draft]").disabled'), true);
-    assert.equal(await evaluate('document.querySelector("[data-role=queue-count]").textContent'), '1 项');
+    assert.equal(await evaluate('document.querySelector("[data-role=queue-count]").textContent'), '3 项');
+    assert.equal(await evaluate('document.querySelectorAll("[data-task-action=RETRY]").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll("[data-task-action=CANCEL]").length'), 1);
 
     await evaluate(`window.__donorCommands = [];
       window.addEventListener('message', (event) => {
@@ -405,6 +416,32 @@ async function run() {
     }));
     await until(() => evaluate('document.querySelector("[data-role=mutation-receipt]")?.textContent.includes("幂等回放")'),
       'idempotency replay receipt');
+
+    await click('[data-task-action="RETRY"]');
+    const taskCommand = await until(async () => {
+      const command = await evaluate(`window.__donorCommands.filter((item) => item.type === 'EXECUTE_MEDIA_TASK').at(-1) || null`);
+      return command || null;
+    }, 'donor task retry command');
+    assert.equal(taskCommand.mediaWorkflowId, 'task-retry');
+    assert.equal(taskCommand.expectedRevision, 5);
+    assert.equal(taskCommand.action, 'RETRY');
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: 'sku-white-small',
+      history: historyProjection('APPROVED', {
+        id: 'application-1', mode: 'append', state: 'APPLIED', targetId: 'draft-fixture',
+        contextSkuKey: 'sku-white-small', contextSlotKey: 'sku:sku-white-small:hero',
+        appliedAt: '2026-09-27T07:02:00.000Z', rolledBackAt: null,
+      }, null),
+    }));
+    const taskReceiptMessage = {
+      contractVersion: 'ss-erp-donor-workbench/v1', type: 'COMMAND_RESULT',
+      requestId: taskCommand.requestId, ok: true, error: '',
+      receipt: { kind: 'MEDIA_TASK', action: 'RETRY', replay: false, at: '2026-09-27T07:03:00.000Z' },
+    };
+    await evaluate(`window.postMessage(${JSON.stringify(taskReceiptMessage)}, ${JSON.stringify(PAGE_ORIGIN)})`);
+    await until(() => evaluate('document.querySelector("[data-role=process-receipt]")?.textContent.includes("安全重试")'),
+      'task command receipt');
     await screenshot('review-desktop');
 
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });

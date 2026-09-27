@@ -15,6 +15,7 @@
   var mediaSignature = '';
   var promptSignature = '';
   var historyRequestListingId = '';
+  var lastTaskReceipt = null;
   var stageUserSelected = false;
   var pending = new Map();
   var toastTimer = 0;
@@ -87,6 +88,21 @@
 
   function stageOrder(stage) {
     return ['collection', 'draft', 'category', 'media', 'review'].indexOf(stage);
+  }
+
+  function operationLabel(value) {
+    return {
+      IMAGE_TO_IMAGE: '参考生图', FULL_EDIT: '全图编辑', INPAINT: '局部重绘',
+      TEXT_TO_IMAGE: '文生图', IMAGE_TRANSLATE: '图片翻译', SUITE: '商品套图',
+    }[value] || value || '图片任务';
+  }
+
+  function statusLabel(value) {
+    return {
+      PLANNED: '待开始', QUEUED: '排队中', RUNNING: '处理中', SUCCEEDED: '已完成',
+      FAILED: '处理失败', CANCEL_REQUESTED: '正在取消', CANCELLED: '已取消',
+      NOT_READY: '尚无候选', PENDING: '等待审核', APPROVED: '审核通过', REJECTED: '已驳回',
+    }[value] || value || '--';
   }
 
   function syncSelections() {
@@ -390,9 +406,9 @@
     if (!items.length) appendEmpty(list, '暂无图片任务');
     items.forEach(function (item) {
       var row = node('div', 'queue-row');
-      row.appendChild(node('strong', '', item.operation || '图片任务'));
-      row.appendChild(node('span', '', item.status || '--'));
-      row.appendChild(node('span', '', item.reviewStatus || '--'));
+      row.appendChild(node('strong', '', operationLabel(item.operation)));
+      row.appendChild(node('span', '', statusLabel(item.status)));
+      row.appendChild(node('span', '', statusLabel(item.reviewStatus)));
       list.appendChild(row);
     });
     one('[data-role="media-state"]').textContent = items.length ? '服务端任务' : '投影模式';
@@ -481,13 +497,13 @@
         var candidate = node('article', 'review-candidate');
         var image = node('img');
         image.src = output.url;
-        image.alt = item.operation + ' 候选图';
+        image.alt = operationLabel(item.operation) + '候选图';
         image.referrerPolicy = 'no-referrer';
         replaceBrokenPreview(image, '预览不可用');
         candidate.appendChild(image);
         var copy = node('div', 'review-candidate-copy');
-        copy.appendChild(node('strong', '', item.operation));
-        copy.appendChild(node('span', '', item.status + ' · ' + item.reviewStatus));
+        copy.appendChild(node('strong', '', operationLabel(item.operation)));
+        copy.appendChild(node('span', '', statusLabel(item.status) + ' · ' + statusLabel(item.reviewStatus)));
         copy.appendChild(node('span', '', [output.width, output.height].every(Number.isSafeInteger)
           ? output.width + ' × ' + output.height : output.mimeType));
         if (item.application) copy.appendChild(node('span', '', item.application.state === 'APPLIED'
@@ -563,6 +579,43 @@
         definition[0], definition[1], index < current ? 'complete' : index === current ? 'active' : 'waiting', index + 1,
       ));
     });
+    projection.workbench.status.media.items.slice(0, 8).forEach(function (task) {
+      var row = node('div', 'process-task');
+      var copy = node('div', 'process-task-copy');
+      copy.appendChild(node('strong', '', operationLabel(task.operation)));
+      copy.appendChild(node('span', '', statusLabel(task.status) + ' · ' + statusLabel(task.reviewStatus)));
+      row.appendChild(copy);
+      if (task.allowedActions.length) {
+        var actions = node('div', 'process-task-actions');
+        task.allowedActions.forEach(function (action) {
+          var button = node('button', '', action === 'CANCEL' ? '取消任务' : '安全重试');
+          button.type = 'button';
+          button.dataset.taskAction = action;
+          button.disabled = projection.busy;
+          button.addEventListener('click', function (event) {
+            if (!event.isTrusted || button.disabled) return;
+            if (action === 'CANCEL' && !globalThis.confirm('确认取消这个图片任务？')) return;
+            send('EXECUTE_MEDIA_TASK', {
+              mediaWorkflowId: task.id,
+              expectedRevision: task.revision,
+              action: action,
+            });
+          });
+          actions.appendChild(button);
+        });
+        row.appendChild(actions);
+      }
+      list.appendChild(row);
+    });
+    var receipt = one('[data-role="process-receipt"]');
+    if (lastTaskReceipt) {
+      receipt.hidden = false;
+      receipt.textContent = (lastTaskReceipt.action === 'CANCEL' ? '任务取消' : '安全重试')
+        + (lastTaskReceipt.replay ? '已按原回执重放。' : '命令已确认。');
+    } else {
+      receipt.hidden = true;
+      receipt.textContent = '';
+    }
     one('[data-role="updated-at"]').textContent = projection.updatedAt || '--';
   }
 
@@ -724,8 +777,21 @@
       var type = pending.get(message.requestId);
       pending.delete(message.requestId);
       if (type === 'LOAD_MEDIA_HISTORY') historyRequestListingId = '';
+      if (type === 'EXECUTE_MEDIA_TASK' && message.ok === true) {
+        var receipt = message.receipt;
+        if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)
+          && Object.keys(receipt).length === 4
+          && receipt.kind === 'MEDIA_TASK'
+          && ['CANCEL', 'RETRY'].includes(receipt.action)
+          && typeof receipt.replay === 'boolean'
+          && typeof receipt.at === 'string' && receipt.at.length <= 80) {
+          lastTaskReceipt = receipt;
+          renderProcess();
+        }
+      }
       showToast(message.ok === true ? (type === 'CREATE_DRAFT' ? '草稿已创建'
         : type === 'PREPARE_MEDIA_MUTATION' ? '已打开独立确认窗口'
+          : type === 'EXECUTE_MEDIA_TASK' ? '任务命令已确认'
           : type === 'LOAD_MEDIA_HISTORY' ? '候选已刷新' : '操作完成')
         : message.error || '操作失败', message.ok !== true);
     }

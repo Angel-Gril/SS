@@ -79,7 +79,19 @@ const projection = contract.createProjection({
         }],
         truncated: false,
       },
-      media: { items: [], actionableCount: 0 },
+      media: {
+        items: [{
+          id: 'media-task-1', operation: 'FULL_EDIT', status: 'FAILED',
+          reviewStatus: 'NOT_READY', revision: 5, actionable: true,
+          allowedActions: ['RETRY'],
+          commandContext: {
+            shopId: 'must-not-leak', listingWorkflowId: 'must-not-leak',
+            draftRevision: 2, draftVersion: 3,
+          },
+          updatedAt: '2026-09-27T08:02:00.000Z',
+        }],
+        actionableCount: 1,
+      },
     },
   },
   history: {
@@ -113,6 +125,11 @@ assert.deepEqual(Array.from(projection.skus, (item) => item.key), ['sku-white', 
 assert.deepEqual(Array.from(projection.media, (item) => item.key), ['media-main']);
 assert.deepEqual(JSON.parse(JSON.stringify(projection.shops)), [{ id: 'shop-1', name: 'DOTH', status: 'ACTIVE' }]);
 assert.equal(JSON.stringify(projection).includes('must-not-leak'), false);
+assert.deepEqual(JSON.parse(JSON.stringify(projection.workbench.status.media.items[0])), {
+  id: 'media-task-1', operation: 'FULL_EDIT', status: 'FAILED',
+  reviewStatus: 'NOT_READY', revision: 5, actionable: true,
+  allowedActions: ['RETRY'], updatedAt: '2026-09-27T08:02:00.000Z',
+});
 assert.equal(projection.history.state, 'ready');
 assert.equal(projection.history.items[0].outputs[0].id, 'asset-1');
 assert.equal(projection.history.items[0].outputs[0].url, 'https://cdn.example/output.png');
@@ -211,6 +228,24 @@ assert.deepEqual(
     action: 'REVIEW_APPROVE',
   },
 );
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_MEDIA_TASK',
+    requestId: 'request-task-1',
+    mediaWorkflowId: 'media-task-1',
+    expectedRevision: 5,
+    action: 'RETRY',
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_MEDIA_TASK',
+    requestId: 'request-task-1',
+    mediaWorkflowId: 'media-task-1',
+    expectedRevision: 5,
+    action: 'RETRY',
+  },
+);
 for (const invalid of [
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: [] },
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: ['sku-white'], ownerUserId: 'forged' },
@@ -219,6 +254,10 @@ for (const invalid of [
     listingWorkflowId: 'draft-1', preferredSkuKey: 'sku-blue', sourceSelectionKey: null,
     choiceBinding: null,
     promptDraft: { contractVersion: 'ss-erp-donor-prompt-prefill/v1', prompt: '', negativePrompt: '' },
+  },
+  {
+    contractVersion: contract.CONTRACT_VERSION, type: 'EXECUTE_MEDIA_TASK', requestId: 'r',
+    mediaWorkflowId: 'media-task-1', expectedRevision: 5, action: 'CONTINUE',
   },
   {
     contractVersion: contract.CONTRACT_VERSION, type: 'PREPARE_MEDIA_MUTATION', requestId: 'r',
@@ -242,6 +281,7 @@ assert.match(bridge, /ss-erp:source-ai-workbench-open/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-history/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirm-prepare/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirmed/);
+assert.match(bridge, /ss-erp:source-listing-workbench-media-command/);
 assert.match(bridge, /response\.result\.state\s*===\s*'choice_required'/);
 assert.match(bridge, /preferredSkuKey:\s*command\.preferredSkuKey/);
 assert.match(bridge, /choiceBinding:\s*response\.result\.binding/);

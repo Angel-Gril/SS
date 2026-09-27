@@ -80,13 +80,14 @@
     });
   }
 
-  function commandResult(requestId, ok, error) {
+  function commandResult(requestId, ok, error, receipt) {
     postToFrame({
       contractVersion: Contract.CONTRACT_VERSION,
       type: 'COMMAND_RESULT',
       requestId: requestId,
       ok: ok === true,
       error: ok === true ? '' : String(error || '操作失败').slice(0, 500),
+      ...(receipt ? { receipt: receipt } : {}),
     });
   }
 
@@ -379,6 +380,44 @@
     }
   }
 
+  async function executeMediaTask(command) {
+    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    var task = currentProjection.workbench.status.media.items.find(function (item) {
+      return item.id === command.mediaWorkflowId;
+    });
+    if (!task || task.revision !== command.expectedRevision
+      || !task.allowedActions.includes(command.action)) {
+      commandResult(command.requestId, false, '任务状态已变化，请刷新后重试');
+      return;
+    }
+    setBusy(true, '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-command',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        mediaWorkflowId: task.id,
+        expectedRevision: task.revision,
+        action: command.action,
+      });
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'completed' || typeof response.result.replay !== 'boolean') {
+        throw new Error(response && response.error || '任务命令执行失败');
+      }
+      commandResult(command.requestId, true, '', {
+        kind: 'MEDIA_TASK',
+        action: command.action,
+        replay: response.result.replay,
+        at: new Date().toISOString(),
+      });
+      await loadProjection({ force: true });
+    } catch (error) {
+      commandResult(command.requestId, false, error && error.message ? error.message : String(error));
+    } finally {
+      if (busy) setBusy(false, '');
+    }
+  }
+
   function showFrame() {
     if (!frame || !trigger) return;
     open = true;
@@ -474,6 +513,7 @@
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
     if (command.type === 'LOAD_MEDIA_HISTORY') void loadMediaHistory(command);
     if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
+    if (command.type === 'EXECUTE_MEDIA_TASK') void executeMediaTask(command);
   });
 
   chrome.runtime.onMessage.addListener(function (message) {

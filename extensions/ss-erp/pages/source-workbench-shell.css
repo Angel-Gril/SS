@@ -259,9 +259,16 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
 .process-copy strong, .process-copy span { display: block; }
 .process-copy strong { font-size: 11px; }
 .process-copy span { margin-top: 4px; color: #84909f; font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.process-task { border-top: 1px solid #d7dce2; padding: 10px 0; }
+.process-task-copy { display: grid; gap: 3px; }
+.process-task-copy strong { font-size: 10px; overflow-wrap: anywhere; }
+.process-task-copy span { color: #64748b; font-size: 9px; overflow-wrap: anywhere; }
+.process-task-actions { display: flex; gap: 6px; margin-top: 8px; }
+.process-task-actions button { min-height: 32px; flex: 1 1 0; padding: 5px 7px; font-size: 9px; }
 .process-footer { margin-top: auto; border-top: 1px solid #d7dce2; padding-top: 12px; color: #84909f; font-size: 9px; }
 .process-footer span, .process-footer time { display: block; }
 .process-footer time { margin-top: 4px; color: #475569; }
+.process-receipt { margin-bottom: 10px; border-left: 3px solid #166534; background: #eef9f1; padding: 8px; color: #14532d; line-height: 1.45; }
 
 .toast { position: fixed; right: 18px; bottom: 18px; z-index: 5; max-width: min(380px, calc(100vw - 36px)); border-left: 3px solid #166534; border-radius: 4px; background: #172033; padding: 10px 13px; color: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .26); font-size: 11px; }
 .toast.is-error { border-left-color: #ef4444; }

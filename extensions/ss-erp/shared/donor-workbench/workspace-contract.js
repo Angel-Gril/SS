@@ -4,7 +4,7 @@
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
   var COMMAND_TYPES = new Set([
     'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
-    'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION',
+    'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -201,10 +201,14 @@
         operation: text(item.operation, 80),
         status: text(item.status, 80),
         reviewStatus: text(item.reviewStatus, 80),
+        revision: Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : 0,
         actionable: item.actionable === true,
+        allowedActions: Object.freeze(unique(item.allowedActions, 2).filter(function (action) {
+          return action === 'CANCEL' || action === 'RETRY';
+        })),
         updatedAt: text(item.updatedAt, 80),
       });
-    }).filter(function (item) { return item.id; }));
+    }).filter(function (item) { return item.id && item.revision > 0; }));
   }
 
   function workbenchProjection(value) {
@@ -546,6 +550,24 @@
         outputAssetId: mutation.outputAssetId,
         expectedRevision: expectedRevision,
         action: action,
+      });
+    }
+    if (item.type === 'EXECUTE_MEDIA_TASK') {
+      var taskRequestId = commandBase(item, [
+        'contractVersion', 'type', 'requestId', 'mediaWorkflowId', 'expectedRevision', 'action',
+      ]);
+      var taskAction = item.action === 'CANCEL' || item.action === 'RETRY' ? item.action : '';
+      var mediaWorkflowId = text(item.mediaWorkflowId, 200);
+      var taskRevision = Number(item.expectedRevision);
+      if (!taskAction || !mediaWorkflowId || !Number.isSafeInteger(taskRevision)
+        || taskRevision < 1) throw new TypeError('invalid donor media task command');
+      return Object.freeze({
+        contractVersion: CONTRACT_VERSION,
+        type: 'EXECUTE_MEDIA_TASK',
+        requestId: taskRequestId,
+        mediaWorkflowId: mediaWorkflowId,
+        expectedRevision: taskRevision,
+        action: taskAction,
       });
     }
     var requestId = commandBase(item, ['contractVersion', 'type', 'requestId']);
