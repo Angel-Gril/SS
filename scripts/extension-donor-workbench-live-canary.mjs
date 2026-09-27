@@ -513,6 +513,7 @@ async function run() {
     const send = (method, params = {}) => cdp.send(method, params, pageSession);
     const frameNavigations = new Map();
     const extensionContexts = new Map();
+    const iframeTargets = new Map();
     let iframeSession = '';
     let iframeContextId = 0;
     const evaluate = async (expression) => {
@@ -549,15 +550,28 @@ async function run() {
       });
       if (observedSession !== pageSession) extensionSessions.add(observedSession);
     });
+    cdp.on('Target.targetInfoChanged', (event) => {
+      const targetInfo = event?.targetInfo;
+      if (!targetInfo?.targetId) return;
+      for (const target of iframeTargets.values()) {
+        if (target.targetId === targetInfo.targetId) target.url = targetInfo.url || '';
+      }
+    });
     iframeObserverArmed = true;
     cdp.on('Target.attachedToTarget', (event) => {
       const childSession = event?.sessionId;
       if (!childSession || event.targetInfo?.type !== 'iframe') return;
+      iframeTargets.set(childSession, {
+        sessionId: childSession,
+        targetId: event.targetInfo.targetId || '',
+        url: event.targetInfo.url || '',
+      });
       trackObserver((async () => {
         let failure;
         try {
           await cdp.send('Runtime.enable', {}, childSession);
           await cdp.send('Network.enable', {}, childSession);
+          await cdp.send('Page.enable', {}, childSession);
         } catch (error) {
           failure = error;
         } finally {
@@ -606,6 +620,7 @@ async function run() {
         || currentFrame.url !== url) {
         throw new Error(`${label} active document loader changed after readiness`);
       }
+      return { frameId: navigation.frameId, loaderId: finalNavigation.loaderId };
     };
     const remainsAbsent = async (selector, label, duration = 3_000) => {
       const deadline = Date.now() + duration;
@@ -617,7 +632,7 @@ async function run() {
       }
       return true;
     };
-    await navigate(options.product.url, 'positive real product');
+    const positiveNavigation = await navigate(options.product.url, 'positive real product');
     const finalUrl = await evaluate('location.href');
     assert.equal(finalUrl, options.product.url, 'real product redirected away from the exact offer');
     const flagOnlyBlocked = await remainsAbsent(DONOR_TRIGGER, 'flag-only donor trigger');
@@ -650,12 +665,21 @@ async function run() {
 
     await settleObservers();
     const iframeContext = await until(async () => {
+      const expectedUrl = `chrome-extension://${extensionId}/pages/source-workbench-shell.html`;
+      const oopif = [...iframeTargets.values()].find((targetInfo) => targetInfo.url === expectedUrl);
+      if (oopif) {
+        const rootFrame = (await cdp.send('Page.getFrameTree', {}, oopif.sessionId)).frameTree?.frame;
+        if (rootFrame?.url !== expectedUrl || rootFrame.id !== oopif.targetId
+          || rootFrame.parentId !== positiveNavigation.frameId) {
+          throw new Error('donor OOPIF frame identity is invalid');
+        }
+        return extensionContexts.get(rootFrame.id) || null;
+      }
       const tree = (await send('Page.getFrameTree')).frameTree;
-      const frame = frameByUrl(
-        tree,
-        `chrome-extension://${extensionId}/pages/source-workbench-shell.html`,
-      );
-      return frame ? extensionContexts.get(frame.id) || null : null;
+      const frame = frameByUrl(tree, expectedUrl);
+      return frame && frame.parentId === positiveNavigation.frameId
+        ? extensionContexts.get(frame.id) || null
+        : null;
     }, 'exact donor extension iframe context', 30_000);
     iframeSession = iframeContext.sessionId;
     iframeContextId = iframeContext.contextId;

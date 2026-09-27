@@ -257,6 +257,10 @@ test('arms paused iframe observation before opening the donor shell', () => {
   assert.match(source, /context\.auxData\.isDefault !== true/u);
   assert.match(source, /frameByUrl\([\s\S]*source-workbench-shell\.html/u);
   assert.match(source, /extensionContexts\.get\(frame\.id\)/u);
+  assert.match(source, /Page\.getFrameTree', \{\}, oopif\.sessionId/u);
+  assert.match(source, /rootFrame\.id !== oopif\.targetId/u);
+  assert.match(source, /rootFrame\.parentId !== positiveNavigation\.frameId/u);
+  assert.match(source, /extensionContexts\.get\(rootFrame\.id\)/u);
   assert.match(source, /contextId: iframeContextId/u);
 });
 
