@@ -1,0 +1,47 @@
+#ss-erp-donor-workbench-host {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  width: 0;
+  height: 0;
+  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#ss-erp-donor-workbench-trigger {
+  position: fixed;
+  right: 18px;
+  bottom: 136px;
+  width: 64px;
+  height: 44px;
+  border: 1px solid #166534;
+  border-radius: 6px;
+  background: #166534;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.24);
+  color: #fff;
+  cursor: pointer;
+  font: 700 12px/1 "Segoe UI", "PingFang SC", sans-serif;
+  letter-spacing: 0;
+}
+
+#ss-erp-donor-workbench-trigger:hover {
+  background: #14532d;
+}
+
+#ss-erp-donor-workbench-trigger:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+#ss-erp-donor-workbench-frame {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  background: #f7f8fa;
+}
+
+#ss-erp-donor-workbench-frame[hidden],
+#ss-erp-donor-workbench-trigger[hidden] {
+  display: none !important;
+}

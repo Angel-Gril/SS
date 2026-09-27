@@ -323,6 +323,11 @@ const steps = [
     args: ['scripts/extension-source-listing-workbench.test.mjs'],
   },
   {
+    name: 'extension donor workbench shell contract',
+    command: 'node',
+    args: ['scripts/extension-donor-workbench-shell.test.mjs'],
+  },
+  {
     name: 'extension dual-mode AI image workbench contract',
     command: 'node',
     args: ['scripts/extension-ai-image-workbench-contract.test.mjs'],

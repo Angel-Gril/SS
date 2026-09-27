@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 donor 工作台 Phase 1 默认关闭实现
+
+- 已在 `extensions/ss-erp/` 内新增 donor-derived 全屏 iframe 商品工作台，复用 `jp20260803` 的单工作台交互模型，但没有复制 license、Provider/Ozon 凭据、第三方直连、旧服务地址、`debugger` 或宽域权限。donor 原目录保持只读。
+- 来源商品 content bridge 是唯一 runtime caller；iframe 仅接收双重净化后的商品、授权店铺、草稿、任务投影，并只能请求 `COLLECT`、`REFRESH`、`CREATE_DRAFT`、`CLOSE`。建草稿仍由 Phase 0 的 device-scoped 服务端 owner 重算 owner/shop/snapshot/SKU/capture hash。
+- 工作台已包含采集、店铺草稿、类目属性、图片处理、审核发布五阶段，SKU/参考素材选择、过程面板和视觉描述 JSON 本地草稿；JSON 尚未接 Provider 或成为服务端事实。开关 `ss-erp:donor-workbench-preview-enabled` 默认关闭，当前生产入口不变。
+- 静态合同、隔离 Chromium 桌面/移动和真实 unpacked MV3 合成 1688 商品页注入均通过；后者确认 iframe 收到真实 content-script capture projection。所有验收的未知网络、Provider、Ozon 与生产 mutation 均为 0。该迁移尚未部署或发布，下一阶段见 [`donor-workbench/MASTER.md`](donor-workbench/MASTER.md)。
+
 ## 2026-09-27 `e83f4e57` Cloud handoff localhost 热修与旧扩展复用裁决
 
 - `e83f4e57 fix(extension): bind cloud source handoff to packaged origin` 已推送。Cloud 扩展打开来源工作流时现在使用签名包内的 `deployment-defaults.erpBaseUrl`，忽略空配置和残留 `127.0.0.1`；Local/source 构建继续使用本地配置。popup 与来源页状态改为“已创建 ERP 标签页，请确认页面加载后继续创建草稿”，不再把 `chrome.tabs.create` 成功误报为 ERP 页面已可用。

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SS ERP 商品工作台</title>
+  <link rel="stylesheet" href="source-workbench-shell.css">
+</head>
+<body>
+  <div class="workbench" data-role="workbench">
+    <header class="topbar">
+      <div class="brand" aria-label="SS ERP">
+        <span class="brand-mark">SS</span>
+        <span><strong>SS ERP</strong><small>商品工作台</small></span>
+      </div>
+      <div class="source-heading">
+        <strong data-role="source-title">正在读取商品</strong>
+        <span data-role="source-meta">来源商品</span>
+      </div>
+      <div class="topbar-actions">
+        <span class="connection" data-role="connection">读取中</span>
+        <button class="icon-button" type="button" data-action="refresh" title="刷新工作台" aria-label="刷新工作台">↻</button>
+        <button class="icon-button" type="button" data-action="close" title="关闭工作台" aria-label="关闭工作台">×</button>
+      </div>
+    </header>
+
+    <div class="workspace-grid">
+      <aside class="stage-rail" aria-label="工作流阶段">
+        <nav class="stage-nav">
+          <button type="button" data-stage="collection"><span>1</span><b>商品采集</b><small data-stage-state="collection">等待</small></button>
+          <button type="button" data-stage="draft"><span>2</span><b>店铺草稿</b><small data-stage-state="draft">等待</small></button>
+          <button type="button" data-stage="category"><span>3</span><b>类目属性</b><small data-stage-state="category">等待</small></button>
+          <button type="button" data-stage="media"><span>4</span><b>图片处理</b><small data-stage-state="media">等待</small></button>
+          <button type="button" data-stage="review"><span>5</span><b>审核发布</b><small data-stage-state="review">等待</small></button>
+        </nav>
+        <div class="rail-summary">
+          <span>当前快照</span>
+          <strong data-role="snapshot-state">未建立</strong>
+          <span>目标店铺</span>
+          <strong data-role="shop-state">未选择</strong>
+          <span>草稿版本</span>
+          <strong data-role="draft-version">--</strong>
+        </div>
+      </aside>
+
+      <main class="main-workspace">
+        <div class="status-line" data-role="status" hidden></div>
+
+        <section class="view" data-view="collection">
+          <div class="section-heading">
+            <div><span>SOURCE PRODUCT</span><h1>商品采集</h1></div>
+            <button type="button" class="secondary-command" data-action="collect">采集到 ERP</button>
+          </div>
+          <div class="product-overview">
+            <div class="product-visual" data-role="product-visual"><span>暂无商品图</span></div>
+            <div class="product-facts">
+              <dl>
+                <div><dt>来源平台</dt><dd data-role="platform">--</dd></div>
+                <div><dt>商品 ID</dt><dd data-role="product-id">--</dd></div>
+                <div><dt>来源类目</dt><dd data-role="source-category">--</dd></div>
+                <div><dt>素材数量</dt><dd data-role="media-count">0</dd></div>
+              </dl>
+            </div>
+          </div>
+          <div class="subheading"><h2>来源素材</h2><span data-role="collection-media-count">0 张</span></div>
+          <div class="media-strip" data-role="collection-media"></div>
+        </section>
+
+        <section class="view" data-view="draft" hidden>
+          <div class="section-heading">
+            <div><span>STORE DRAFT</span><h1>店铺与 SKU</h1></div>
+            <span class="state-badge" data-role="draft-state">等待草稿</span>
+          </div>
+          <div class="draft-layout">
+            <section class="sku-pane">
+              <div class="subheading"><h2>Canonical SKU</h2><span data-role="sku-selection-count">0 / 0</span></div>
+              <div class="list-actions">
+                <button type="button" data-action="select-all-skus">全选</button>
+                <button type="button" data-action="clear-skus">清空</button>
+              </div>
+              <div class="sku-list" data-role="sku-list"></div>
+            </section>
+            <section class="shop-pane">
+              <label class="field-label" for="shop-select">Ozon 店铺</label>
+              <select id="shop-select" data-role="shop-select"></select>
+              <div class="draft-summary" data-role="draft-summary"></div>
+              <button type="button" class="primary-command" data-action="create-draft">创建精确快照草稿</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="category" hidden>
+          <div class="section-heading">
+            <div><span>CATEGORY & ATTRIBUTES</span><h1>类目属性</h1></div>
+            <span class="state-badge" data-role="category-state">等待草稿</span>
+          </div>
+          <div class="category-band">
+            <span>来源类目</span>
+            <strong data-role="category-path">--</strong>
+          </div>
+          <div class="projection-table" data-role="category-projection"></div>
+        </section>
+
+        <section class="view" data-view="media" hidden>
+          <div class="section-heading">
+            <div><span>IMAGE WORKSPACE</span><h1>图片与视觉描述</h1></div>
+            <span class="state-badge" data-role="media-state">投影模式</span>
+          </div>
+          <div class="media-workspace">
+            <section class="reference-pane">
+              <div class="subheading"><h2>参考素材</h2><span data-role="reference-count">0 已选</span></div>
+              <div class="image-grid" data-role="reference-grid"></div>
+            </section>
+            <section class="prompt-pane">
+              <div class="subheading"><h2>视觉描述 JSON</h2><span data-role="json-state">有效</span></div>
+              <textarea data-role="prompt-json" spellcheck="false" aria-label="视觉描述 JSON"></textarea>
+              <div class="prompt-actions">
+                <span>本地草稿 · 未提交</span>
+                <button type="button" data-action="copy-json">复制 JSON</button>
+              </div>
+            </section>
+          </div>
+          <div class="subheading queue-heading"><h2>任务队列</h2><span data-role="queue-count">0 项</span></div>
+          <div class="queue-list" data-role="queue-list"></div>
+        </section>
+
+        <section class="view" data-view="review" hidden>
+          <div class="section-heading">
+            <div><span>REVIEW & PUBLISH</span><h1>审核发布</h1></div>
+            <span class="state-badge" data-role="review-state">等待草稿</span>
+          </div>
+          <div class="review-summary" data-role="review-summary"></div>
+          <div class="subheading"><h2>阻断与提醒</h2><span data-role="issue-count">0</span></div>
+          <div class="issue-list" data-role="issue-list"></div>
+        </section>
+      </main>
+
+      <aside class="process-panel" aria-label="处理过程">
+        <div class="process-heading"><span>PROCESS</span><h2>处理过程</h2></div>
+        <div class="process-list" data-role="process-list"></div>
+        <div class="process-footer">
+          <span>最近刷新</span>
+          <time data-role="updated-at">--</time>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <div class="toast" data-role="toast" hidden></div>
+  <script src="../shared/donor-workbench/workspace-contract.js"></script>
+  <script src="source-workbench-shell.js"></script>
+</body>
+</html>

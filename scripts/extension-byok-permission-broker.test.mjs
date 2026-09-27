@@ -594,12 +594,13 @@ test('cloud manifest declares Provider access only as optional and never as a ma
       .includes('<all_urls>'),
     false,
   );
+  const webResourceMatches = (manifest.web_accessible_resources || [])
+    .flatMap((group) => group.matches || []);
+  for (const group of manifest.web_accessible_resources || []) {
+    assert.equal((group.matches || []).includes('https://*/*'), false);
+  }
   for (const requiredMatch of EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES) {
-    assert.equal(
-      (manifest.web_accessible_resources || [])
-        .every((group) => (group.matches || []).includes(requiredMatch)),
-      true,
-    );
+    assert.equal(webResourceMatches.includes(requiredMatch), true);
   }
   assert.match(buildScript, /optional_host_permissions/u);
   assert.match(buildScript, /https:\/\/\*\/\*/u);
