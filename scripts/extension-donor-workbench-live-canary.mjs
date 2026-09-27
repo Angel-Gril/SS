@@ -484,11 +484,16 @@ async function run() {
     'release-bound SS ERP Worker identity is invalid');
 
     const storage = async (expression) => {
-      const result = await cdp.send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      }, workerSession);
+      let result;
+      try {
+        result = await cdp.send('Runtime.evaluate', {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        }, workerSession);
+      } catch (error) {
+        throw new Error(`Worker storage evaluation failed: ${error.message}`);
+      }
       if (result.exceptionDetails) {
         throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
       }
@@ -522,11 +527,16 @@ async function run() {
     let iframeSession = '';
     let iframeContextId = 0;
     const evaluate = async (expression) => {
-      const result = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      });
+      let result;
+      try {
+        result = await send('Runtime.evaluate', {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        });
+      } catch (error) {
+        throw new Error(`Source page evaluation failed: ${error.message}`);
+      }
       if (result.exceptionDetails) {
         throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
       }
@@ -591,11 +601,6 @@ async function run() {
       })(), 'iframe target');
     });
     await send('Page.enable');
-    await cdp.send('Target.setAutoAttach', {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    }, pageSession);
     await send('Runtime.enable');
     await send('Network.enable');
     await send('Emulation.setDeviceMetricsOverride', {
@@ -718,12 +723,17 @@ async function run() {
     iframeSession = iframeContext.sessionId;
     iframeContextId = iframeContext.contextId;
     const iframeEvaluate = async (expression) => {
-      const result = await cdp.send('Runtime.evaluate', {
-        expression,
-        contextId: iframeContextId,
-        awaitPromise: true,
-        returnByValue: true,
-      }, iframeSession);
+      let result;
+      try {
+        result = await cdp.send('Runtime.evaluate', {
+          expression,
+          contextId: iframeContextId,
+          awaitPromise: true,
+          returnByValue: true,
+        }, iframeSession);
+      } catch (error) {
+        throw new Error(`Donor iframe evaluation failed: ${error.message}`);
+      }
       if (result.exceptionDetails) {
         throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
       }

@@ -252,6 +252,7 @@ test('arms paused iframe observation before opening the donor shell', () => {
   const click = source.indexOf("type: 'mousePressed'");
   assert.ok(attachedHandler >= 0 && resume > attachedHandler && autoAttach > resume
     && paused > autoAttach && click > paused);
+  assert.equal(source.match(/'Target\.setAutoAttach'/gu)?.length, 1);
   assert.match(source, /Runtime\.executionContextCreated/u);
   assert.match(source, /context\.origin !== `chrome-extension:\/\/\$\{extensionId\}`/u);
   assert.match(source, /context\.auxData\.isDefault !== true/u);
@@ -264,6 +265,7 @@ test('arms paused iframe observation before opening the donor shell', () => {
   assert.match(source, /rootFrame\.parentId !== positiveNavigation\.frameId/u);
   assert.match(source, /contextKey\(inspectionSession, rootFrame\.id\)/u);
   assert.match(source, /contextId: iframeContextId/u);
+  assert.match(source, /Donor iframe evaluation failed/u);
 });
 
 test('prefers system Chrome with monitored extension loading over older Playwright Chromium', () => {
