@@ -1617,6 +1617,24 @@
     }
   }
 
+  async function applyPromptPrefill(lifecycleEpoch, refreshWorkspace) {
+    if (!lifecycleIsCurrent(lifecycleEpoch) || !state.publicState) return false;
+    try {
+      var prefill = await client.getPromptPrefill();
+      if (!lifecycleIsCurrent(lifecycleEpoch) || !prefill || prefill.state !== 'ready'
+        || reviewPublishOnly() || state.candidate || state.publicState.result || state.unknownOutcome
+        || String(nodes.promptInput.value || '').trim()
+        || String(nodes.negativePromptInput.value || '').trim()) return false;
+      nodes.promptInput.value = prefill.prompt;
+      nodes.negativePromptInput.value = prefill.negativePrompt;
+      if (refreshWorkspace === true) emitWorkspaceBootstrap(null);
+      renderControls();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function loadPublicState(expectedLifecycleEpoch) {
     var lifecycleEpoch = Number.isSafeInteger(expectedLifecycleEpoch)
       ? expectedLifecycleEpoch
@@ -1657,6 +1675,8 @@
         clearResultView();
         clearWorkspaceView();
         setReviewPublishOnlyClass(true);
+        await applyPromptPrefill(lifecycleEpoch);
+        if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
         emitWorkspaceEvent(DIRECT_REVIEW_EVENT, next.publishRequest);
         setStatus('已绑定资产通过发布授权核对。请检查 ERP 权威清单后确认。', 'success');
       } else {
@@ -1675,6 +1695,8 @@
         if (priorUnknownOutcome && !state.unknownOutcome) clearWorkspaceView();
         renderContext(next.context);
         renderProfileOptions();
+        await applyPromptPrefill(lifecycleEpoch);
+        if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
         try {
           await loadSourceCatalog(lifecycleEpoch, next.context);
         } catch {
@@ -2288,6 +2310,10 @@
   if (global.chrome && global.chrome.runtime && global.chrome.runtime.onMessage
     && typeof global.chrome.runtime.onMessage.addListener === 'function') {
     global.chrome.runtime.onMessage.addListener(function (message) {
+      if (message && message.type === 'ss-erp:donor-prompt-prefill-ready') {
+        void applyPromptPrefill(state.lifecycleEpoch, true);
+        return;
+      }
       if (!message || message.type !== clientApi.DEVICE_INVALIDATED_MESSAGE) return;
       state.lifecycleEpoch += 1;
       state.publicState = null;

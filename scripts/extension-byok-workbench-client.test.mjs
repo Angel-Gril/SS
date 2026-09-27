@@ -127,6 +127,15 @@ const workspacePublishState = {
 const messages = [];
 const responses = new Map([
   [api.MESSAGE_TYPES.GET_PUBLIC_STATE, { ok: true, data: { mode: 'BYOK' } }],
+  [api.MESSAGE_TYPES.GET_PROMPT_PREFILL, {
+    ok: true,
+    data: {
+      contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+      state: 'ready',
+      prompt: 'Keep the selected SKU unchanged.',
+      negativePrompt: 'watermark',
+    },
+  }],
   [api.MESSAGE_TYPES.GET_READINESS, { ok: true, data: readiness }],
   [api.MESSAGE_TYPES.EXECUTE_PROVIDER, {
     ok: true,
@@ -230,6 +239,29 @@ assert.equal(messages.length, beforeInvalidEditReviews,
   'invalid edit-review witnesses never reach the background or trigger image requests');
 
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getPublicState())), { mode: 'BYOK' });
+assert.deepEqual(JSON.parse(JSON.stringify(await client.getPromptPrefill())), {
+  contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+  state: 'ready',
+  prompt: 'Keep the selected SKU unchanged.',
+  negativePrompt: 'watermark',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+  type: api.MESSAGE_TYPES.GET_PROMPT_PREFILL,
+  payload: {},
+});
+responses.set(api.MESSAGE_TYPES.GET_PROMPT_PREFILL, {
+  ok: true,
+  data: {
+    contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+    state: 'ready',
+    prompt: '',
+    negativePrompt: 'watermark',
+  },
+});
+await assert.rejects(
+  () => client.getPromptPrefill(),
+  (error) => error?.code === 'SS_ERP_BYOK_WORKBENCH_RESPONSE_INVALID',
+);
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getReadiness('profile-1'))), readiness);
 const generated = await client.generate({
   profileId: 'profile-1', prompt: 'Create a clean product hero image', negativePrompt: null,

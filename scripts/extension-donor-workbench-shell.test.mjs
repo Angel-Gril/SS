@@ -59,7 +59,7 @@ const projection = contract.createProjection({
         { key: 'media-main', role: 'product_main', disposition: 'accepted', url: 'https://img.example/main.jpg', skuKeys: [] },
         { key: 'media-rejected', role: 'unknown', disposition: 'rejected', url: null, skuKeys: [] },
       ],
-      facts: { title: 'Storage box' },
+      facts: { title: 'Storage box', selectedSkuKey: 'sku-blue' },
     },
   },
   shops: [{ id: 'shop-1', name: 'DOTH', status: 'ACTIVE', clientId: 'must-not-leak' }],
@@ -78,10 +78,13 @@ const projection = contract.createProjection({
   error: '',
 });
 assert.equal(projection.source.sourceProductId, '9901');
+assert.equal(projection.source.preferredSkuKey, 'sku-blue');
 assert.deepEqual(Array.from(projection.skus, (item) => item.key), ['sku-white', 'sku-blue']);
 assert.deepEqual(Array.from(projection.media, (item) => item.key), ['media-main']);
 assert.deepEqual(JSON.parse(JSON.stringify(projection.shops)), [{ id: 'shop-1', name: 'DOTH', status: 'ACTIVE' }]);
 assert.equal(JSON.stringify(projection).includes('must-not-leak'), false);
+const promptAdapterSource = fs.readFileSync('extensions/ss-erp/shared/donor-workbench/prompt-adapter.js', 'utf8');
+assert.match(promptAdapterSource, /SS_ERP_DONOR_PROMPT_ADAPTER/u);
 const reparsed = contract.parseProjection({
   ...JSON.parse(JSON.stringify(projection)),
   media: [{ key: 'unsafe', role: 'product_main', url: 'http://127.0.0.1/private.png', skuKeys: [] }],
@@ -112,23 +115,39 @@ assert.deepEqual(
     type: 'OPEN_MEDIA_WORKBENCH',
     requestId: 'request-media-1',
     listingWorkflowId: 'draft-1',
-    preferredSkuKey: null,
+    preferredSkuKey: 'sku-blue',
     sourceSelectionKey: null,
     choiceBinding: null,
+    promptDraft: {
+      contractVersion: 'ss-erp-donor-prompt-prefill/v1',
+      prompt: '  Preserve the blue SKU.  ',
+      negativePrompt: ' watermark ',
+    },
   }))),
   {
     contractVersion: contract.CONTRACT_VERSION,
     type: 'OPEN_MEDIA_WORKBENCH',
     requestId: 'request-media-1',
     listingWorkflowId: 'draft-1',
-    preferredSkuKey: null,
+    preferredSkuKey: 'sku-blue',
     sourceSelectionKey: null,
     choiceBinding: null,
+    promptDraft: {
+      contractVersion: 'ss-erp-donor-prompt-prefill/v1',
+      prompt: 'Preserve the blue SKU.',
+      negativePrompt: 'watermark',
+    },
   },
 );
 for (const invalid of [
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: [] },
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: ['sku-white'], ownerUserId: 'forged' },
+  {
+    contractVersion: contract.CONTRACT_VERSION, type: 'OPEN_MEDIA_WORKBENCH', requestId: 'r',
+    listingWorkflowId: 'draft-1', preferredSkuKey: 'sku-blue', sourceSelectionKey: null,
+    choiceBinding: null,
+    promptDraft: { contractVersion: 'ss-erp-donor-prompt-prefill/v1', prompt: '', negativePrompt: '' },
+  },
   { contractVersion: contract.CONTRACT_VERSION, type: 'PUBLISH', requestId: 'r' },
 ]) {
   assert.throws(() => contract.parseFrameCommand(invalid));
@@ -143,6 +162,10 @@ assert.match(bridge, /allowedShopIds\.has\(command\.shopId\)/);
 assert.match(bridge, /allowedSkuKeys\.has\(skuKey\)/);
 assert.match(bridge, /ss-erp:source-listing-workbench-draft-create/);
 assert.match(bridge, /ss-erp:source-ai-workbench-open/);
+assert.match(bridge, /response\.result\.state\s*===\s*'choice_required'/);
+assert.match(bridge, /preferredSkuKey:\s*command\.preferredSkuKey/);
+assert.match(bridge, /choiceBinding:\s*response\.result\.binding/);
+assert.match(bridge, /promptDraft:\s*command\.promptDraft/);
 assert.match(bridge, /hostname\.includes\('tmall\.com'\)\) return 'tmall'/);
 assert.match(bridge, /if \(wasOpen\) document\.documentElement\.style\.overflow = pageOverflow/);
 
@@ -152,6 +175,8 @@ assert.match(page, /source-workbench-shell\.css/);
 assert.match(page, /shared\/donor-workbench\/workspace-contract\.js/);
 assert.match(page, /source-workbench-shell\.js/);
 assert.match(page, /data-action="open-ai-workbench"/);
+assert.match(page, /data-role="prompt-text"/);
+assert.match(page, /data-role="negative-prompt-text"/);
 assert.doesNotMatch(page, /<script(?![^>]*\bsrc=)/i);
 assert.doesNotMatch(pageScript, /chrome\.runtime/);
 

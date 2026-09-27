@@ -319,6 +319,9 @@
     var sameContext = requiredMethod(sessionManager, 'sameContext');
     var resolveLaunch = requiredMethod(config.launchClient, 'resolve');
     var assertSourceCurrent = requiredMethod(config, 'assertSourceCurrent');
+    var consumePromptHandoff = config.promptHandoff
+      && typeof config.promptHandoff.consume === 'function'
+      ? config.promptHandoff.consume.bind(config.promptHandoff) : null;
 
     async function sourceRemainsCurrent(value) {
       try {
@@ -820,6 +823,33 @@
             : 'NOT_READY',
       };
     });
+
+    if (messageTypes.GET_PROMPT_PREFILL && consumePromptHandoff) {
+      handlers[messageTypes.GET_PROMPT_PREFILL] = guarded(async function (handlerContext) {
+      if (!exactKeys(handlerContext.payload || {}, [])) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      var promptPrefill = await consumePromptHandoff({
+        tabId: handlerContext.sender.tabId,
+        binding: {
+          sourcePlatform: session.context.sourcePlatform,
+          sourceProductId: session.context.sourceProductId,
+          sourceCaptureSnapshotId: session.context.sourceCaptureSnapshotId,
+          supplyGoodsId: session.context.supplyGoodsId,
+          shopId: session.context.shopId,
+          workflowId: session.context.workflowId,
+          draftRevision: session.context.draftRevision,
+          draftVersion: session.context.draftVersion,
+          skuKey: session.context.skuKey,
+        },
+      });
+      if (isReviewPublishContext(session.context)) {
+        return { contractVersion: 'ss-erp-donor-prompt-handoff/v1', state: 'empty', prompt: null, negativePrompt: null };
+      }
+      return promptPrefill;
+      });
+    }
 
     handlers[messageTypes.EDIT_MEDIA_PREPARE] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
@@ -1547,11 +1577,20 @@
         sourceSelectionKey: sourceSelectionKey,
       });
       if (!readySourceCurrent) return Object.freeze({ state: 'stale' });
-      return openSession({
+      var opened = await openSession({
         context: context,
         sourceTabId: sender.tabId,
         sourceDocumentId: sender.documentId,
       });
+      var result = {
+        state: opened.state,
+        tabId: opened.tabId,
+      };
+      Object.defineProperty(result, 'resolvedSkuKey', {
+        value: context.skuKey,
+        enumerable: false,
+      });
+      return Object.freeze(result);
     }
 
     async function removeTab(value) {

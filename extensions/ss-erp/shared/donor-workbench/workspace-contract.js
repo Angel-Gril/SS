@@ -236,6 +236,17 @@
       identity.productId || product.sourceProductId || product.productId || product.id,
       200,
     );
+    var projectedSkus = skuRows(product, capture);
+    var facts = record(capture.facts) || {};
+    var selectedSku = record(product.selectedSku) || {};
+    var preferredSkuCandidate = text(
+      factValue(facts.selectedSkuKey)
+        || selectedSku.key || selectedSku.skuKey || selectedSku.skuId || selectedSku.id,
+      500,
+    );
+    var preferredSkuKey = projectedSkus.some(function (sku) {
+      return sku.key === preferredSkuCandidate;
+    }) ? preferredSkuCandidate : '';
     var categoryPath = Object.freeze((Array.isArray(category.path) ? category.path : []).slice(0, 20)
       .map(function (item) { return text(record(item) && item.name || item, 160); }).filter(Boolean));
     return Object.freeze({
@@ -247,8 +258,9 @@
         canonicalUrl: httpsUrl(identity.canonicalUrl || product.url || product.sourceUrl),
         categoryName: text(category.name, 200),
         categoryPath: categoryPath,
+        preferredSkuKey: preferredSkuKey,
       }),
-      skus: skuRows(product, capture),
+      skus: projectedSkus,
       media: mediaRows(product, capture),
       shops: shopRows(options.shops),
       handoff: handoffProjection(options.handoff),
@@ -280,6 +292,7 @@
             name: source.categoryName,
             path: Array.isArray(source.categoryPath) ? source.categoryPath : [],
           },
+          facts: { selectedSkuKey: source.preferredSkuKey },
           skus: (Array.isArray(item.skus) ? item.skus : []).map(function (sku) {
             var row = record(sku) || {};
             return { key: row.key, name: row.label, imageUrl: row.imageUrl };
@@ -338,7 +351,7 @@
     if (item.type === 'OPEN_MEDIA_WORKBENCH') {
       var workbenchRequestId = commandBase(item, [
         'contractVersion', 'type', 'requestId', 'listingWorkflowId',
-        'preferredSkuKey', 'sourceSelectionKey', 'choiceBinding',
+        'preferredSkuKey', 'sourceSelectionKey', 'choiceBinding', 'promptDraft',
       ]);
       var listingWorkflowId = text(item.listingWorkflowId, 200);
       var preferredSkuKey = item.preferredSkuKey === null ? null : text(item.preferredSkuKey, 500);
@@ -346,7 +359,14 @@
       if (!listingWorkflowId
         || (item.preferredSkuKey !== null && !preferredSkuKey)
         || (item.sourceSelectionKey !== null && !sourceSelectionKey)
-        || item.choiceBinding !== null) {
+        || item.choiceBinding !== null
+        || (item.promptDraft !== null && (!record(item.promptDraft)
+          || Object.keys(item.promptDraft).length !== 3
+          || item.promptDraft.contractVersion !== 'ss-erp-donor-prompt-prefill/v1'
+          || typeof item.promptDraft.prompt !== 'string'
+          || typeof item.promptDraft.negativePrompt !== 'string'
+          || item.promptDraft.prompt.length < 1 || item.promptDraft.prompt.length > 8000
+          || item.promptDraft.negativePrompt.length > 4000))) {
         throw new TypeError('invalid donor workbench media launch command');
       }
       return Object.freeze({
@@ -357,6 +377,11 @@
         preferredSkuKey: preferredSkuKey,
         sourceSelectionKey: sourceSelectionKey,
         choiceBinding: null,
+        promptDraft: item.promptDraft === null ? null : Object.freeze({
+          contractVersion: item.promptDraft.contractVersion,
+          prompt: item.promptDraft.prompt.normalize('NFKC').trim(),
+          negativePrompt: item.promptDraft.negativePrompt.normalize('NFKC').trim(),
+        }),
       });
     }
     var requestId = commandBase(item, ['contractVersion', 'type', 'requestId']);

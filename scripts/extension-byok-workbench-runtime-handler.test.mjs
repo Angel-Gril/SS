@@ -42,6 +42,7 @@ const api = context.SS_ERP_BYOK_WORKBENCH_RUNTIME_HANDLER;
 
 const MESSAGE_TYPES = {
   GET_PUBLIC_STATE: 'state',
+  GET_PROMPT_PREFILL: 'prompt-prefill',
   GET_READINESS: 'readiness',
   EXECUTE_PROVIDER: 'execute',
   OPEN_PREVIEW: 'preview',
@@ -686,6 +687,17 @@ const providerSemaphore = {
     return 0;
   },
 };
+const promptHandoff = {
+  async consume(value) {
+    calls.push(['prompt-prefill', value]);
+    return {
+      contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+      state: 'ready',
+      prompt: 'Donor prompt',
+      negativePrompt: 'watermark',
+    };
+  },
+};
 
 const dispatcherOptions = {
   messageTypes: MESSAGE_TYPES,
@@ -695,6 +707,7 @@ const dispatcherOptions = {
   sourceMediaLibrary,
   editController, editMediaStore, editEpochGuard,
   providerSemaphore,
+  promptHandoff,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
 };
 assert.throws(
@@ -743,6 +756,9 @@ const opened = await dispatcher.openFromSource({
   sourceSelectionKey: 'sku-1',
 });
 assert.deepEqual(JSON.parse(JSON.stringify(opened)), { state: 'workbench_opened', tabId: 77 });
+assert.equal(opened.resolvedSkuKey, 'sku-1');
+assert.equal(Object.keys(opened).includes('resolvedSkuKey'), false,
+  'resolved SKU is internal launch metadata and must not enter the runtime response');
 
 const stateResponse = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({ payload: {}, sender });
 assert.equal(stateResponse.ok, true);
@@ -764,6 +780,28 @@ assert.deepEqual(JSON.parse(JSON.stringify(stateResponse.data.profiles[0].capabi
   },
 ]);
 assert.equal(JSON.stringify(stateResponse).includes('apiKey'), false);
+
+const promptPrefillResponse = await dispatcher.handlers[MESSAGE_TYPES.GET_PROMPT_PREFILL]({
+  payload: {}, sender,
+});
+assert.equal(promptPrefillResponse.ok, true);
+assert.deepEqual(JSON.parse(JSON.stringify(promptPrefillResponse.data)), {
+  contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+  state: 'ready',
+  prompt: 'Donor prompt',
+  negativePrompt: 'watermark',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(
+  calls.find((row) => row[0] === 'prompt-prefill')[1],
+)), {
+  tabId: 77,
+  binding: {
+    sourcePlatform: '1688', sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+    skuKey: 'sku-1',
+  },
+});
 
 const catalogResponse = await dispatcher.handlers[MESSAGE_TYPES.SOURCE_CATALOG]({
   payload: {}, sender,
@@ -1574,6 +1612,19 @@ session = {
 const reviewState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
   payload: {}, sender,
 });
+const promptConsumeCountBeforeReview = calls.filter((row) => row[0] === 'prompt-prefill').length;
+const reviewPromptPrefill = await dispatcher.handlers[MESSAGE_TYPES.GET_PROMPT_PREFILL]({
+  payload: {}, sender,
+});
+assert.deepEqual(JSON.parse(JSON.stringify(reviewPromptPrefill.data)), {
+  contractVersion: 'ss-erp-donor-prompt-handoff/v1',
+  state: 'empty',
+  prompt: null,
+  negativePrompt: null,
+});
+assert.equal(calls.filter((row) => row[0] === 'prompt-prefill').length,
+  promptConsumeCountBeforeReview + 1,
+  'review-only sessions must consume and discard a staged donor prompt');
 const reviewRequest = {
   executionMode: 'BYOK',
   binding: {

@@ -2,6 +2,7 @@
   'use strict';
 
   var Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
+  var PromptAdapter = globalThis.SS_ERP_DONOR_PROMPT_ADAPTER;
   if (!Contract) return;
 
   var projection = Contract.createProjection({});
@@ -9,6 +10,7 @@
   var selectedSkuKeys = new Set();
   var selectedMediaKeys = new Set();
   var selectedShopId = '';
+  var selectedMediaSkuKey = '';
   var skuSignature = '';
   var mediaSignature = '';
   var promptSignature = '';
@@ -96,6 +98,12 @@
       }
       skuSignature = nextSkuSignature;
     }
+    if (projection.source.preferredSkuKey) {
+      selectedMediaSkuKey = projection.source.preferredSkuKey;
+    } else if (!projection.skus.some(function (item) { return item.key === selectedMediaSkuKey; })) {
+      selectedMediaSkuKey = projection.source.preferredSkuKey
+        || (projection.skus[0] && projection.skus[0].key) || '';
+    }
     var nextMediaSignature = projection.media.map(function (item) { return item.key; }).join('\u0000');
     if (nextMediaSignature !== mediaSignature) {
       var allowedMedia = new Set(projection.media.map(function (item) { return item.key; }));
@@ -113,29 +121,38 @@
   function syncPromptDraft() {
     var signature = [
       projection.source.sourceProductId,
-      Array.from(selectedSkuKeys).join(','),
+      selectedMediaSkuKey || Array.from(selectedSkuKeys).join(','),
       Array.from(selectedMediaKeys).join(','),
     ].join('|');
     if (signature === promptSignature) return;
     promptSignature = signature;
     var textarea = one('[data-role="prompt-json"]');
     if (!textarea) return;
+    var draft = PromptAdapter && typeof PromptAdapter.buildPromptDraft === 'function'
+      && selectedSkuKeys.size > 0
+      ? PromptAdapter.buildPromptDraft(projection, {
+        selectedSkuKeys: selectedMediaSkuKey ? [selectedMediaSkuKey] : Array.from(selectedSkuKeys),
+        selectedMediaKeys: Array.from(selectedMediaKeys),
+      })
+      : null;
     textarea.value = JSON.stringify({
       product: {
         title: projection.source.title,
         sourcePlatform: projection.source.platform,
         sourceCategory: projection.source.categoryName,
       },
-      selectedSkuKeys: Array.from(selectedSkuKeys),
+      selectedSkuKeys: selectedMediaSkuKey ? [selectedMediaSkuKey] : Array.from(selectedSkuKeys),
       referenceMediaKeys: Array.from(selectedMediaKeys),
-      visualDescription: {
-        subject: '',
-        composition: '',
-        background: '',
-        lighting: '',
-        constraints: [],
+      visualDescription: draft ? draft.visualDescription : {
+        subject: '', composition: '', background: '', lighting: '', constraints: [],
       },
+      prompt: draft ? draft.prompt : '',
+      negativePrompt: draft ? draft.negativePrompt : '',
     }, null, 2);
+    var promptText = one('[data-role="prompt-text"]');
+    var negativePromptText = one('[data-role="negative-prompt-text"]');
+    if (promptText) promptText.value = draft ? draft.prompt : '';
+    if (negativePromptText) negativePromptText.value = draft ? draft.negativePrompt : '';
     validatePromptJson();
   }
 
@@ -386,6 +403,17 @@
     syncPromptDraft();
     var openButton = one('[data-action="open-ai-workbench"]');
     openButton.disabled = projection.busy || !currentListing();
+    var skuSelect = one('[data-role="media-sku-select"]');
+    clear(skuSelect);
+    projection.skus.forEach(function (sku) {
+      var option = node('option', '', sku.label || sku.key);
+      option.value = sku.key;
+      option.selected = sku.key === selectedMediaSkuKey;
+      skuSelect.appendChild(option);
+    });
+    skuSelect.value = selectedMediaSkuKey;
+    skuSelect.disabled = projection.busy || projection.skus.length < 2
+      || Boolean(projection.source.preferredSkuKey);
   }
 
   function reviewMetric(label, value) {
@@ -469,6 +497,17 @@
     }
   }
 
+  function buildCurrentPromptDraft() {
+    var prompt = one('[data-role="prompt-text"]');
+    var negative = one('[data-role="negative-prompt-text"]');
+    if (!prompt || !String(prompt.value || '').trim()) return null;
+    return {
+      contractVersion: 'ss-erp-donor-prompt-prefill/v1',
+      prompt: String(prompt.value || '').normalize('NFKC').trim().slice(0, 8000),
+      negativePrompt: String(negative && negative.value || '').normalize('NFKC').trim().slice(0, 4000),
+    };
+  }
+
   function showToast(message, error) {
     var toast = one('[data-role="toast"]');
     toast.textContent = String(message || '操作完成');
@@ -540,13 +579,20 @@
       showToast('请先创建店铺草稿', true);
       return;
     }
-    var preferredSkuKey = selectedSkuKeys.size === 1 ? Array.from(selectedSkuKeys)[0] : null;
+    var preferredSkuKey = selectedMediaSkuKey || null;
     send('OPEN_MEDIA_WORKBENCH', {
       listingWorkflowId: listing.id,
       preferredSkuKey: preferredSkuKey,
-      sourceSelectionKey: preferredSkuKey,
+      sourceSelectionKey: projection.source.preferredSkuKey || null,
       choiceBinding: null,
+      promptDraft: buildCurrentPromptDraft(),
     });
+  });
+  one('[data-role="media-sku-select"]').addEventListener('change', function (event) {
+    selectedMediaSkuKey = String(event.target.value || '');
+    promptSignature = '';
+    syncPromptDraft();
+    renderMedia();
   });
   one('[data-role="prompt-json"]').addEventListener('input', validatePromptJson);
   one('[data-action="copy-json"]').addEventListener('click', async function (event) {

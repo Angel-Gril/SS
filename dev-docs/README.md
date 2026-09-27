@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 donor 工作台 Phase 2 草稿与生图接线
+
+- donor 工作台 Phase 2 的 `D2.1/D2.2` 已完成本地实现：店铺草稿继续调用 device-scoped `CREATE_DRAFT` owner；图片阶段新增独立处理 SKU、来源参考图、视觉 JSON 及正/负提示词编辑，并通过现有 SS ERP ERP 托管/自带 API Key 工作台执行，不复制 donor Provider/Ozon 直连或密钥存储。
+- 视觉 JSON 与提示词由本地确定性 adapter 基于来源商品、所选 SKU 和参考图编译，不新增 AI planner 请求，也不成为服务端 plan、费用或权限事实。可选提示词只通过 `chrome.storage.session` 交接，绑定完整来源/草稿/SKU 和目标 tab、十分钟过期、消费一次；审核态、已有候选、未知结果或已有输入时只消费不应用。
+- 多 SKU 路径保持服务端权威：无来源页明确 SKU 时先取得 `choice_required` 与服务端 binding，再用用户选择的处理 SKU 打开；来源页已有 SKU 时 donor 选择器锁定并随权威投影纠正。定向合同、桌面/移动 Chromium、unpacked MV3 与四操作 AI 工作台 Provider fixture 均通过；真实 Provider、Ozon 和生产 mutation 为 0。剩余 `D2.3/D2.4` 是审核/assignment/幂等回放与命令回执驱动的暂停恢复。
+
 ## 2026-09-27 donor 工作台 Phase 1 默认关闭实现
 
 - 已在 `extensions/ss-erp/` 内新增 donor-derived 全屏 iframe 商品工作台，复用 `jp20260803` 的单工作台交互模型，但没有复制 license、Provider/Ozon 凭据、第三方直连、旧服务地址、`debugger` 或宽域权限。donor 原目录保持只读。

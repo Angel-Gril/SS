@@ -223,22 +223,41 @@
       commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
       return;
     }
+    if (currentProjection.source.preferredSkuKey
+      && command.preferredSkuKey !== currentProjection.source.preferredSkuKey) {
+      commandResult(command.requestId, false, '请先在来源商品页切换到要处理的 SKU 后刷新工作台');
+      return;
+    }
     setBusy(true, '');
     try {
-      var response = await sendRuntimeMessage({
+      var message = {
         type: 'ss-erp:source-ai-workbench-open',
         platform: currentProjection.source.platform,
         sourceProductId: currentProjection.source.sourceProductId,
         listingWorkflowId: command.listingWorkflowId,
-        preferredSkuKey: command.preferredSkuKey,
-        choiceBinding: command.choiceBinding,
+        preferredSkuKey: command.sourceSelectionKey,
+        choiceBinding: null,
         sourceSelectionKey: command.sourceSelectionKey,
-      });
+        promptDraft: command.promptDraft,
+      };
+      var response = await sendRuntimeMessage(message);
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || 'AI 图片工作台打开失败');
       }
       if (response.result.state === 'choice_required') {
-        throw new Error('当前商品有多个 SKU，请在现有 AI 图片工作台选择 SKU');
+        if (!command.preferredSkuKey || !response.result.binding
+          || !Array.isArray(response.result.skuKeys)
+          || !response.result.skuKeys.includes(command.preferredSkuKey)) {
+          throw new Error('当前商品 SKU 选择上下文无效，请刷新后重试');
+        }
+        response = await sendRuntimeMessage({
+          ...message,
+          preferredSkuKey: command.preferredSkuKey,
+          choiceBinding: response.result.binding,
+        });
+        if (!response || !response.ok || !response.result) {
+          throw new Error(response && response.error || 'AI 图片工作台打开失败');
+        }
       }
       if (!['workbench_opened', 'workbench_focused'].includes(response.result.state)) {
         throw new Error(response.result.reason || 'AI 图片工作台当前不可用');

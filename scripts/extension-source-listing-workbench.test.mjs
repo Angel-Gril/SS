@@ -92,6 +92,10 @@ assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-command/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-relay/);
 assert.match(worker, /relaySourceAiImageSuiteCommand/);
 assert.match(worker, /ss-erp:source-ai-workbench-open/);
+assert.match(worker, /importScripts\(['"]\.\.\/shared\/donor-workbench\/prompt-handoff\.js['"]\)/);
+assert.match(worker, /getDonorPromptHandoffStore/);
+assert.match(worker, /resolvedSkuKey/);
+assert.match(worker, /getDonorPromptHandoffStore\(\)\.stage/);
 assert.match(
   worker,
   /assertSourceCurrent:\s*assertSourceAiWorkbenchPageCurrent/u,

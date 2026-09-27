@@ -49,6 +49,7 @@
     }),
     WORKBENCH: Object.freeze({
       GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
+      GET_PROMPT_PREFILL: 'ss-erp:ai-image-workbench-prompt-prefill',
       GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
       EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
       RECOVER_PROVIDER: 'ss-erp:ai-image-workbench-provider-recover',

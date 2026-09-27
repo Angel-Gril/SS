@@ -36,6 +36,7 @@
   ]);
   var MESSAGE_TYPES = Object.freeze({
     GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
+    GET_PROMPT_PREFILL: 'ss-erp:ai-image-workbench-prompt-prefill',
     GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
     EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
     OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
@@ -671,6 +672,21 @@
     return Object.freeze({
       getPublicState: function () {
         return send(MESSAGE_TYPES.GET_PUBLIC_STATE, {});
+      },
+      getPromptPrefill: function () {
+        return send(MESSAGE_TYPES.GET_PROMPT_PREFILL, {}).then(function (value) {
+          if (!isRecord(value)
+            || !exactKeys(value, ['contractVersion', 'state', 'prompt', 'negativePrompt'])
+            || value.contractVersion !== 'ss-erp-donor-prompt-handoff/v1'
+            || !['ready', 'empty'].includes(value.state)
+            || (value.state === 'ready'
+              && (typeof value.prompt !== 'string' || !value.prompt || value.prompt.length > 8000
+                || typeof value.negativePrompt !== 'string' || value.negativePrompt.length > 4000))
+            || (value.state === 'empty' && (value.prompt !== null || value.negativePrompt !== null))) {
+            throw clientError('SS_ERP_BYOK_WORKBENCH_RESPONSE_INVALID');
+          }
+          return value;
+        });
       },
       getReadiness: function (profileIdValue) {
         return send(MESSAGE_TYPES.GET_READINESS, { profileId: profileId(profileIdValue) })

@@ -108,6 +108,7 @@
           </div>
           <div class="media-action-bar">
             <div><strong>SS ERP AI 图片工作台</strong><span>使用当前草稿、SKU 与设备授权打开受控生图/改图流程。</span></div>
+            <label><span>处理 SKU</span><select data-role="media-sku-select" aria-label="选择图片处理 SKU"></select></label>
             <button type="button" class="primary-command" data-action="open-ai-workbench">打开 AI 工作台</button>
           </div>
           <div class="media-workspace">
@@ -118,8 +119,12 @@
             <section class="prompt-pane">
               <div class="subheading"><h2>视觉描述 JSON</h2><span data-role="json-state">有效</span></div>
               <textarea data-role="prompt-json" spellcheck="false" aria-label="视觉描述 JSON"></textarea>
+              <div class="prompt-text-grid">
+                <label><span>生成提示词</span><textarea data-role="prompt-text" spellcheck="false" aria-label="生成提示词"></textarea></label>
+                <label><span>负面提示词</span><textarea data-role="negative-prompt-text" spellcheck="false" aria-label="负面提示词"></textarea></label>
+              </div>
               <div class="prompt-actions">
-                <span>本地草稿 · 未提交</span>
+                <span data-role="prompt-state">本地草稿 · 未提交</span>
                 <button type="button" data-action="copy-json">复制 JSON</button>
               </div>
             </section>
@@ -151,6 +156,7 @@
   </div>
   <div class="toast" data-role="toast" hidden></div>
   <script src="../shared/donor-workbench/workspace-contract.js"></script>
+  <script src="../shared/donor-workbench/prompt-adapter.js"></script>
   <script src="source-workbench-shell.js"></script>
 </body>
 </html>

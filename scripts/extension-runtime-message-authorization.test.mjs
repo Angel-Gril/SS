@@ -140,6 +140,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const setKey = api.MESSAGE_TYPES.PROVIDER_SETTINGS.SET_SESSION_KEY;
   const settingsReadiness = api.MESSAGE_TYPES.PROVIDER_SETTINGS.GET_READINESS;
   const workbenchState = api.MESSAGE_TYPES.WORKBENCH.GET_PUBLIC_STATE;
+  const promptPrefill = api.MESSAGE_TYPES.WORKBENCH.GET_PROMPT_PREFILL;
   const execute = api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER;
   const preview = api.MESSAGE_TYPES.WORKBENCH.OPEN_PREVIEW;
   const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
@@ -163,6 +164,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     settingsReadiness,
     preparePermission,
     workbenchState,
+    promptPrefill,
     execute,
     preview,
     review,
@@ -203,6 +205,16 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     extensionSender('/pages/ai-image-workbench.html'),
     extensionId,
   ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    promptPrefill,
+    extensionSender('/pages/ai-image-workbench.html'),
+    extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    promptPrefill,
+    extensionSender('/pages/settings.html'),
+    extensionId,
+  ), false);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     execute,
     extensionSender('/pages/ai-image-workbench.html'),

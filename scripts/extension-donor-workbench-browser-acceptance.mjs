@@ -88,7 +88,7 @@ function chromeExecutable() {
   return executable;
 }
 
-function projection({ withDraft }) {
+function projection({ withDraft, preferredSkuKey = '' }) {
   return {
     contractVersion: 'ss-erp-donor-workbench/v1',
     source: {
@@ -98,6 +98,7 @@ function projection({ withDraft }) {
       canonicalUrl: 'https://detail.1688.com/offer/990499606077.html',
       categoryName: 'Storage organizers',
       categoryPath: ['Home', 'Storage', 'Organizers'],
+      preferredSkuKey,
     },
     skus: [
       { key: 'sku-white-small', label: 'Color: White / Size: Small', imageUrl: `${IMAGE_ORIGIN}/white-small.png` },
@@ -217,6 +218,7 @@ async function run() {
           const allowed = new Set([
             'pages/source-workbench-shell.html', 'pages/source-workbench-shell.css',
             'pages/source-workbench-shell.js', 'shared/donor-workbench/workspace-contract.js',
+            'shared/donor-workbench/prompt-adapter.js',
           ]);
           assert.ok(allowed.has(relative), `Unexpected workbench resource: ${relative}`);
           const body = await readFile(path.join(EXTENSION_ROOT, relative));
@@ -267,11 +269,47 @@ async function run() {
     await until(() => evaluate('document.querySelector("[data-view=media]").hidden === false'), 'media stage');
     assert.equal(await evaluate('document.querySelectorAll(".image-tile").length'), 4);
     assert.equal(await evaluate('document.querySelector("[data-role=json-state]").textContent'), '有效');
+    assert.equal(await evaluate('document.querySelectorAll("[data-role=media-sku-select] option").length'), 3);
+    assert.equal(await evaluate('document.querySelector("[data-role=media-sku-select]").value'), 'sku-white-small');
+    assert.match(await evaluate('document.querySelector("[data-role=prompt-text]").value'), /White \/ Size: Small/u);
+    assert.match(await evaluate('document.querySelector("[data-role=negative-prompt-text]").value'), /watermark/u);
+    assert.equal(await evaluate(`(() => {
+      const value = JSON.parse(document.querySelector('[data-role=prompt-json]').value);
+      return value.visualDescription.evidencePolicy === 'verified-source-only';
+    })()`), true);
+
+    await evaluate(`(() => {
+      const select = document.querySelector('[data-role=media-sku-select]');
+      select.value = 'sku-green-large';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await until(() => evaluate('document.querySelector("[data-role=prompt-text]").value.includes("Green / Size: Large")'),
+      'selected SKU prompt refresh');
 
     await postProjection(projection({ withDraft: true }));
     await until(() => evaluate('document.querySelectorAll(".queue-row").length === 1'), 'server task projection');
     assert.equal(await evaluate('document.querySelector("[data-action=create-draft]").disabled'), true);
     assert.equal(await evaluate('document.querySelector("[data-role=queue-count]").textContent'), '1 项');
+
+    await evaluate(`window.__donorCommands = [];
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'OPEN_MEDIA_WORKBENCH') window.__donorCommands.push(event.data);
+      });`);
+    await click('[data-action="open-ai-workbench"]');
+    const mediaCommand = await until(async () => {
+      const command = await evaluate('window.__donorCommands.at(-1) || null');
+      return command || null;
+    }, 'donor media launch command');
+    assert.equal(mediaCommand.preferredSkuKey, 'sku-green-large');
+    assert.equal(mediaCommand.sourceSelectionKey, null);
+    assert.match(mediaCommand.promptDraft.prompt, /Green \/ Size: Large/u);
+    assert.match(mediaCommand.promptDraft.negativePrompt, /watermark/u);
+
+    await postProjection(projection({ withDraft: true, preferredSkuKey: 'sku-white-small' }));
+    await until(() => evaluate(`document.querySelector('[data-role=media-sku-select]').value === 'sku-white-small'`),
+      'source-selected SKU lock');
+    assert.equal(await evaluate('document.querySelector("[data-role=media-sku-select]").disabled'), true);
+    assert.match(await evaluate('document.querySelector("[data-role=prompt-text]").value'), /White \/ Size: Small/u);
 
     const screenshot = async (name) => {
       await send('Page.bringToFront');

@@ -37,6 +37,7 @@ try { importScripts('../shared/publish/workbench-listing-publish-coordinator.js'
 try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
+try { importScripts('../shared/donor-workbench/prompt-handoff.js'); } catch (e) { console.warn('[SS ERP] donor prompt handoff load error:', e); }
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
 try { importScripts('../shared/byok/workbench-source-media-library.js'); } catch (e) { console.warn('[SS ERP] BYOK source media library load error:', e); }
 try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
@@ -433,6 +434,7 @@ let byokRuntimeAuthorityGuard = null;
 let byokWorkbenchLaunchClient = null;
 let byokWorkbenchBatchLaunchClient = null;
 let byokWorkbenchSessionManager = null;
+let donorPromptHandoffStore = null;
 let byokWorkbenchPreviewBroker = null;
 let byokWorkbenchSourceMediaLibrary = null;
 let byokWorkbenchRuntimeDispatcher = null;
@@ -2106,6 +2108,19 @@ function getByokWorkbenchSessionManager() {
   return byokWorkbenchSessionManager;
 }
 
+function getDonorPromptHandoffStore() {
+  if (donorPromptHandoffStore) return donorPromptHandoffStore;
+  const api = globalThis.SS_ERP_DONOR_PROMPT_HANDOFF;
+  if (!api || typeof api.createStore !== 'function') {
+    throw new Error('Donor prompt handoff is unavailable');
+  }
+  donorPromptHandoffStore = api.createStore({
+    storage: chrome.storage.session,
+    now: () => Date.now(),
+  });
+  return donorPromptHandoffStore;
+}
+
 function getByokWorkbenchPreviewBroker() {
   if (byokWorkbenchPreviewBroker) return byokWorkbenchPreviewBroker;
   const api = globalThis.SS_ERP_BYOK_WORKBENCH_PREVIEW_CHANNEL;
@@ -2329,6 +2344,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     editMediaStore: getByokWorkbenchEditMediaStore(),
     editEpochGuard: getByokWorkbenchEditEpochGuard(),
     providerSemaphore: getByokWorkbenchProviderSemaphore(),
+    promptHandoff: getDonorPromptHandoffStore(),
     now: () => new Date(),
   });
   return byokWorkbenchRuntimeDispatcher;
@@ -2823,7 +2839,12 @@ function sourceAiWorkbenchChoiceBinding(value) {
 }
 
 async function openAuthoritativeSourceAiWorkbench(message, sender) {
-  if (!message || Object.keys(message).length !== 7
+  const allowedMessageKeys = new Set([
+    'type', 'platform', 'sourceProductId', 'listingWorkflowId', 'preferredSkuKey',
+    'choiceBinding', 'sourceSelectionKey', 'promptDraft',
+  ]);
+  if (!message || (Object.keys(message).length !== 7 && Object.keys(message).length !== 8)
+    || Object.keys(message).some((key) => !allowedMessageKeys.has(key))
     || ![
       'type', 'platform', 'sourceProductId', 'listingWorkflowId', 'preferredSkuKey', 'choiceBinding',
       'sourceSelectionKey',
@@ -2841,6 +2862,18 @@ async function openAuthoritativeSourceAiWorkbench(message, sender) {
     ? null : sourceAiWorkbenchChoiceBinding(message.choiceBinding);
   const sourceSelectionKey = message.sourceSelectionKey === null
     ? null : sourceWorkflowHandoffText(message.sourceSelectionKey, 500);
+  const promptDraft = message.promptDraft === undefined || message.promptDraft === null
+    ? null : message.promptDraft;
+  let normalizedPromptDraft = null;
+  if (promptDraft !== null) {
+    const promptApi = globalThis.SS_ERP_DONOR_PROMPT_HANDOFF;
+    if (!promptApi || typeof promptApi.parseDraft !== 'function') {
+      throw new Error('AI 图片工作台提示词交接不可用');
+    }
+    try { normalizedPromptDraft = promptApi.parseDraft(promptDraft); } catch {
+      throw new Error('AI 图片工作台提示词无效');
+    }
+  }
   const sourceSender = sourceAiWorkbenchSenderIdentity(sender, platform, sourceProductId);
   if (!sourceProductId || !platform || !requestedListingWorkflowId || !sourceSender
     || (message.preferredSkuKey !== null && !preferredSkuKey)
@@ -2877,7 +2910,7 @@ async function openAuthoritativeSourceAiWorkbench(message, sender) {
     if (choiceBinding && SOURCE_AI_WORKBENCH_BINDING_KEYS.some(
       (key) => choiceBinding[key] !== currentBinding[key],
     )) return { state: 'stale' };
-    return await getByokWorkbenchRuntimeDispatcher().openFromSource({
+    const result = await getByokWorkbenchRuntimeDispatcher().openFromSource({
       request: {
         ...currentBinding,
         preferredSkuKey,
@@ -2886,6 +2919,22 @@ async function openAuthoritativeSourceAiWorkbench(message, sender) {
       sourceSender,
       sourceSelectionKey,
     });
+    const resolvedSkuKey = preferredSkuKey
+      || sourceWorkflowHandoffText(result && result.resolvedSkuKey, 500);
+    if (normalizedPromptDraft !== null && result && ['workbench_opened', 'workbench_focused'].includes(result.state)
+      && Number.isSafeInteger(result.tabId) && resolvedSkuKey) {
+      await getDonorPromptHandoffStore().stage({
+        tabId: result.tabId,
+        binding: { ...currentBinding, skuKey: resolvedSkuKey },
+        draft: normalizedPromptDraft,
+      });
+      try {
+        await chrome.tabs.sendMessage(result.tabId, {
+          type: 'ss-erp:donor-prompt-prefill-ready',
+        });
+      } catch (_error) {}
+    }
+    return result;
   } catch (error) {
     if (Number(error && error.status) === 409) return { state: 'stale' };
     if (Number(error && error.status) === 403
@@ -8120,6 +8169,7 @@ if (chrome.tabs?.onRemoved?.addListener) {
       Promise.resolve().then(() => getByokWorkbenchRuntimeDispatcher().removeTab(tabId)),
       Promise.resolve().then(() => getByokWorkbenchBatchRegistry().removeTab(tabId)),
       Promise.resolve().then(() => getHostedAiImageSuiteClientRegistry().removeTab(tabId)),
+      Promise.resolve().then(() => getDonorPromptHandoffStore().clearTab(tabId)),
     ]).catch(() => {});
   });
 }

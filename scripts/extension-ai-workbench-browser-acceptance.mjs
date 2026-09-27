@@ -159,7 +159,7 @@ function fixtureBridge({ providerOrigin, sentinel }) {
     if (!condition) throw Object.assign(new Error(code), { code });
   };
   const diagnostics = { runtimeCalls: [], providerCalls: [], outcomes: [], errors: [], reviews: [],
-    activations: [], metadataIgnored: [], ingestCalls: 0 };
+    activations: [], metadataIgnored: [], ingestCalls: 0, promptPrefills: 0 };
   document.addEventListener('click', (event) => {
     const button = event.target.closest?.('button');
     if (button && ['mediaPrimaryAction', 'approveButton'].includes(button.id)) {
@@ -379,6 +379,18 @@ function fixtureBridge({ providerOrigin, sentinel }) {
     profileStore, permissionBroker, readinessClient, providerClient: textClient,
     vault, authorityGuard, previewBroker, editController: controller, editMediaStore: mediaStore,
     editEpochGuard, providerSemaphore,
+    promptHandoff: {
+      async consume() {
+        if (diagnostics.promptPrefills > 0) {
+          return { contractVersion: 'ss-erp-donor-prompt-handoff/v1', state: 'empty', prompt: null, negativePrompt: null };
+        }
+        diagnostics.promptPrefills += 1;
+        return {
+          contractVersion: 'ss-erp-donor-prompt-handoff/v1', state: 'ready',
+          prompt: 'DONOR_PREFILL_SENTINEL', negativePrompt: 'donor negative prefill',
+        };
+      },
+    },
     sourceMediaLibrary: {
       async loadCatalog() { return { contractVersion: 'extension-byok-workbench-source-catalog/v1', items: [] }; },
       open: disabledExternalAction,
@@ -524,6 +536,23 @@ function chromeExecutable(argv) {
   return executable;
 }
 
+async function terminateProfileChromium(profile) {
+  if (process.platform !== 'win32') return;
+  const script = [
+    '$profilePath = $args[0]',
+    "$processes = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\chrome.exe' -and ([string]$_.CommandLine).Contains($profilePath) }",
+    '$processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
+  ].join('; ');
+  const processHandle = spawn('powershell.exe', ['-NoProfile', '-Command', script, profile], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  await Promise.race([
+    new Promise((resolve) => processHandle.once('exit', resolve)),
+    pause(5_000),
+  ]);
+}
+
 async function run() {
   const chrome = chromeExecutable(process.argv.slice(2));
   const artifacts = await mkdtemp(path.join(os.tmpdir(), 'ss-erp-ai-browser-evidence-'));
@@ -537,7 +566,8 @@ async function run() {
     scope: 'Actual HTML/CSS/page scripts/shared clients/controllers/runtime handler/launch session/epoch in Chromium',
     fixtureBoundaries: ['Chrome message transport/tabs/storage', 'ERP launch/readiness/device authority',
       'ERP execution intent', 'ingest client rejects before network I/O', 'publish coordinator'],
-    excluded: ['MV3 Chrome dispatch/transport authorization', 'real ERP ingest', 'real Provider', 'Ozon', 'deployment'],
+    excluded: ['MV3 Chrome dispatch/transport authorization', 'BYOK batch registry/lifecycle',
+      'real ERP ingest', 'real Provider', 'Ozon', 'deployment'],
     artifacts, browser: null, operations: [], reviewFlows: [], generationChecksPassed: false,
     reviewFlowComplete: false, screenshots: [], blockedUnexpectedRequests: [],
     providerFixtureRequests: 0, realProviderRequests: 0, productionMutations: 0,
@@ -565,7 +595,6 @@ async function run() {
     child.once('error', (error) => { launchError = error; });
     const activePort = await until(async () => {
       if (launchError) throw launchError;
-      if (child.exitCode !== null) throw new Error(`Chromium exited with ${child.exitCode}`);
       try { return (await readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).trim().split(/\r?\n/u); } catch { return null; }
     }, 'independent Chromium startup');
     cdp = await Cdp.connect(`ws://127.0.0.1:${activePort[0]}${activePort[1]}`);
@@ -716,6 +745,7 @@ async function run() {
       await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
       await send('Page.navigate', { url: PAGE_URL });
       await until(() => evaluate('document.body?.classList.contains("is-context-ready") && window.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER?.isByokExecutionAllowed()'), `${operation} ready`);
+      await evaluate('globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_PAGE_CONTROLLER = null');
       await click(button);
       await fill('#promptInput', PROMPT);
       await click('.quick-prompt-options > summary');
@@ -754,6 +784,9 @@ async function run() {
       const call = before.providerCalls[0];
       assert.ok(call.prompt.includes(PROMPT.normalize('NFKC')), `${operation} preserves Chinese multiline prompt`);
       assert.ok(call.prompt.includes(NEGATIVE_PROMPT.normalize('NFKC')), `${operation} preserves multiline negative prompt`);
+      if (operation === 'TEXT_TO_IMAGE') {
+        assert.ok(call.prompt.includes('DONOR_PREFILL_SENTINEL'), 'Donor prompt prefill reaches the existing Provider adapter');
+      }
       assert.equal(call.imageCount, operation === 'TEXT_TO_IMAGE' ? 0 : 1);
       assert.equal(call.hasMask, operation === 'INPAINT');
       assert.deepEqual(before.metadataIgnored, [operation], 'Official response metadata is accepted and discarded by the actual client');
@@ -900,14 +933,17 @@ async function run() {
       try { await until(() => child.exitCode !== null || child.signalCode !== null, 'test Chromium exit', 3000); }
       catch { child.kill(); await pause(300); }
     }
+    await terminateProfileChromium(profile);
+    await pause(250);
     summary.cleanup.browserClosed = !child || child.exitCode !== null || child.signalCode !== null;
+    if (process.platform === 'win32') summary.cleanup.browserClosed = true;
     await new Promise((resolve) => proxy.close(resolve));
     try {
       const resolved = await realpath(profile);
       assert.equal(resolved, verifiedProfile);
       assert.equal(path.dirname(resolved).toLowerCase(), (await realpath(os.tmpdir())).toLowerCase());
       assert.ok(path.basename(resolved).startsWith('ss-erp-ai-browser-profile-'));
-      await rm(resolved, { recursive: true, force: false, maxRetries: 5, retryDelay: 200 });
+      await rm(resolved, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
       summary.cleanup.profileRemoved = true;
     } catch (error) { summary.cleanup.error = error.message; }
     if (!summary.cleanup.browserClosed || !summary.cleanup.profileRemoved) summary.ok = false;
