@@ -279,6 +279,10 @@ function frameByUrl(frameTree, url) {
   return null;
 }
 
+function contextKey(sessionId, frameId) {
+  return `${sessionId}\0${frameId}`;
+}
+
 async function run() {
   const options = parseDonorWorkbenchLiveCanaryOptions(process.argv.slice(2), { repoRoot: ROOT });
   assert.equal(gitOutput(['rev-parse', 'HEAD']), options.gitCommit,
@@ -514,6 +518,7 @@ async function run() {
     const frameNavigations = new Map();
     const extensionContexts = new Map();
     const iframeTargets = new Map();
+    let manualInspectionTargetId = '';
     let iframeSession = '';
     let iframeContextId = 0;
     const evaluate = async (expression) => {
@@ -544,7 +549,7 @@ async function run() {
       if (!context?.id || context.origin !== `chrome-extension://${extensionId}`
         || !context.auxData?.frameId || context.auxData.isDefault !== true) return;
       const observedSession = sessionId || pageSession;
-      extensionContexts.set(context.auxData.frameId, {
+      extensionContexts.set(contextKey(observedSession, context.auxData.frameId), {
         sessionId: observedSession,
         contextId: context.id,
       });
@@ -561,6 +566,7 @@ async function run() {
     cdp.on('Target.attachedToTarget', (event) => {
       const childSession = event?.sessionId;
       if (!childSession || event.targetInfo?.type !== 'iframe') return;
+      if (event.targetInfo.targetId === manualInspectionTargetId) return;
       iframeTargets.set(childSession, {
         sessionId: childSession,
         targetId: event.targetInfo.targetId || '',
@@ -664,23 +670,51 @@ async function run() {
     ));
 
     await settleObservers();
-    const iframeContext = await until(async () => {
-      const expectedUrl = `chrome-extension://${extensionId}/pages/source-workbench-shell.html`;
-      const oopif = [...iframeTargets.values()].find((targetInfo) => targetInfo.url === expectedUrl);
-      if (oopif) {
-        const rootFrame = (await cdp.send('Page.getFrameTree', {}, oopif.sessionId)).frameTree?.frame;
-        if (rootFrame?.url !== expectedUrl || rootFrame.id !== oopif.targetId
-          || rootFrame.parentId !== positiveNavigation.frameId) {
-          throw new Error('donor OOPIF frame identity is invalid');
-        }
-        return extensionContexts.get(rootFrame.id) || null;
+    const expectedIframeUrl = `chrome-extension://${extensionId}/pages/source-workbench-shell.html`;
+    const pageTree = (await send('Page.getFrameTree')).frameTree;
+    const sameProcessFrame = frameByUrl(pageTree, expectedIframeUrl);
+    let iframeContext;
+    if (sameProcessFrame) {
+      if (sameProcessFrame.parentId !== positiveNavigation.frameId) {
+        throw new Error('donor same-process frame identity is invalid');
       }
-      const tree = (await send('Page.getFrameTree')).frameTree;
-      const frame = frameByUrl(tree, expectedUrl);
-      return frame && frame.parentId === positiveNavigation.frameId
-        ? extensionContexts.get(frame.id) || null
-        : null;
-    }, 'exact donor extension iframe context', 30_000);
+      iframeContext = await until(
+        () => extensionContexts.get(contextKey(pageSession, sameProcessFrame.id)) || null,
+        'exact same-process donor iframe context',
+        30_000,
+      );
+    } else {
+      const oopif = await until(
+        () => [...iframeTargets.values()].find((targetInfo) => targetInfo.url === expectedIframeUrl)
+          || null,
+        'exact donor OOPIF target',
+        10_000,
+      );
+      manualInspectionTargetId = oopif.targetId;
+      let inspectionSession;
+      try {
+        inspectionSession = (await cdp.send('Target.attachToTarget', {
+          targetId: oopif.targetId,
+          flatten: true,
+        })).sessionId;
+      } finally {
+        manualInspectionTargetId = '';
+      }
+      extensionSessions.add(inspectionSession);
+      await cdp.send('Runtime.enable', {}, inspectionSession);
+      await cdp.send('Network.enable', {}, inspectionSession);
+      await cdp.send('Page.enable', {}, inspectionSession);
+      const rootFrame = (await cdp.send('Page.getFrameTree', {}, inspectionSession)).frameTree?.frame;
+      if (rootFrame?.url !== expectedIframeUrl || rootFrame.id !== oopif.targetId
+        || rootFrame.parentId !== positiveNavigation.frameId) {
+        throw new Error('donor OOPIF inspection frame identity is invalid');
+      }
+      iframeContext = await until(
+        () => extensionContexts.get(contextKey(inspectionSession, rootFrame.id)) || null,
+        'exact donor OOPIF inspection context',
+        30_000,
+      );
+    }
     iframeSession = iframeContext.sessionId;
     iframeContextId = iframeContext.contextId;
     const iframeEvaluate = async (expression) => {
