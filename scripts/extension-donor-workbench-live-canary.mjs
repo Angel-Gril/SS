@@ -398,6 +398,7 @@ async function run() {
     })).sessionId;
     const send = (method, params = {}) => cdp.send(method, params, pageSession);
     const lifecycleEvents = new Set();
+    const frameNavigations = new Map();
     let iframeSession = '';
     let iframeReadyResolve;
     let iframeReadyReject;
@@ -424,6 +425,13 @@ async function run() {
     cdp.on('Page.lifecycleEvent', (event, sessionId) => {
       if (sessionId !== pageSession || !event?.frameId || !event?.loaderId || !event?.name) return;
       lifecycleEvents.add(`${event.frameId}\0${event.loaderId}\0${event.name}`);
+    });
+    cdp.on('Page.frameNavigated', (event, sessionId) => {
+      if (sessionId !== pageSession || !event?.frame?.id || event.frame.parentId) return;
+      frameNavigations.set(event.frame.id, {
+        loaderId: event.frame.loaderId || '',
+        url: event.frame.url || '',
+      });
     });
     iframeObserverArmed = true;
     cdp.on('Target.attachedToTarget', (event) => {
@@ -475,13 +483,19 @@ async function run() {
       if (!navigation.frameId || !navigation.loaderId) {
         throw new Error(`${label} navigation did not create a document loader`);
       }
+      const finalNavigation = await until(() => {
+        const observed = frameNavigations.get(navigation.frameId);
+        return observed?.loaderId && observed.url === url ? observed : null;
+      }, `${label} exact frame navigation`, 45_000);
       await until(
-        () => lifecycleEvents.has(`${navigation.frameId}\0${navigation.loaderId}\0load`),
-        `${label} lifecycle load`,
+        () => lifecycleEvents.has(
+          `${navigation.frameId}\0${finalNavigation.loaderId}\0DOMContentLoaded`,
+        ),
+        `${label} lifecycle DOMContentLoaded`,
         45_000,
       );
       await until(
-        () => evaluate(`document.readyState === "complete" && location.href === ${JSON.stringify(url)}`),
+        () => evaluate(`document.readyState !== "loading" && location.href === ${JSON.stringify(url)}`),
         `${label} exact document readiness`,
         15_000,
       );

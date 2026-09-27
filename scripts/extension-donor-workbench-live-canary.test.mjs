@@ -207,6 +207,17 @@ test('waits for the resumed Worker context before asserting manifest identity', 
   assert.match(source, /release-bound Worker identity[^]*10_000/u);
 });
 
+test('binds navigation readiness to the final exact-URL document loader', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  assert.match(source, /Page\.frameNavigated/u);
+  assert.match(source, /observed\.url === url/u);
+  assert.match(source, /finalNavigation\.loaderId[^]*DOMContentLoaded/u);
+  assert.doesNotMatch(source, /navigation\.loaderId\\0load/u);
+});
+
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {
   const extensionId = 'a'.repeat(32);
   const workerSession = 'worker-session';
