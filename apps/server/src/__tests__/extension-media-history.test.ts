@@ -39,6 +39,7 @@ async function routeApp(input: {
   loadMediaHistory?: () => Promise<ReturnType<typeof historyResult>>;
 }) {
   const loadStatus = vi.fn();
+  const createDraft = vi.fn();
   const loadMediaHistory = vi.fn(input.loadMediaHistory || (async () => historyResult()));
   const evaluate = vi.fn(async () => capability(input.enabled !== false));
   const app = Fastify();
@@ -52,7 +53,7 @@ async function routeApp(input: {
       };
     },
     featureFlags: { evaluate },
-    service: { loadStatus, loadMediaHistory },
+    service: { loadStatus, loadMediaHistory, createDraft },
   });
   await app.ready();
   return { app, evaluate, loadMediaHistory };

@@ -98,6 +98,10 @@
     'ss-erp:source-listing-workbench-ai-image-suite-command',
   ]);
 
+  var SOURCE_PRODUCT_MUTATION_TYPES = setOf([
+    'ss-erp:source-listing-workbench-draft-create',
+  ]);
+
   var SOURCE_AI_IMAGE_SUITE_RELAY_TYPES = setOf([
     'ss-erp:source-listing-workbench-ai-image-suite-relay',
   ]);
@@ -269,6 +273,7 @@
     SOURCE_MEDIA_EDITOR_OPEN_TYPES,
     SOURCE_MEDIA_EDITOR_PAGE_TYPES,
     SOURCE_PAGE_TYPES,
+    SOURCE_PRODUCT_MUTATION_TYPES,
     SOURCE_AI_IMAGE_SUITE_TYPES,
     SOURCE_AI_IMAGE_SUITE_RELAY_TYPES,
     SOURCE_AI_WORKBENCH_LAUNCH_TYPES,
@@ -398,6 +403,7 @@
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
+      && !SOURCE_PRODUCT_MUTATION_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_RELAY_TYPES.has(messageType)
       && !SOURCE_AI_WORKBENCH_LAUNCH_TYPES.has(messageType);
@@ -407,6 +413,7 @@
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
+      && !SOURCE_PRODUCT_MUTATION_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
       && !SOURCE_AI_IMAGE_SUITE_RELAY_TYPES.has(messageType)
       && !SOURCE_AI_WORKBENCH_LAUNCH_TYPES.has(messageType);
@@ -414,7 +421,8 @@
     if (kind === 'official') return OFFICIAL_PAGE_TYPES.has(messageType);
     if (kind === 'ozon') return OZON_PAGE_TYPES.has(messageType);
     if (kind === 'source') {
-      if (SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+      if (SOURCE_PRODUCT_MUTATION_TYPES.has(messageType)
+        || SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
         || SOURCE_AI_WORKBENCH_LAUNCH_TYPES.has(messageType)) {
         var sourceUrl = parseSenderUrl(sender);
         return isSourceProductPageUrl(sourceUrl)

@@ -6335,6 +6335,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'ss-erp:source-listing-workbench-draft-create') {
+    Promise.resolve().then(async () => {
+      const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+      const platform = sourceWorkflowPlatform(message.platform);
+      const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      if (!handoff || !sourceProductId || !platform
+        || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform
+        || sourceWorkflowHandoffText(message.snapshotId, 200) !== handoff.snapshotId) {
+        throw new Error('没有可继续的 ERP 来源商品记录');
+      }
+      const shopId = sourceWorkflowHandoffText(message.shopId, 200);
+      const selectedSkuKeys = Array.isArray(message.selectedSkuKeys)
+        ? message.selectedSkuKeys.map((value) => sourceWorkflowHandoffText(value, 500)).filter(Boolean)
+        : [];
+      if (!shopId || !selectedSkuKeys.length || selectedSkuKeys.length > 100) {
+        throw new Error('店铺草稿参数无效');
+      }
+      const created = await getSourceListingWorkflowClient().createDraft({
+        snapshotId: handoff.snapshotId,
+        supplyGoodsId: handoff.supplyGoodsId,
+        shopId,
+        selectedSkuKeys,
+      });
+      return { handoff, result: created };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE) {
     Promise.resolve().then(async () => {
       const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);

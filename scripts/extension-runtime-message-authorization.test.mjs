@@ -379,6 +379,40 @@ test('allows the unified AI workbench launcher only from an exact supported sour
   }
 });
 
+test('allows source draft creation only from an exact supported source-product page', () => {
+  const { policy } = loadApi();
+  const type = 'ss-erp:source-listing-workbench-draft-create';
+  const sourceSender = (url) => ({
+    id: extensionId,
+    url,
+    documentUrl: url,
+    origin: new URL(url).origin,
+    frameId: 0,
+    tab: { id: 12, url },
+    documentId: 'source-document-1',
+  });
+  assert.equal(policy.isKnownRuntimeMessageType(type), true);
+  for (const url of [
+    'https://detail.1688.com/offer/123.html',
+    'https://mobile.yangkeduo.com/goods.html?goods_id=456',
+    'https://item.taobao.com/item.htm?id=789',
+    'https://detail.tmall.com/item.htm?id=987',
+  ]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sourceSender(url), extensionId), true);
+  }
+  for (const sender of [
+    sourceSender('https://s.1688.com/selloffer/offer_search.htm'),
+    sourceSender('https://www.taobao.com/'),
+    extensionSender('/pages/ai-image-workbench.html'),
+    extensionSender('/pages/settings.html'),
+    extensionSender('/pages/popup.html'),
+    { id: extensionId, url: 'https://app.ss-erp.com/products' },
+    { id: extensionId, url: 'https://www.ozon.ru/product/1' },
+  ]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false);
+  }
+});
+
 test('permits one exact settings-to-background key request without returning or echoing the key', async () => {
   const { api } = loadApi();
   const secret = 'sk-session-secret-sentinel';

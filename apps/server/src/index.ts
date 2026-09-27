@@ -2838,6 +2838,8 @@ if (isExtensionDeviceAuthEnabled()) {
     prefix: '/api/extension-device/source-workbench',
     service: createExtensionSourceWorkbenchService({
       production: process.env.NODE_ENV === 'production',
+      ownership: sourceListingWorkflowContext,
+      workflow: sourceListingWorkflowService,
       loadAllowedPreviewOrigins: async () => {
         const config = await getRuntimeConfigForStorage();
         return [config.localBaseUrl, config.oss?.cdnDomain]

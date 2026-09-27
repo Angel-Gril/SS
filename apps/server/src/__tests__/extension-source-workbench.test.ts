@@ -44,7 +44,18 @@ async function buildRouteApp(input: {
     items: [],
     nextCursor: null,
   }));
-  const evaluate = vi.fn(async () => decision(input.enabled !== false));
+  const createDraft = vi.fn(async () => ({
+    id: 'draft-1', shopId: 'shop-1', stage: 'CATEGORY_REVIEW', status: 'ACTIVE',
+    runState: 'ACTIVE', revision: 1, draftVersion: 1, selectedSkuCount: 1,
+    mediaAssignmentCount: 0, validationStatus: 'NOT_RUN', blockerCount: 0,
+    warningCount: 0, blockers: [], warnings: [], updatedAt: '2026-07-21T03:00:00.000Z',
+  }));
+  const evaluate = vi.fn(async (feature: string) => ({
+    ...decision(input.enabled !== false),
+    ...(feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { listingStage: input.enabled === false ? 'off' as const : 'dual_read' as const }
+      : {}),
+  }));
   const app = Fastify();
   await app.register(extensionSourceWorkbenchRoutes, {
     prefix: '/api/extension-device/source-workbench',
@@ -59,10 +70,10 @@ async function buildRouteApp(input: {
       };
     },
     featureFlags: { evaluate },
-    service: { loadStatus, loadMediaHistory },
+    service: { loadStatus, loadMediaHistory, createDraft },
   });
   await app.ready();
-  return { app, loadStatus, loadMediaHistory, evaluate };
+  return { app, loadStatus, loadMediaHistory, createDraft, evaluate };
 }
 
 describe('extension source workbench route', () => {
@@ -172,9 +183,118 @@ describe('extension source workbench route', () => {
       await app.close();
     }
   });
+
+  it('creates an owned draft through the existing workflow owner for an exact write-scoped shop', async () => {
+    const { app, createDraft, evaluate } = await buildRouteApp({
+      scopes: ['listing:review', 'listing:write'],
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/drafts',
+        payload: {
+          snapshotId: 'snapshot-1',
+          supplyGoodsId: 'goods-1',
+          shopId: 'shop-1',
+          selectedSkuKeys: ['sku-1'],
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.json()).toEqual({
+        code: 1,
+        data: expect.objectContaining({ id: 'draft-1', revision: 1, draftVersion: 1 }),
+      });
+      expect(evaluate).toHaveBeenCalledWith('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+        ownerUserId: 'owner-1', shopId: 'shop-1', deviceSessionId: 'session-1',
+      });
+      expect(evaluate).toHaveBeenCalledWith('SOURCE_LISTING_WORKFLOW', {
+        ownerUserId: 'owner-1', shopId: 'shop-1', platform: 'OZON',
+      });
+      expect(createDraft).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1',
+        snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', selectedSkuKeys: ['sku-1'],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects draft creation without write scope, an exact shop grant, or an enabled listing stage', async () => {
+    const readOnly = await buildRouteApp({ scopes: ['listing:review'] });
+    const wrongShop = await buildRouteApp({
+      scopes: ['listing:review', 'listing:write'], allowedShopIds: ['shop-2'],
+    });
+    const dark = await buildRouteApp({
+      enabled: false, scopes: ['listing:review', 'listing:write'],
+    });
+    const request = {
+      method: 'POST' as const,
+      url: '/api/extension-device/source-workbench/drafts',
+      payload: { snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1', selectedSkuKeys: ['sku-1'] },
+    };
+    try {
+      expect((await readOnly.app.inject(request)).statusCode).toBe(403);
+      expect((await wrongShop.app.inject(request)).statusCode).toBe(403);
+      expect((await dark.app.inject(request)).statusCode).toBe(409);
+      expect(readOnly.createDraft).not.toHaveBeenCalled();
+      expect(wrongShop.createDraft).not.toHaveBeenCalled();
+      expect(dark.createDraft).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([readOnly.app.close(), wrongShop.app.close(), dark.app.close()]);
+    }
+  });
 });
 
 describe('extension source workbench status service', () => {
+  it('delegates draft identity to the ownership resolver and existing workflow owner', async () => {
+    const ownership = {
+      assertOwnedTarget: vi.fn(async () => ({
+        shopId: 'shop-canonical',
+        supplyGoodsId: 'goods-canonical',
+        sourceCaptureSnapshotId: 'snapshot-canonical',
+        sourceCaptureHash: 'capture-hash-canonical',
+        selectedSkuKeys: ['sku-canonical'],
+      })),
+    };
+    const workflow = {
+      createDraft: vi.fn(async () => ({
+        id: 'draft-1', ownerUserId: 'owner-1', shopId: 'shop-canonical',
+        supplyGoodsId: 'goods-canonical', sourceCaptureSnapshotId: 'snapshot-canonical',
+        sourceCaptureHash: 'capture-hash-canonical', selectedSkuKeys: ['sku-canonical'],
+        stage: 'CATEGORY_REVIEW', status: 'ACTIVE', runState: 'ACTIVE', revision: 1,
+        draftVersion: 1, media: { assignments: [] }, validation: { status: 'NOT_RUN' },
+        blockers: [], warnings: [], updatedAt: '2026-07-21T03:00:00.000Z',
+      })),
+    };
+    const service = createExtensionSourceWorkbenchService({
+      ownership: ownership as never,
+      workflow: workflow as never,
+    });
+
+    const result = await service.createDraft({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-requested',
+      snapshotId: 'snapshot-requested', supplyGoodsId: 'goods-requested',
+      selectedSkuKeys: ['sku-alias'],
+    });
+
+    expect(ownership.assertOwnedTarget).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', shopId: 'shop-requested', supplyGoodsId: 'goods-requested',
+      sourceCaptureSnapshotId: 'snapshot-requested', selectedSkuKeys: ['sku-alias'],
+    });
+    expect(workflow.createDraft).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-canonical',
+      supplyGoodsId: 'goods-canonical', sourceCaptureSnapshotId: 'snapshot-canonical',
+      sourceCaptureHash: 'capture-hash-canonical', selectedSkuKeys: ['sku-canonical'],
+    });
+    expect(result).toMatchObject({
+      id: 'draft-1', shopId: 'shop-canonical', revision: 1, draftVersion: 1,
+      selectedSkuCount: 1, mediaAssignmentCount: 0,
+    });
+    expect(JSON.stringify(result)).not.toContain('capture-hash-canonical');
+  });
+
   it('returns bounded fields and queries only the current listing revision and draft version', async () => {
     const client = {
       sourceCaptureSnapshot: {

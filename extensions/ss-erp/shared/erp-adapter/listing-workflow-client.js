@@ -1214,6 +1214,29 @@
       throw new TypeError('source workflow transport is required');
     }
     return {
+      async createDraft(input) {
+        var snapshotId = identifier(input && input.snapshotId, 'snapshotId');
+        var supplyGoodsId = identifier(input && input.supplyGoodsId, 'supplyGoodsId');
+        var shopId = identifier(input && input.shopId, 'shopId');
+        var selectedSkuKeys = Array.isArray(input && input.selectedSkuKeys)
+          ? input.selectedSkuKeys.map(function (value) { return identifier(value, 'selectedSkuKey', 500); })
+          : [];
+        if (!selectedSkuKeys.length || selectedSkuKeys.length > 100) {
+          throw new TypeError('selectedSkuKeys is invalid');
+        }
+        var response = await transport.post(
+          '/api/extension-device/source-workbench/drafts',
+          { snapshotId: snapshotId, supplyGoodsId: supplyGoodsId, shopId: shopId, selectedSkuKeys: selectedSkuKeys },
+          { requiredScope: 'listing:write' },
+        );
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var envelope = record(response.body);
+        var data = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (!data || !validListingItem(data) || data.shopId !== shopId) {
+          throw new Error('invalid source listing draft response');
+        }
+        return { state: 'created', draft: data };
+      },
       async getStatus(input) {
         var snapshotId = identifier(input && input.snapshotId, 'snapshotId');
         var supplyGoodsId = identifier(input && input.supplyGoodsId, 'supplyGoodsId');

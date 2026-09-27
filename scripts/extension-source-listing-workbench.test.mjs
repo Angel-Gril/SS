@@ -84,6 +84,7 @@ assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-confirmation-coordinator\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-mutation-intent\.js['"]\)/);
 assert.match(worker, /ss-erp:source-listing-workbench-status/);
+assert.match(worker, /ss-erp:source-listing-workbench-draft-create/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite/);
@@ -170,6 +171,7 @@ assert.match(worker, /SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS\s*=\s*24\s*\*\s*60
 assert.match(worker, /draftRevision: listing\.revision/);
 assert.match(worker, /crypto\.getRandomValues/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
+assert.match(policy, /ss-erp:source-listing-workbench-draft-create/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-history/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
 assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite/);
@@ -877,6 +879,42 @@ assert.equal(requests[0].init.headers.Authorization, 'Bearer device-access-token
 assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.signal instanceof AbortSignal, true);
+
+const draftRequests = [];
+const draftClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('draft client must not GET'); },
+    async post(path, body, options) {
+      draftRequests.push({ path, body, options });
+      return {
+        state: 'response', status: 201,
+        body: {
+          code: 1,
+          data: {
+            id: 'draft-1', shopId: 'shop-1', stage: 'CATEGORY_REVIEW', status: 'ACTIVE',
+            runState: 'ACTIVE', revision: 1, draftVersion: 1, selectedSkuCount: 1,
+            mediaAssignmentCount: 0, validationStatus: 'NOT_RUN', blockerCount: 0,
+            warningCount: 0, blockers: [], warnings: [], updatedAt: '2026-07-21T00:00:00.000Z',
+          },
+        },
+      };
+    },
+  },
+});
+const draftCreated = await draftClient.createDraft({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  selectedSkuKeys: ['sku-1'], ownerUserId: 'forged-owner', sourceCaptureHash: 'forged-hash',
+});
+assert.equal(draftCreated.state, 'created');
+assert.equal(draftCreated.draft.id, 'draft-1');
+assert.deepEqual(JSON.parse(JSON.stringify(draftRequests)), [{
+  path: '/api/extension-device/source-workbench/drafts',
+  body: {
+    snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+    selectedSkuKeys: ['sku-1'],
+  },
+  options: { requiredScope: 'listing:write' },
+}]);
 
 const historyRequests = [];
 const historyClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({

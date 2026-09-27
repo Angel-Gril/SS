@@ -3,6 +3,8 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
 import { canUseAiImageJobOperation } from './ai-image-provider-admission.js';
+import type { SourceListingWorkflowContextResolver } from './source-listing-workflow-context.js';
+import type { SourceListingWorkflowService } from './source-listing-workflow.js';
 
 export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
@@ -29,7 +31,7 @@ interface ExtensionSourceWorkbenchClient {
 export class ExtensionSourceWorkbenchError extends Error {
   constructor(
     public readonly code: 'SOURCE_WORKBENCH_NOT_FOUND' | 'SOURCE_WORKBENCH_INVALID' | 'SOURCE_WORKBENCH_STALE',
-    public readonly statusCode: 404 | 400 | 409,
+    public readonly statusCode: 404 | 400 | 409 | 422,
     message: string,
   ) {
     super(message);
@@ -339,6 +341,26 @@ function listingSummary(row: any) {
   };
 }
 
+function createdListingSummary(draft: any) {
+  return {
+    id: String(draft.id),
+    shopId: String(draft.shopId),
+    stage: String(draft.stage),
+    status: String(draft.status || 'ACTIVE'),
+    runState: String(draft.runState || 'UNKNOWN'),
+    revision: Number(draft.revision),
+    draftVersion: Number(draft.draftVersion),
+    selectedSkuCount: array(draft.selectedSkuKeys).length,
+    mediaAssignmentCount: array(draft.media?.assignments).length,
+    validationStatus: boundedText(draft.validation?.status, 80) || 'UNKNOWN',
+    blockerCount: array(draft.blockers).length,
+    warningCount: array(draft.warnings).length,
+    blockers: issues(draft.blockers),
+    warnings: issues(draft.warnings),
+    updatedAt: isoDate(draft.updatedAt),
+  };
+}
+
 interface ExtensionMediaCommandContext {
   shopId: string;
   listingWorkflowId: string;
@@ -439,12 +461,57 @@ function mediaActionable(row: any) {
 
 export function createExtensionSourceWorkbenchService(options: {
   client?: ExtensionSourceWorkbenchClient;
+  ownership?: Pick<SourceListingWorkflowContextResolver, 'assertOwnedTarget'>;
+  workflow?: Pick<SourceListingWorkflowService, 'createDraft'>;
   loadAllowedPreviewOrigins?(): Promise<string[]>;
   production?: boolean;
 } = {}) {
   const client = options.client || prisma as unknown as ExtensionSourceWorkbenchClient;
 
   return {
+    async createDraft(input: {
+      ownerUserId: string;
+      actorUserId: string;
+      shopId: string;
+      snapshotId: string;
+      supplyGoodsId: string;
+      selectedSkuKeys: string[];
+    }) {
+      if (!options.ownership || !options.workflow) {
+        throw new ExtensionSourceWorkbenchError(
+          'SOURCE_WORKBENCH_INVALID', 400, 'Draft creation owner is unavailable',
+        );
+      }
+      try {
+        const owned = await options.ownership.assertOwnedTarget({
+          ownerUserId: identifier(input.ownerUserId, 'ownerUserId'),
+          shopId: identifier(input.shopId, 'shopId'),
+          supplyGoodsId: identifier(input.supplyGoodsId, 'supplyGoodsId'),
+          sourceCaptureSnapshotId: identifier(input.snapshotId, 'snapshotId'),
+          selectedSkuKeys: input.selectedSkuKeys,
+        });
+        const draft = await options.workflow.createDraft({
+          ownerUserId: input.ownerUserId,
+          actorUserId: identifier(input.actorUserId, 'actorUserId'),
+          shopId: owned.shopId,
+          supplyGoodsId: owned.supplyGoodsId,
+          sourceCaptureSnapshotId: owned.sourceCaptureSnapshotId,
+          sourceCaptureHash: owned.sourceCaptureHash,
+          selectedSkuKeys: owned.selectedSkuKeys,
+        });
+        return createdListingSummary(draft);
+      } catch (error: any) {
+        if (error instanceof ExtensionSourceWorkbenchError) throw error;
+        const statusCode = Number(error?.statusCode);
+        throw new ExtensionSourceWorkbenchError(
+          statusCode === 404 ? 'SOURCE_WORKBENCH_NOT_FOUND'
+            : statusCode === 409 ? 'SOURCE_WORKBENCH_STALE' : 'SOURCE_WORKBENCH_INVALID',
+          statusCode === 404 ? 404 : statusCode === 409 ? 409 : statusCode === 422 ? 422 : 400,
+          String(error?.message || 'Draft creation failed'),
+        );
+      }
+    },
+
     async loadStatus(input: {
       ownerUserId: string;
       allowedShopIds: string[];
