@@ -808,3 +808,10 @@
 - 已复现的 owner 缺口是 transport 将所有 HTTP `410` 无条件升级为设备撤销。hosted preview ticket、command grant 等业务资源过期会错误调用 `clearIfCurrent`；当前本地修复改为按服务端 `errorCode` 分类，明确 device identity 错误继续 fail-closed，业务 `401/410` 只返回 `http_error`。
 - 新增组合回归覆盖合法 claim、业务 `410`、Worker manager 重建和同一 credential 继续 `beginOperation`。定向 48 项、受影响 hosted/ERP 15 项、扩展 verifier `462/462`、workspace typecheck 与 ESLint 通过。
 - 本轮源码随本节所在提交固化但尚未部署；没有 Provider/Ozon 写入、官网 CAS 或新增费用。受控 reauthorization 后 COM pilot 当前 active session 为 `42f4d334-...` 与 `90238535-...`，后续部署 expectation 必须重读当前 ID。下一步从该 clean commit 重跑 offline、候选构建/签名/双区部署，再重新取得 normal ERP suite、QA04、区域 canary/approval；禁止复用 `04f9ff9e` 原件冒充新提交。
+
+## 2026-09-27 donor D4.3 预发布停止点
+
+- D4.3 的构建、签名、部署、真实商品 allowlist canary、官网切换和 rollback 已获明确授权；不包含新的 Provider 费用或 Ozon 发布。打包 owner 已修复 donor WAR 边界，正式 verifier 的 cloud/local donor shell 只保留五个来源商品匹配。
+- release-bound live canary 已绑定 Ed25519 signature、canonical evidence、cloud ZIP/解包 tree、受监控 Worker 启动、真实正负商品指纹、flag-only/allowlist/rollback 和扩展 mutation。独立审查在实际运行前关闭了 worker/iframe/content-script 网络盲区和 fallback 商品假阳性。
+- `1.0.366-1.0.370` 均在本地 fail-closed 调试中废弃，未上传或部署。最终尝试 `397d3ac48eca0fed1048aa593609dbc2334fb101 / 1.0.370` 能绑定签名候选并到达真实 1688 exact frame/loader，但 clean headless Chrome `153.0.8010.48` 的文档持续为 `readyState=loading`；三种 loader/readiness 方案均超时，触发重复失败停止条件。没有 PASS 回执、Provider/Ozon/ERP 业务 mutation、VPS 部署、website approval 或 CAS。
+- 正式 QA04 还独立受 `QA04_ERP_SOURCE_CHANGED` 阻断，因为 donor 迁移修改了服务端 draft/media/billing owner；最终提交需要新的 normal 两图 SUITE 原件及独立费用授权。当前 COM/CN 应用和官网继续安全服务 `6378b62e / 1.0.364`。

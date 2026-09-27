@@ -1,11 +1,18 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 donor 工作台 D4.3 授权后预发布阻塞
+
+- 用户已明确授权 D4.3 的构建、签名、双区部署、真实商品 allowlist canary、官网切换与 rollback 验证；该授权不包含新的 Provider 付费请求或 Ozon 发布。实现提交 `5265107d` 修复 cloud/local 打包时 donor 单一 shell WAR 被扩成全 marketplace/ERP 来源的问题；`ad086d3b` 起新增 release-bound live canary，并在后续提交补齐受监控 Worker 启动、签名/evidence/ZIP 字节绑定、真实正负商品指纹、扩展 mutation 监听、清键 rollback 与候选清理。
+- 本地 `1.0.366` 至 `1.0.370` 候选均只用于 fail-closed 调试，从未上传或部署。最新 `397d3ac4 / 1.0.370` COM 候选 cloud/local SHA-256 为 `4a63186ea84328bc0860f54d9044337b3e7cb2c5503413b3874af3d91db090c5` / `842d7d195210bfed18d1c781f35946d79b5daf7e73915c251b8cab33f803cf0c`，evidence/signature SHA-256 为 `0225cbbb68f312f68a10b6f2d6d04537102c4974ce3b69f23df656f347491674` / `7dbf07a31fa67dca853b377a08ea8dac8686b7e87b10c26566f1c5e2a4090ab5`；它也未获 live PASS，禁止部署或重标。
+- 隔离 Chrome `153.0.8010.48` 已证明受监控 `Extensions.loadUnpacked`、候选 Worker 和最终 exact 1688 frame/loader 可建立，但 clean headless profile 在真实 `990499606077` 上持续保持 `document.readyState=loading`。依次尝试初始 loader `load`、最终 loader `DOMContentLoaded`、最终 frame-tree loader 加 readyState 三种绑定均安全超时；按停止条件不再继续修改 runner 或消耗版本。没有生成 D4.3 canary PASS 回执。
+- `6378b62e -> 397d3ac4` 同时包含服务端 draft/media/billing owner 变化，正式 QA04 明确返回 `QA04_ERP_SOURCE_CHANGED`；后续还必须在最终提交重新取得 fresh normal 两图 SUITE 证据，该 Provider 费用需要独立授权。两区生产应用和官网仍为 `6378b62e / 1.0.364`；本轮 Provider、Ozon、ERP 业务 mutation、VPS 部署、website approval 和 CAS 均为 0。
+
 ## 2026-09-27 donor 工作台 Phase 4 package gate
 
 - `D4.1` 已完成：正式 extension verifier 新增 donor 必需文件、service-worker handoff owner、content/page 脚本顺序、五个 marketplace WAR 精确来源、默认关闭和无 donor 直连 Ozon/Provider 检查，source verifier 从 `475` 升至 `490 pass`，零 failure/warning。
 - 新隔离负例会同时删除 prompt adapter、加入 `<all_urls>`、破坏默认关闭、倒置脚本并注入 Ozon fetch，要求 verifier 对五项逐一拒绝；该测试已进入 preflight。D4.1 完成时 D4.2 allowlist canary 尚未执行；当前 D4.2 已由下述独立回执关闭，D4.3 entrypoint cutover/rollback 仍未执行。
 - `D4.2` 隔离 allowlist canary 已完成：donor 除布尔 flag 外还要求最多 20 条精确 `platform:sourceProductId`；clean commit `8106c1688bc44ebce1b18269971a516910664c5a`、extension-tree SHA-256 `999c7f8199d9f7f62c12a3e5a0f92fbd4cbb8e837195b88f8f42298e249f7ee7` 上，flag-only 不注入，`1688:990499606077` 正例注入，相邻 `1688:990499606078` 负例拒绝。私有回执位于 `C:\Users\550W\AppData\Local\Temp\ss-erp-donor-mv3-evidence-9XVUf7\summary.json`。
-- 该 canary 使用精确 1688 URL 的拦截合成页面和 unpacked MV3，不是签名候选、生产部署或真实商品业务验收。D4.3 仍需独立生产 cutover 授权、同提交构建/签名/部署、真实 allowlist canary 与 rollback 证据；本轮 Provider/Ozon/生产 mutation 为 0。
+- 该 canary 使用精确 1688 URL 的拦截合成页面和 unpacked MV3，不是签名候选、生产部署或真实商品业务验收。在该 D4.2 检查点，D4.3 仍需独立生产 cutover 授权；当前授权已取得，但真实 canary 仍在本页顶部记录的浏览器停止点，尚无部署或 rollback PASS 证据。
 
 ## 2026-09-27 donor 工作台 Phase 3 设备店铺边界
 
