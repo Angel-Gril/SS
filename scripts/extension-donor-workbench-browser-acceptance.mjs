@@ -88,7 +88,31 @@ function chromeExecutable() {
   return executable;
 }
 
-function projection({ withDraft, preferredSkuKey = '' }) {
+function historyProjection(reviewStatus = 'PENDING', application = null, receipt = null) {
+  return {
+    state: 'ready', listingWorkflowId: 'draft-fixture', error: '',
+    context: {
+      snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture', shopId: 'shop-doth',
+      listingWorkflowId: 'draft-fixture', revision: 2, draftVersion: 2,
+    },
+    items: [{
+      id: 'media-history-1', operation: 'IMAGE_TO_IMAGE', status: 'SUCCEEDED',
+      reviewStatus, revision: reviewStatus === 'PENDING' ? 3 : 4,
+      contextSkuKey: 'sku-white-small', contextSlotKey: 'sku:sku-white-small:hero',
+      selectedOutputAssetId: reviewStatus === 'PENDING' ? null : 'asset-output-1',
+      outputs: [{
+        id: 'asset-output-1', url: `${IMAGE_ORIGIN}/generated.png`, mimeType: 'image/png',
+        width: 900, height: 1200,
+      }],
+      application,
+      createdAt: '2026-09-27T07:00:00.000Z', updatedAt: '2026-09-27T07:01:00.000Z',
+    }],
+    nextCursor: null,
+    receipt,
+  };
+}
+
+function projection({ withDraft, preferredSkuKey = '', history = null }) {
   return {
     contractVersion: 'ss-erp-donor-workbench/v1',
     source: {
@@ -138,6 +162,10 @@ function projection({ withDraft, preferredSkuKey = '' }) {
           }] : [],
         },
       },
+    },
+    history: history || {
+      state: 'idle', listingWorkflowId: '', error: '', context: null,
+      items: [], nextCursor: null, receipt: null,
     },
     busy: false,
     error: '',
@@ -293,7 +321,8 @@ async function run() {
 
     await evaluate(`window.__donorCommands = [];
       window.addEventListener('message', (event) => {
-        if (event.data?.type === 'OPEN_MEDIA_WORKBENCH') window.__donorCommands.push(event.data);
+        if (event.data?.contractVersion === 'ss-erp-donor-workbench/v1'
+          && typeof event.data?.type === 'string') window.__donorCommands.push(event.data);
       });`);
     await click('[data-action="open-ai-workbench"]');
     const mediaCommand = await until(async () => {
@@ -305,7 +334,11 @@ async function run() {
     assert.match(mediaCommand.promptDraft.prompt, /Green \/ Size: Large/u);
     assert.match(mediaCommand.promptDraft.negativePrompt, /watermark/u);
 
-    await postProjection(projection({ withDraft: true, preferredSkuKey: 'sku-white-small' }));
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: 'sku-white-small',
+      history: historyProjection(),
+    }));
     await until(() => evaluate(`document.querySelector('[data-role=media-sku-select]').value === 'sku-white-small'`),
       'source-selected SKU lock');
     assert.equal(await evaluate('document.querySelector("[data-role=media-sku-select]").disabled'), true);
@@ -328,6 +361,50 @@ async function run() {
     await click('[data-stage="review"]');
     await until(() => evaluate('document.querySelector("[data-view=review]").hidden === false'), 'review stage');
     assert.equal(await evaluate('document.querySelectorAll(".issue-row").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll(".review-candidate").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll(".review-candidate img").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll("[data-media-action=REVIEW_APPROVE]").length'), 1);
+    assert.equal(await evaluate('document.querySelectorAll("[data-media-action=REVIEW_REJECT]").length'), 1);
+    await click('[data-media-action="REVIEW_APPROVE"]');
+    const reviewCommand = await until(async () => {
+      const command = await evaluate(`window.__donorCommands.filter((item) => item.type === 'PREPARE_MEDIA_MUTATION').at(-1) || null`);
+      return command || null;
+    }, 'donor review command');
+    assert.deepEqual(reviewCommand, {
+      contractVersion: 'ss-erp-donor-workbench/v1', type: 'PREPARE_MEDIA_MUTATION',
+      requestId: reviewCommand.requestId, listingWorkflowId: 'draft-fixture',
+      mediaWorkflowId: 'media-history-1', outputAssetId: 'asset-output-1',
+      expectedRevision: 3, action: 'REVIEW_APPROVE',
+    });
+
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: 'sku-white-small',
+      history: historyProjection('APPROVED'),
+    }));
+    await until(() => evaluate('document.querySelectorAll("[data-media-action=APPLY_APPEND]").length === 1'),
+      'approved candidate apply action');
+    await click('[data-media-action="APPLY_APPEND"]');
+    const applyCommand = await until(async () => {
+      const command = await evaluate(`window.__donorCommands.filter((item) => item.action === 'APPLY_APPEND').at(-1) || null`);
+      return command || null;
+    }, 'donor apply command');
+    assert.equal(applyCommand.expectedRevision, 4);
+    assert.equal(applyCommand.outputAssetId, 'asset-output-1');
+
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: 'sku-white-small',
+      history: historyProjection('APPROVED', {
+        id: 'application-1', mode: 'append', state: 'APPLIED', targetId: 'draft-fixture',
+        contextSkuKey: 'sku-white-small', contextSlotKey: 'sku:sku-white-small:hero',
+        appliedAt: '2026-09-27T07:02:00.000Z', rolledBackAt: null,
+      }, {
+        kind: 'MUTATION_COMPLETED', replay: true, at: '2026-09-27T07:02:01.000Z',
+      }),
+    }));
+    await until(() => evaluate('document.querySelector("[data-role=mutation-receipt]")?.textContent.includes("幂等回放")'),
+      'idempotency replay receipt');
     await screenshot('review-desktop');
 
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });

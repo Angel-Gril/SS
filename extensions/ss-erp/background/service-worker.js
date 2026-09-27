@@ -3946,6 +3946,7 @@ async function submitSourceMediaConfirmation(nonce, sender) {
         sourceProductId: outcome.confirmation.sourceProductId,
         listingWorkflowId: outcome.confirmation.listingWorkflowId,
         resultKind: 'MUTATION_COMPLETED',
+        replay: outcome.replay === true,
       });
     } catch {}
   }

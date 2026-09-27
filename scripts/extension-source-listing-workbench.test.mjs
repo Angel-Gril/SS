@@ -96,6 +96,8 @@ assert.match(worker, /importScripts\(['"]\.\.\/shared\/donor-workbench\/prompt-h
 assert.match(worker, /getDonorPromptHandoffStore/);
 assert.match(worker, /resolvedSkuKey/);
 assert.match(worker, /getDonorPromptHandoffStore\(\)\.stage/);
+assert.match(worker, /resultKind:\s*'MUTATION_COMPLETED'/);
+assert.match(worker, /replay:\s*outcome\.replay\s*===\s*true/);
 assert.match(
   worker,
   /assertSourceCurrent:\s*assertSourceAiWorkbenchPageCurrent/u,

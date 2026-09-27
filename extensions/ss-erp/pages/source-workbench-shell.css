@@ -235,6 +235,17 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
 .issue-list { display: grid; gap: 7px; }
 .issue-row { border-left: 3px solid #d97706; background: #fff7e6; padding: 9px 11px; color: #92400e; font-size: 10px; line-height: 1.5; }
 .issue-row.is-blocker { border-left-color: #b42318; background: #fff1f1; color: #b42318; }
+.review-history-heading { margin-top: 24px; }
+.icon-command { width: 36px; height: 36px; padding: 0; font-size: 18px; }
+.history-state { margin-bottom: 10px; color: #64748b; font-size: 10px; }
+.mutation-receipt { margin-bottom: 12px; border-left: 3px solid #166534; background: #eef9f1; padding: 10px 12px; color: #14532d; font-size: 10px; }
+.review-candidates { display: grid; gap: 12px; }
+.review-candidate { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 14px; align-items: center; border-top: 1px solid #d7dce2; padding: 12px 0; }
+.review-candidate img { width: 96px; height: 96px; border: 1px solid #d7dce2; background: #fff; object-fit: contain; }
+.review-candidate-copy { min-width: 0; display: grid; gap: 4px; }
+.review-candidate-copy span { color: #64748b; font-size: 10px; overflow-wrap: anywhere; }
+.review-candidate-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.review-candidate-actions button[data-media-action="APPLY_APPEND"] { border-color: #166534; background: #166534; color: #fff; }
 
 .process-panel { display: flex; flex-direction: column; border-left: 1px solid #d7dce2; padding: 18px 16px; }
 .process-heading { border-bottom: 1px solid #d7dce2; padding-bottom: 12px; }
@@ -281,6 +292,10 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
   .product-visual { width: min(210px, 100%); }
   .projection-table { grid-template-columns: 1fr; }
   .review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .review-candidate { grid-template-columns: 72px minmax(0, 1fr); }
+  .review-candidate img { width: 72px; height: 72px; }
+  .review-candidate-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .review-candidate-actions button { flex: 1 1 100px; }
 }
 
 @media (max-width: 520px) {

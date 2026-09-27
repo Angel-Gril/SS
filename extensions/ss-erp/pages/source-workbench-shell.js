@@ -14,6 +14,7 @@
   var skuSignature = '';
   var mediaSignature = '';
   var promptSignature = '';
+  var historyRequestListingId = '';
   var stageUserSelected = false;
   var pending = new Map();
   var toastTimer = 0;
@@ -423,6 +424,89 @@
     return metric;
   }
 
+  function requestMediaHistory(force) {
+    var listing = currentListing();
+    if (!listing || projection.busy) return;
+    var history = projection.history || {};
+    if (!force && (historyRequestListingId === listing.id
+      || (history.listingWorkflowId === listing.id
+        && (history.state === 'loading' || history.state === 'ready')))) return;
+    historyRequestListingId = listing.id;
+    send('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing.id });
+  }
+
+  function mediaMutationButton(item, output, action, label, primary) {
+    var button = node('button', primary ? 'primary-command' : '', label);
+    button.type = 'button';
+    button.dataset.mediaAction = action;
+    button.disabled = projection.busy;
+    button.addEventListener('click', function (event) {
+      if (!event.isTrusted || button.disabled) return;
+      send('PREPARE_MEDIA_MUTATION', {
+        listingWorkflowId: projection.history.listingWorkflowId,
+        mediaWorkflowId: item.id,
+        outputAssetId: output.id,
+        expectedRevision: item.revision,
+        action: action,
+      });
+    });
+    return button;
+  }
+
+  function renderReviewHistory() {
+    var history = projection.history || {};
+    var listing = currentListing();
+    var receipt = one('[data-role="mutation-receipt"]');
+    if (history.receipt) {
+      receipt.hidden = false;
+      receipt.textContent = history.receipt.replay
+        ? '幂等回放已确认，草稿没有重复写入。'
+        : '审核或草稿写入已由 ERP 确认。';
+    } else {
+      receipt.hidden = true;
+      receipt.textContent = '';
+    }
+    var stateNode = one('[data-role="history-state"]');
+    var labels = { idle: '等待读取', loading: '正在读取候选', ready: '候选已同步', error: '候选读取失败' };
+    stateNode.textContent = history.error || labels[history.state] || labels.idle;
+    var list = one('[data-role="review-candidates"]');
+    clear(list);
+    if (!listing || history.state !== 'ready' || history.listingWorkflowId !== listing.id) {
+      appendEmpty(list, listing ? '候选尚未同步' : '尚未创建草稿');
+      return;
+    }
+    if (!history.items.length) appendEmpty(list, '暂无候选图');
+    history.items.forEach(function (item) {
+      item.outputs.forEach(function (output) {
+        var candidate = node('article', 'review-candidate');
+        var image = node('img');
+        image.src = output.url;
+        image.alt = item.operation + ' 候选图';
+        image.referrerPolicy = 'no-referrer';
+        replaceBrokenPreview(image, '预览不可用');
+        candidate.appendChild(image);
+        var copy = node('div', 'review-candidate-copy');
+        copy.appendChild(node('strong', '', item.operation));
+        copy.appendChild(node('span', '', item.status + ' · ' + item.reviewStatus));
+        copy.appendChild(node('span', '', [output.width, output.height].every(Number.isSafeInteger)
+          ? output.width + ' × ' + output.height : output.mimeType));
+        if (item.application) copy.appendChild(node('span', '', item.application.state === 'APPLIED'
+          ? '已写入草稿' : '写入已回滚'));
+        candidate.appendChild(copy);
+        var actions = node('div', 'review-candidate-actions');
+        if (!item.application && item.status === 'SUCCEEDED' && item.reviewStatus === 'PENDING') {
+          actions.appendChild(mediaMutationButton(item, output, 'REVIEW_APPROVE', '通过', false));
+          actions.appendChild(mediaMutationButton(item, output, 'REVIEW_REJECT', '驳回', false));
+        } else if (!item.application && item.reviewStatus === 'APPROVED'
+          && item.selectedOutputAssetId === output.id) {
+          actions.appendChild(mediaMutationButton(item, output, 'APPLY_APPEND', '追加到草稿', true));
+        }
+        if (actions.children.length) candidate.appendChild(actions);
+        list.appendChild(candidate);
+      });
+    });
+  }
+
   function renderReview() {
     var listing = currentListing();
     var summary = one('[data-role="review-summary"]');
@@ -448,6 +532,7 @@
         [entry.issue.code, entry.issue.message].filter(Boolean).join(' · '),
       ));
     });
+    renderReviewHistory();
   }
 
   function processEntry(label, detail, state, ordinal) {
@@ -528,13 +613,16 @@
     renderMedia();
     renderReview();
     renderProcess();
+    if ((activeStage === 'media' || activeStage === 'review') && currentListing()) {
+      globalThis.setTimeout(function () { requestMediaHistory(false); }, 0);
+    }
   }
 
   all('[data-stage]').forEach(function (button) {
     button.addEventListener('click', function () {
       stageUserSelected = true;
       activeStage = button.dataset.stage;
-      renderStages();
+      render();
     });
   });
   one('[data-action="close"]').addEventListener('click', function (event) {
@@ -594,6 +682,10 @@
     syncPromptDraft();
     renderMedia();
   });
+  one('[data-action="refresh-history"]').addEventListener('click', function (event) {
+    if (!event.isTrusted || projection.busy) return;
+    requestMediaHistory(true);
+  });
   one('[data-role="prompt-json"]').addEventListener('input', validatePromptJson);
   one('[data-action="copy-json"]').addEventListener('click', async function (event) {
     if (!event.isTrusted || !validatePromptJson()) return;
@@ -621,6 +713,8 @@
         return;
       }
       syncSelections();
+      if (projection.history && projection.history.listingWorkflowId === historyRequestListingId
+        && projection.history.state !== 'idle') historyRequestListingId = '';
       if (!stageUserSelected) activeStage = stageFromProjection();
       render();
       return;
@@ -629,7 +723,10 @@
       && pending.has(message.requestId)) {
       var type = pending.get(message.requestId);
       pending.delete(message.requestId);
-      showToast(message.ok === true ? (type === 'CREATE_DRAFT' ? '草稿已创建' : '操作完成')
+      if (type === 'LOAD_MEDIA_HISTORY') historyRequestListingId = '';
+      showToast(message.ok === true ? (type === 'CREATE_DRAFT' ? '草稿已创建'
+        : type === 'PREPARE_MEDIA_MUTATION' ? '已打开独立确认窗口'
+          : type === 'LOAD_MEDIA_HISTORY' ? '候选已刷新' : '操作完成')
         : message.error || '操作失败', message.ok !== true);
     }
   });

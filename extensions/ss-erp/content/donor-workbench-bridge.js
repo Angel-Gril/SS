@@ -18,6 +18,11 @@
   var open = false;
   var busy = false;
   var refreshEpoch = 0;
+  var historyEpoch = 0;
+  var currentHistory = {
+    state: 'idle', listingWorkflowId: '', error: '', context: null,
+    items: [], nextCursor: null, receipt: null,
+  };
 
   function isExactSourceProductUrl(value) {
     try {
@@ -85,18 +90,24 @@
     });
   }
 
-  function setBusy(value, error) {
-    busy = value === true;
+  function rebuildProjection(error) {
     currentProjection = Contract.createProjection({
       platform: sourcePlatform(),
       product: currentProduct,
       shops: currentProjection.shops,
       handoff: currentProjection.handoff,
       workbench: currentProjection.workbench,
+      history: currentHistory,
       busy: busy,
       error: error || '',
     });
+    currentHistory = currentProjection.history;
     publishProjection();
+  }
+
+  function setBusy(value, error) {
+    busy = value === true;
+    rebuildProjection(error);
   }
 
   async function loadProjection(options) {
@@ -144,9 +155,11 @@
         workbench: statusResult && statusResult.ok
           ? statusResult.result
           : { state: 'unavailable', reason: 'runtime_unavailable' },
+        history: currentHistory,
         busy: false,
         error: error,
       });
+      currentHistory = currentProjection.history;
       publishProjection();
       return true;
     } catch (error) {
@@ -270,6 +283,102 @@
     }
   }
 
+  async function loadMediaHistory(command) {
+    var listingWorkflowId = command && command.listingWorkflowId;
+    var requestId = command && command.requestId;
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === listingWorkflowId;
+    });
+    if (!listing || !currentProjection.handoff) {
+      if (requestId) commandResult(requestId, false, '草稿已变化，请刷新后重试');
+      return false;
+    }
+    var epoch = ++historyEpoch;
+    var receipt = currentHistory.receipt || null;
+    currentHistory = {
+      state: 'loading', listingWorkflowId: listingWorkflowId, error: '', context: null,
+      items: [], nextCursor: null, receipt: receipt,
+    };
+    rebuildProjection('');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-history',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        listingWorkflowId: listingWorkflowId,
+      });
+      if (epoch !== historyEpoch) return false;
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'ready' || !response.result.history) {
+        throw new Error(response && response.error || '候选历史读取失败');
+      }
+      currentHistory = Object.assign({}, response.result.history, {
+        state: 'ready', listingWorkflowId: listingWorkflowId, error: '', receipt: receipt,
+      });
+      rebuildProjection('');
+      if (currentProjection.history.state !== 'ready') {
+        throw new Error('候选历史与当前草稿版本不一致');
+      }
+      if (requestId) commandResult(requestId, true, '');
+      return true;
+    } catch (error) {
+      if (epoch !== historyEpoch) return false;
+      currentHistory = {
+        state: 'error', listingWorkflowId: listingWorkflowId,
+        error: error && error.message ? error.message : String(error),
+        context: null, items: [], nextCursor: null, receipt: receipt,
+      };
+      rebuildProjection('');
+      if (requestId) commandResult(requestId, false, currentHistory.error);
+      return false;
+    }
+  }
+
+  async function prepareMediaMutation(command) {
+    var history = currentProjection.history;
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === command.listingWorkflowId;
+    });
+    var item = history && history.state === 'ready'
+      ? history.items.find(function (candidate) { return candidate.id === command.mediaWorkflowId; })
+      : null;
+    var output = item && item.outputs.find(function (candidate) {
+      return candidate.id === command.outputAssetId;
+    });
+    var reviewAction = command.action === 'REVIEW_APPROVE' || command.action === 'REVIEW_REJECT';
+    var allowed = listing && history.listingWorkflowId === listing.id && item && output
+      && item.revision === command.expectedRevision && item.status === 'SUCCEEDED'
+      && item.application === null
+      && (reviewAction ? item.reviewStatus === 'PENDING'
+        : item.reviewStatus === 'APPROVED' && item.selectedOutputAssetId === output.id);
+    if (!allowed) {
+      commandResult(command.requestId, false, '候选或草稿已变化，请刷新后重试');
+      return;
+    }
+    setBusy(true, '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-confirm-prepare',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id,
+        mediaWorkflowId: item.id,
+        outputAssetId: output.id,
+        expectedRevision: item.revision,
+        action: command.action,
+      });
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'confirmation_opened') {
+        throw new Error(response && response.error || '独立确认窗口打开失败');
+      }
+      commandResult(command.requestId, true, '');
+    } catch (error) {
+      commandResult(command.requestId, false, error && error.message ? error.message : String(error));
+    } finally {
+      setBusy(false, '');
+    }
+  }
+
   function showFrame() {
     if (!frame || !trigger) return;
     open = true;
@@ -363,9 +472,31 @@
     }
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
+    if (command.type === 'LOAD_MEDIA_HISTORY') void loadMediaHistory(command);
+    if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
+  });
+
+  chrome.runtime.onMessage.addListener(function (message) {
+    if (!message || message.type !== 'ss-erp:source-listing-workbench-media-confirmed'
+      || message.resultKind !== 'MUTATION_COMPLETED'
+      || typeof message.replay !== 'boolean'
+      || message.platform !== currentProjection.source.platform
+      || message.sourceProductId !== currentProjection.source.sourceProductId) return;
+    currentHistory = {
+      state: 'idle', listingWorkflowId: message.listingWorkflowId, error: '', context: null,
+      items: [], nextCursor: null,
+      receipt: {
+        kind: 'MUTATION_COMPLETED', replay: message.replay, at: new Date().toISOString(),
+      },
+    };
+    rebuildProjection('');
+    void loadProjection({ force: true }).then(function () {
+      return loadMediaHistory({ listingWorkflowId: message.listingWorkflowId });
+    });
   });
 
   globalThis.addEventListener('pagehide', function (event) {
+    historyEpoch += 1;
     if (!event.persisted) unmount();
   });
   globalThis.addEventListener('pageshow', function (event) {
