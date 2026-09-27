@@ -333,6 +333,11 @@ const steps = [
     args: ['scripts/extension-donor-workbench-package-verifier.test.mjs'],
   },
   {
+    name: 'extension donor workbench live canary contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-donor-workbench-live-canary.test.mjs'],
+  },
+  {
     name: 'extension dual-mode AI image workbench contract',
     command: 'node',
     args: ['scripts/extension-ai-image-workbench-contract.test.mjs'],

@@ -44,6 +44,7 @@
     "test:extension-release-publication": "node scripts/extension-release-publication.test.mjs",
     "test:extension-website-publication-gate": "node --test scripts/extension-website-publication-gate.test.mjs",
     "canary:rel04:dark": "node scripts/rel04-dark-canary.mjs",
+    "canary:donor:live": "node scripts/extension-donor-workbench-live-canary.mjs",
     "test:rel04:dark-canary": "node scripts/rel04-dark-canary.test.mjs",
     "verify:extension": "node scripts/verify-extension-package.mjs",
     "verify:extension:cloud": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-cloud --target cloud --strict",
