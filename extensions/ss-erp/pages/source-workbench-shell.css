@@ -210,6 +210,17 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
 .media-action-bar span { margin-top: 4px; color: #475569; font-size: 10px; }
 .media-action-bar label { display: grid; min-width: 190px; gap: 4px; color: #475569; font-size: 9px; font-weight: 700; }
 .media-action-bar select { height: 36px; min-width: 0; border: 1px solid #86b796; border-radius: 4px; background: #fff; padding: 0 8px; color: #172033; font-size: 10px; }
+.billing-band { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 12px; border-block: 1px solid #d7dce2; background: #fff; }
+.billing-band section { min-width: 0; padding: 11px 12px; }
+.billing-band section + section { border-left: 1px solid #d7dce2; }
+.billing-band span, .billing-band strong, .billing-band small { display: block; }
+.billing-band span { color: #64748b; font-size: 9px; }
+.billing-band strong { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+.billing-band small { margin-top: 3px; color: #64748b; font-size: 9px; overflow-wrap: anywhere; }
+.billing-slot-list { display: grid; margin-bottom: 18px; }
+.billing-slot-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 120px 90px; gap: 10px; border-bottom: 1px solid #e3e7ec; padding: 8px 4px; font-size: 9px; }
+.billing-slot-row strong, .billing-slot-row span { overflow-wrap: anywhere; }
+.billing-slot-row span { color: #64748b; }
 .image-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; max-height: 430px; overflow: auto; }
 .image-tile { aspect-ratio: 1; cursor: pointer; }
 .image-tile.is-selected { border-color: #166534; box-shadow: inset 0 0 0 2px #166534; }
@@ -296,6 +307,8 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
   .process-list { max-height: 320px; }
   .draft-layout, .media-workspace, .product-overview { grid-template-columns: 1fr; }
   .media-action-bar { align-items: stretch; flex-direction: column; }
+  .billing-slot-row { grid-template-columns: minmax(0, 1fr) 90px 100px; }
+  .billing-slot-row span:last-child { grid-column: 1 / -1; }
   .product-visual { width: min(210px, 100%); }
   .projection-table { grid-template-columns: 1fr; }
   .review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -314,6 +327,10 @@ button:focus-visible, select:focus-visible, textarea:focus-visible {
   .product-facts dl, .review-summary { grid-template-columns: 1fr; }
   .image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .queue-row { grid-template-columns: 1fr; gap: 4px; }
+  .billing-band { grid-template-columns: 1fr; }
+  .billing-band section + section { border-top: 1px solid #d7dce2; border-left: 0; }
+  .billing-slot-row { grid-template-columns: 1fr; gap: 3px; }
+  .billing-slot-row span:last-child { grid-column: auto; }
   .prompt-pane textarea { min-height: 280px; }
 }
 

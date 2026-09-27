@@ -7,6 +7,14 @@ import { aiImageSuiteQuoteCurrency } from './ai-image-suite-provider-runtime.js'
 export const EXTENSION_AI_IMAGE_SUITE_PROJECTION_VERSION =
   'extension-ai-image-suite-projection/v1' as const;
 
+const billingReservationStatuses = new Set([
+  'RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED', 'SETTLED', 'RELEASED',
+]);
+const billingSettlementKinds = new Set([
+  'CHARGE', 'RELEASE', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+  'RECONCILED_CHARGE', 'RECONCILED_RELEASE',
+]);
+
 export interface ExtensionAiImageSuiteBinding {
   snapshotId: string;
   supplyGoodsId: string;
@@ -69,6 +77,83 @@ function boundedCost(value: unknown, field: string, positive = false): number {
     throw new ExtensionAiImageSuiteProjectionError('STALE_CONTEXT', 409, `${field} is invalid`);
   }
   return Number(value);
+}
+
+function boundedUnits(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > 1_000_000_000) {
+    throw new ExtensionAiImageSuiteProjectionError('STALE_CONTEXT', 409, `${field} is invalid`);
+  }
+  return Number(value);
+}
+
+function slotBillingProjection(input: {
+  job: unknown;
+  currency: 'CNY' | 'USD';
+  estimatedCostMinor: number;
+  maximumCostMinor: number;
+}) {
+  const job = record(input.job);
+  const reservation = record(job?.costReservation);
+  const base = {
+    mode: 'ERP_HOSTED' as const,
+    currency: input.currency,
+    estimatedCostMinor: input.estimatedCostMinor,
+    maximumCostMinor: input.maximumCostMinor,
+  };
+  if (!reservation) {
+    return { ...base, reservationStatus: 'NOT_CREATED' as const, settlement: null };
+  }
+  const reservationStatus = typeof reservation.status === 'string'
+    && billingReservationStatuses.has(reservation.status)
+    ? reservation.status
+    : null;
+  if (!reservationStatus
+    || reservation.currency !== input.currency
+    || boundedCost(reservation.estimatedCostMinor, 'reservation estimated cost')
+      !== input.estimatedCostMinor
+    || boundedCost(reservation.maximumCostMinor, 'reservation maximum cost')
+      !== input.maximumCostMinor) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Slot billing reservation no longer matches frozen pricing',
+    );
+  }
+  const settlements = Array.isArray(reservation.settlements) ? reservation.settlements : [];
+  const settlement = record(settlements[0]);
+  let projectedSettlement: {
+    kind: string;
+    actualCostMinor: number | null;
+    billedUnits: number;
+  } | null = null;
+  if (settlement) {
+    const kind = typeof settlement.kind === 'string' && billingSettlementKinds.has(settlement.kind)
+      ? settlement.kind : null;
+    const actualCostMinor = settlement.actualCostMinor === null
+      ? null : boundedCost(settlement.actualCostMinor, 'settlement actual cost');
+    if (!kind) {
+      throw new ExtensionAiImageSuiteProjectionError('STALE_CONTEXT', 409, 'Slot settlement kind is invalid');
+    }
+    projectedSettlement = {
+      kind,
+      actualCostMinor,
+      billedUnits: boundedUnits(settlement.billedUnits, 'settlement billed units'),
+    };
+    if ((['CHARGE', 'RECONCILED_CHARGE'].includes(kind) && actualCostMinor === null)
+      || (['RELEASE', 'RECONCILED_RELEASE'].includes(kind) && actualCostMinor !== null)) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Slot settlement amount does not match its kind',
+      );
+    }
+  }
+  const settledKind = projectedSettlement?.kind;
+  if ((reservationStatus === 'SETTLED'
+      && settledKind !== 'CHARGE' && settledKind !== 'RECONCILED_CHARGE')
+    || (reservationStatus === 'RELEASED'
+      && settledKind !== 'RELEASE' && settledKind !== 'RECONCILED_RELEASE')) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Slot settlement does not match reservation status',
+    );
+  }
+  return { ...base, reservationStatus, settlement: projectedSettlement };
 }
 
 function sha256(value: unknown, field: string): string {
@@ -538,6 +623,7 @@ function suiteProjection(input: {
     throw new ExtensionAiImageSuiteProjectionError('STALE_CONTEXT', 409, 'Suite pricing is invalid');
   }
   const canExecute = input.scopes.includes('media:execute');
+  const currency = aiImageSuiteQuoteCurrency(input.approved.preview.pricingVersion);
   const canGenerate = canExecute && input.executionReady;
   const suiteCommands: Record<string, unknown> = {};
   if (canGenerate && status === 'PLANNED') {
@@ -585,6 +671,7 @@ function suiteProjection(input: {
     }
     const slotRevision = positiveInteger(slot.revision, 'slotRevision');
     const slotAttempt = nonNegativeInteger(slot.attempt, 'slot attempt');
+    const estimatedSlotCost = boundedCost(slot.estimatedCostCents, 'slot estimated cost');
     const maximumSlotCost = boundedCost(slot.maximumCostCents, 'slot maximum cost');
     const workflow = record(slot.childWorkflow);
     const workflowId = workflow && slot.childWorkflowId === workflow.id
@@ -680,13 +767,19 @@ function suiteProjection(input: {
       status: slotStatus,
       attempt: slotAttempt,
       revision: slotRevision,
-      estimatedCostCents: boundedCost(slot.estimatedCostCents, 'slot estimated cost'),
+      estimatedCostCents: estimatedSlotCost,
       maximumCostCents: maximumSlotCost,
       workflowId,
       workflowRevision,
       reviewStatus,
       output,
       application,
+      billing: slotBillingProjection({
+        job: currentJob,
+        currency,
+        estimatedCostMinor: estimatedSlotCost,
+        maximumCostMinor: maximumSlotCost,
+      }),
       allowedActions: Object.keys(commands),
       commands,
     };

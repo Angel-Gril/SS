@@ -4,7 +4,7 @@
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
   var COMMAND_TYPES = new Set([
     'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
-    'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK',
+    'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK', 'LOAD_BILLING',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -351,6 +351,141 @@
     });
   }
 
+  function emptyBilling(state, listingWorkflowId, error) {
+    return Object.freeze({
+      state: state,
+      listingWorkflowId: listingWorkflowId,
+      error: error,
+      executionMode: 'ERP_HOSTED',
+      quote: null,
+      suite: null,
+    });
+  }
+
+  function billingMinor(value) {
+    return Number.isSafeInteger(value) && value >= 0 && value <= 10000000 ? value : null;
+  }
+
+  function billingSettlement(value, reservationStatus) {
+    if (value === null) {
+      return ['SETTLED', 'RELEASED'].includes(reservationStatus) ? undefined : null;
+    }
+    if (!exactKeys(value, ['kind', 'actualCostMinor', 'billedUnits'])) return undefined;
+    var kinds = [
+      'CHARGE', 'RELEASE', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+      'RECONCILED_CHARGE', 'RECONCILED_RELEASE',
+    ];
+    var actual = value.actualCostMinor === null ? null : billingMinor(value.actualCostMinor);
+    if (!kinds.includes(value.kind)
+      || (value.actualCostMinor !== null && actual === null)
+      || !Number.isSafeInteger(value.billedUnits) || value.billedUnits < 0
+      || value.billedUnits > 1000000000
+      || (reservationStatus === 'SETTLED'
+        && (!['CHARGE', 'RECONCILED_CHARGE'].includes(value.kind) || actual === null))
+      || (reservationStatus === 'RELEASED'
+        && (!['RELEASE', 'RECONCILED_RELEASE'].includes(value.kind) || actual !== null))) {
+      return undefined;
+    }
+    return Object.freeze({ kind: value.kind, actualCostMinor: actual, billedUnits: value.billedUnits });
+  }
+
+  function billingSlotRows(values, currency) {
+    var rows = [];
+    var invalid = false;
+    (Array.isArray(values) ? values : []).slice(0, 500).forEach(function (value) {
+      var item = record(value) || {};
+      var billing = record(item.billing);
+      var reservationStatuses = [
+        'NOT_CREATED', 'RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+        'SETTLED', 'RELEASED',
+      ];
+      var estimated = billing && billingMinor(billing.estimatedCostMinor);
+      var maximum = billing && billingMinor(billing.maximumCostMinor);
+      var settlement = billing && billingSettlement(billing.settlement, billing.reservationStatus);
+      if (!text(item.slotKey, 500) || !text(item.goal, 200) || !text(item.status, 100)
+        || !exactKeys(billing, [
+          'mode', 'currency', 'estimatedCostMinor', 'maximumCostMinor',
+          'reservationStatus', 'settlement',
+        ])
+        || billing.mode !== 'ERP_HOSTED' || billing.currency !== currency
+        || estimated === null || maximum === null || maximum < estimated
+        || !reservationStatuses.includes(billing.reservationStatus)
+        || settlement === undefined) {
+        invalid = true;
+        return;
+      }
+      rows.push(Object.freeze({
+        slotKey: text(item.slotKey, 500),
+        goal: text(item.goal, 200),
+        status: text(item.status, 100),
+        billing: Object.freeze({
+          mode: 'ERP_HOSTED',
+          currency: currency,
+          estimatedCostMinor: estimated,
+          maximumCostMinor: maximum,
+          reservationStatus: billing.reservationStatus,
+          settlement: settlement,
+        }),
+      }));
+    });
+    return invalid ? null : Object.freeze(rows);
+  }
+
+  function billingProjection(value, listings) {
+    var input = record(value) || {};
+    var state = ['idle', 'loading', 'ready', 'error'].includes(input.state) ? input.state : 'idle';
+    var listingWorkflowId = text(input.listingWorkflowId, 200);
+    var error = text(input.error, 500);
+    if (state !== 'ready') return emptyBilling(state, listingWorkflowId, error);
+    var raw = record(input.projection);
+    var context = raw && record(raw.context);
+    var listing = (Array.isArray(listings) ? listings : []).find(function (item) {
+      return item.id === listingWorkflowId;
+    });
+    if (!raw || raw.contractVersion !== 'extension-ai-image-suite-projection/v1'
+      || !context || !listing || context.listingWorkflowId !== listing.id
+      || context.shopId !== listing.shopId || context.draftRevision !== listing.revision
+      || context.draftVersion !== listing.draftVersion) {
+      return emptyBilling('error', listingWorkflowId, '计费状态与当前草稿不一致');
+    }
+    if (raw.plan === null) return emptyBilling('ready', listingWorkflowId, '');
+    var plan = record(raw.plan);
+    var preview = plan && record(plan.preview);
+    var currency = preview && Object.prototype.hasOwnProperty.call(preview, 'currency')
+      ? preview.currency : 'USD';
+    var itemCount = preview && Number(preview.itemCount);
+    var estimated = preview && billingMinor(preview.estimatedCostCents);
+    var maximum = preview && billingMinor(preview.maximumCostCents);
+    if (!preview || !['CNY', 'USD'].includes(currency)
+      || !Number.isSafeInteger(itemCount) || itemCount < 1 || itemCount > 500
+      || estimated === null || maximum === null || maximum < estimated) {
+      return emptyBilling('error', listingWorkflowId, '托管报价无效');
+    }
+    var quote = Object.freeze({
+      currency: currency,
+      itemCount: itemCount,
+      estimatedCostMinor: estimated,
+      maximumCostMinor: maximum,
+    });
+    if (raw.suite === null) {
+      return Object.freeze({
+        state: 'ready', listingWorkflowId: listingWorkflowId, error: '',
+        executionMode: 'ERP_HOSTED', quote: quote, suite: null,
+      });
+    }
+    var suite = record(raw.suite);
+    var slots = suite && billingSlotRows(suite.slots, currency);
+    if (!suite || !text(suite.status, 100) || !slots) {
+      return emptyBilling('error', listingWorkflowId, '托管结算状态无效');
+    }
+    return Object.freeze({
+      state: 'ready', listingWorkflowId: listingWorkflowId, error: '',
+      executionMode: 'ERP_HOSTED',
+      quote: quote,
+      suite: Object.freeze({ status: text(suite.status, 100), slots: slots }),
+    });
+  }
+
   function createProjection(input) {
     var options = record(input) || {};
     var product = record(options.product) || {};
@@ -392,6 +527,7 @@
       handoff: handoffProjection(options.handoff),
       workbench: projectedWorkbench,
       history: historyProjection(options.history, projectedWorkbench.status.listing.items),
+      billing: billingProjection(options.billing, projectedWorkbench.status.listing.items),
       busy: options.busy === true,
       error: text(options.error, 500),
       updatedAt: new Date().toISOString(),
@@ -440,6 +576,7 @@
       handoff: item.handoff,
       workbench: item.workbench,
       history: item.history,
+      billing: item.billing,
       busy: item.busy,
       error: item.error,
     });
@@ -523,6 +660,19 @@
         type: 'LOAD_MEDIA_HISTORY',
         requestId: historyRequestId,
         listingWorkflowId: historyListingWorkflowId,
+      });
+    }
+    if (item.type === 'LOAD_BILLING') {
+      var billingRequestId = commandBase(item, [
+        'contractVersion', 'type', 'requestId', 'listingWorkflowId',
+      ]);
+      var billingListingWorkflowId = text(item.listingWorkflowId, 200);
+      if (!billingListingWorkflowId) throw new TypeError('invalid donor billing command');
+      return Object.freeze({
+        contractVersion: CONTRACT_VERSION,
+        type: 'LOAD_BILLING',
+        requestId: billingRequestId,
+        listingWorkflowId: billingListingWorkflowId,
       });
     }
     if (item.type === 'PREPARE_MEDIA_MUTATION') {

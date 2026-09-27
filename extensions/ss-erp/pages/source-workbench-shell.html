@@ -111,6 +111,19 @@
             <label><span>处理 SKU</span><select data-role="media-sku-select" aria-label="选择图片处理 SKU"></select></label>
             <button type="button" class="primary-command" data-action="open-ai-workbench">打开 AI 工作台</button>
           </div>
+          <div class="billing-band" aria-label="图片费用">
+            <section>
+              <span>ERP 托管</span>
+              <strong data-role="hosted-billing-summary">等待读取报价</strong>
+              <small data-role="hosted-billing-state">--</small>
+            </section>
+            <section>
+              <span>自带 API Key</span>
+              <strong data-role="byok-billing-summary">ERP 生图费 ¥0.00</strong>
+              <small>Provider 费用由对应账户结算</small>
+            </section>
+          </div>
+          <div class="billing-slot-list" data-role="billing-slot-list"></div>
           <div class="media-workspace">
             <section class="reference-pane">
               <div class="subheading"><h2>参考素材</h2><span data-role="reference-count">0 已选</span></div>

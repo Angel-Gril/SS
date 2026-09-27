@@ -89,6 +89,11 @@ function currentSuiteFixture() {
         storageBackend: 'oss', mimeType: 'image/png', width: 900, height: 1200,
       },
       application: null,
+      billing: {
+        mode: 'ERP_HOSTED', currency: 'USD', estimatedCostMinor: 9, maximumCostMinor: 12,
+        reservationStatus: 'SETTLED',
+        settlement: { kind: 'CHARGE', actualCostMinor: 9, billedUnits: 1 },
+      },
       allowedActions: ['REVIEW_SLOT'],
       commands: {
         REVIEW_SLOT: {
@@ -104,6 +109,11 @@ function currentSuiteFixture() {
       revision: 3, estimatedCostCents: 9, maximumCostCents: 12,
       workflowId: null, workflowRevision: null, reviewStatus: 'NOT_READY', output: null,
       application: null,
+      billing: {
+        mode: 'ERP_HOSTED', currency: 'USD', estimatedCostMinor: 9, maximumCostMinor: 12,
+        reservationStatus: 'RELEASED',
+        settlement: { kind: 'RELEASE', actualCostMinor: null, billedUnits: 0 },
+      },
       allowedActions: ['RETRY_SLOT'],
       commands: {
         RETRY_SLOT: {
@@ -184,6 +194,12 @@ assert.equal(current.plan.startIntent, null);
 assert.equal(current.suite.continueIntent.action, 'CONTINUE');
 assert.equal(current.suite.cancelIntent.action, 'CANCEL');
 assert.equal(current.suite.slots[0].previewAvailable, true);
+assert.equal(Object.hasOwn(current.suite.slots[0], 'billing'), false,
+  'billing remains a read-only donor projection and never enters hosted command state');
+const invalidBilling = currentSuiteFixture();
+invalidBilling.suite.slots[0].billing.currency = 'CNY';
+assert.throws(() => adapter.project(invalidBilling),
+  (error) => error?.code === 'SS_ERP_HOSTED_WORKBENCH_PROJECTION_INVALID');
 assert.deepEqual(JSON.parse(JSON.stringify(current.suite.slots[0].output)), {
   assetId: 'asset-1', mimeType: 'image/png', width: 900, height: 1200,
 });

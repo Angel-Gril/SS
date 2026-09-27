@@ -1098,7 +1098,13 @@ function currentSuiteProjectionFixture(action) {
     status: 'FAILED', attempt: 1,
     revision: 3, estimatedCostCents: 9, maximumCostCents: 12,
     workflowId: null, workflowRevision: null, reviewStatus: 'NOT_READY', output: null,
-    application: null, allowedActions: ['RETRY_SLOT'],
+    application: null,
+    billing: {
+      mode: 'ERP_HOSTED', currency: 'USD', estimatedCostMinor: 9, maximumCostMinor: 12,
+      reservationStatus: 'RELEASED',
+      settlement: { kind: 'RELEASE', actualCostMinor: null, billedUnits: 0 },
+    },
+    allowedActions: ['RETRY_SLOT'],
     commands: {
       RETRY_SLOT: {
         suiteId: 'suite-1', slotId: 'slot-1', expectedSuiteRevision: 8,
@@ -1160,6 +1166,16 @@ crossSkuSuiteMembership.suite.slots[0].applicableSkuKeys = ['sku-other'];
 assert.throws(
   () => suiteIntentContract.createAiImageSuiteIntentWitness({
     projection: crossSkuSuiteMembership,
+    action: 'RETRY_SLOT',
+    slotId: 'slot-1',
+  }),
+  /AI image suite projection is invalid/u,
+);
+const leakingSuiteBilling = currentSuiteProjectionFixture('RETRY_SLOT');
+leakingSuiteBilling.suite.slots[0].billing.reservationId = 'must-not-leak';
+assert.throws(
+  () => suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: leakingSuiteBilling,
     action: 'RETRY_SLOT',
     slotId: 'slot-1',
   }),

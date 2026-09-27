@@ -19,9 +19,13 @@
   var busy = false;
   var refreshEpoch = 0;
   var historyEpoch = 0;
+  var billingEpoch = 0;
   var currentHistory = {
     state: 'idle', listingWorkflowId: '', error: '', context: null,
     items: [], nextCursor: null, receipt: null,
+  };
+  var currentBilling = {
+    state: 'idle', listingWorkflowId: '', error: '', projection: null,
   };
 
   function isExactSourceProductUrl(value) {
@@ -99,6 +103,7 @@
       handoff: currentProjection.handoff,
       workbench: currentProjection.workbench,
       history: currentHistory,
+      billing: currentBilling,
       busy: busy,
       error: error || '',
     });
@@ -114,6 +119,12 @@
   async function loadProjection(options) {
     options = options || {};
     var epoch = ++refreshEpoch;
+    if (options.force === true) {
+      billingEpoch += 1;
+      currentBilling = {
+        state: 'idle', listingWorkflowId: '', error: '', projection: null,
+      };
+    }
     setBusy(true, '');
     try {
       var collected = await sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' });
@@ -157,6 +168,7 @@
           ? statusResult.result
           : { state: 'unavailable', reason: 'runtime_unavailable' },
         history: currentHistory,
+        billing: currentBilling,
         busy: false,
         error: error,
       });
@@ -331,6 +343,55 @@
       };
       rebuildProjection('');
       if (requestId) commandResult(requestId, false, currentHistory.error);
+      return false;
+    }
+  }
+
+  async function loadBilling(command) {
+    var listingWorkflowId = command && command.listingWorkflowId;
+    var requestId = command && command.requestId;
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === listingWorkflowId;
+    });
+    if (!listing || !currentProjection.handoff) {
+      if (requestId) commandResult(requestId, false, '草稿已变化，请刷新后重试');
+      return false;
+    }
+    var epoch = ++billingEpoch;
+    currentBilling = {
+      state: 'loading', listingWorkflowId: listingWorkflowId, error: '', projection: null,
+    };
+    rebuildProjection('');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-ai-image-suite',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        listingWorkflowId: listingWorkflowId,
+      });
+      if (epoch !== billingEpoch) return false;
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'ready' || !response.result.projection) {
+        throw new Error(response && response.error || '托管计费状态读取失败');
+      }
+      currentBilling = {
+        state: 'ready', listingWorkflowId: listingWorkflowId,
+        error: '', projection: response.result.projection,
+      };
+      rebuildProjection('');
+      if (currentProjection.billing.state !== 'ready') {
+        throw new Error(currentProjection.billing.error || '托管计费状态与当前草稿不一致');
+      }
+      if (requestId) commandResult(requestId, true, '');
+      return true;
+    } catch (error) {
+      if (epoch !== billingEpoch) return false;
+      currentBilling = {
+        state: 'error', listingWorkflowId: listingWorkflowId,
+        error: error && error.message ? error.message : String(error), projection: null,
+      };
+      rebuildProjection('');
+      if (requestId) commandResult(requestId, false, currentBilling.error);
       return false;
     }
   }
@@ -512,6 +573,7 @@
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
     if (command.type === 'LOAD_MEDIA_HISTORY') void loadMediaHistory(command);
+    if (command.type === 'LOAD_BILLING') void loadBilling(command);
     if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
     if (command.type === 'EXECUTE_MEDIA_TASK') void executeMediaTask(command);
   });
@@ -537,6 +599,7 @@
 
   globalThis.addEventListener('pagehide', function (event) {
     historyEpoch += 1;
+    billingEpoch += 1;
     if (!event.persisted) unmount();
   });
   globalThis.addEventListener('pageshow', function (event) {

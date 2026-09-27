@@ -112,7 +112,47 @@ function historyProjection(reviewStatus = 'PENDING', application = null, receipt
   };
 }
 
-function projection({ withDraft, preferredSkuKey = '', history = null }) {
+function billingProjection() {
+  return {
+    state: 'ready', listingWorkflowId: 'draft-fixture', error: '',
+    projection: {
+      contractVersion: 'extension-ai-image-suite-projection/v1',
+      context: {
+        snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture', shopId: 'shop-doth',
+        listingWorkflowId: 'draft-fixture', draftRevision: 2, draftVersion: 2,
+      },
+      plan: {
+        id: 'internal-plan-id',
+        preview: {
+          pricingVersion: 'internal-pricing-version', currency: 'CNY', itemCount: 2,
+          estimatedCostCents: 28, maximumCostCents: 28,
+        },
+      },
+      suite: {
+        id: 'internal-suite-id', status: 'SUCCEEDED',
+        slots: [{
+          id: 'internal-slot-1', slotKey: 'sku:sku-white-small:hero', goal: '商品主图',
+          status: 'SUCCEEDED',
+          billing: {
+            mode: 'ERP_HOSTED', currency: 'CNY',
+            estimatedCostMinor: 14, maximumCostMinor: 14, reservationStatus: 'SETTLED',
+            settlement: { kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 },
+          },
+        }, {
+          id: 'internal-slot-2', slotKey: 'sku:sku-white-small:detail-1', goal: '商品细节图',
+          status: 'SUCCEEDED',
+          billing: {
+            mode: 'ERP_HOSTED', currency: 'CNY',
+            estimatedCostMinor: 14, maximumCostMinor: 14, reservationStatus: 'SETTLED',
+            settlement: { kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 },
+          },
+        }],
+      },
+    },
+  };
+}
+
+function projection({ withDraft, preferredSkuKey = '', history = null, billing = null }) {
   return {
     contractVersion: 'ss-erp-donor-workbench/v1',
     source: {
@@ -175,6 +215,9 @@ function projection({ withDraft, preferredSkuKey = '', history = null }) {
     history: history || {
       state: 'idle', listingWorkflowId: '', error: '', context: null,
       items: [], nextCursor: null, receipt: null,
+    },
+    billing: billing || {
+      state: 'idle', listingWorkflowId: '', error: '', projection: null,
     },
     busy: false,
     error: '',
@@ -323,10 +366,15 @@ async function run() {
     await until(() => evaluate('document.querySelector("[data-role=prompt-text]").value.includes("Green / Size: Large")'),
       'selected SKU prompt refresh');
 
-    await postProjection(projection({ withDraft: true }));
+    await postProjection(projection({ withDraft: true, billing: billingProjection() }));
     await until(() => evaluate('document.querySelectorAll(".queue-row").length === 3'), 'server task projection');
     assert.equal(await evaluate('document.querySelector("[data-action=create-draft]").disabled'), true);
     assert.equal(await evaluate('document.querySelector("[data-role=queue-count]").textContent'), '3 项');
+    assert.match(await evaluate('document.querySelector("[data-role=hosted-billing-summary]").textContent'), /¥0\.28/u);
+    assert.match(await evaluate('document.querySelector("[data-role=byok-billing-summary]").textContent'), /¥0\.00/u);
+    assert.equal(await evaluate('document.querySelectorAll(".billing-slot-row").length'), 2);
+    assert.equal(await evaluate('document.body.textContent.includes("internal-plan-id")'), false);
+    assert.equal(await evaluate('document.body.textContent.includes("internal-suite-id")'), false);
     assert.equal(await evaluate('document.querySelectorAll("[data-task-action=RETRY]").length'), 1);
     assert.equal(await evaluate('document.querySelectorAll("[data-task-action=CANCEL]").length'), 1);
 
@@ -335,9 +383,27 @@ async function run() {
         if (event.data?.contractVersion === 'ss-erp-donor-workbench/v1'
           && typeof event.data?.type === 'string') window.__donorCommands.push(event.data);
       });`);
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: '',
+      history: historyProjection(),
+      billing: {
+        state: 'error', listingWorkflowId: 'draft-fixture',
+        error: '计费状态暂不可用', projection: null,
+      },
+    }));
+    await pause(120);
+    assert.equal(await evaluate(`window.__donorCommands.filter((item) => item.type === 'LOAD_BILLING').length`), 0,
+      'billing errors stay stable until an explicit refresh');
+    await postProjection(projection({
+      withDraft: true,
+      preferredSkuKey: '',
+      history: historyProjection(),
+      billing: billingProjection(),
+    }));
     await click('[data-action="open-ai-workbench"]');
     const mediaCommand = await until(async () => {
-      const command = await evaluate('window.__donorCommands.at(-1) || null');
+      const command = await evaluate(`window.__donorCommands.filter((item) => item.type === 'OPEN_MEDIA_WORKBENCH').at(-1) || null`);
       return command || null;
     }, 'donor media launch command');
     assert.equal(mediaCommand.preferredSkuKey, 'sku-green-large');
@@ -349,6 +415,7 @@ async function run() {
       withDraft: true,
       preferredSkuKey: 'sku-white-small',
       history: historyProjection(),
+      billing: billingProjection(),
     }));
     await until(() => evaluate(`document.querySelector('[data-role=media-sku-select]').value === 'sku-white-small'`),
       'source-selected SKU lock');
@@ -392,6 +459,7 @@ async function run() {
       withDraft: true,
       preferredSkuKey: 'sku-white-small',
       history: historyProjection('APPROVED'),
+      billing: billingProjection(),
     }));
     await until(() => evaluate('document.querySelectorAll("[data-media-action=APPLY_APPEND]").length === 1'),
       'approved candidate apply action');
@@ -413,6 +481,7 @@ async function run() {
       }, {
         kind: 'MUTATION_COMPLETED', replay: true, at: '2026-09-27T07:02:01.000Z',
       }),
+      billing: billingProjection(),
     }));
     await until(() => evaluate('document.querySelector("[data-role=mutation-receipt]")?.textContent.includes("幂等回放")'),
       'idempotency replay receipt');
@@ -433,6 +502,7 @@ async function run() {
         contextSkuKey: 'sku-white-small', contextSlotKey: 'sku:sku-white-small:hero',
         appliedAt: '2026-09-27T07:02:00.000Z', rolledBackAt: null,
       }, null),
+      billing: billingProjection(),
     }));
     const taskReceiptMessage = {
       contractVersion: 'ss-erp-donor-workbench/v1', type: 'COMMAND_RESULT',

@@ -15,6 +15,7 @@
   var mediaSignature = '';
   var promptSignature = '';
   var historyRequestListingId = '';
+  var billingRequestListingId = '';
   var lastTaskReceipt = null;
   var stageUserSelected = false;
   var pending = new Map();
@@ -414,9 +415,71 @@
     one('[data-role="media-state"]').textContent = items.length ? '服务端任务' : '投影模式';
   }
 
+  function formatMinor(currency, value) {
+    var amount = Number.isSafeInteger(value) ? value / 100 : 0;
+    return (currency === 'CNY' ? '¥' : '$') + amount.toFixed(2);
+  }
+
+  function reservationLabel(value) {
+    return {
+      NOT_CREATED: '未预留', RESERVED: '已预留', SUBMISSION_UNCERTAIN: '提交结果未知',
+      RECONCILIATION_REQUIRED: '待对账', SETTLED: '已结算', RELEASED: '已释放',
+    }[value] || value || '--';
+  }
+
+  function settlementLabel(value) {
+    if (!value) return '暂无结算';
+    var labels = {
+      CHARGE: '扣费', RELEASE: '释放', SUBMISSION_UNCERTAIN: '提交结果未知',
+      RECONCILIATION_REQUIRED: '待对账', RECONCILED_CHARGE: '对账扣费',
+      RECONCILED_RELEASE: '对账释放',
+    };
+    return labels[value.kind] || value.kind;
+  }
+
+  function renderBilling() {
+    var billing = projection.billing || {};
+    var summary = one('[data-role="hosted-billing-summary"]');
+    var state = one('[data-role="hosted-billing-state"]');
+    var slots = one('[data-role="billing-slot-list"]');
+    clear(slots);
+    if (billing.state === 'loading') {
+      summary.textContent = '正在读取报价';
+      state.textContent = 'ERP 权威状态';
+      return;
+    }
+    if (billing.state === 'error') {
+      summary.textContent = '托管计费状态不可用';
+      state.textContent = billing.error || '请刷新后重试';
+      return;
+    }
+    if (billing.state !== 'ready' || !billing.quote) {
+      summary.textContent = billing.state === 'ready' ? '尚未建立托管报价' : '等待读取报价';
+      state.textContent = billing.state === 'ready' ? '计划尚未创建' : '--';
+      return;
+    }
+    summary.textContent = '预估 ' + formatMinor(billing.quote.currency, billing.quote.estimatedCostMinor)
+      + ' · 最高 ' + formatMinor(billing.quote.currency, billing.quote.maximumCostMinor);
+    state.textContent = billing.quote.itemCount + ' 张 · '
+      + (billing.suite ? statusLabel(billing.suite.status) : '等待启动');
+    if (!billing.suite) return;
+    billing.suite.slots.forEach(function (slot) {
+      var row = node('div', 'billing-slot-row');
+      row.appendChild(node('strong', '', slot.goal));
+      row.appendChild(node('span', '', reservationLabel(slot.billing.reservationStatus)));
+      row.appendChild(node('span', '', settlementLabel(slot.billing.settlement)));
+      row.appendChild(node('span', '', slot.billing.settlement
+        && slot.billing.settlement.actualCostMinor !== null
+        ? formatMinor(slot.billing.currency, slot.billing.settlement.actualCostMinor)
+        : formatMinor(slot.billing.currency, 0)));
+      slots.appendChild(row);
+    });
+  }
+
   function renderMedia() {
     renderReferences();
     renderQueue();
+    renderBilling();
     syncPromptDraft();
     var openButton = one('[data-action="open-ai-workbench"]');
     openButton.disabled = projection.busy || !currentListing();
@@ -446,9 +509,20 @@
     var history = projection.history || {};
     if (!force && (historyRequestListingId === listing.id
       || (history.listingWorkflowId === listing.id
-        && (history.state === 'loading' || history.state === 'ready')))) return;
+        && ['loading', 'ready', 'error'].includes(history.state)))) return;
     historyRequestListingId = listing.id;
     send('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing.id });
+  }
+
+  function requestBilling(force) {
+    var listing = currentListing();
+    if (!listing || projection.busy) return;
+    var billing = projection.billing || {};
+    if (!force && (billingRequestListingId === listing.id
+      || (billing.listingWorkflowId === listing.id
+        && ['loading', 'ready', 'error'].includes(billing.state)))) return;
+    billingRequestListingId = listing.id;
+    send('LOAD_BILLING', { listingWorkflowId: listing.id });
   }
 
   function mediaMutationButton(item, output, action, label, primary) {
@@ -668,6 +742,7 @@
     renderProcess();
     if ((activeStage === 'media' || activeStage === 'review') && currentListing()) {
       globalThis.setTimeout(function () { requestMediaHistory(false); }, 0);
+      globalThis.setTimeout(function () { requestBilling(false); }, 0);
     }
   }
 
@@ -768,6 +843,8 @@
       syncSelections();
       if (projection.history && projection.history.listingWorkflowId === historyRequestListingId
         && projection.history.state !== 'idle') historyRequestListingId = '';
+      if (projection.billing && projection.billing.listingWorkflowId === billingRequestListingId
+        && projection.billing.state !== 'idle') billingRequestListingId = '';
       if (!stageUserSelected) activeStage = stageFromProjection();
       render();
       return;
@@ -777,6 +854,7 @@
       var type = pending.get(message.requestId);
       pending.delete(message.requestId);
       if (type === 'LOAD_MEDIA_HISTORY') historyRequestListingId = '';
+      if (type === 'LOAD_BILLING') billingRequestListingId = '';
       if (type === 'EXECUTE_MEDIA_TASK' && message.ok === true) {
         var receipt = message.receipt;
         if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)
@@ -792,6 +870,7 @@
       showToast(message.ok === true ? (type === 'CREATE_DRAFT' ? '草稿已创建'
         : type === 'PREPARE_MEDIA_MUTATION' ? '已打开独立确认窗口'
           : type === 'EXECUTE_MEDIA_TASK' ? '任务命令已确认'
+            : type === 'LOAD_BILLING' ? '计费状态已刷新'
           : type === 'LOAD_MEDIA_HISTORY' ? '候选已刷新' : '操作完成')
         : message.error || '操作失败', message.ok !== true);
     }

@@ -116,6 +116,45 @@ const projection = contract.createProjection({
     nextCursor: null,
     receipt: null,
   },
+  billing: {
+    state: 'ready', listingWorkflowId: 'draft-1', error: '',
+    projection: {
+      contractVersion: 'extension-ai-image-suite-projection/v1',
+      context: {
+        snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+        listingWorkflowId: 'draft-1', draftRevision: 2, draftVersion: 3,
+      },
+      plan: {
+        id: 'must-not-leak-plan-id',
+        preview: {
+          pricingVersion: 'must-not-leak-pricing-version', currency: 'CNY', itemCount: 2,
+          estimatedCostCents: 28, maximumCostCents: 28,
+        },
+      },
+      suite: {
+        id: 'must-not-leak-suite-id', status: 'SUCCEEDED',
+        slots: [{
+          id: 'must-not-leak-slot-id', slotKey: 'sku:sku-blue:hero', goal: '商品主图',
+          status: 'SUCCEEDED',
+          billing: {
+            mode: 'ERP_HOSTED', currency: 'CNY',
+            estimatedCostMinor: 14, maximumCostMinor: 14,
+            reservationStatus: 'SETTLED',
+            settlement: { kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 },
+          },
+        }, {
+          id: 'must-not-leak-slot-id-2', slotKey: 'sku:sku-blue:detail-1', goal: '商品细节图',
+          status: 'CANCELLED',
+          billing: {
+            mode: 'ERP_HOSTED', currency: 'CNY',
+            estimatedCostMinor: 14, maximumCostMinor: 14,
+            reservationStatus: 'RELEASED',
+            settlement: { kind: 'RELEASE', actualCostMinor: null, billedUnits: 0 },
+          },
+        }],
+      },
+    },
+  },
   busy: false,
   error: '',
 });
@@ -133,6 +172,31 @@ assert.deepEqual(JSON.parse(JSON.stringify(projection.workbench.status.media.ite
 assert.equal(projection.history.state, 'ready');
 assert.equal(projection.history.items[0].outputs[0].id, 'asset-1');
 assert.equal(projection.history.items[0].outputs[0].url, 'https://cdn.example/output.png');
+assert.deepEqual(JSON.parse(JSON.stringify(projection.billing)), {
+  state: 'ready', listingWorkflowId: 'draft-1', error: '', executionMode: 'ERP_HOSTED',
+  quote: {
+    currency: 'CNY', itemCount: 2, estimatedCostMinor: 28, maximumCostMinor: 28,
+  },
+  suite: {
+    status: 'SUCCEEDED',
+    slots: [{
+      slotKey: 'sku:sku-blue:hero', goal: '商品主图', status: 'SUCCEEDED',
+      billing: {
+        mode: 'ERP_HOSTED', currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14,
+        reservationStatus: 'SETTLED',
+        settlement: { kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 },
+      },
+    }, {
+      slotKey: 'sku:sku-blue:detail-1', goal: '商品细节图', status: 'CANCELLED',
+      billing: {
+        mode: 'ERP_HOSTED', currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14,
+        reservationStatus: 'RELEASED',
+        settlement: { kind: 'RELEASE', actualCostMinor: null, billedUnits: 0 },
+      },
+    }],
+  },
+});
+assert.equal(JSON.stringify(projection.billing).includes('must-not-leak'), false);
 const promptAdapterSource = fs.readFileSync('extensions/ss-erp/shared/donor-workbench/prompt-adapter.js', 'utf8');
 assert.match(promptAdapterSource, /SS_ERP_DONOR_PROMPT_ADAPTER/u);
 const reparsed = contract.parseProjection({
@@ -160,6 +224,20 @@ assert.deepEqual(
     requestId: 'request-1',
     shopId: 'shop-1',
     selectedSkuKeys: ['sku-white', 'sku-blue'],
+  },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'LOAD_BILLING',
+    requestId: 'request-billing-1',
+    listingWorkflowId: 'draft-1',
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'LOAD_BILLING',
+    requestId: 'request-billing-1',
+    listingWorkflowId: 'draft-1',
   },
 );
 assert.deepEqual(
@@ -282,6 +360,8 @@ assert.match(bridge, /ss-erp:source-listing-workbench-media-history/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirm-prepare/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirmed/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-command/);
+assert.match(bridge, /ss-erp:source-listing-workbench-ai-image-suite/);
+assert.doesNotMatch(bridge, /currentBilling\s*=\s*currentProjection\.billing/u);
 assert.match(bridge, /type:\s*'spb-self-hosted:get-ozon-shops',\s*deviceOnly:\s*true/u);
 assert.match(bridge, /response\.result\.state\s*===\s*'choice_required'/);
 assert.match(bridge, /preferredSkuKey:\s*command\.preferredSkuKey/);

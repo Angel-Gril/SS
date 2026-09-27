@@ -121,6 +121,17 @@ function currentSuiteState() {
         jobs: [{
           id: 'job-1',
           provider: 'must-not-leak provider',
+          costReservation: {
+            id: 'must-not-leak-reservation-id',
+            status: 'SETTLED', currency: 'USD',
+            estimatedCostMinor: 9, maximumCostMinor: 12,
+            provider: 'must-not-leak provider', model: 'must-not-leak model',
+            requestFingerprint: 'e'.repeat(64),
+            settlements: [{
+              id: 'must-not-leak-settlement-id', kind: 'CHARGE',
+              actualCostMinor: 9, billedUnits: 1,
+            }],
+          },
           assets: [{
             id: 'asset-safe-1',
             ownerUserId: 'owner-1',
@@ -172,8 +183,15 @@ function currentSuiteState() {
           providerReconciledAt: new Date('2026-07-24T00:01:00.000Z'),
           actualCostCents: null, billedUnits: 0,
           costReservation: {
-            status: 'RELEASED', provider: 'must-not-leak provider', model: 'must-not-leak model',
+            id: 'must-not-leak-released-reservation-id',
+            status: 'RELEASED', currency: 'USD',
+            estimatedCostMinor: 9, maximumCostMinor: 12,
+            provider: 'must-not-leak provider', model: 'must-not-leak model',
             requestFingerprint: 'f'.repeat(64),
+            settlements: [{
+              id: 'must-not-leak-release-settlement-id', kind: 'RELEASE',
+              actualCostMinor: null, billedUnits: 0,
+            }],
           },
           _count: { assets: 0 }, assets: [],
         }],
@@ -412,6 +430,12 @@ describe('extension AI image suite projection', () => {
           height: 1024,
         },
         application: null,
+        billing: {
+          mode: 'ERP_HOSTED', currency: 'USD',
+          estimatedCostMinor: 9, maximumCostMinor: 12,
+          reservationStatus: 'SETTLED',
+          settlement: { kind: 'CHARGE', actualCostMinor: 9, billedUnits: 1 },
+        },
         allowedActions: ['REVIEW_SLOT'],
         commands: {
           REVIEW_SLOT: {
@@ -442,6 +466,12 @@ describe('extension AI image suite projection', () => {
         reviewStatus: 'NOT_READY',
         output: null,
         application: null,
+        billing: {
+          mode: 'ERP_HOSTED', currency: 'USD',
+          estimatedCostMinor: 9, maximumCostMinor: 12,
+          reservationStatus: 'RELEASED',
+          settlement: { kind: 'RELEASE', actualCostMinor: null, billedUnits: 0 },
+        },
         allowedActions: ['RETRY_SLOT'],
         commands: {
           RETRY_SLOT: {
@@ -457,9 +487,34 @@ describe('extension AI image suite projection', () => {
     const serialized = JSON.stringify(result);
     for (const forbidden of [
       'must-not-leak', 'provider.example', 'external.example', 'prompt', 'apiKey',
+      'reservation-id', 'settlement-id', 'requestFingerprint',
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('rejects billing currency, amount, and terminal-settlement drift', () => {
+    const project = (state: ReturnType<typeof currentSuiteState>) => projectExtensionAiImageSuite({
+      requested: binding,
+      state,
+      ownerUserId: 'owner-1',
+      scopes: ['listing:review', 'media:execute'],
+      trustedPreviewOrigins: ['https://erp.example'],
+    });
+    const mutations = [
+      (state: any) => { state.suite.slots[0].childWorkflow.jobs[0].costReservation.currency = 'CNY'; },
+      (state: any) => { state.suite.slots[0].childWorkflow.jobs[0].costReservation.maximumCostMinor = 13; },
+      (state: any) => { state.suite.slots[0].childWorkflow.jobs[0].costReservation.settlements = []; },
+      (state: any) => {
+        state.suite.slots[0].childWorkflow.jobs[0]
+          .costReservation.settlements[0].actualCostMinor = null;
+      },
+    ];
+    mutations.forEach((mutate) => {
+      const state = currentSuiteState() as any;
+      mutate(state);
+      expect(() => project(state)).toThrowError(expect.objectContaining({ code: 'STALE_CONTEXT' }));
+    });
   });
 
   it('projects exact sorted members for a real rule-based compatibility-group plan', () => {
@@ -735,6 +790,8 @@ describe('extension AI image suite projection', () => {
     retryState.suite.slots[1].childWorkflow.jobs[0].model = 'fake-image-suite-v1';
     retryState.suite.slots[1].childWorkflow.jobs[0].costReservation.provider = 'fake';
     retryState.suite.slots[1].childWorkflow.jobs[0].costReservation.model = 'fake-image-suite-v1';
+    retryState.suite.slots[1].childWorkflow.jobs[0].costReservation.estimatedCostMinor = 0;
+    retryState.suite.slots[1].childWorkflow.jobs[0].costReservation.maximumCostMinor = 0;
 
     const retryProjection = projectExtensionAiImageSuite({
       requested: binding,

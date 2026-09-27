@@ -497,9 +497,21 @@ describe('Prisma AI image suite repository', () => {
                     costReservation: {
                       select: {
                         status: true,
+                        currency: true,
+                        estimatedCostMinor: true,
+                        maximumCostMinor: true,
                         provider: true,
                         model: true,
                         requestFingerprint: true,
+                        settlements: {
+                          orderBy: { createdAt: 'desc' },
+                          take: 1,
+                          select: {
+                            kind: true,
+                            actualCostMinor: true,
+                            billedUnits: true,
+                          },
+                        },
                       },
                     },
                     _count: {

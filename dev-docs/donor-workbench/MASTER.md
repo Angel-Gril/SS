@@ -16,15 +16,14 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 - [x] Phase 0: Foundation and Safety (3/3 tasks) [details](./phase-0-foundation.md)
 - [x] Phase 1: Donor Workbench Shell (3/3 tasks) [details](./phase-1-shell.md)
 - [x] Phase 2: Draft and Media Parity (4/4 tasks) [details](./phase-2-parity.md)
-- [ ] Phase 3: Shop, Billing, Publish (1/3 tasks) [details](./phase-3-operations.md)
+- [ ] Phase 3: Shop, Billing, Publish (2/3 tasks) [details](./phase-3-operations.md)
 - [ ] Phase 4: Release and Cutover (0/3 tasks) [details](./phase-4-cutover.md)
 
 ## Current Status
 
-Phase 2 is complete and Phase 3 is active with `D3.1` complete. The donor shop picker now requests only the scoped device shop projection and fails before the legacy account-token branch if the device reader is unavailable. Candidate review, append-to-draft and task recovery retain their existing server owners; hosted suite pause/continue remains in the AI workbench owner. The 1.0.365 localhost handoff hotfix remains separate in `e83f4e57`; donor migration work is not deployed or published.
+Phase 2 is complete and Phase 3 is active with `D3.1-D3.2` complete. The donor shop picker is device-only. ERP-hosted quote/reservation/latest-settlement summaries are now server-derived and double-sanitized into the media stage without billing IDs or command authority; the self-supplied API Key path truthfully displays zero ERP generation charge. The 1.0.365 localhost handoff hotfix remains separate in `e83f4e57`; donor migration work is not deployed or published.
 
 ## Next Steps
 
-1. Add quote/reservation/settlement projections without exposing internal billing identities.
-2. Keep Ozon publish behind the existing publisher receipt/reconciliation owner.
-3. Keep the production entrypoint unchanged until an allowlisted real-product canary passes.
+1. Surface controlled Ozon publish only through the existing publisher receipt/reconciliation owner.
+2. Keep the production entrypoint unchanged until an allowlisted real-product canary passes.

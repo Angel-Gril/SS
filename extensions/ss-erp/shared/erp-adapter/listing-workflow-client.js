@@ -812,6 +812,46 @@
       && value.writesStoreDraft === false;
   }
 
+  function validSuiteBilling(value, slot, currency) {
+    var billing = record(value);
+    var settlement = billing && billing.settlement;
+    var reservationStatuses = [
+      'NOT_CREATED', 'RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+      'SETTLED', 'RELEASED',
+    ];
+    var settlementKinds = [
+      'CHARGE', 'RELEASE', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+      'RECONCILED_CHARGE', 'RECONCILED_RELEASE',
+    ];
+    if (!exactKeys(billing, [
+      'mode', 'currency', 'estimatedCostMinor', 'maximumCostMinor',
+      'reservationStatus', 'settlement',
+    ])
+      || billing.mode !== 'ERP_HOSTED'
+      || billing.currency !== currency
+      || billing.estimatedCostMinor !== slot.estimatedCostCents
+      || billing.maximumCostMinor !== slot.maximumCostCents
+      || !reservationStatuses.includes(billing.reservationStatus)) return false;
+    if (settlement === null) {
+      return !['SETTLED', 'RELEASED'].includes(billing.reservationStatus);
+    }
+    if (!exactKeys(settlement, ['kind', 'actualCostMinor', 'billedUnits'])
+      || !settlementKinds.includes(settlement.kind)
+      || !(settlement.actualCostMinor === null
+        || boundedSuiteCost(settlement.actualCostMinor, false))
+      || !Number.isSafeInteger(settlement.billedUnits) || settlement.billedUnits < 0
+      || settlement.billedUnits > 1000000000) return false;
+    if (billing.reservationStatus === 'SETTLED') {
+      return ['CHARGE', 'RECONCILED_CHARGE'].includes(settlement.kind)
+        && settlement.actualCostMinor !== null;
+    }
+    if (billing.reservationStatus === 'RELEASED') {
+      return ['RELEASE', 'RECONCILED_RELEASE'].includes(settlement.kind)
+        && settlement.actualCostMinor === null;
+    }
+    return true;
+  }
+
   function canonicalTimestamp(value) {
     if (typeof value !== 'string' || !value || value.length > 100) return false;
     var parsed = new Date(value);
@@ -860,16 +900,17 @@
       && canonicalTimestamp(command.expectedTargetUpdatedAt);
   }
 
-  function validSuiteSlot(value, suite) {
+  function validSuiteSlot(value, suite, currency) {
     var slot = record(value);
     var ownership = slot && record(slot.ownership);
     var commands = slot && record(slot.commands);
-    if (!exactKeys(slot, [
+    var slotKeys = [
       'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
       'status', 'attempt', 'revision',
       'estimatedCostCents', 'maximumCostCents', 'workflowId', 'workflowRevision',
       'reviewStatus', 'output', 'application', 'allowedActions', 'commands',
-    ])
+    ];
+    if (!exactKeys(slot, slot && slot.billing !== undefined ? slotKeys.concat('billing') : slotKeys)
       || !text(slot.id, 200)
       || !Number.isSafeInteger(slot.ordinal) || slot.ordinal < 0
       || !text(slot.slotKey, 500)
@@ -891,6 +932,7 @@
       || !AI_IMAGE_SUITE_REVIEW_STATUSES.includes(slot.reviewStatus)
       || !validSuiteOutput(slot.output)
       || !validSuiteApplication(slot.application)
+      || (slot.billing !== undefined && !validSuiteBilling(slot.billing, slot, currency))
       || !validAllowedCommands(
         slot.allowedActions,
         commands,
@@ -924,7 +966,9 @@
         && commands[action].suiteId === suite.id
         && commands[action].expectedSuiteRevision === suite.revision;
     })) return false;
-    return suite.slots.every(function (slot) { return validSuiteSlot(slot, suite); });
+    var currency = Object.prototype.hasOwnProperty.call(plan.preview, 'currency')
+      ? plan.preview.currency : 'USD';
+    return suite.slots.every(function (slot) { return validSuiteSlot(slot, suite, currency); });
   }
 
   function validAiImageSuiteProjection(value, expected) {

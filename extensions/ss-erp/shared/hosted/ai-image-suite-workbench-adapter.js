@@ -216,6 +216,45 @@
       && value.writesStoreDraft === false;
   }
 
+  function validBilling(value, slot, currency) {
+    var billing = record(value);
+    var settlement = billing && billing.settlement;
+    var reservationStatuses = [
+      'NOT_CREATED', 'RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+      'SETTLED', 'RELEASED',
+    ];
+    var settlementKinds = [
+      'CHARGE', 'RELEASE', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
+      'RECONCILED_CHARGE', 'RECONCILED_RELEASE',
+    ];
+    if (!exactKeys(billing, [
+      'mode', 'currency', 'estimatedCostMinor', 'maximumCostMinor',
+      'reservationStatus', 'settlement',
+    ])
+      || billing.mode !== 'ERP_HOSTED'
+      || billing.currency !== currency
+      || billing.estimatedCostMinor !== slot.estimatedCostCents
+      || billing.maximumCostMinor !== slot.maximumCostCents
+      || !reservationStatuses.includes(billing.reservationStatus)) return false;
+    if (settlement === null) {
+      return !['SETTLED', 'RELEASED'].includes(billing.reservationStatus);
+    }
+    if (!exactKeys(settlement, ['kind', 'actualCostMinor', 'billedUnits'])
+      || !settlementKinds.includes(settlement.kind)
+      || !(settlement.actualCostMinor === null || cost(settlement.actualCostMinor, false))
+      || !nonNegativeInteger(settlement.billedUnits)
+      || settlement.billedUnits > 1000000000) return false;
+    if (billing.reservationStatus === 'SETTLED') {
+      return ['CHARGE', 'RECONCILED_CHARGE'].includes(settlement.kind)
+        && settlement.actualCostMinor !== null;
+    }
+    if (billing.reservationStatus === 'RELEASED') {
+      return ['RELEASE', 'RECONCILED_RELEASE'].includes(settlement.kind)
+        && settlement.actualCostMinor === null;
+    }
+    return true;
+  }
+
   function canonicalTimestamp(value) {
     if (!text(value, 100)) return false;
     var parsed = new Date(value);
@@ -261,15 +300,16 @@
       && canonicalTimestamp(command.expectedTargetUpdatedAt);
   }
 
-  function validSuiteSlot(value, suite) {
+  function validSuiteSlot(value, suite, currency) {
     var slot = record(value);
     var commands = slot && record(slot.commands);
-    if (!exactKeys(slot, [
+    var slotKeys = [
       'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
       'status', 'attempt', 'revision',
       'estimatedCostCents', 'maximumCostCents', 'workflowId', 'workflowRevision',
       'reviewStatus', 'output', 'application', 'allowedActions', 'commands',
-    ])
+    ];
+    if (!exactKeys(slot, slot && slot.billing !== undefined ? slotKeys.concat('billing') : slotKeys)
       || !text(slot.id, 200)
       || !nonNegativeInteger(slot.ordinal)
       || !text(slot.slotKey, 500)
@@ -288,6 +328,7 @@
       || !REVIEW_STATUSES.includes(slot.reviewStatus)
       || !validCandidate(slot.output)
       || !validApplication(slot.application)
+      || (slot.billing !== undefined && !validBilling(slot.billing, slot, currency))
       || !validActionMap(
         slot.allowedActions,
         commands,
@@ -322,7 +363,14 @@
       || suite.slots.length > MAX_ITEMS
       || new Set(suite.slots.map(function (slot) { return slot.id; })).size !== suite.slots.length
       || new Set(suite.slots.map(function (slot) { return slot.slotKey; })).size !== suite.slots.length
-      || !suite.slots.every(function (slot) { return validSuiteSlot(slot, suite); })) return false;
+      || !suite.slots.every(function (slot) {
+        return validSuiteSlot(
+          slot,
+          suite,
+          Object.prototype.hasOwnProperty.call(plan.preview, 'currency')
+            ? plan.preview.currency : 'USD',
+        );
+      })) return false;
     var planSlots = new Map(plan.preview.slots.map(function (slot) {
       return [slot.slotKey, slot];
     }));
