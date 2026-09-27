@@ -3,7 +3,9 @@
 ## 2026-09-27 donor 工作台 Phase 4 package gate
 
 - `D4.1` 已完成：正式 extension verifier 新增 donor 必需文件、service-worker handoff owner、content/page 脚本顺序、五个 marketplace WAR 精确来源、默认关闭和无 donor 直连 Ozon/Provider 检查，source verifier 从 `475` 升至 `490 pass`，零 failure/warning。
-- 新隔离负例会同时删除 prompt adapter、加入 `<all_urls>`、破坏默认关闭、倒置脚本并注入 Ozon fetch，要求 verifier 对五项逐一拒绝；该测试已进入 preflight。D4.2 allowlist canary、D4.3 entrypoint cutover/rollback 尚未执行，本轮无 Provider/Ozon/生产写入或部署。
+- 新隔离负例会同时删除 prompt adapter、加入 `<all_urls>`、破坏默认关闭、倒置脚本并注入 Ozon fetch，要求 verifier 对五项逐一拒绝；该测试已进入 preflight。D4.1 完成时 D4.2 allowlist canary 尚未执行；当前 D4.2 已由下述独立回执关闭，D4.3 entrypoint cutover/rollback 仍未执行。
+- `D4.2` 隔离 allowlist canary 已完成：donor 除布尔 flag 外还要求最多 20 条精确 `platform:sourceProductId`；clean commit `8106c1688bc44ebce1b18269971a516910664c5a`、extension-tree SHA-256 `999c7f8199d9f7f62c12a3e5a0f92fbd4cbb8e837195b88f8f42298e249f7ee7` 上，flag-only 不注入，`1688:990499606077` 正例注入，相邻 `1688:990499606078` 负例拒绝。私有回执位于 `C:\Users\550W\AppData\Local\Temp\ss-erp-donor-mv3-evidence-9XVUf7\summary.json`。
+- 该 canary 使用精确 1688 URL 的拦截合成页面和 unpacked MV3，不是签名候选、生产部署或真实商品业务验收。D4.3 仍需独立生产 cutover 授权、同提交构建/签名/部署、真实 allowlist canary 与 rollback 证据；本轮 Provider/Ozon/生产 mutation 为 0。
 
 ## 2026-09-27 donor 工作台 Phase 3 设备店铺边界
 
