@@ -115,11 +115,11 @@ async function terminateProfileChromium(profile) {
     "$processes = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*\\chrome.exe' -and ([string]$_.CommandLine).Contains($profilePath) }",
     '$processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
   ].join('; ');
-  const process = spawn('powershell.exe', ['-NoProfile', '-Command', script, profile], {
+  const terminator = spawn('powershell.exe', ['-NoProfile', '-Command', script, profile], {
     windowsHide: true,
     stdio: 'ignore',
   });
-  await Promise.race([new Promise((resolve) => process.once('exit', resolve)), pause(5_000)]);
+  await Promise.race([new Promise((resolve) => terminator.once('exit', resolve)), pause(5_000)]);
 }
 
 async function extensionTreeSha256(root) {

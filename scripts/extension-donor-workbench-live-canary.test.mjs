@@ -185,6 +185,19 @@ test('prefers system Chrome with monitored extension loading over older Playwrig
   assert.ok(systemChrome >= 0 && playwrightChrome > systemChrome && capabilityError > playwrightChrome);
 });
 
+test('cleanup does not shadow the Node process owner before platform detection', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  const cleanup = source.slice(
+    source.indexOf('async function terminateProfileChromium'),
+    source.indexOf('async function extensionTreeSha256'),
+  );
+  assert.match(cleanup, /if \(process\.platform !== 'win32'\) return;/u);
+  assert.doesNotMatch(cleanup, /const process\s*=/u);
+});
+
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {
   const extensionId = 'a'.repeat(32);
   const workerSession = 'worker-session';
