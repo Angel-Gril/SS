@@ -349,7 +349,10 @@ for (const invalid of [
 
 const bridge = fs.readFileSync(bridgePath, 'utf8');
 assert.match(bridge, /ss-erp:donor-workbench-preview-enabled/);
+assert.match(bridge, /ss-erp:donor-workbench-preview-allowlist:v1/);
 assert.match(bridge, /enabled\s*!==\s*true/);
+assert.match(bridge, /normalizedAllowlist\(allowlist\)\.has\(currentSourceAllowlistKey\(\)\)/);
+assert.match(bridge, /ALLOWLIST_LIMIT\s*=\s*20/);
 assert.match(bridge, /event\.source\s*!==\s*frame\.contentWindow/);
 assert.match(bridge, /event\.origin\s*!==\s*extensionOrigin/);
 assert.match(bridge, /allowedShopIds\.has\(command\.shopId\)/);

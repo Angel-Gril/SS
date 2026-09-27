@@ -841,10 +841,12 @@ checkScriptLoadOrder(donorHtmlScripts, [
   'pages/source-workbench-shell.js',
 ], 'donor workbench page');
 if (donorBridgeText.includes("ss-erp:donor-workbench-preview-enabled")
-  && donorBridgeText.includes('enabled !== true')) {
-  pass('donor workbench entrypoint remains default-off');
+  && donorBridgeText.includes('ss-erp:donor-workbench-preview-allowlist:v1')
+  && donorBridgeText.includes('enabled !== true')
+  && donorBridgeText.includes('normalizedAllowlist(allowlist).has(currentSourceAllowlistKey())')) {
+  pass('donor workbench entrypoint remains default-off and allowlisted');
 } else {
-  fail('donor workbench entrypoint is not default-off');
+  fail('donor workbench entrypoint is not default-off and allowlisted');
 }
 if (/\bfetch\s*\(/u.test(donorPageText)
   || /api\.ozon\.ru|chrome\.debugger|https:\/\/\*\/\*/iu.test(donorPageText + donorBridgeText)) {

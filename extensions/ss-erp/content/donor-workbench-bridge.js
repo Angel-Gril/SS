@@ -2,6 +2,8 @@
   'use strict';
 
   var FEATURE_KEY = 'ss-erp:donor-workbench-preview-enabled';
+  var ALLOWLIST_KEY = 'ss-erp:donor-workbench-preview-allowlist:v1';
+  var ALLOWLIST_LIMIT = 20;
   var HOST_ID = 'ss-erp-donor-workbench-host';
   var TRIGGER_ID = 'ss-erp-donor-workbench-trigger';
   var FRAME_ID = 'ss-erp-donor-workbench-frame';
@@ -53,6 +55,44 @@
     if (hostname.includes('taobao.com')) return 'taobao';
     if (hostname.includes('tmall.com')) return 'tmall';
     return '';
+  }
+
+  function sourceProductIdFromUrl(value, platform) {
+    try {
+      var url = new URL(value);
+      var productId = '';
+      if (platform === '1688') {
+        var match = url.pathname.match(/^\/offer\/([^/]+)\.html$/u);
+        productId = match ? decodeURIComponent(match[1]) : '';
+      } else if (platform === 'pdd') {
+        productId = url.searchParams.get('goods_id') || '';
+      } else if (platform === 'taobao' || platform === 'tmall') {
+        productId = url.searchParams.get('id') || '';
+      }
+      var normalized = String(productId || '').normalize('NFKC').trim();
+      return normalized && normalized.length <= 200
+        && !/[\u0000-\u001f\u007f]/u.test(normalized) ? normalized : '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function currentSourceAllowlistKey() {
+    var platform = sourcePlatform();
+    var productId = sourceProductIdFromUrl(location.href, platform);
+    return platform && productId ? platform + ':' + encodeURIComponent(productId) : '';
+  }
+
+  function normalizedAllowlist(value) {
+    if (!Array.isArray(value) || value.length > ALLOWLIST_LIMIT) return new Set();
+    var entries = new Set();
+    value.forEach(function (entry) {
+      if (typeof entry !== 'string' || entry !== entry.normalize('NFKC').trim()
+        || entry.length < 3 || entry.length > 700
+        || !/^(?:1688|pdd|taobao|tmall):[A-Za-z0-9.!~_%'-]+$/u.test(entry)) return;
+      entries.add(entry);
+    });
+    return entries.size === value.length ? entries : new Set();
   }
 
   function sendRuntimeMessage(message) {
@@ -533,12 +573,21 @@
     frame = null;
   }
 
-  function setEnabled(enabled) {
-    if (enabled !== true) {
+  function setEnabled(enabled, allowlist) {
+    if (enabled !== true || !normalizedAllowlist(allowlist).has(currentSourceAllowlistKey())) {
       unmount();
       return;
     }
     mount();
+  }
+
+  function refreshRolloutState() {
+    chrome.storage.local.get([FEATURE_KEY, ALLOWLIST_KEY], function (result) {
+      setEnabled(
+        Boolean(result && result[FEATURE_KEY] === true),
+        result && result[ALLOWLIST_KEY],
+      );
+    });
   }
 
   globalThis.addEventListener('message', function (event) {
@@ -604,16 +653,12 @@
   });
   globalThis.addEventListener('pageshow', function (event) {
     if (!event.persisted) return;
-    chrome.storage.local.get([FEATURE_KEY], function (result) {
-      setEnabled(Boolean(result && result[FEATURE_KEY] === true));
-    });
+    refreshRolloutState();
   });
   chrome.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName === 'local' && changes[FEATURE_KEY]) {
-      setEnabled(changes[FEATURE_KEY].newValue === true);
+    if (areaName === 'local' && (changes[FEATURE_KEY] || changes[ALLOWLIST_KEY])) {
+      refreshRolloutState();
     }
   });
-  chrome.storage.local.get([FEATURE_KEY], function (result) {
-    setEnabled(Boolean(result && result[FEATURE_KEY] === true));
-  });
+  refreshRolloutState();
 }());

@@ -63,7 +63,7 @@ try {
   assert.notEqual(result.status, 0, 'a weakened donor package must fail verification');
   assert.match(output, /donor workbench file shared\/donor-workbench\/prompt-adapter\.js missing/u);
   assert.match(output, /donor workbench web-accessible boundary is not exact/u);
-  assert.match(output, /donor workbench entrypoint is not default-off/u);
+  assert.match(output, /donor workbench entrypoint is not default-off and allowlisted/u);
   assert.match(output, /donor workbench contains a forbidden direct network or broad-permission path/u);
   assert.match(
     output,

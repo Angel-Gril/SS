@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTENSION_ROOT = path.join(ROOT, 'extensions', 'ss-erp');
 const PRODUCT_URL = 'https://detail.1688.com/offer/990499606077.html';
+const NEGATIVE_PRODUCT_URL = 'https://detail.1688.com/offer/990499606078.html';
 const FEATURE_KEY = 'ss-erp:donor-workbench-preview-enabled';
+const ALLOWLIST_KEY = 'ss-erp:donor-workbench-preview-allowlist:v1';
+const ALLOWED_SOURCE_KEY = '1688:990499606077';
+const NEGATIVE_SOURCE_KEY = '1688:990499606078';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function until(check, label, timeout = 20_000) {
@@ -113,12 +118,45 @@ function productHtml() {
     </main></body></html>`;
 }
 
+async function extensionTreeSha256(root) {
+  const files = [];
+  async function walk(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(absolute);
+      else if (entry.isFile()) files.push(absolute);
+    }
+  }
+  await walk(root);
+  const hash = createHash('sha256');
+  for (const file of files) {
+    hash.update(path.relative(root, file).replaceAll('\\', '/'));
+    hash.update('\0');
+    hash.update(await readFile(file));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function gitOutput(args) {
+  const result = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, `git ${args.join(' ')} failed`);
+  return String(result.stdout || '').trim();
+}
+
 async function run() {
   const artifacts = await mkdtemp(path.join(os.tmpdir(), 'ss-erp-donor-mv3-evidence-'));
   const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-donor-mv3-profile-')));
+  const sourceCommit = gitOutput(['rev-parse', 'HEAD']);
+  const worktreeClean = gitOutput(['status', '--short']) === '';
+  if (process.argv.includes('--require-clean')) assert.equal(worktreeClean, true, 'canary requires a clean worktree');
   const summary = {
-    contractVersion: 'ss-erp-donor-workbench-mv3-acceptance/v1', ok: false,
+    contractVersion: 'ss-erp-donor-workbench-mv3-acceptance/v2', ok: false,
     artifacts, screenshot: null, extensionId: null, sourceTitle: null,
+    sourceCommit, extensionTreeSha256: await extensionTreeSha256(EXTENSION_ROOT), worktreeClean,
+    allowlistKey: ALLOWLIST_KEY, allowedSourceKey: ALLOWED_SOURCE_KEY,
+    negativeSourceKey: NEGATIVE_SOURCE_KEY, negativeSourceBlocked: false,
     pageErrors: [], blockedRequests: [], productionMutations: 0, providerRequests: 0, ozonRequests: 0,
   };
   let child;
@@ -175,7 +213,10 @@ async function run() {
       `SS ERP extension service worker was not found: ${JSON.stringify(workerDiagnostics)}`);
     summary.extensionId = new URL(workerTarget.url).hostname;
     const workerEval = await cdp.send('Runtime.evaluate', {
-      expression: `chrome.storage.local.set({${JSON.stringify(FEATURE_KEY)}: true})`,
+      expression: `chrome.storage.local.set({
+        ${JSON.stringify(FEATURE_KEY)}: true,
+        ${JSON.stringify(ALLOWLIST_KEY)}: []
+      })`,
       awaitPromise: true, returnByValue: true,
     }, workerSession);
     if (workerEval.exceptionDetails) {
@@ -200,7 +241,7 @@ async function run() {
       if (sessionId !== pageSession) return;
       void (async () => {
         const url = new URL(event.request.url);
-        if (url.href === PRODUCT_URL) {
+        if (url.origin === 'https://detail.1688.com' && /^\/offer\/[^/]+\.html$/u.test(url.pathname)) {
           const body = Buffer.from(productHtml());
           await send('Fetch.fulfillRequest', {
             requestId: event.requestId, responseCode: 200,
@@ -237,6 +278,16 @@ async function run() {
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: PRODUCT_URL });
     await until(() => evaluate('document.readyState === "complete"'), 'synthetic source page load');
+    await pause(300);
+    assert.equal(await evaluate('!!document.querySelector("#ss-erp-donor-workbench-trigger")'), false,
+      'feature flag alone must not bypass the exact product allowlist');
+    const allowlistEval = await cdp.send('Runtime.evaluate', {
+      expression: `chrome.storage.local.set({
+        ${JSON.stringify(ALLOWLIST_KEY)}: [${JSON.stringify(ALLOWED_SOURCE_KEY)}]
+      })`,
+      awaitPromise: true, returnByValue: true,
+    }, workerSession);
+    if (allowlistEval.exceptionDetails) throw new Error('canary allowlist write failed');
     await until(() => evaluate('!!document.querySelector("#ss-erp-donor-workbench-trigger")'), 'donor workbench trigger injection');
 
     const point = await evaluate(`(() => { const n=document.querySelector('#ss-erp-donor-workbench-trigger'); const r=n.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
@@ -276,6 +327,14 @@ async function run() {
     const screenshot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, fromSurface: true });
     summary.screenshot = path.join(artifacts, 'source-page-workbench.png');
     await writeFile(summary.screenshot, Buffer.from(screenshot.data, 'base64'));
+
+    await send('Page.navigate', { url: NEGATIVE_PRODUCT_URL });
+    await until(() => evaluate('document.readyState === "complete"'), 'non-allowlisted source page load');
+    await pause(400);
+    summary.negativeSourceBlocked = await evaluate(
+      '!document.querySelector("#ss-erp-donor-workbench-trigger")',
+    );
+    assert.equal(summary.negativeSourceBlocked, true, 'a non-allowlisted product must not mount donor UI');
 
     assert.deepEqual(summary.pageErrors, []);
     assert.deepEqual(summary.blockedRequests, []);
