@@ -13,6 +13,7 @@ import {
   buildDonorWorkbenchLiveCanaryReceipt,
   parseDonorWorkbenchLiveCanaryOptions,
   recordDonorWorkbenchExtensionMutation,
+  selectAuthorized1688Cookies,
 } from './extension-donor-workbench-live-canary-contract.mjs';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import {
@@ -90,6 +91,15 @@ class Cdp {
       this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
+
+  close() {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('CDP connection closed'));
+    }
+    this.pending.clear();
+    this.socket.close();
+  }
 }
 
 function chromeExecutable() {
@@ -146,6 +156,96 @@ async function extensionTreeSha256(root) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function cookieFingerprint(cookies) {
+  return cookies.map((cookie) => [
+    cookie.name,
+    cookie.value,
+    cookie.domain,
+    cookie.path,
+    cookie.httpOnly,
+    cookie.secure,
+    cookie.sameSite || '',
+    cookie.expires || 0,
+    cookie.priority || '',
+    cookie.sameParty ?? null,
+    cookie.sourceScheme || '',
+    cookie.sourcePort ?? null,
+  ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+async function importAuthorized1688Cookies(targetCdp, sourceOrigin, urls) {
+  const versionUrl = `${sourceOrigin}/json/version`;
+  const response = await fetch(versionUrl, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok || response.url !== versionUrl) {
+    throw new Error('authorized cookie source CDP version endpoint is unavailable');
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text) > 64 * 1024) {
+    throw new Error('authorized cookie source CDP version response is too large');
+  }
+  let version;
+  try {
+    version = JSON.parse(text);
+  } catch {
+    throw new Error('authorized cookie source CDP version response is invalid');
+  }
+  let socketUrl;
+  try {
+    socketUrl = new URL(version.webSocketDebuggerUrl);
+  } catch {
+    throw new Error('authorized cookie source CDP WebSocket is invalid');
+  }
+  const source = new URL(sourceOrigin);
+  if (socketUrl.protocol !== 'ws:'
+    || socketUrl.hostname !== '127.0.0.1'
+    || socketUrl.port !== source.port || socketUrl.username || socketUrl.password
+    || socketUrl.search || socketUrl.hash
+    || !/^\/devtools\/browser\/[A-Za-z0-9-]+$/u.test(socketUrl.pathname)) {
+    throw new Error('authorized cookie source CDP WebSocket escaped loopback');
+  }
+  const sourceCdp = await Cdp.connect(socketUrl.href);
+  let selected;
+  let sourceSession = '';
+  try {
+    const targets = (await sourceCdp.send('Target.getTargets')).targetInfos || [];
+    const page = targets.find((target) => {
+      if (target.type !== 'page' || !target.targetId) return false;
+      try {
+        const hostname = new URL(target.url).hostname.toLowerCase();
+        return hostname === '1688.com' || hostname.endsWith('.1688.com');
+      } catch {
+        return false;
+      }
+    });
+    if (!page) throw new Error('authorized cookie source has no active 1688 page');
+    sourceSession = (await sourceCdp.send('Target.attachToTarget', {
+      targetId: page.targetId,
+      flatten: true,
+    })).sessionId;
+    const sourceCookies = await sourceCdp.send('Network.getCookies', { urls }, sourceSession);
+    selected = selectAuthorized1688Cookies(sourceCookies.cookies);
+  } finally {
+    if (sourceSession) {
+      try { await sourceCdp.send('Target.detachFromTarget', { sessionId: sourceSession }); } catch {}
+    }
+    sourceCdp.close();
+  }
+  await targetCdp.send('Storage.setCookies', { cookies: selected.cookies });
+  const targetCookies = selectAuthorized1688Cookies(
+    (await targetCdp.send('Storage.getCookies')).cookies,
+  );
+  if (JSON.stringify(cookieFingerprint(targetCookies.cookies))
+    !== JSON.stringify(cookieFingerprint(selected.cookies))) {
+    throw new Error('authorized 1688 cookie import verification failed');
+  }
+  return selected.summary;
 }
 
 function gitOutput(args) {
@@ -261,6 +361,10 @@ async function run() {
       }
     }, 'live canary Chromium startup');
     cdp = await Cdp.connect(`ws://127.0.0.1:${activePort[0]}${activePort[1]}`);
+    const cookieImport = await importAuthorized1688Cookies(cdp, options.cookieSourceCdp, [
+      options.product.url,
+      options.negativeProduct.url,
+    ]);
     let extensionId = '';
     let workerSession = '';
     let iframeObserverArmed = false;
@@ -639,6 +743,7 @@ async function run() {
         keyId: signature.keyId,
         signedAt: signature.signedAt,
       },
+      cookieImport,
       product: {
         url: options.product.url,
         sourceKey: options.product.sourceKey,

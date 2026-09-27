@@ -7,6 +7,7 @@ import {
   buildDonorWorkbenchLiveCanaryReceipt,
   parseDonorWorkbenchLiveCanaryOptions,
   recordDonorWorkbenchExtensionMutation,
+  selectAuthorized1688Cookies,
 } from './extension-donor-workbench-live-canary-contract.mjs';
 
 const repoRoot = process.cwd();
@@ -31,6 +32,7 @@ function args(overrides = {}) {
     '--expected-tree-sha256': treeSha256,
     '--expected-title-sha256': 'c'.repeat(64),
     '--expected-negative-title-sha256': '2'.repeat(64),
+    '--cookie-source-cdp': 'http://127.0.0.1:9222',
     '--product-url': positiveUrl,
     '--negative-product-url': negativeUrl,
     '--output': output,
@@ -59,6 +61,7 @@ test('parses a release-bound distinct-product 1688 live canary', () => {
   assert.equal(parsed.extensionTreeSha256, treeSha256);
   assert.equal(parsed.expectedTitleSha256, 'c'.repeat(64));
   assert.equal(parsed.expectedNegativeTitleSha256, '2'.repeat(64));
+  assert.equal(parsed.cookieSourceCdp, 'http://127.0.0.1:9222');
   assert.equal(parsed.product.sourceKey, '1688:990499606077');
   assert.equal(parsed.negativeProduct.sourceKey, '1688:990499606078');
   assert.equal(parsed.output, output);
@@ -89,6 +92,78 @@ test('rejects malformed, duplicate-source, in-repository, and overwrite inputs',
     ], { repoRoot }),
     /exactly once/u,
   );
+  assert.throws(
+    () => parseDonorWorkbenchLiveCanaryOptions(args({
+      '--cookie-source-cdp': 'http://192.168.1.8:9222',
+    }), { repoRoot }),
+    /loopback/u,
+  );
+});
+
+test('selects only bounded unexpired 1688 cookies without widening their scope', () => {
+  const selected = selectAuthorized1688Cookies([
+    {
+      name: 'session', value: 'secret-value', domain: '.1688.com', path: '/',
+      expires: 2_000_000_000, httpOnly: true, secure: true, sameSite: 'Lax',
+      priority: 'High', sameParty: true, sourceScheme: 'Secure', sourcePort: 443, size: 99,
+    },
+    {
+      name: 'detail', value: 'detail-value', domain: 'detail.1688.com', path: '/offer',
+      expires: -1, httpOnly: false, secure: true, sameSite: 'None',
+      priority: 'Medium', sameParty: false, sourceScheme: 'Secure', sourcePort: 443,
+    },
+    {
+      name: 'expired', value: 'old', domain: '.1688.com', path: '/',
+      expires: 1_600_000_000, httpOnly: false, secure: true, sameSite: 'Lax',
+    },
+    {
+      name: 'erp', value: 'must-not-copy', domain: '.ss-erp.com', path: '/',
+      expires: 2_000_000_000, httpOnly: true, secure: true, sameSite: 'Lax',
+    },
+    {
+      name: 'partitioned', value: 'must-stay-partitioned', domain: '.1688.com', path: '/',
+      expires: 2_000_000_000, httpOnly: true, secure: true, sameSite: 'None',
+      partitionKey: { topLevelSite: 'https://example.com', hasCrossSiteAncestor: true },
+    },
+  ], 1_900_000_000);
+  assert.deepEqual(selected.summary, {
+    scope: '1688-only',
+    count: 2,
+    domains: ['.1688.com', 'detail.1688.com'],
+  });
+  assert.deepEqual(selected.cookies, [
+    {
+      name: 'session', value: 'secret-value', domain: '.1688.com', path: '/',
+      expires: 2_000_000_000, httpOnly: true, secure: true, sameSite: 'Lax',
+      priority: 'High', sameParty: true, sourceScheme: 'Secure', sourcePort: 443,
+    },
+    {
+      name: 'detail', value: 'detail-value', domain: 'detail.1688.com', path: '/offer',
+      httpOnly: false, secure: true, sameSite: 'None',
+      priority: 'Medium', sameParty: false, sourceScheme: 'Secure', sourcePort: 443,
+    },
+  ]);
+  assert.equal(JSON.stringify(selected.summary).includes('secret-value'), false);
+  assert.throws(() => selectAuthorized1688Cookies([], 1_900_000_000), /no active 1688 cookies/u);
+  assert.throws(() => selectAuthorized1688Cookies(Array.from({ length: 129 }, (_, index) => ({
+    name: `cookie-${index}`, value: 'value', domain: '.1688.com', path: '/',
+    expires: 2_000_000_000, httpOnly: false, secure: true, sameSite: 'Lax',
+  })), 1_900_000_000), /exceed the import limit/u);
+  assert.throws(() => selectAuthorized1688Cookies(Array.from({ length: 33 }, (_, index) => ({
+    name: `large-${index}`, value: 'x'.repeat(8192), domain: '.1688.com', path: '/',
+    expires: 2_000_000_000, httpOnly: false, secure: true, sameSite: 'Lax',
+  })), 1_900_000_000), /exceed the import limit/u);
+});
+
+test('reads source cookies through URL-scoped page Network.getCookies only', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  assert.match(source, /sourceCdp\.send\('Network\.getCookies', \{ urls \}, sourceSession\)/u);
+  assert.doesNotMatch(source, /sourceCdp\.send\('Storage\.getCookies'/u);
+  assert.match(source, /hostname === '1688\.com' \|\| hostname\.endsWith\('\.1688\.com'\)/u);
+  assert.match(source, /Target\.detachFromTarget/u);
 });
 
 test('builds a PASS receipt only from complete cutover and rollback evidence', () => {
@@ -106,6 +181,11 @@ test('builds a PASS receipt only from complete cutover and rollback evidence', (
       cloudZipSha256: 'f'.repeat(64),
       keyId: 'release-key',
       signedAt: '2026-09-27T11:00:00.000Z',
+    },
+    cookieImport: {
+      scope: '1688-only',
+      count: 2,
+      domains: ['.1688.com', 'detail.1688.com'],
     },
     product: {
       url: positiveUrl,

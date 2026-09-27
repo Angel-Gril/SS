@@ -88,6 +88,22 @@ function outputPath(value, repoRoot) {
   return output;
 }
 
+function loopbackCdpOrigin(value) {
+  let url;
+  try {
+    url = new URL(String(value || ''));
+  } catch {
+    fail('cookie source CDP must be one loopback HTTP origin');
+  }
+  const port = Number(url.port);
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
+    || !Number.isSafeInteger(port) || port < 1024 || port > 65535
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    fail('cookie source CDP must be one loopback HTTP origin');
+  }
+  return url.origin;
+}
+
 export function parseDonorWorkbenchLiveCanaryOptions(args, { repoRoot = process.cwd() } = {}) {
   const required = new Set([
     '--extension-dir',
@@ -102,6 +118,7 @@ export function parseDonorWorkbenchLiveCanaryOptions(args, { repoRoot = process.
     '--product-url',
     '--negative-product-url',
     '--output',
+    '--cookie-source-cdp',
   ]);
   if (!Array.isArray(args) || args.length !== required.size * 2) {
     fail('every live canary option is required exactly once');
@@ -155,6 +172,7 @@ export function parseDonorWorkbenchLiveCanaryOptions(args, { repoRoot = process.
     expectedNegativeTitleSha256,
     product,
     negativeProduct,
+    cookieSourceCdp: loopbackCdpOrigin(values.get('--cookie-source-cdp')),
     output: outputPath(values.get('--output'), path.resolve(repoRoot)),
   };
 }
@@ -170,6 +188,72 @@ function text(value, field, maximum = 2048) {
 function zero(value, field) {
   if (value !== 0) fail(`${field} must be zero`);
   return value;
+}
+
+function boundedCookieText(value, field, maximum, allowEmpty = false) {
+  if (typeof value !== 'string' || (!allowEmpty && !value) || value.length > maximum
+    || [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    })) {
+    fail(`authorized 1688 cookie ${field} is invalid`);
+  }
+  return value;
+}
+
+export function selectAuthorized1688Cookies(value, nowSeconds = Date.now() / 1000) {
+  if (!Array.isArray(value) || value.length > 4096 || !Number.isFinite(nowSeconds)) {
+    fail('authorized 1688 cookie source is invalid');
+  }
+  const cookies = [];
+  let totalBytes = 0;
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const domain = String(candidate.domain || '').toLowerCase();
+    if (!/^\.?(?:[a-z0-9-]+\.)*1688\.com$/u.test(domain)) continue;
+    if (candidate.partitionKey || candidate.partitionKeyOpaque === true) continue;
+    const expires = Number(candidate.expires);
+    if (Number.isFinite(expires) && expires > 0 && expires <= nowSeconds) continue;
+    const cookie = {
+      name: boundedCookieText(candidate.name, 'name', 256),
+      value: boundedCookieText(candidate.value, 'value', 8192, true),
+      domain: boundedCookieText(domain, 'domain', 253),
+      path: boundedCookieText(candidate.path || '/', 'path', 1024),
+      httpOnly: candidate.httpOnly === true,
+      secure: candidate.secure === true,
+    };
+    if (!cookie.path.startsWith('/')) fail('authorized 1688 cookie path is invalid');
+    if (Number.isFinite(expires) && expires > nowSeconds) cookie.expires = expires;
+    if (['Strict', 'Lax', 'None'].includes(candidate.sameSite)) cookie.sameSite = candidate.sameSite;
+    if (['Low', 'Medium', 'High'].includes(candidate.priority)) cookie.priority = candidate.priority;
+    if (typeof candidate.sameParty === 'boolean') cookie.sameParty = candidate.sameParty;
+    if (['Unset', 'NonSecure', 'Secure'].includes(candidate.sourceScheme)) {
+      cookie.sourceScheme = candidate.sourceScheme;
+    }
+    if (candidate.sourcePort !== undefined) {
+      if (!Number.isSafeInteger(candidate.sourcePort)
+        || (candidate.sourcePort !== -1
+          && (candidate.sourcePort < 1 || candidate.sourcePort > 65535))) {
+        fail('authorized 1688 cookie sourcePort is invalid');
+      }
+      cookie.sourcePort = candidate.sourcePort;
+    }
+    totalBytes += Buffer.byteLength(cookie.name) + Buffer.byteLength(cookie.value)
+      + Buffer.byteLength(cookie.domain) + Buffer.byteLength(cookie.path);
+    if (cookies.length >= 128 || totalBytes > 256 * 1024) {
+      fail('authorized 1688 cookies exceed the import limit');
+    }
+    cookies.push(cookie);
+  }
+  if (!cookies.length) fail('no active 1688 cookies were available');
+  return {
+    cookies,
+    summary: {
+      scope: '1688-only',
+      count: cookies.length,
+      domains: [...new Set(cookies.map((cookie) => cookie.domain))].sort(),
+    },
+  };
 }
 
 function initiatorUrls(event) {
@@ -229,8 +313,8 @@ export function recordDonorWorkbenchExtensionMutation(network, event, {
 export function buildDonorWorkbenchLiveCanaryReceipt(value) {
   exactObject(value, [
     'observedAt', 'gitCommit', 'version', 'extensionTreeSha256', 'extensionId', 'browser',
-    'worktreeClean', 'releaseBinding', 'product', 'negativeProduct', 'cutover', 'network',
-    'pageErrors', 'screenshotSha256',
+    'worktreeClean', 'releaseBinding', 'cookieImport', 'product', 'negativeProduct', 'cutover',
+    'network', 'pageErrors', 'screenshotSha256',
   ], 'live canary');
   if (new Date(value.observedAt).toISOString() !== value.observedAt) fail('observedAt is invalid');
   if (!COMMIT.test(value.gitCommit)) fail('gitCommit is invalid');
@@ -249,6 +333,19 @@ export function buildDonorWorkbenchLiveCanaryReceipt(value) {
   text(value.releaseBinding.keyId, 'releaseBinding keyId', 256);
   if (new Date(value.releaseBinding.signedAt).toISOString() !== value.releaseBinding.signedAt) {
     fail('releaseBinding signedAt is invalid');
+  }
+  exactObject(value.cookieImport, ['scope', 'count', 'domains'], 'cookieImport');
+  if (value.cookieImport.scope !== '1688-only'
+    || !Number.isSafeInteger(value.cookieImport.count) || value.cookieImport.count < 1
+    || value.cookieImport.count > 128
+    || !Array.isArray(value.cookieImport.domains) || !value.cookieImport.domains.length
+    || value.cookieImport.domains.some((domain) => {
+      const normalized = String(domain || '').replace(/^\./u, '');
+      return normalized !== '1688.com' && !normalized.endsWith('.1688.com');
+    })
+    || JSON.stringify([...new Set(value.cookieImport.domains)].sort())
+      !== JSON.stringify(value.cookieImport.domains)) {
+    fail('cookieImport is invalid');
   }
   text(value.browser, 'browser');
   exactObject(value.product, [
