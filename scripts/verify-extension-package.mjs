@@ -709,6 +709,25 @@ const requiredUnifiedPublishModules = [
   'pages/ai-image-workbench-publish.js',
 ];
 
+const requiredDonorWorkbenchFiles = [
+  'shared/donor-workbench/workspace-contract.js',
+  'shared/donor-workbench/prompt-adapter.js',
+  'shared/donor-workbench/prompt-handoff.js',
+  'content/donor-workbench-bridge.js',
+  'content/donor-workbench-bridge.css',
+  'pages/source-workbench-shell.html',
+  'pages/source-workbench-shell.css',
+  'pages/source-workbench-shell.js',
+];
+
+const donorSourceMatches = [
+  'https://detail.1688.com/*',
+  'https://*.pinduoduo.com/*',
+  'https://*.yangkeduo.com/*',
+  'https://item.taobao.com/*',
+  'https://detail.tmall.com/*',
+];
+
 const requiredByokPages = [
   'pages/ai-provider-settings.html',
   'pages/ai-provider-settings.css',
@@ -735,6 +754,9 @@ for (const modulePath of requiredHostedPageModules) {
 }
 for (const modulePath of requiredUnifiedPublishModules) {
   fileExists(modulePath, `unified publish module ${modulePath}`);
+}
+for (const donorPath of requiredDonorWorkbenchFiles) {
+  fileExists(donorPath, `donor workbench file ${donorPath}`);
 }
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
@@ -773,6 +795,63 @@ checkScriptLoadOrder(
   requiredHostedBackgroundModules,
   'ERP-hosted service worker',
 );
+if (swText.includes('../shared/donor-workbench/prompt-handoff.js')) {
+  pass('service worker imports the donor prompt handoff owner');
+} else {
+  fail('service worker does not import the donor prompt handoff owner');
+}
+
+const donorContentEntry = (manifest.content_scripts || []).find((entry) => (
+  Array.isArray(entry.js) && entry.js.includes('content/donor-workbench-bridge.js')
+));
+if (!donorContentEntry) {
+  fail('donor workbench content-script entry missing');
+} else {
+  checkScriptLoadOrder(donorContentEntry.js || [], [
+    'shared/donor-workbench/workspace-contract.js',
+    'content/donor-workbench-bridge.js',
+    'content/source-listing-workbench.js',
+    'content/source-costing-panel.js',
+  ], 'donor workbench content-script');
+  if ((donorContentEntry.css || []).includes('content/donor-workbench-bridge.css')) {
+    pass('donor workbench content style is packaged');
+  } else {
+    fail('donor workbench content style missing');
+  }
+}
+
+const donorResourceGroup = (manifest.web_accessible_resources || []).find((group) => (
+  Array.isArray(group.resources) && group.resources.includes('pages/source-workbench-shell.html')
+));
+if (!donorResourceGroup
+  || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/source-workbench-shell.html'])
+  || !containsExactUniqueSet(donorResourceGroup.matches, donorSourceMatches)) {
+  fail('donor workbench web-accessible boundary is not exact');
+} else {
+  pass('donor workbench web-accessible boundary is exact');
+}
+
+const donorBridgeText = readFileSync(relToAbs('content/donor-workbench-bridge.js'), 'utf8');
+const donorPageText = readFileSync(relToAbs('pages/source-workbench-shell.js'), 'utf8');
+const donorHtmlScripts = parseHtmlLocalRefs('pages/source-workbench-shell.html')
+  .filter((value) => value.endsWith('.js'));
+checkScriptLoadOrder(donorHtmlScripts, [
+  'shared/donor-workbench/workspace-contract.js',
+  'shared/donor-workbench/prompt-adapter.js',
+  'pages/source-workbench-shell.js',
+], 'donor workbench page');
+if (donorBridgeText.includes("ss-erp:donor-workbench-preview-enabled")
+  && donorBridgeText.includes('enabled !== true')) {
+  pass('donor workbench entrypoint remains default-off');
+} else {
+  fail('donor workbench entrypoint is not default-off');
+}
+if (/\bfetch\s*\(/u.test(donorPageText)
+  || /api\.ozon\.ru|chrome\.debugger|https:\/\/\*\/\*/iu.test(donorPageText + donorBridgeText)) {
+  fail('donor workbench contains a forbidden direct network or broad-permission path');
+} else {
+  pass('donor workbench contains no direct Ozon/Provider network path');
+}
 
 const hostedPreviewWired = [
   'function getHostedAiImageSuitePreviewBridge()',

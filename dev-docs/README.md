@@ -1,5 +1,10 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 donor 工作台 Phase 4 package gate
+
+- `D4.1` 已完成：正式 extension verifier 新增 donor 必需文件、service-worker handoff owner、content/page 脚本顺序、五个 marketplace WAR 精确来源、默认关闭和无 donor 直连 Ozon/Provider 检查，source verifier 从 `475` 升至 `490 pass`，零 failure/warning。
+- 新隔离负例会同时删除 prompt adapter、加入 `<all_urls>`、破坏默认关闭、倒置脚本并注入 Ozon fetch，要求 verifier 对五项逐一拒绝；该测试已进入 preflight。D4.2 allowlist canary、D4.3 entrypoint cutover/rollback 尚未执行，本轮无 Provider/Ozon/生产写入或部署。
+
 ## 2026-09-27 donor 工作台 Phase 3 设备店铺边界
 
 - Phase 3 的 `D3.1` 已完成本地实现。donor 店铺选择器只接收设备 session 返回的 `{id,name,status}`，新 bridge 显式发送 `deviceOnly:true`；设备 shop reader 缺失或失败时在 legacy account-token 分支前直接拒绝，不会因旧兼容逻辑扩大店铺可见范围。
