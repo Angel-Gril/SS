@@ -789,17 +789,29 @@ async function run() {
     const screenshotBytes = Buffer.from(screenshot.data, 'base64');
     writeNewArtifactDurably(screenshotPath, screenshotBytes, { mode: 0o600 });
 
-    await navigate(options.negativeProduct.url, 'distinct negative product');
+    const negativeNavigation = await navigate(
+      options.negativeProduct.url,
+      'distinct negative product',
+    );
+    await until(
+      () => evaluate(`location.href === ${JSON.stringify(options.negativeProduct.url)}
+        && document.body?.innerText?.trim().length > 100
+        && document.images.length > 0`),
+      'negative product hydrated document facts',
+      15_000,
+    );
+    const negativeFrame = (await send('Page.getFrameTree')).frameTree?.frame;
+    if (negativeFrame?.id !== negativeNavigation.frameId
+      || negativeFrame.loaderId !== negativeNavigation.loaderId
+      || negativeFrame.url !== options.negativeProduct.url) {
+      throw new Error('negative product document changed after hydration');
+    }
     const negativePageTitle = String(await evaluate('document.title.trim()'));
     assert.doesNotMatch(negativePageTitle, /登录|验证码|安全验证|访问受限|login|captcha|verify/iu,
       'negative product resolved to an authentication or risk-control page');
     const negativePageTitleSha256 = sha256(Buffer.from(negativePageTitle, 'utf8'));
     assert.equal(negativePageTitleSha256, options.expectedNegativeTitleSha256,
       'negative product page title does not match the approved source fact');
-    assert.ok(await evaluate('document.body?.innerText?.trim().length > 100'),
-      'negative product page does not contain a real document body');
-    assert.ok(await evaluate('document.images.length > 0'),
-      'negative product page does not contain product media');
     const negativeBlocked = await remainsAbsent(DONOR_TRIGGER, 'distinct-product donor trigger');
 
     await navigate(options.product.url, 'rollback positive product');

@@ -328,6 +328,9 @@ test('binds readyState to the final exact-URL frame-tree loader', () => {
   assert.match(source, /Page\.getFrameTree/u);
   assert.match(source, /currentFrame\.loaderId !== finalNavigation\.loaderId/u);
   assert.doesNotMatch(source, /Page\.lifecycleEvent|Page\.setLifecycleEventsEnabled/u);
+  assert.match(source, /negative product hydrated document facts[\s\S]*15_000/u);
+  assert.match(source, /negativeFrame\.loaderId !== negativeNavigation\.loaderId/u);
+  assert.match(source, /negative product document changed after hydration/u);
 });
 
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {
