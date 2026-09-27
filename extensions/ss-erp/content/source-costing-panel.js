@@ -1855,7 +1855,7 @@
         platform: handoff.platform
       });
       if (!response || !response.ok) throw new Error(response && response.error || '打开 ERP 失败');
-      setStatus('已打开 ERP，可继续处理上架信息。', 'ok');
+      setStatus('已创建 ERP 标签页，请确认页面加载后继续创建草稿。', '');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {

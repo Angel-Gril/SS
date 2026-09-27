@@ -103,6 +103,16 @@ for (const [label, source] of [['popup', popup], ['source panel', sourcePanel]])
     `${label} CTA should invoke the controlled service-worker open message with its expected snapshot`,
   );
   assert.match(source, /\.handoff/, `${label} should enable its CTA only from a successful V2 handoff response`);
+  assert.doesNotMatch(
+    source,
+    /已打开 ERP[，,]可继续处理上架信息/u,
+    `${label} must not report a reachable ERP page after only creating a browser tab`,
+  );
+  assert.match(
+    source,
+    /已创建 ERP 标签页，请确认页面加载后继续创建草稿/u,
+    `${label} should describe the exact handoff outcome without claiming page readiness`,
+  );
 }
 assert.match(popup, /sourceWorkflowHandoffBtn\.hidden\s*=\s*!handoff/, 'popup CTA should remain hidden without a V2 handoff');
 assert.match(sourcePanel, /open-source-workflow[^\n]*hidden/, 'source panel CTA should be hidden by default');
@@ -283,8 +293,25 @@ assert.equal(
   context.handoffApi.buildConfiguredSourceWorkflowUrl('https://erp.example:8443/api/collect?mode=cloud#api', handoff),
   `https://erp.example:8443${handoff.path}`,
 );
+context.SS_ERP_DEPLOYMENT_DEFAULTS = {
+  target: 'cloud',
+  erpBaseUrl: 'https://app.ss-erp.com',
+  erpAdminBaseUrl: 'https://admin.ss-erp.com',
+  erpApiBaseUrl: 'https://ss-erp.com',
+};
+assert.equal(
+  context.handoffApi.buildConfiguredSourceWorkflowUrl('', handoff),
+  `https://app.ss-erp.com${handoff.path}`,
+  'a fresh cloud package must use its signed Web origin when mutable runtime storage is empty',
+);
+assert.equal(
+  context.handoffApi.buildConfiguredSourceWorkflowUrl('http://127.0.0.1:3001', handoff),
+  `https://app.ss-erp.com${handoff.path}`,
+  'a cloud package must ignore a stale local endpoint when opening its ERP workflow',
+);
 stored['ss-erp:source-workflow:last-handoff:v1'] = { ...handoff, path: 'https://attacker.example/' };
 assert.equal(await context.handoffApi.readPersistedSourceWorkflowHandoff(), null);
+context.SS_ERP_DEPLOYMENT_DEFAULTS = { target: 'source' };
 assert.throws(
   () => context.handoffApi.buildConfiguredSourceWorkflowUrl('javascript:alert(1)', handoff),
   /ERP 地址无效/,

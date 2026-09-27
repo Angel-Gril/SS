@@ -85,7 +85,7 @@
       sourceWorkflowHandoffBtn.textContent = '打开 ERP 继续';
       sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
       if (response && response.ok) {
-        setActionStatus('已打开 ERP，可继续处理上架信息', 'ok');
+        setActionStatus('已创建 ERP 标签页，请确认页面加载后继续创建草稿', '');
         return;
       }
       setActionStatus((response && response.error) || '打开 ERP 失败', 'fail');

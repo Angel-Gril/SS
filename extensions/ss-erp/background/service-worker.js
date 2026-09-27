@@ -3928,7 +3928,10 @@ function inferErpWebBaseUrl(value) {
 }
 
 function buildConfiguredSourceWorkflowUrl(baseUrlValue, handoff) {
-  const webBaseUrl = new URL(inferErpWebBaseUrl(baseUrlValue));
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  const webBaseUrl = new URL(inferErpWebBaseUrl(
+    defaults.target === 'cloud' ? defaults.erpBaseUrl : baseUrlValue,
+  ));
   const target = new URL(handoff.path, webBaseUrl);
   if (target.origin !== webBaseUrl.origin || target.pathname !== '/collect/source') {
     throw new Error('ERP 工作流地址无效');
