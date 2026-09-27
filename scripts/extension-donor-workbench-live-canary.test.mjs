@@ -207,15 +207,16 @@ test('waits for the resumed Worker context before asserting manifest identity', 
   assert.match(source, /release-bound Worker identity[^]*10_000/u);
 });
 
-test('binds navigation readiness to the final exact-URL document loader', () => {
+test('binds readyState to the final exact-URL frame-tree loader', () => {
   const source = readFileSync(
     path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
     'utf8',
   );
   assert.match(source, /Page\.frameNavigated/u);
   assert.match(source, /observed\.url === url/u);
-  assert.match(source, /finalNavigation\.loaderId[^]*DOMContentLoaded/u);
-  assert.doesNotMatch(source, /navigation\.loaderId\\0load/u);
+  assert.match(source, /Page\.getFrameTree/u);
+  assert.match(source, /currentFrame\.loaderId !== finalNavigation\.loaderId/u);
+  assert.doesNotMatch(source, /Page\.lifecycleEvent|Page\.setLifecycleEventsEnabled/u);
 });
 
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {

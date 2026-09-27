@@ -397,7 +397,6 @@ async function run() {
       flatten: true,
     })).sessionId;
     const send = (method, params = {}) => cdp.send(method, params, pageSession);
-    const lifecycleEvents = new Set();
     const frameNavigations = new Map();
     let iframeSession = '';
     let iframeReadyResolve;
@@ -421,10 +420,6 @@ async function run() {
       if (sessionId !== pageSession) return;
       const error = extensionException(event);
       if (error) pageErrors.push(error);
-    });
-    cdp.on('Page.lifecycleEvent', (event, sessionId) => {
-      if (sessionId !== pageSession || !event?.frameId || !event?.loaderId || !event?.name) return;
-      lifecycleEvents.add(`${event.frameId}\0${event.loaderId}\0${event.name}`);
     });
     cdp.on('Page.frameNavigated', (event, sessionId) => {
       if (sessionId !== pageSession || !event?.frame?.id || event.frame.parentId) return;
@@ -462,7 +457,6 @@ async function run() {
       })(), 'iframe target', expectedIframe ? iframeReadyReject : null);
     });
     await send('Page.enable');
-    await send('Page.setLifecycleEventsEnabled', { enabled: true });
     await cdp.send('Target.setAutoAttach', {
       autoAttach: true,
       waitForDebuggerOnStart: true,
@@ -488,17 +482,16 @@ async function run() {
         return observed?.loaderId && observed.url === url ? observed : null;
       }, `${label} exact frame navigation`, 45_000);
       await until(
-        () => lifecycleEvents.has(
-          `${navigation.frameId}\0${finalNavigation.loaderId}\0DOMContentLoaded`,
-        ),
-        `${label} lifecycle DOMContentLoaded`,
-        45_000,
-      );
-      await until(
         () => evaluate(`document.readyState !== "loading" && location.href === ${JSON.stringify(url)}`),
         `${label} exact document readiness`,
-        15_000,
+        45_000,
       );
+      const currentFrame = (await send('Page.getFrameTree')).frameTree?.frame;
+      if (currentFrame?.id !== navigation.frameId
+        || currentFrame.loaderId !== finalNavigation.loaderId
+        || currentFrame.url !== url) {
+        throw new Error(`${label} active document loader changed after readiness`);
+      }
     };
     const remainsAbsent = async (selector, label, duration = 3_000) => {
       const deadline = Date.now() + duration;
