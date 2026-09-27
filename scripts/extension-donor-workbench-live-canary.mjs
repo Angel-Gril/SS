@@ -601,6 +601,11 @@ async function run() {
       })(), 'iframe target');
     });
     await send('Page.enable');
+    await cdp.send('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+    }, pageSession);
     await send('Runtime.enable');
     await send('Network.enable');
     await send('Emulation.setDeviceMetricsOverride', {

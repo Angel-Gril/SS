@@ -252,13 +252,14 @@ test('arms paused iframe observation before opening the donor shell', () => {
   const click = source.indexOf("type: 'mousePressed'");
   assert.ok(attachedHandler >= 0 && resume > attachedHandler && autoAttach > resume
     && paused > autoAttach && click > paused);
-  assert.equal(source.match(/'Target\.setAutoAttach'/gu)?.length, 1);
+  assert.equal(source.match(/'Target\.setAutoAttach'/gu)?.length, 2);
   assert.match(source, /Runtime\.executionContextCreated/u);
   assert.match(source, /context\.origin !== `chrome-extension:\/\/\$\{extensionId\}`/u);
   assert.match(source, /context\.auxData\.isDefault !== true/u);
   assert.match(source, /frameByUrl\([\s\S]*source-workbench-shell\.html/u);
   assert.match(source, /contextKey\(pageSession, sameProcessFrame\.id\)/u);
   assert.match(source, /manualInspectionTargetId = oopif\.targetId/u);
+  assert.doesNotMatch(source, /autoAttach: false/u);
   assert.match(source, /Target\.attachToTarget[\s\S]*targetId: oopif\.targetId/u);
   assert.match(source, /Page\.getFrameTree', \{\}, inspectionSession/u);
   assert.match(source, /rootFrame\.id !== oopif\.targetId/u);
