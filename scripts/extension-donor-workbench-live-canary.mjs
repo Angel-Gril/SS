@@ -269,6 +269,16 @@ function extensionException(event) {
   return details.exception?.description || details.text || 'Extension exception';
 }
 
+function frameByUrl(frameTree, url) {
+  if (!frameTree?.frame) return null;
+  if (frameTree.frame.url === url) return frameTree.frame;
+  for (const child of frameTree.childFrames || []) {
+    const found = frameByUrl(child, url);
+    if (found) return found;
+  }
+  return null;
+}
+
 async function run() {
   const options = parseDonorWorkbenchLiveCanaryOptions(process.argv.slice(2), { repoRoot: ROOT });
   assert.equal(gitOutput(['rev-parse', 'HEAD']), options.gitCommit,
@@ -502,13 +512,9 @@ async function run() {
     })).sessionId;
     const send = (method, params = {}) => cdp.send(method, params, pageSession);
     const frameNavigations = new Map();
+    const extensionContexts = new Map();
     let iframeSession = '';
-    let iframeReadyResolve;
-    let iframeReadyReject;
-    const iframeReady = new Promise((resolve, reject) => {
-      iframeReadyResolve = resolve;
-      iframeReadyReject = reject;
-    });
+    let iframeContextId = 0;
     const evaluate = async (expression) => {
       const result = await send('Runtime.evaluate', {
         expression,
@@ -532,21 +538,26 @@ async function run() {
         url: event.frame.url || '',
       });
     });
+    cdp.on('Runtime.executionContextCreated', (event, sessionId) => {
+      const context = event?.context;
+      if (!context?.id || context.origin !== `chrome-extension://${extensionId}`
+        || !context.auxData?.frameId || context.auxData.isDefault !== true) return;
+      const observedSession = sessionId || pageSession;
+      extensionContexts.set(context.auxData.frameId, {
+        sessionId: observedSession,
+        contextId: context.id,
+      });
+      if (observedSession !== pageSession) extensionSessions.add(observedSession);
+    });
     iframeObserverArmed = true;
     cdp.on('Target.attachedToTarget', (event) => {
       const childSession = event?.sessionId;
       if (!childSession || event.targetInfo?.type !== 'iframe') return;
-      const expectedIframe = event.targetInfo.url
-        === `chrome-extension://${extensionId}/pages/source-workbench-shell.html`;
       trackObserver((async () => {
         let failure;
         try {
-          if (expectedIframe) {
-            iframeSession = childSession;
-            extensionSessions.add(childSession);
-            await cdp.send('Runtime.enable', {}, childSession);
-            await cdp.send('Network.enable', {}, childSession);
-          }
+          await cdp.send('Runtime.enable', {}, childSession);
+          await cdp.send('Network.enable', {}, childSession);
         } catch (error) {
           failure = error;
         } finally {
@@ -557,8 +568,7 @@ async function run() {
           }
         }
         if (failure) throw failure;
-        if (expectedIframe) iframeReadyResolve(childSession);
-      })(), 'iframe target', expectedIframe ? iframeReadyReject : null);
+      })(), 'iframe target');
     });
     await send('Page.enable');
     await cdp.send('Target.setAutoAttach', {
@@ -638,13 +648,21 @@ async function run() {
       'donor workbench iframe open',
     ));
 
-    await Promise.race([
-      iframeReady,
-      pause(30_000).then(() => { throw new Error('Timed out: paused donor extension iframe'); }),
-    ]);
+    await settleObservers();
+    const iframeContext = await until(async () => {
+      const tree = (await send('Page.getFrameTree')).frameTree;
+      const frame = frameByUrl(
+        tree,
+        `chrome-extension://${extensionId}/pages/source-workbench-shell.html`,
+      );
+      return frame ? extensionContexts.get(frame.id) || null : null;
+    }, 'exact donor extension iframe context', 30_000);
+    iframeSession = iframeContext.sessionId;
+    iframeContextId = iframeContext.contextId;
     const iframeEvaluate = async (expression) => {
       const result = await cdp.send('Runtime.evaluate', {
         expression,
+        contextId: iframeContextId,
         awaitPromise: true,
         returnByValue: true,
       }, iframeSession);
