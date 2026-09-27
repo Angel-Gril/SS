@@ -194,6 +194,7 @@ test('builds a PASS receipt only from complete cutover and rollback evidence', (
       title: 'Real product',
       titleSha256: '1'.repeat(64),
       mediaCount: 3,
+      renderedMediaCount: 2,
       skuCount: 2,
     },
     negativeProduct: {
@@ -331,6 +332,8 @@ test('binds readyState to the final exact-URL frame-tree loader', () => {
   assert.match(source, /negative product hydrated document facts[\s\S]*15_000/u);
   assert.match(source, /negativeFrame\.loaderId !== negativeNavigation\.loaderId/u);
   assert.match(source, /negative product document changed after hydration/u);
+  assert.match(source, /real source media pixels[\s\S]*15_000/u);
+  assert.match(source, /naturalWidth > 0[\s\S]*naturalHeight > 0/u);
 });
 
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {

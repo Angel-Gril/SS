@@ -779,6 +779,18 @@ async function run() {
       'real product projection does not contain source media');
     assert.ok(Number.isSafeInteger(skuCount) && skuCount > 0,
       'real product projection does not contain source SKUs');
+    const renderedMedia = await until(async () => {
+      const state = await iframeEvaluate(`(() => {
+        const main = document.querySelector('[data-role="product-visual"] img');
+        const thumbs = [...document.querySelectorAll('.media-thumb img')];
+        return {
+          main: Boolean(main && main.complete && main.naturalWidth > 0 && main.naturalHeight > 0),
+          count: thumbs.filter((image) => image.complete
+            && image.naturalWidth > 0 && image.naturalHeight > 0).length
+        };
+      })()`);
+      return state.main && state.count > 0 ? state : null;
+    }, 'real source media pixels', 15_000);
     await send('Page.bringToFront');
     await evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const screenshot = await send('Page.captureScreenshot', {
@@ -866,6 +878,7 @@ async function run() {
         title,
         titleSha256,
         mediaCount,
+        renderedMediaCount: renderedMedia.count,
         skuCount,
       },
       negativeProduct: {

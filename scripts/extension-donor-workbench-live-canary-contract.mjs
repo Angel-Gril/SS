@@ -349,7 +349,8 @@ export function buildDonorWorkbenchLiveCanaryReceipt(value) {
   }
   text(value.browser, 'browser');
   exactObject(value.product, [
-    'url', 'sourceKey', 'finalUrl', 'title', 'titleSha256', 'mediaCount', 'skuCount',
+    'url', 'sourceKey', 'finalUrl', 'title', 'titleSha256', 'mediaCount',
+    'renderedMediaCount', 'skuCount',
   ], 'product');
   exactObject(value.negativeProduct, [
     'url', 'sourceKey', 'pageTitle', 'pageTitleSha256', 'blocked',
@@ -369,6 +370,11 @@ export function buildDonorWorkbenchLiveCanaryReceipt(value) {
   if (!SHA256.test(value.product.titleSha256)) fail('product titleSha256 is invalid');
   if (!Number.isSafeInteger(value.product.mediaCount) || value.product.mediaCount < 1) {
     fail('product mediaCount is invalid');
+  }
+  if (!Number.isSafeInteger(value.product.renderedMediaCount)
+    || value.product.renderedMediaCount < 1
+    || value.product.renderedMediaCount > value.product.mediaCount) {
+    fail('product renderedMediaCount is invalid');
   }
   if (!Number.isSafeInteger(value.product.skuCount) || value.product.skuCount < 1) {
     fail('product skuCount is invalid');
