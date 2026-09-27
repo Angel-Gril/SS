@@ -198,6 +198,15 @@ test('cleanup does not shadow the Node process owner before platform detection',
   assert.doesNotMatch(cleanup, /const process\s*=/u);
 });
 
+test('waits for the resumed Worker context before asserting manifest identity', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  assert.match(source, /await until\(async \(\) => \{[\s\S]*typeof chrome ===/u);
+  assert.match(source, /release-bound Worker identity[^]*10_000/u);
+});
+
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {
   const extensionId = 'a'.repeat(32);
   const workerSession = 'worker-session';

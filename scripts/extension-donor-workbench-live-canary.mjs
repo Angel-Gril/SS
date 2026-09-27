@@ -348,12 +348,21 @@ async function run() {
     ]);
     assert.equal(loadedExtension.id, extensionId, 'loaded extension ID does not match its Worker');
     await settleObservers();
-    const identity = await cdp.send('Runtime.evaluate', {
-      expression: 'chrome.runtime?.getManifest?.() || null',
-      returnByValue: true,
-    }, workerSession);
-    assert.ok(identity.result?.value?.name?.startsWith('SS ERP - 松鼠跨境卖家助手')
-      && identity.result.value.version === options.version,
+    const identity = await until(async () => {
+      try {
+        const result = await cdp.send('Runtime.evaluate', {
+          expression: 'typeof chrome === "object" ? chrome.runtime?.getManifest?.() || null : null',
+          returnByValue: true,
+        }, workerSession);
+        return result.exceptionDetails || !result.result?.value?.version
+          ? null
+          : result.result.value;
+      } catch {
+        return null;
+      }
+    }, 'release-bound Worker identity', 10_000);
+    assert.ok(identity.name?.startsWith('SS ERP - 松鼠跨境卖家助手')
+      && identity.version === options.version,
     'release-bound SS ERP Worker identity is invalid');
 
     const storage = async (expression) => {
