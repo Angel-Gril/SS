@@ -144,6 +144,12 @@ test('popup shop and Cookie sync use scoped device auth without a legacy account
   const deviceShopCase = collectWorkerSource.slice(deviceShopCaseStart, deviceShopCaseEnd);
   assert.match(deviceShopCase, /never fall back to an account-wide/);
   assert.doesNotMatch(deviceShopCase, /deviceResult\.errorCode !== 'device_unpaired'/);
+  assert.match(deviceShopCase, /message\.deviceOnly\s*===\s*true/);
+  assert.match(deviceShopCase, /device_shop_reader_unavailable/);
+  assert.ok(
+    deviceShopCase.indexOf('device_shop_reader_unavailable') < deviceShopCase.indexOf('getStoredErpConnection'),
+    'device-only shop reads must fail before the legacy account-token branch',
+  );
   assert.match(policySource, /'ozon-calc:get-ozon-cdn-auth'/);
   const preloadStart = ozonOverlaySource.indexOf('function autoSyncCurrentOzonCookieForListData');
   const preloadEnd = ozonOverlaySource.indexOf('\n  function hasDisplayablePremiumData', preloadStart);

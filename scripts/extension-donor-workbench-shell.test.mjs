@@ -282,6 +282,7 @@ assert.match(bridge, /ss-erp:source-listing-workbench-media-history/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirm-prepare/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirmed/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-command/);
+assert.match(bridge, /type:\s*'spb-self-hosted:get-ozon-shops',\s*deviceOnly:\s*true/u);
 assert.match(bridge, /response\.result\.state\s*===\s*'choice_required'/);
 assert.match(bridge, /preferredSkuKey:\s*command\.preferredSkuKey/);
 assert.match(bridge, /choiceBinding:\s*response\.result\.binding/);

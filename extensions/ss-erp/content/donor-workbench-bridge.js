@@ -129,7 +129,7 @@
       if (!baseProjection.source.sourceProductId) throw new Error('当前商品缺少稳定商品 ID');
 
       var results = await Promise.all([
-        sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops' }).catch(function (error) {
+        sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops', deviceOnly: true }).catch(function (error) {
           return { ok: false, error: error && error.message ? error.message : String(error) };
         }),
         sendRuntimeMessage({

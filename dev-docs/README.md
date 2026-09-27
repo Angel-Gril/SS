@@ -1,5 +1,10 @@
 # SS ERP 内部开发真源
 
+## 2026-09-27 donor 工作台 Phase 3 设备店铺边界
+
+- Phase 3 的 `D3.1` 已完成本地实现。donor 店铺选择器只接收设备 session 返回的 `{id,name,status}`，新 bridge 显式发送 `deviceOnly:true`；设备 shop reader 缺失或失败时在 legacy account-token 分支前直接拒绝，不会因旧兼容逻辑扩大店铺可见范围。
+- 建草稿仍只发送投影内 shop ID、snapshot 与所选来源 SKU，owner/active grant/shop membership/scopes/draft facts 由设备 transport 和服务端重算。donor shell、logistics scoped-auth 与 unpacked MV3 验收通过；真实 Provider、Ozon 和生产 mutation 为 0。下一步是 `D3.2` 的 quote/reservation/settlement 安全投影。
+
 ## 2026-09-27 donor 工作台 Phase 2 草稿与生图接线
 
 - donor 工作台 Phase 2 的 `D2.1-D2.4` 已完成本地实现：店铺草稿继续调用 device-scoped `CREATE_DRAFT` owner；图片阶段新增独立处理 SKU、来源参考图、视觉 JSON 及正/负提示词编辑，并通过现有 SS ERP ERP 托管/自带 API Key 工作台执行，不复制 donor Provider/Ozon 直连或密钥存储。

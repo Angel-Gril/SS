@@ -6250,6 +6250,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, data: testResults };
       }
       case "spb-self-hosted:get-ozon-shops": {
+        const deviceOnly = message.deviceOnly === true;
         // Prefer the scoped device session created by the new pairing flow.
         // The legacy account-equivalent token is intentionally optional and
         // may be empty even when the device is fully ACTIVE.
@@ -6272,6 +6273,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             ok: false,
             errorCode: 'device_shop_read_failed',
             error: '设备店铺读取失败',
+          };
+        }
+
+        if (deviceOnly) {
+          return {
+            ok: false,
+            errorCode: 'device_shop_reader_unavailable',
+            error: '设备店铺读取模块不可用，请重新加载扩展',
           };
         }
 
