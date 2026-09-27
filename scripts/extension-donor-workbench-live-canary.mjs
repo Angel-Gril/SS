@@ -483,34 +483,45 @@ async function run() {
       && identity.version === options.version,
     'release-bound SS ERP Worker identity is invalid');
 
-    const storage = async (expression) => {
-      let result;
-      try {
-        result = await cdp.send('Runtime.evaluate', {
-          expression,
-          awaitPromise: true,
-          returnByValue: true,
-        }, workerSession);
-      } catch (error) {
-        throw new Error(`Worker storage evaluation failed: ${error.message}`);
-      }
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-      }
-      return result.result.value;
-    };
-    const setRollout = (enabled, allowlist) => storage(`new Promise((resolve, reject) => {
-      chrome.storage.local.set({
-        ${JSON.stringify(DONOR_WORKBENCH_FEATURE_KEY)}: ${JSON.stringify(enabled)},
-        ${JSON.stringify(DONOR_WORKBENCH_ALLOWLIST_KEY)}: ${JSON.stringify(allowlist)}
-      }, () => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(true));
-    })`);
-    const clearRollout = () => storage(`new Promise((resolve, reject) => {
-      chrome.storage.local.remove([
-        ${JSON.stringify(DONOR_WORKBENCH_FEATURE_KEY)},
-        ${JSON.stringify(DONOR_WORKBENCH_ALLOWLIST_KEY)}
-      ], () => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(true));
-    })`);
+    const storagePageUrl = `chrome-extension://${extensionId}/pages/ai-image-workbench-launch.html`;
+    const storageTarget = await cdp.send('Target.createTarget', { url: storagePageUrl });
+    const storageSession = (await cdp.send('Target.attachToTarget', {
+      targetId: storageTarget.targetId,
+      flatten: true,
+    })).sessionId;
+    extensionSessions.add(storageSession);
+    await cdp.send('Runtime.enable', {}, storageSession);
+    await cdp.send('Network.enable', {}, storageSession);
+    await cdp.send('Page.enable', {}, storageSession);
+    const storageFrame = await until(async () => {
+      const frame = (await cdp.send('Page.getFrameTree', {}, storageSession)).frameTree?.frame;
+      return frame?.url === storagePageUrl ? frame : null;
+    }, 'extension storage page identity', 10_000);
+    if (storageFrame.id !== storageTarget.targetId) {
+      throw new Error('extension storage page target identity is invalid');
+    }
+    const storageIdentity = await cdp.send('Runtime.evaluate', {
+      expression: '({ id: chrome.runtime.id, version: chrome.runtime.getManifest().version })',
+      returnByValue: true,
+    }, storageSession);
+    if (storageIdentity.exceptionDetails || storageIdentity.result?.value?.id !== extensionId
+      || storageIdentity.result.value.version !== options.version) {
+      throw new Error('extension storage page runtime identity is invalid');
+    }
+    const rolloutKeys = [DONOR_WORKBENCH_FEATURE_KEY, DONOR_WORKBENCH_ALLOWLIST_KEY];
+    const setRollout = (enabled, allowlist) => cdp.send('Extensions.setStorageItems', {
+      id: extensionId,
+      storageArea: 'local',
+      values: {
+        [DONOR_WORKBENCH_FEATURE_KEY]: enabled,
+        [DONOR_WORKBENCH_ALLOWLIST_KEY]: allowlist,
+      },
+    }, storageSession);
+    const clearRollout = () => cdp.send('Extensions.removeStorageItems', {
+      id: extensionId,
+      storageArea: 'local',
+      keys: rolloutKeys,
+    }, storageSession);
     await clearRollout();
     await setRollout(true, []);
 
@@ -806,10 +817,11 @@ async function run() {
       'legacy source workbench after rollback',
       15_000,
     ));
-    const stored = await storage(`new Promise((resolve) => chrome.storage.local.get([
-      ${JSON.stringify(DONOR_WORKBENCH_FEATURE_KEY)},
-      ${JSON.stringify(DONOR_WORKBENCH_ALLOWLIST_KEY)}
-    ], resolve))`);
+    const stored = (await cdp.send('Extensions.getStorageItems', {
+      id: extensionId,
+      storageArea: 'local',
+      keys: rolloutKeys,
+    }, storageSession)).data;
     const storageCleared = stored && Object.keys(stored).length === 0;
     assert.equal(storageCleared, true, 'donor rollout storage keys were not cleared');
     await settleObservers();

@@ -302,6 +302,22 @@ test('waits for the resumed Worker context before asserting manifest identity', 
   assert.match(source, /release-bound Worker identity[^]*10_000/u);
 });
 
+test('uses browser-owned extension storage for rollout and rollback', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  assert.match(source, /Extensions\.setStorageItems/u);
+  assert.match(source, /Extensions\.removeStorageItems/u);
+  assert.match(source, /Extensions\.getStorageItems/u);
+  assert.match(source, /pages\/ai-image-workbench-launch\.html/u);
+  assert.match(source, /storageIdentity\.result\.value\.version !== options\.version/u);
+  assert.match(source, /Extensions\.setStorageItems[\s\S]*storageSession\)/u);
+  assert.match(source, /Extensions\.removeStorageItems[\s\S]*storageSession\)/u);
+  assert.match(source, /Extensions\.getStorageItems[\s\S]*storageSession\)/u);
+  assert.doesNotMatch(source, /chrome\.storage\.local\.(?:set|remove|get)/u);
+});
+
 test('binds readyState to the final exact-URL frame-tree loader', () => {
   const source = readFileSync(
     path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
