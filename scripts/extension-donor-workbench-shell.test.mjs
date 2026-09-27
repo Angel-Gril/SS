@@ -106,6 +106,26 @@ assert.deepEqual(
     selectedSkuKeys: ['sku-white', 'sku-blue'],
   },
 );
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'OPEN_MEDIA_WORKBENCH',
+    requestId: 'request-media-1',
+    listingWorkflowId: 'draft-1',
+    preferredSkuKey: null,
+    sourceSelectionKey: null,
+    choiceBinding: null,
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'OPEN_MEDIA_WORKBENCH',
+    requestId: 'request-media-1',
+    listingWorkflowId: 'draft-1',
+    preferredSkuKey: null,
+    sourceSelectionKey: null,
+    choiceBinding: null,
+  },
+);
 for (const invalid of [
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: [] },
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: ['sku-white'], ownerUserId: 'forged' },
@@ -122,6 +142,7 @@ assert.match(bridge, /event\.origin\s*!==\s*extensionOrigin/);
 assert.match(bridge, /allowedShopIds\.has\(command\.shopId\)/);
 assert.match(bridge, /allowedSkuKeys\.has\(skuKey\)/);
 assert.match(bridge, /ss-erp:source-listing-workbench-draft-create/);
+assert.match(bridge, /ss-erp:source-ai-workbench-open/);
 assert.match(bridge, /hostname\.includes\('tmall\.com'\)\) return 'tmall'/);
 assert.match(bridge, /if \(wasOpen\) document\.documentElement\.style\.overflow = pageOverflow/);
 
@@ -130,6 +151,7 @@ const pageScript = fs.readFileSync(pageScriptPath, 'utf8');
 assert.match(page, /source-workbench-shell\.css/);
 assert.match(page, /shared\/donor-workbench\/workspace-contract\.js/);
 assert.match(page, /source-workbench-shell\.js/);
+assert.match(page, /data-action="open-ai-workbench"/);
 assert.doesNotMatch(page, /<script(?![^>]*\bsrc=)/i);
 assert.doesNotMatch(pageScript, /chrome\.runtime/);
 

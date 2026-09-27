@@ -2,7 +2,7 @@
   'use strict';
 
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
-  var COMMAND_TYPES = new Set(['READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT']);
+  var COMMAND_TYPES = new Set(['READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH']);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
 
@@ -333,6 +333,30 @@
         requestId: requestId,
         shopId: shopId,
         selectedSkuKeys: Object.freeze(selectedSkuKeys),
+      });
+    }
+    if (item.type === 'OPEN_MEDIA_WORKBENCH') {
+      var workbenchRequestId = commandBase(item, [
+        'contractVersion', 'type', 'requestId', 'listingWorkflowId',
+        'preferredSkuKey', 'sourceSelectionKey', 'choiceBinding',
+      ]);
+      var listingWorkflowId = text(item.listingWorkflowId, 200);
+      var preferredSkuKey = item.preferredSkuKey === null ? null : text(item.preferredSkuKey, 500);
+      var sourceSelectionKey = item.sourceSelectionKey === null ? null : text(item.sourceSelectionKey, 500);
+      if (!listingWorkflowId
+        || (item.preferredSkuKey !== null && !preferredSkuKey)
+        || (item.sourceSelectionKey !== null && !sourceSelectionKey)
+        || item.choiceBinding !== null) {
+        throw new TypeError('invalid donor workbench media launch command');
+      }
+      return Object.freeze({
+        contractVersion: CONTRACT_VERSION,
+        type: 'OPEN_MEDIA_WORKBENCH',
+        requestId: workbenchRequestId,
+        listingWorkflowId: listingWorkflowId,
+        preferredSkuKey: preferredSkuKey,
+        sourceSelectionKey: sourceSelectionKey,
+        choiceBinding: null,
       });
     }
     var requestId = commandBase(item, ['contractVersion', 'type', 'requestId']);

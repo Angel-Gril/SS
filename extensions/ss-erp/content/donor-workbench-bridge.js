@@ -214,6 +214,43 @@
     }
   }
 
+  async function openMediaWorkbench(command) {
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === command.listingWorkflowId;
+    });
+    if (!listing || !currentProjection.handoff
+      || !currentProjection.shops.some(function (shop) { return shop.id === listing.shopId; })) {
+      commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
+      return;
+    }
+    setBusy(true, '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-ai-workbench-open',
+        platform: currentProjection.source.platform,
+        sourceProductId: currentProjection.source.sourceProductId,
+        listingWorkflowId: command.listingWorkflowId,
+        preferredSkuKey: command.preferredSkuKey,
+        choiceBinding: command.choiceBinding,
+        sourceSelectionKey: command.sourceSelectionKey,
+      });
+      if (!response || !response.ok || !response.result) {
+        throw new Error(response && response.error || 'AI 图片工作台打开失败');
+      }
+      if (response.result.state === 'choice_required') {
+        throw new Error('当前商品有多个 SKU，请在现有 AI 图片工作台选择 SKU');
+      }
+      if (!['workbench_opened', 'workbench_focused'].includes(response.result.state)) {
+        throw new Error(response.result.reason || 'AI 图片工作台当前不可用');
+      }
+      commandResult(command.requestId, true, '');
+      await loadProjection({ force: true });
+    } catch (error) {
+      setBusy(false, error && error.message ? error.message : String(error));
+      commandResult(command.requestId, false, error && error.message ? error.message : String(error));
+    }
+  }
+
   function showFrame() {
     if (!frame || !trigger) return;
     open = true;
@@ -306,6 +343,7 @@
       return;
     }
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
+    if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
   });
 
   globalThis.addEventListener('pagehide', function (event) {

@@ -384,6 +384,8 @@
     renderReferences();
     renderQueue();
     syncPromptDraft();
+    var openButton = one('[data-action="open-ai-workbench"]');
+    openButton.disabled = projection.busy || !currentListing();
   }
 
   function reviewMetric(label, value) {
@@ -529,6 +531,21 @@
     send('CREATE_DRAFT', {
       shopId: selectedShopId,
       selectedSkuKeys: Array.from(selectedSkuKeys),
+    });
+  });
+  one('[data-action="open-ai-workbench"]').addEventListener('click', function (event) {
+    if (!event.isTrusted || projection.busy) return;
+    var listing = currentListing();
+    if (!listing) {
+      showToast('请先创建店铺草稿', true);
+      return;
+    }
+    var preferredSkuKey = selectedSkuKeys.size === 1 ? Array.from(selectedSkuKeys)[0] : null;
+    send('OPEN_MEDIA_WORKBENCH', {
+      listingWorkflowId: listing.id,
+      preferredSkuKey: preferredSkuKey,
+      sourceSelectionKey: preferredSkuKey,
+      choiceBinding: null,
     });
   });
   one('[data-role="prompt-json"]').addEventListener('input', validatePromptJson);
