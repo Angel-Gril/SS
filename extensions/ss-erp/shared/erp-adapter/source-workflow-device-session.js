@@ -42,6 +42,7 @@
   var BROWSER_ONE_CLICK_WATERMARK_PATH =
     '/api/extension-device/browser-one-click/watermark-templates/read';
   var PRODUCT_SELECTION_RULES_PATH = '/api/extension-device/product-selection/rules';
+  var SOURCE_WORKBENCH_DRAFT_PATH = '/api/extension-device/source-workbench/drafts';
   var HOSTED_PLAN_PATH = '/api/extension-device/source-workbench/plans';
   var HOSTED_LISTING_ASSIGNMENT_PATH =
     '/api/extension-device/source-workbench/ai-image-suite/listing-assignments';
@@ -179,6 +180,7 @@
       BROWSER_ONE_CLICK_STATUS_PATH,
       BROWSER_ONE_CLICK_JOBS_PATH,
       BROWSER_ONE_CLICK_WATERMARK_PATH,
+      SOURCE_WORKBENCH_DRAFT_PATH,
       HOSTED_PLAN_PATH,
       HOSTED_LISTING_ASSIGNMENT_PATH,
       HOSTED_PREVIEW_PATH,

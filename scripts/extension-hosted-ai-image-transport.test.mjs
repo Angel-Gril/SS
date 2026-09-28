@@ -224,6 +224,16 @@ const jsonTransport = api.createTransport({
   fetchImpl: async () => jsonResponse(),
 });
 await assert.doesNotReject(jsonTransport.post(
+  '/api/extension-device/source-workbench/drafts',
+  {
+    snapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    shopId: 'shop-1',
+    selectedSkuKeys: ['sku-1'],
+  },
+  { requiredScope: 'listing:write' },
+));
+await assert.doesNotReject(jsonTransport.post(
   '/api/extension-device/source-workbench/plans',
   { contractVersion: 'fixture/v1' },
   { requiredScope: 'media:execute' },
@@ -250,6 +260,9 @@ await assert.doesNotReject(jsonTransport.post(
 ));
 
 for (const path of [
+  '/api/extension-device/source-workbench/drafts?owner=other',
+  '/api/extension-device/source-workbench/drafts/extra',
+  'https://erp.example/api/extension-device/source-workbench/drafts',
   '/api/extension-device/source-workbench/plans/plan-1/delete',
   '/api/extension-device/source-workbench/plans/%2Fadmin/review',
   '/api/extension-device/source-workbench/plans/plan-1/review?owner=other',
