@@ -401,6 +401,9 @@ for (const source of [appDirDeploy, releaseDeploy, stagingDeploy]) {
 }
 assert.match(appDirDeploy, /assert_root_ancestor_chain "\$EXTENSION_RELEASE_ROOT"/u);
 assert.match(releaseDeploy, /assert_root_ancestor_chain "\$EXTENSION_RELEASE_ROOT"/u);
+assert.match(releaseDeploy, /tar --owner=0 --group=0 --numeric-owner -czf/u);
+assert.match(appDirDeploy, /tar --owner=0 --group=0 --numeric-owner -czf/u);
+assert.match(appDirDeploy, /tar -xzf .*--no-same-owner/u);
 assert.match(stagingDeploy, /EXTENSION_RELEASE_ROOT ancestors must be readable root-owned canonical directories/u);
 assert.match(
   stagingDeploy,

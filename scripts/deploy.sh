@@ -212,7 +212,7 @@ git "${GIT_SAFE_ARGS[@]}" cat-file blob \
   "$COMMIT_HASH:scripts/git-commit-tree.mjs" > "$PACKAGE_SNAPSHOT_TOOL"
 log "Packaging $COMMIT_HASH"
 node "$PACKAGE_SNAPSHOT_TOOL" materialize "$COMMIT_HASH" "$PACKAGE_SOURCE_ROOT"
-tar -czf "$TARBALL" -C "$PACKAGE_SNAPSHOT_ROOT" ss-erp
+tar --owner=0 --group=0 --numeric-owner -czf "$TARBALL" -C "$PACKAGE_SNAPSHOT_ROOT" ss-erp
 ARCHIVE_SHA256="$(node -e '
 const fs = require("node:fs");
 const crypto = require("node:crypto");
