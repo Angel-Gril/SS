@@ -193,9 +193,9 @@ test('builds a PASS receipt only from complete cutover and rollback evidence', (
       finalUrl: positiveUrl,
       title: 'Real product',
       titleSha256: '1'.repeat(64),
-      mediaCount: 3,
-      renderedMediaCount: 2,
-      skuCount: 2,
+      renderedPageMediaCount: 2,
+      toolbarActionCount: 8,
+      sourceWorkbenchVisible: true,
     },
     negativeProduct: {
       url: negativeUrl,
@@ -207,7 +207,10 @@ test('builds a PASS receipt only from complete cutover and rollback evidence', (
     cutover: {
       flagOnlyBlocked: true,
       allowlistedMounted: true,
-      iframeOpened: true,
+      unifiedMediaOpened: true,
+      iframeSuppressed: true,
+      calculatorMediaSeparated: true,
+      unifiedMediaClosed: true,
       rollbackUnmounted: true,
       legacyBefore: true,
       legacyAfterRollback: true,
@@ -241,7 +244,7 @@ test('builds a PASS receipt only from complete cutover and rollback evidence', (
   );
 });
 
-test('arms paused iframe observation before opening the donor shell', () => {
+test('arms paused extension observation before opening the unified media card', () => {
   const source = readFileSync(
     path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
     'utf8',
@@ -257,17 +260,9 @@ test('arms paused iframe observation before opening the donor shell', () => {
   assert.match(source, /Runtime\.executionContextCreated/u);
   assert.match(source, /context\.origin !== `chrome-extension:\/\/\$\{extensionId\}`/u);
   assert.match(source, /context\.auxData\.isDefault !== true/u);
-  assert.match(source, /frameByUrl\([\s\S]*source-workbench-shell\.html/u);
-  assert.match(source, /contextKey\(pageSession, sameProcessFrame\.id\)/u);
-  assert.match(source, /manualInspectionTargetId = oopif\.targetId/u);
   assert.doesNotMatch(source, /autoAttach: false/u);
-  assert.match(source, /Target\.attachToTarget[\s\S]*targetId: oopif\.targetId/u);
-  assert.match(source, /Page\.getFrameTree', \{\}, inspectionSession/u);
-  assert.match(source, /rootFrame\.id !== oopif\.targetId/u);
-  assert.match(source, /rootFrame\.parentId !== positiveNavigation\.frameId/u);
-  assert.match(source, /contextKey\(inspectionSession, rootFrame\.id\)/u);
-  assert.match(source, /contextId: iframeContextId/u);
-  assert.match(source, /Donor iframe evaluation failed/u);
+  assert.match(source, /iframe target/u);
+  assert.match(source, /donor iframe suppression/u);
 });
 
 test('prefers system Chrome with monitored extension loading over older Playwright Chromium', () => {
@@ -332,8 +327,20 @@ test('binds readyState to the final exact-URL frame-tree loader', () => {
   assert.match(source, /negative product hydrated document facts[\s\S]*15_000/u);
   assert.match(source, /negativeFrame\.loaderId !== negativeNavigation\.loaderId/u);
   assert.match(source, /negative product document changed after hydration/u);
-  assert.match(source, /real source media pixels[\s\S]*15_000/u);
+  assert.match(source, /real source page media pixels[\s\S]*15_000/u);
   assert.match(source, /naturalWidth > 0[\s\S]*naturalHeight > 0/u);
+});
+
+test('accepts the unified media card cutover without opening the donor iframe', () => {
+  const source = readFileSync(
+    path.join(repoRoot, 'scripts', 'extension-donor-workbench-live-canary.mjs'),
+    'utf8',
+  );
+  assert.match(source, /#ss-erp-source-costing-panel/u);
+  assert.match(source, /classList\.contains\(['"]media-focus['"]\)/u);
+  assert.match(source, /donor iframe suppression/u);
+  assert.match(source, /calculator media separation/u);
+  assert.doesNotMatch(source, /donor workbench iframe open/u);
 });
 
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {

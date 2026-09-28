@@ -21,12 +21,12 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 
 ## Current Status
 
-Phases 0-3 are complete locally and Phase 4 is active with `D4.1-D4.2` complete. D4.3 production authorization was granted, but the release-bound real-product canary has no PASS receipt: the isolated headless profile never advances the real 1688 document beyond `readyState=loading`, despite an exact final frame/loader. No candidate was deployed or published, and the production entrypoint remains unchanged.
+Phases 0-3 are complete locally and Phase 4 is active with `D4.1-D4.2` complete. The unified media entry shipped to both application regions as `0db36e3d / 1.0.384`, while the website pointer remains on `6378b62e / 1.0.364`. D4.3 still has no PASS receipt: the first signed real-product rerun reached a complete logged-in 1688 document, but the old canary still waited for the donor iframe that the new unified entry intentionally suppresses.
 
-The current uncommitted continuation keeps the donor-derived shell as one continuous precision workspace and reconnects its media entry to the existing server-owned hosted workbench launch path. The primary AI entry and donor trigger now stay inside the existing media-focus card instead of opening a second workbench tab or global iframe on real marketplace pages; the shell contract accepts the hosted plan-create command and lets the Worker resolve donor slot keys to authoritative hosted slot IDs. This is local wiring only and has not produced Provider/Ozon writes or release evidence.
+The current continuation updates the release-bound canary owner to the shipped product model. It must prove the donor trigger opens the existing media-focus card, the calculator-only surface is hidden there, the donor iframe stays hidden, close/rollback restores the legacy entry, the negative product remains blocked, and Provider/Ozon/ERP mutations remain zero. The next candidate must be rebuilt and signed from this final commit before that evidence can close D4.3.
 
 ## Next Steps
 
-1. Select and explicitly authorize a repeatable live-canary browser context that has a valid 1688 page session, without weakening release, product-fingerprint, mutation or rollback checks.
-2. After that canary passes, obtain separate Provider-cost authorization for the final-commit fresh normal SUITE required by QA04.
-3. Deploy and switch the source entrypoint only with same-commit rollback evidence and independent publication approval.
+1. Rebuild/sign the final commit and rerun the updated release-bound real-product canary with the already authorized logged-in 1688 cookie source.
+2. After that canary passes, obtain final-commit fresh normal SUITE/QA04 evidence under the separate cost and mutation boundary.
+3. Generate regional canaries, website approval and CAS only after the final commit is deployed and every publication gate passes.

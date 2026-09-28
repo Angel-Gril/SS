@@ -26,6 +26,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DONOR_TRIGGER = '#ss-erp-donor-workbench-trigger';
 const DONOR_FRAME = '#ss-erp-donor-workbench-frame';
 const LEGACY_TRIGGER = '#ss-erp-source-costing-fab';
+const UNIFIED_MEDIA_PANEL = '#ss-erp-source-costing-panel';
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function until(check, label, timeout = 30_000) {
@@ -267,20 +268,6 @@ function extensionException(event) {
   ].filter(Boolean);
   if (!urls.some((url) => String(url).startsWith('chrome-extension://'))) return '';
   return details.exception?.description || details.text || 'Extension exception';
-}
-
-function frameByUrl(frameTree, url) {
-  if (!frameTree?.frame) return null;
-  if (frameTree.frame.url === url) return frameTree.frame;
-  for (const child of frameTree.childFrames || []) {
-    const found = frameByUrl(child, url);
-    if (found) return found;
-  }
-  return null;
-}
-
-function contextKey(sessionId, frameId) {
-  return `${sessionId}\0${frameId}`;
 }
 
 async function run() {
@@ -532,11 +519,6 @@ async function run() {
     })).sessionId;
     const send = (method, params = {}) => cdp.send(method, params, pageSession);
     const frameNavigations = new Map();
-    const extensionContexts = new Map();
-    const iframeTargets = new Map();
-    let manualInspectionTargetId = '';
-    let iframeSession = '';
-    let iframeContextId = 0;
     const evaluate = async (expression) => {
       let result;
       try {
@@ -570,29 +552,13 @@ async function run() {
       if (!context?.id || context.origin !== `chrome-extension://${extensionId}`
         || !context.auxData?.frameId || context.auxData.isDefault !== true) return;
       const observedSession = sessionId || pageSession;
-      extensionContexts.set(contextKey(observedSession, context.auxData.frameId), {
-        sessionId: observedSession,
-        contextId: context.id,
-      });
       if (observedSession !== pageSession) extensionSessions.add(observedSession);
-    });
-    cdp.on('Target.targetInfoChanged', (event) => {
-      const targetInfo = event?.targetInfo;
-      if (!targetInfo?.targetId) return;
-      for (const target of iframeTargets.values()) {
-        if (target.targetId === targetInfo.targetId) target.url = targetInfo.url || '';
-      }
     });
     iframeObserverArmed = true;
     cdp.on('Target.attachedToTarget', (event) => {
       const childSession = event?.sessionId;
       if (!childSession || event.targetInfo?.type !== 'iframe') return;
-      if (event.targetInfo.targetId === manualInspectionTargetId) return;
-      iframeTargets.set(childSession, {
-        sessionId: childSession,
-        targetId: event.targetInfo.targetId || '',
-        url: event.targetInfo.url || '',
-      });
+      extensionSessions.add(childSession);
       trackObserver((async () => {
         let failure;
         try {
@@ -659,7 +625,17 @@ async function run() {
       }
       return true;
     };
-    const positiveNavigation = await navigate(options.product.url, 'positive real product');
+    const remainsTrue = async (expression, label, duration = 3_000) => {
+      const deadline = Date.now() + duration;
+      while (Date.now() < deadline) {
+        if (await evaluate(expression) !== true) {
+          throw new Error(`${label} changed during the stability window`);
+        }
+        await pause(100);
+      }
+      return true;
+    };
+    await navigate(options.product.url, 'positive real product');
     const finalUrl = await evaluate('location.href');
     assert.equal(finalUrl, options.product.url, 'real product redirected away from the exact offer');
     const flagOnlyBlocked = await remainsAbsent(DONOR_TRIGGER, 'flag-only donor trigger');
@@ -685,82 +661,62 @@ async function run() {
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
     });
-    const iframeOpened = Boolean(await until(
-      () => evaluate(`document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden === false`),
-      'donor workbench iframe open',
-    ));
+    const unifiedMediaState = await until(async () => {
+      const value = await evaluate(`(() => {
+        const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
+        const frame = document.querySelector(${JSON.stringify(DONOR_FRAME)});
+        const workbench = panel?.querySelector('[data-role="source-listing-workbench"]');
+        const toolbar = panel?.querySelector('[data-role="precision-toolbar"]');
+        const sourceCard = panel?.querySelector('[data-role="source-card"]');
+        const contextTitle = panel?.querySelector('[data-role="context-title"]')?.textContent?.trim() || '';
+        const hiddenSelectors = [
+          '[data-role="ozon-card"]', '[data-role="source-card"]', '[data-role="cost"]',
+          '[data-role="input-card"]', '[data-role="result-card"]', '.ss-erp-source-cost',
+          '.ss-erp-source-actions'
+        ];
+        return {
+          opened: Boolean(panel?.classList.contains('open')
+            && panel.classList.contains('media-focus')
+            && panel.getAttribute('role') === 'dialog'
+            && panel.getAttribute('aria-modal') === 'true'),
+          iframeSuppressed: Boolean(frame && frame.hidden === true),
+          calculatorMediaSeparated: Boolean(panel && hiddenSelectors.every((selector) => {
+            const node = panel.querySelector(selector);
+            return node && getComputedStyle(node).display === 'none';
+          })),
+          sourceWorkbenchVisible: Boolean(workbench && workbench.hidden === false
+            && getComputedStyle(workbench).display !== 'none'),
+          toolbarActionCount: toolbar?.querySelectorAll('[data-precision-action]').length || 0,
+          sourceText: sourceCard?.textContent?.trim() || '',
+          contextTitle
+        };
+      })()`);
+      return value?.opened && value.iframeSuppressed && value.calculatorMediaSeparated
+        && value.sourceWorkbenchVisible && value.toolbarActionCount >= 8
+        && value.sourceText.length > 20 && value.contextTitle && !/读取/u.test(value.contextTitle)
+        ? value : null;
+    }, 'unified media card open');
+    const unifiedMediaOpened = true;
+    const iframeSuppressed = await remainsTrue(
+      `document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden === true`,
+      'donor iframe suppression',
+    );
+    const calculatorMediaSeparated = await remainsTrue(
+      `(() => {
+        const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
+        return Boolean(panel?.classList.contains('media-focus')
+          && ['[data-role="ozon-card"]','[data-role="source-card"]','[data-role="cost"]',
+            '[data-role="input-card"]','[data-role="result-card"]','.ss-erp-source-cost',
+            '.ss-erp-source-actions'].every((selector) => {
+              const node = panel.querySelector(selector);
+              return node && getComputedStyle(node).display === 'none';
+            }));
+      })()`,
+      'calculator media separation',
+    );
 
     await settleObservers();
-    const expectedIframeUrl = `chrome-extension://${extensionId}/pages/source-workbench-shell.html`;
-    const pageTree = (await send('Page.getFrameTree')).frameTree;
-    const sameProcessFrame = frameByUrl(pageTree, expectedIframeUrl);
-    let iframeContext;
-    if (sameProcessFrame) {
-      if (sameProcessFrame.parentId !== positiveNavigation.frameId) {
-        throw new Error('donor same-process frame identity is invalid');
-      }
-      iframeContext = await until(
-        () => extensionContexts.get(contextKey(pageSession, sameProcessFrame.id)) || null,
-        'exact same-process donor iframe context',
-        30_000,
-      );
-    } else {
-      const oopif = await until(
-        () => [...iframeTargets.values()].find((targetInfo) => targetInfo.url === expectedIframeUrl)
-          || null,
-        'exact donor OOPIF target',
-        10_000,
-      );
-      manualInspectionTargetId = oopif.targetId;
-      let inspectionSession;
-      try {
-        inspectionSession = (await cdp.send('Target.attachToTarget', {
-          targetId: oopif.targetId,
-          flatten: true,
-        })).sessionId;
-      } finally {
-        manualInspectionTargetId = '';
-      }
-      extensionSessions.add(inspectionSession);
-      await cdp.send('Runtime.enable', {}, inspectionSession);
-      await cdp.send('Network.enable', {}, inspectionSession);
-      await cdp.send('Page.enable', {}, inspectionSession);
-      const rootFrame = (await cdp.send('Page.getFrameTree', {}, inspectionSession)).frameTree?.frame;
-      if (rootFrame?.url !== expectedIframeUrl || rootFrame.id !== oopif.targetId
-        || rootFrame.parentId !== positiveNavigation.frameId) {
-        throw new Error('donor OOPIF inspection frame identity is invalid');
-      }
-      iframeContext = await until(
-        () => extensionContexts.get(contextKey(inspectionSession, rootFrame.id)) || null,
-        'exact donor OOPIF inspection context',
-        30_000,
-      );
-    }
-    iframeSession = iframeContext.sessionId;
-    iframeContextId = iframeContext.contextId;
-    const iframeEvaluate = async (expression) => {
-      let result;
-      try {
-        result = await cdp.send('Runtime.evaluate', {
-          expression,
-          contextId: iframeContextId,
-          awaitPromise: true,
-          returnByValue: true,
-        }, iframeSession);
-      } catch (error) {
-        throw new Error(`Donor iframe evaluation failed: ${error.message}`);
-      }
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-      }
-      return result.result.value;
-    };
-    const title = await until(async () => {
-      const value = await iframeEvaluate(
-        'document.querySelector("[data-role=source-title]")?.textContent?.trim() || ""',
-      );
-      return value && value !== '正在读取商品' ? value : null;
-    }, 'real product projection');
+    const title = String(await evaluate('document.title.trim()'));
     assert.doesNotMatch(title, /^1688 商品\s+[1-9][0-9]*$/u,
       'real product projection used the collector fallback title');
     assert.doesNotMatch(title, /登录|验证码|安全验证|访问受限|login|captcha|verify/iu,
@@ -768,29 +724,11 @@ async function run() {
     const titleSha256 = sha256(Buffer.from(title, 'utf8'));
     assert.equal(titleSha256, options.expectedTitleSha256,
       'real product title does not match the approved source fact');
-    assert.equal(
-      await iframeEvaluate('document.querySelector("[data-role=product-id]")?.textContent?.trim()'),
-      options.product.productId,
-      'donor projection product ID does not match the real offer',
-    );
-    const mediaCount = await iframeEvaluate('document.querySelectorAll(".media-thumb").length');
-    const skuCount = await iframeEvaluate('document.querySelectorAll(".sku-row").length');
-    assert.ok(Number.isSafeInteger(mediaCount) && mediaCount > 0,
-      'real product projection does not contain source media');
-    assert.ok(Number.isSafeInteger(skuCount) && skuCount > 0,
-      'real product projection does not contain source SKUs');
-    const renderedMedia = await until(async () => {
-      const state = await iframeEvaluate(`(() => {
-        const main = document.querySelector('[data-role="product-visual"] img');
-        const thumbs = [...document.querySelectorAll('.media-thumb img')];
-        return {
-          main: Boolean(main && main.complete && main.naturalWidth > 0 && main.naturalHeight > 0),
-          count: thumbs.filter((image) => image.complete
-            && image.naturalWidth > 0 && image.naturalHeight > 0).length
-        };
-      })()`);
-      return state.main && state.count > 0 ? state : null;
-    }, 'real source media pixels', 15_000);
+    const renderedPageMediaCount = await until(async () => {
+      const count = await evaluate(`[...document.images].filter((image) => image.complete
+        && image.naturalWidth > 0 && image.naturalHeight > 0).length`);
+      return Number.isSafeInteger(count) && count > 0 ? count : null;
+    }, 'real source page media pixels', 15_000);
     await send('Page.bringToFront');
     await evaluate('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const screenshot = await send('Page.captureScreenshot', {
@@ -800,6 +738,29 @@ async function run() {
     });
     const screenshotBytes = Buffer.from(screenshot.data, 'base64');
     writeNewArtifactDurably(screenshotPath, screenshotBytes, { mode: 0o600 });
+    const closePoint = await evaluate(`(() => {
+      const node = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})
+        ?.querySelector('[data-action="close"]');
+      const rect = node?.getBoundingClientRect();
+      return rect ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } : null;
+    })()`);
+    assert.ok(closePoint, 'unified media close action is unavailable');
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1,
+    });
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1,
+    });
+    const unifiedMediaClosed = Boolean(await until(
+      () => evaluate(`(() => {
+        const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
+        const backdrop = document.querySelector('#ss-erp-source-workbench-backdrop');
+        return Boolean(panel && !panel.classList.contains('open')
+          && backdrop?.hidden === true
+          && !document.documentElement.classList.contains('ss-erp-source-media-modal-open'));
+      })()`),
+      'unified media card close',
+    ));
 
     const negativeNavigation = await navigate(
       options.negativeProduct.url,
@@ -877,9 +838,9 @@ async function run() {
         finalUrl,
         title,
         titleSha256,
-        mediaCount,
-        renderedMediaCount: renderedMedia.count,
-        skuCount,
+        renderedPageMediaCount,
+        toolbarActionCount: unifiedMediaState.toolbarActionCount,
+        sourceWorkbenchVisible: unifiedMediaState.sourceWorkbenchVisible,
       },
       negativeProduct: {
         url: options.negativeProduct.url,
@@ -891,7 +852,10 @@ async function run() {
       cutover: {
         flagOnlyBlocked,
         allowlistedMounted,
-        iframeOpened,
+        unifiedMediaOpened,
+        iframeSuppressed,
+        calculatorMediaSeparated,
+        unifiedMediaClosed,
         rollbackUnmounted,
         legacyBefore,
         legacyAfterRollback,

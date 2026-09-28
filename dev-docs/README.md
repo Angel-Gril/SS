@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 统一 media card 双区部署与 D4.3 canary owner 修正
+
+- `05a4156a` 将 donor、AI 图片与原 source-costing 图片入口统一到同一个 `media-focus` 卡片；真实 marketplace 页面优先复用该卡片，不再打开全屏 `chrome-extension://` iframe。利润/核价 owner 仍保留物流、汇率和费用能力，图片工作流只在显式 media-focus 中显示。`0db36e3d` 另修复 Windows/Git Bash 部署归档所有权，并已推送到 `origin/feat/ai-media-prompt-registry`。
+- 同 commit 的区域扩展 `1.0.384` 已按正确 origin 独立构建和 Ed25519 签名。COM cloud/local SHA-256 为 `f11e097c8d6775da9bb53b91599934e39e4263ec16371e8d5fc9cbe42a928e0c` / `fbd3f82d3cfd664f4421dcb6a58a38180d5c8f19e960e7cac654c7ced5f7cd28`，签名 SHA-256 `8ca1f84d67b665231d32187d0da23b061a3abcb80f419deaac0b9aa3d1dfd076`；CN 为 `8c735d9bac5dba7a2740447f2321de8d198afc7a9ce0b9ba45cd34585de7c3ba` / `7fc27d4e651abff4d5804bf8709e429fabc7095d05ea3b9f4603c01be162d227`，签名 SHA-256 `bea1ef56c4f36becee1ce6913014dad6d538e9c0f2656ce06dec61b45c84218a`。
+- COM/CN 已切换运行 `0db36e3d25ada95ea0bb2a842557514239acf422 / 1.0.384`。COM 保持 DOTH 单 active device session 的受限 hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 使用 RDS/direct-origin 并保持 AI/BYOK/Ozon 全暗。两区备份/恢复分别验证 144/143 张 public 表；完整 VPS verifier 均为 `0 failure / 1 warning`，COM/CN canonical evidence SHA-256 为 `dfdbe8299bc7d68cbcab156a96dce3151d53fbdc6de12515cf4638fe416e30ac` / `b2da296af64dc47afcffcaeb29368690fb8c6d7936eb786508fb68fd5ad9ebfb`，唯一 warning 为未配置远端备份。
+- 第一次 release-bound 真实 1688 canary 正确加载签名候选与登录 cookies，但旧 runner 仍等待已取消的 donor iframe，因 `Timed out: donor workbench iframe open` 安全失败；没有 Provider/Ozon/ERP mutation，也没有 PASS 回执。本次 canary owner 改为验证统一 media card 打开、核价内容隔离、donor iframe 保持隐藏、关闭/rollback 与旧核价入口恢复；正式候选仍须在新 commit 重新构建、签名并取得真实 PASS。
+- 官网 COM/CN pointer 仍安全服务旧 `6378b62e / 1.0.364`。当前未执行新 website approval、distribution probe 或 CAS；`0db36e3d` 的部署成功不能替代 final-commit QA04、D4.3 canary 或官网发布。
+
 ## 2026-09-27 donor 工作台 D4.3 授权后预发布阻塞
 
 - 用户已明确授权 D4.3 的构建、签名、双区部署、真实商品 allowlist canary、官网切换与 rollback 验证；该授权不包含新的 Provider 付费请求或 Ozon 发布。实现提交 `5265107d` 修复 cloud/local 打包时 donor 单一 shell WAR 被扩成全 marketplace/ERP 来源的问题；`ad086d3b` 起新增 release-bound live canary，并在后续提交补齐受监控 Worker 启动、签名/evidence/ZIP 字节绑定、真实正负商品指纹、扩展 mutation 监听、清键 rollback 与候选清理。
