@@ -1139,6 +1139,13 @@
   async function openPrimaryAiWorkbench(trigger) {
     if (state.sourceAiWorkbenchOpening || state.sourceAiWorkbenchState === 'refreshing') return;
     state.panelTrigger = trigger || state.panelTrigger;
+    // Open the unified media card synchronously. Product/ERP hydration may be
+    // slow or unavailable on a marketplace page, but that must not make the
+    // entry appear dead; the card can render its loading/unavailable state and
+    // settle the authoritative workbench projection asynchronously.
+    openPanel(null, { focus: 'media', trigger: trigger });
+    state.pendingSourceWorkbenchFocus = true;
+    renderContent();
     try {
       if (!state.loaded) {
         state.loaded = true;
@@ -1151,7 +1158,6 @@
         // Keep the image workflow in the same donor-style card surface. The
         // old path opened a second extension tab, which split SKU, review and
         // billing context and made the feature feel like a global overlay.
-        openPanel(null, { focus: 'media', trigger: trigger });
         await refreshSourceWorkbenchStatus({ force: true });
         state.pendingSourceWorkbenchFocus = true;
         renderContent();
@@ -1160,7 +1166,7 @@
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     }
-    openPanel(null, { focus: 'media', trigger: trigger });
+    renderContent();
   }
 
   function sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId) {

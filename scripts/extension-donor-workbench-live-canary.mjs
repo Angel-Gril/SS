@@ -661,7 +661,9 @@ async function run() {
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
     });
-    const unifiedMediaState = await until(async () => {
+    let unifiedMediaState;
+    try {
+      unifiedMediaState = await until(async () => {
       const value = await evaluate(`(() => {
         const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
         const frame = document.querySelector(${JSON.stringify(DONOR_FRAME)});
@@ -695,7 +697,19 @@ async function run() {
         && value.sourceWorkbenchVisible && value.toolbarActionCount >= 8
         && value.sourceText.length > 20 && value.contextTitle && !/读取/u.test(value.contextTitle)
         ? value : null;
-    }, 'unified media card open');
+      }, 'unified media card open');
+    } catch (error) {
+      const diagnostics = await evaluate(`(() => ({
+        trigger: Boolean(document.querySelector(${JSON.stringify(DONOR_TRIGGER)})),
+        mediaFab: Boolean(document.querySelector('#ss-erp-source-media-fab')),
+        panel: Boolean(document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})),
+        panelClasses: document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})?.className || '',
+        panelHidden: document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})?.hidden ?? null,
+        iframeHidden: document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden ?? null,
+        bodyText: document.body?.innerText?.slice(0, 500) || ''
+      }))()`);
+      throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
+    }
     const unifiedMediaOpened = true;
     const iframeSuppressed = await remainsTrue(
       `document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden === true`,
