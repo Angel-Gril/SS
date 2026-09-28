@@ -152,7 +152,8 @@ function fail(code: AiMediaPlanningSourceErrorCode, status: number, message: str
   throw new AiMediaPlanningSourceError(code, status, message);
 }
 
-function decodedMime(format: string | undefined): string | null {
+function decodedMime(format: string | undefined, compression?: string): string | null {
+  if (format === 'heif') return compression === 'av1' ? 'image/avif' : null;
   return ({
     jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
     avif: 'image/avif', tiff: 'image/tiff',
@@ -398,7 +399,7 @@ async function freezePlanningSources(
       const metadata = await sharp(downloaded.buffer, {
         animated: false, limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
       }).metadata();
-      const detectedMime = decodedMime(metadata.format);
+      const detectedMime = decodedMime(metadata.format, metadata.compression);
       width = metadata.autoOrient?.width || metadata.width || 0;
       height = metadata.autoOrient?.height || metadata.height || 0;
       if (!detectedMime || detectedMime !== normalizedMime(downloaded.contentType)

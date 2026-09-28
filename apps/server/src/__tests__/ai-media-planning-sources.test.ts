@@ -256,6 +256,33 @@ describe('AI media planning source byte authority', () => {
     expect(f.repository.createRulePlan).not.toHaveBeenCalled();
   });
 
+  it('accepts AVIF bytes that Sharp identifies as HEIF with AV1 compression', async () => {
+    const f = await fixture();
+    const avif = await sharp({
+      create: { width: 64, height: 96, channels: 3, background: '#23374d' },
+    }).avif({ quality: 80 }).toBuffer();
+    const metadata = await sharp(avif).metadata();
+    expect(metadata).toMatchObject({
+      format: 'heif', compression: 'av1', width: 64, height: 96,
+    });
+    f.authority.capture.media[0]!.width = null;
+    f.authority.capture.media[0]!.height = null;
+    f.authority.capture.media[0]!.mimeType = null;
+    f.download.mockImplementation(async (url: string) => ({
+      sourceUrl: url, finalUrl: url, contentType: 'image/avif', buffer: avif, redirectCount: 0,
+    }));
+
+    await f.service.createRuleBased(f.input);
+
+    expect(f.assets[0]).toMatchObject({
+      width: 64,
+      height: 96,
+      sourceSha256: digest(avif),
+      metadata: { sourceMimeType: 'image/avif', sourceSha256: digest(avif) },
+    });
+    expect(f.repository.createRulePlan).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects animated source images instead of silently freezing only the first frame', async () => {
     const f = await fixture();
     const animation = await sharp(Buffer.concat([
