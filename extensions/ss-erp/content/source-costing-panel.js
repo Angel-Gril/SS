@@ -303,6 +303,10 @@
     mediaFab.addEventListener('click', function () {
       void openPrimaryAiWorkbench(mediaFab);
     });
+    document.addEventListener('ss-erp:source-media-focus-request', function (event) {
+      if (!event || !event.detail || event.detail.source !== 'donor-workbench') return;
+      void openPrimaryAiWorkbench(mediaFab);
+    });
     backdrop.addEventListener('click', function () {
       closePanel(panel);
     });

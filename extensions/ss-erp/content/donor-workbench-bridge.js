@@ -594,6 +594,9 @@
       // The existing media-focus card already owns the same server contracts,
       // so use it as the unified donor entry instead of creating a second
       // global overlay.
+      document.dispatchEvent(new CustomEvent('ss-erp:source-media-focus-request', {
+        detail: { source: 'donor-workbench' },
+      }));
       unifiedMediaFab.click();
       return;
     }

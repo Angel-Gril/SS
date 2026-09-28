@@ -7,6 +7,7 @@
 - COM/CN 已切换运行 `0db36e3d25ada95ea0bb2a842557514239acf422 / 1.0.384`。COM 保持 DOTH 单 active device session 的受限 hosted pilot，仅允许 `IMAGE_TO_IMAGE/SUITE`；CN 使用 RDS/direct-origin 并保持 AI/BYOK/Ozon 全暗。两区备份/恢复分别验证 144/143 张 public 表；完整 VPS verifier 均为 `0 failure / 1 warning`，COM/CN canonical evidence SHA-256 为 `dfdbe8299bc7d68cbcab156a96dce3151d53fbdc6de12515cf4638fe416e30ac` / `b2da296af64dc47afcffcaeb29368690fb8c6d7936eb786508fb68fd5ad9ebfb`，唯一 warning 为未配置远端备份。
 - 第一次 release-bound 真实 1688 canary 正确加载签名候选与登录 cookies，但旧 runner 仍等待已取消的 donor iframe，因 `Timed out: donor workbench iframe open` 安全失败；没有 Provider/Ozon/ERP mutation，也没有 PASS 回执。本次 canary owner 改为验证统一 media card 打开、核价内容隔离、donor iframe 保持隐藏、关闭/rollback 与旧核价入口恢复；正式候选仍须在新 commit 重新构建、签名并取得真实 PASS。
 - `openPrimaryAiWorkbench` 现在先同步打开 unified `media-focus` 卡片，再异步读取来源/ERP projection；慢或不可用的设备/ERP 状态不会让入口无响应。该 owner 修复随 canary runner 诊断改动进入下一 commit，尚未部署或公开发布。
+- donor trigger 与 source-costing panel 之间新增显式 `ss-erp:source-media-focus-request` 事件接线，避免真实 marketplace 页上跨 content-script click 连接失效；旧 `.click()` 仍保留作兼容路径。该接线尚未部署，需随下一候选重建验证。
 - 官网 COM/CN pointer 仍安全服务旧 `6378b62e / 1.0.364`。当前未执行新 website approval、distribution probe 或 CAS；`0db36e3d` 的部署成功不能替代 final-commit QA04、D4.3 canary 或官网发布。
 
 ## 2026-09-27 donor 工作台 D4.3 授权后预发布阻塞
