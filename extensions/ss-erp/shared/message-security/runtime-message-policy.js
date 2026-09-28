@@ -96,6 +96,7 @@
   var SOURCE_AI_IMAGE_SUITE_TYPES = setOf([
     'ss-erp:source-listing-workbench-ai-image-suite',
     'ss-erp:source-listing-workbench-ai-image-suite-command',
+    'ss-erp:source-listing-workbench-ai-image-suite-assignment',
   ]);
 
   var SOURCE_PRODUCT_MUTATION_TYPES = setOf([

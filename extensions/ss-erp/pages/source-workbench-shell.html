@@ -8,16 +8,29 @@
 </head>
 <body>
   <div class="workbench" data-role="workbench">
-    <header class="topbar">
+    <header class="precision-toolbar">
       <div class="brand" aria-label="SS ERP">
         <span class="brand-mark">SS</span>
         <span><strong>SS ERP</strong><small>商品工作台</small></span>
       </div>
-      <div class="source-heading">
+      <div class="source-heading precision-source-heading">
         <strong data-role="source-title">正在读取商品</strong>
         <span data-role="source-meta">来源商品</span>
       </div>
-      <div class="topbar-actions">
+      <div class="precision-toolbar-main">
+        <button type="button" class="toolbar-command" data-action="select-shop">选择店铺⌄</button>
+        <button type="button" class="toolbar-command" data-action="show-basic">基础信息</button>
+        <button type="button" class="toolbar-command" data-action="select-category">选择类目</button>
+        <button type="button" class="toolbar-command toolbar-primary" data-action="start-workflow">开始执行</button>
+      </div>
+      <div class="precision-toolbar-actions">
+        <button type="button" class="toolbar-command" data-action="show-process">查看过程</button>
+        <button type="button" class="toolbar-command" data-action="show-ai-process">AI生图过程</button>
+        <button type="button" class="toolbar-command" data-action="show-translation-process">AI翻译过程</button>
+        <button type="button" class="toolbar-command toolbar-upload" data-action="upload-ozon">上传 Ozon</button>
+        <button type="button" class="toolbar-command" data-action="close">关闭</button>
+      </div>
+      <div class="topbar-actions" hidden>
         <span class="connection" data-role="connection">读取中</span>
         <button class="icon-button" type="button" data-action="refresh" title="刷新工作台" aria-label="刷新工作台">↻</button>
         <button class="icon-button" type="button" data-action="close" title="关闭工作台" aria-label="关闭工作台">×</button>
@@ -25,7 +38,7 @@
     </header>
 
     <div class="workspace-grid">
-      <aside class="stage-rail" aria-label="工作流阶段">
+      <aside class="precision-rail" aria-label="工作流阶段">
         <nav class="stage-nav">
           <button type="button" data-stage="collection"><span>1</span><b>商品采集</b><small data-stage-state="collection">等待</small></button>
           <button type="button" data-stage="draft"><span>2</span><b>店铺草稿</b><small data-stage-state="draft">等待</small></button>
@@ -45,6 +58,13 @@
 
       <main class="main-workspace">
         <div class="status-line" data-role="status" hidden></div>
+        <div class="image-workflow-bar" aria-label="图片处理流程">
+          <strong>图片处理流程：</strong>
+          <button type="button" class="workflow-mode is-active" data-hosted-action="TRANSLATE">仅翻译</button>
+          <button type="button" class="workflow-mode" data-hosted-action="AI_MAIN_TRANSLATE">AI主图+翻译</button>
+          <button type="button" class="workflow-mode" data-hosted-action="AI_SUITE">AI套图</button>
+          <button type="button" class="workflow-start" data-hosted-action="CREATE_AND_REVIEW_PLAN">点击开始处理图片</button>
+        </div>
 
         <section class="view" data-view="collection">
           <div class="section-heading">
@@ -109,7 +129,16 @@
           <div class="media-action-bar">
             <div><strong>SS ERP AI 图片工作台</strong><span>使用当前草稿、SKU 与设备授权打开受控生图/改图流程。</span></div>
             <label><span>处理 SKU</span><select data-role="media-sku-select" aria-label="选择图片处理 SKU"></select></label>
-            <button type="button" class="primary-command" data-action="open-ai-workbench">打开 AI 工作台</button>
+            <button type="button" class="primary-command" data-action="open-ai-workbench">开始托管套图</button>
+          </div>
+          <div class="hosted-inline-controls" data-role="hosted-inline-controls">
+            <div class="hosted-inline-summary"><strong data-role="hosted-plan-summary">ERP 托管套图</strong><span data-role="hosted-inline-status">等待读取计划</span></div>
+            <div class="hosted-inline-actions">
+              <button type="button" data-hosted-action="CREATE_AND_REVIEW_PLAN">创建并审核计划</button>
+              <button type="button" data-hosted-action="START" disabled>确认费用并启动</button>
+              <button type="button" data-hosted-action="CONTINUE" disabled>继续任务</button>
+              <button type="button" data-hosted-action="ASSIGN_APPROVED" disabled>写入已批准结果</button>
+            </div>
           </div>
           <div class="billing-band" aria-label="图片费用">
             <section>
@@ -178,6 +207,13 @@
         </div>
       </aside>
     </div>
+    <footer class="precision-footer">
+      <strong data-role="footer-status">请选择类目</strong>
+      <span data-role="footer-version">SS ERP donor workbench</span>
+      <button type="button" data-action="pricing-tool">定价工具</button>
+      <button type="button" data-action="inventory-tool">库存管理</button>
+      <button type="button" data-action="logout">退出登录</button>
+    </footer>
   </div>
   <div class="toast" data-role="toast" hidden></div>
   <script src="../shared/donor-workbench/workspace-contract.js"></script>

@@ -132,6 +132,48 @@ html.ss-erp-source-media-modal-open {
   cursor: default;
 }
 
+#ss-erp-source-costing-panel .ss-erp-source-precision-toolbar {
+  display: none;
+}
+
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-precision-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 46px;
+  padding: 6px 14px;
+  border-bottom: 1px solid #bce8d7;
+  background: linear-gradient(90deg, #ecfff7, #f3f8ff);
+  overflow-x: auto;
+}
+
+.ss-erp-source-precision-toolbar button {
+  min-height: 34px;
+  border: 1px solid #d7e1ee;
+  border-radius: 9px;
+  background: #fff;
+  color: #24324a;
+  padding: 0 12px;
+  font: 700 12px/1 "Segoe UI", "PingFang SC", sans-serif;
+  white-space: nowrap;
+}
+
+.ss-erp-source-precision-toolbar button:hover {
+  border-color: #3b82f6;
+  color: #1d4ed8;
+  background: #f7fbff;
+}
+
+.ss-erp-source-precision-toolbar button.is-primary {
+  border-color: #2f80ed;
+  background: #2f80ed;
+  color: #fff;
+}
+
+.ss-erp-source-precision-spacer {
+  flex: 1 1 auto;
+}
+
 #ss-erp-source-costing-panel.media-focus .ss-erp-source-body {
   display: block;
   padding: 16px 18px 12px;

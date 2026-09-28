@@ -1491,7 +1491,10 @@ if (isExtensionDeviceAuthEnabled()) {
       bindingHash: _lookupBindingHash,
       ...bindingLookup
     } = lookupRecord;
-    const storedBinding = await extensionHostedAiImagePlanBindings.find(bindingLookup);
+    const storedBinding = await extensionHostedAiImagePlanBindings.find(bindingLookup)
+      || (extensionHostedAiImagePlanBindings.adoptSessionSuccessor
+        ? await extensionHostedAiImagePlanBindings.adoptSessionSuccessor(bindingLookup)
+        : null);
     const planPromise = storedBinding
       ? prisma.aiMediaPlan.findFirst({
         where: {

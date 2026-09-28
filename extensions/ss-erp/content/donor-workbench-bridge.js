@@ -18,6 +18,8 @@
   var currentProjection = Contract.createProjection({ platform: sourcePlatform() });
   var pageOverflow = '';
   var open = false;
+  var frameLoadTimer = 0;
+  var legacySurfaceStyles = new Map();
   var busy = false;
   var refreshEpoch = 0;
   var historyEpoch = 0;
@@ -301,6 +303,9 @@
         platform: currentProjection.source.platform,
         sourceProductId: currentProjection.source.sourceProductId,
         listingWorkflowId: command.listingWorkflowId,
+        // The first hop is a HINT.  When the source page has not pinned a SKU,
+        // sending the donor's local choice here would violate the hosted launch
+        // contract; the follow-up choice_required hop carries the explicit key.
         preferredSkuKey: command.sourceSelectionKey,
         choiceBinding: null,
         sourceSelectionKey: command.sourceSelectionKey,
@@ -436,6 +441,68 @@
     }
   }
 
+  async function executeHostedSuite(command) {
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === command.listingWorkflowId;
+    });
+    if (!listing || !currentProjection.handoff) {
+      commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
+      return;
+    }
+    setBusy(true, '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id,
+        action: command.action,
+        slotKey: command.slotKey,
+        decision: command.decision,
+        costConfirmed: command.costConfirmed,
+      });
+      if (!response || !response.ok || !response.result) {
+        throw new Error(response && response.error || 'ERP 托管套图操作失败');
+      }
+      commandResult(command.requestId, true, '');
+      await loadProjection({ force: true });
+      await loadBilling({ listingWorkflowId: listing.id });
+    } catch (error) {
+      commandResult(command.requestId, false, error && error.message ? error.message : String(error));
+    } finally {
+      setBusy(false, '');
+    }
+  }
+
+  async function assignHostedSuite(command) {
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === command.listingWorkflowId;
+    });
+    if (!listing || !currentProjection.handoff) {
+      commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
+      return;
+    }
+    setBusy(true, '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-ai-image-suite-assignment',
+        sourceProductId: currentProjection.source.sourceProductId,
+        platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id,
+      });
+      if (!response || !response.ok || !response.result) {
+        throw new Error(response && response.error || 'ERP 托管结果写入失败');
+      }
+      commandResult(command.requestId, true, '');
+      await loadProjection({ force: true });
+      await loadBilling({ listingWorkflowId: listing.id });
+    } catch (error) {
+      commandResult(command.requestId, false, error && error.message ? error.message : String(error));
+    } finally {
+      setBusy(false, '');
+    }
+  }
+
   async function prepareMediaMutation(command) {
     var history = currentProjection.history;
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
@@ -521,21 +588,78 @@
 
   function showFrame() {
     if (!frame || !trigger) return;
+    var unifiedMediaFab = document.getElementById('ss-erp-source-media-fab');
+    if (unifiedMediaFab && typeof unifiedMediaFab.click === 'function') {
+      // On real marketplace pages the page CSP can reject extension iframes.
+      // The existing media-focus card already owns the same server contracts,
+      // so use it as the unified donor entry instead of creating a second
+      // global overlay.
+      unifiedMediaFab.click();
+      return;
+    }
     open = true;
     frame.hidden = false;
     trigger.hidden = true;
+    setLegacySurfaceHidden(true);
     pageOverflow = document.documentElement.style.overflow;
     document.documentElement.style.overflow = 'hidden';
     publishProjection();
     void loadProjection({ force: true });
+    globalThis.clearTimeout(frameLoadTimer);
+    frameLoadTimer = globalThis.setTimeout(function () {
+      if (!open || !frame) return;
+      try {
+        // A CSP-blocked extension frame stays as same-origin about:blank.
+        // Do not leave an opaque empty overlay over the marketplace page.
+        if (frame.contentWindow && frame.contentWindow.location.href === 'about:blank') {
+          trigger.textContent = '工作台（需新标签页）';
+          trigger.title = '当前来源页禁止嵌入扩展工作台，请使用 ERP 工作台入口';
+          hideFrame();
+        }
+      } catch (_error) {
+        // A loaded extension frame is cross-origin and intentionally unreadable here.
+      }
+    }, 1200);
   }
 
   function hideFrame() {
     var wasOpen = open;
+    globalThis.clearTimeout(frameLoadTimer);
+    frameLoadTimer = 0;
     open = false;
     if (frame) frame.hidden = true;
     if (trigger) trigger.hidden = false;
+    setLegacySurfaceHidden(false);
     if (wasOpen) document.documentElement.style.overflow = pageOverflow;
+  }
+
+  function setLegacySurfaceHidden(hidden) {
+    [
+      'ss-erp-source-costing-fab',
+      'ss-erp-source-media-fab',
+      'ss-erp-source-costing-panel',
+    ].forEach(function (id) {
+      var element = document.getElementById(id);
+      if (!element) return;
+      if (hidden) {
+        if (!legacySurfaceStyles.has(id)) {
+          legacySurfaceStyles.set(id, {
+            display: element.style.display,
+            visibility: element.style.visibility,
+          });
+        }
+        element.style.visibility = 'hidden';
+        element.style.pointerEvents = 'none';
+      } else {
+        var previous = legacySurfaceStyles.get(id);
+        if (previous) {
+          element.style.display = previous.display;
+          element.style.visibility = previous.visibility;
+        }
+        element.style.removeProperty('pointer-events');
+      }
+    });
+    if (!hidden) legacySurfaceStyles.clear();
   }
 
   function mount() {
@@ -625,6 +749,8 @@
     if (command.type === 'LOAD_BILLING') void loadBilling(command);
     if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
     if (command.type === 'EXECUTE_MEDIA_TASK') void executeMediaTask(command);
+    if (command.type === 'EXECUTE_HOSTED_SUITE') void executeHostedSuite(command);
+    if (command.type === 'ASSIGN_HOSTED_SUITE') void assignHostedSuite(command);
   });
 
   chrome.runtime.onMessage.addListener(function (message) {

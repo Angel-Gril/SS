@@ -87,6 +87,7 @@ describe('extension hosted AI image production registration', () => {
     expect(loader).toContain('deviceSessionId: string');
     expect(loader).toContain('extensionHostedAiImageAuthority.loadPlanAuthority');
     expect(loader).toContain('extensionHostedAiImagePlanBindings.find(bindingLookup)');
+    expect(loader).toContain('extensionHostedAiImagePlanBindings.adoptSessionSuccessor(bindingLookup)');
     expect(loader).toContain('id: storedBinding.planId');
     expect(loader).toContain('deviceSessionId: input.deviceSessionId');
     expect(loader).toContain('loadExtensionHostedAiImageReadPolicy');

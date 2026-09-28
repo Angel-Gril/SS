@@ -77,6 +77,16 @@ assert.match(
 assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-picker\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
 assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-copy\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
 assert.match(panelCss, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*#ss-erp-source-costing-panel\.open,[\s\S]*animation:\s*none/u);
+assert.match(panel, /openPanel\(null, \{ focus: 'media', trigger: trigger \}\)/u);
+const primaryAiWorkbenchSource = panel.slice(
+  panel.indexOf('async function openPrimaryAiWorkbench'),
+  panel.indexOf('function sourceWorkbenchAiImageSuiteBinding'),
+);
+assert.doesNotMatch(
+  primaryAiWorkbenchSource,
+  /openSourceAiWorkbench\(listing\)/u,
+  'the primary image entry must stay inside the unified media card',
+);
 assert.match(panelCss, /@media \(forced-colors:\s*active\)[\s\S]*\.ss-erp-source-actions button/u);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/listing-workflow-client\.js['"]\)/);
@@ -108,13 +118,17 @@ assert.match(panel, /ss-erp:source-ai-workbench-open/);
 assert.match(
   panel,
   /mediaFab\.addEventListener\(['"]click['"][\s\S]{0,500}openPrimaryAiWorkbench\(mediaFab\)/u,
-  'the primary AI image button should enter the standalone workbench instead of opening the legacy media panel first',
+  'the primary AI image button should enter the unified media panel',
 );
 assert.match(
   panel,
-  /async function openPrimaryAiWorkbench\(trigger\)[\s\S]{0,1600}openSourceAiWorkbench\(listing\)/u,
-  'the primary AI entry should load authoritative context and open the standalone workbench when it is available',
+  /async function openPrimaryAiWorkbench\(trigger\)[\s\S]{0,1600}openPanel\(null, \{ focus: 'media', trigger: trigger \}\)/u,
+  'the primary AI entry should keep the workflow inside the unified media panel',
 );
+assert.match(panel, /ss-erp-source-precision-toolbar/u);
+assert.match(panel, /data-precision-action="show-ai-process"/u);
+assert.match(panelCss, /ss-erp-source-precision-toolbar/u);
+assert.match(panel, /sourceWorkbench\.hidden\s*=\s*!panel\.classList\.contains\('media-focus'\)/u);
 assert.match(panel, /onOpenAiWorkbench/);
 assert.match(panel, /preferredSkuKey/u);
 assert.match(panel, /sourceSelectionKey:\s*sourceSelectionKey/u);
@@ -1496,6 +1510,27 @@ assert.equal(planCreateCalls[0].input.galleryGoals[0], 'scene');
 assert.equal(planCreateCalls[1].input.planId, 'plan-created');
 assert.equal(planCreateCalls[1].input.expectedRevision, 1);
 assert.equal(Object.prototype.hasOwnProperty.call(planCreateCalls[0].input, 'ownerUserId'), false);
+planCreateCalls.length = 0;
+planClient.createPlan = async function (input) {
+  planCreateCalls.push({ method: 'createPlan', input });
+  return {
+    plan: { id: 'plan-created', revision: 2, reviewStatus: 'APPROVED' },
+    replayed: true,
+  };
+};
+const replayedApprovedPlan = await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuitePlan({
+  ...suiteMessageContext,
+  type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'CREATE_AND_REVIEW_PLAN',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(replayedApprovedPlan.result)), {
+  state: 'completed', action: 'CREATE_AND_REVIEW_PLAN', replay: true,
+});
+assert.deepEqual(planCreateCalls.map((call) => call.method), ['createPlan']);
+planClient.createPlan = async function (input) {
+  planCreateCalls.push({ method: 'createPlan', input });
+  return { plan: { id: 'plan-created', revision: 1, reviewStatus: 'PENDING' }, replayed: false };
+};
 authoritativeSuiteRead = { state: 'ready', projection: suiteProjection };
 authoritativeSuiteCalls.length = 0;
 
@@ -1531,6 +1566,18 @@ assert.notEqual(authoritativeSuiteCalls[2].input.projection, staleClientProjecti
 assert.deepEqual(JSON.parse(JSON.stringify(authoritativeSuiteCalls[2].input)), {
   projection: suiteProjection, action: 'START', costConfirmed: true,
 });
+
+const slotKeyProjection = currentSuiteProjectionFixture('REVIEW_SLOT');
+authoritativeSuiteCalls.length = 0;
+authoritativeSuiteRead = { state: 'ready', projection: slotKeyProjection };
+const slotKeyCommandResult = await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext,
+  type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'REVIEW_SLOT', slotKey: 'sku:sku-1:hero', decision: 'APPROVE', costConfirmed: false,
+});
+assert.equal(slotKeyCommandResult.result.state, 'completed');
+assert.equal(authoritativeSuiteCalls[2].input.slotId, 'slot-1');
+assert.equal(authoritativeSuiteCalls[2].input.action, 'REVIEW_SLOT');
 
 authoritativeSuiteCalls.length = 0;
 authoritativeSuiteRead = { state: 'ready', projection: increasedPriceProjection };

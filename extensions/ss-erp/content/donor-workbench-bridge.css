@@ -4,6 +4,7 @@
   z-index: 2147483646;
   width: 0;
   height: 0;
+  pointer-events: none;
   font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
@@ -21,6 +22,7 @@
   cursor: pointer;
   font: 700 12px/1 "Segoe UI", "PingFang SC", sans-serif;
   letter-spacing: 0;
+  pointer-events: auto;
 }
 
 #ss-erp-donor-workbench-trigger:hover {
@@ -34,14 +36,27 @@
 
 #ss-erp-donor-workbench-frame {
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  border: 0;
+  inset: 16px;
+  width: calc(100vw - 32px);
+  height: calc(100vh - 32px);
+  border: 1px solid rgba(255, 255, 255, .72);
+  border-radius: 22px;
   background: #f7f8fa;
+  box-shadow: 0 26px 90px rgba(14, 32, 61, .28), 0 0 0 9999px rgba(15, 23, 42, .42);
+  pointer-events: auto;
 }
 
 #ss-erp-donor-workbench-frame[hidden],
 #ss-erp-donor-workbench-trigger[hidden] {
   display: none !important;
+}
+
+@media (max-width: 820px) {
+  #ss-erp-donor-workbench-frame {
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
 }

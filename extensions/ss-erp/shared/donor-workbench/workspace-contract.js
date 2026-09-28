@@ -5,6 +5,7 @@
   var COMMAND_TYPES = new Set([
     'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
     'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK', 'LOAD_BILLING',
+    'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -718,6 +719,45 @@
         mediaWorkflowId: mediaWorkflowId,
         expectedRevision: taskRevision,
         action: taskAction,
+      });
+    }
+    if (item.type === 'EXECUTE_HOSTED_SUITE') {
+      var hostedRequestId = commandBase(item, [
+        'contractVersion', 'type', 'requestId', 'listingWorkflowId',
+        'action', 'slotKey', 'decision', 'costConfirmed',
+      ]);
+      var hostedAction = [
+        'CREATE_AND_REVIEW_PLAN', 'START', 'CONTINUE', 'CANCEL', 'REVIEW_SLOT', 'APPLY_SLOT',
+      ].includes(item.action)
+        ? item.action : '';
+      var hostedSlotKey = item.slotKey === null ? null : text(item.slotKey, 1024);
+      var hostedDecision = item.decision === null ? null : item.decision;
+      if (!hostedAction || !text(item.listingWorkflowId, 200)
+        || (item.slotKey !== null && !hostedSlotKey)
+        || (hostedAction === 'REVIEW_SLOT'
+          ? !['APPROVE', 'REJECT'].includes(hostedDecision)
+          : hostedDecision !== null)
+        || typeof item.costConfirmed !== 'boolean'
+        || (['START'].includes(hostedAction) !== (item.costConfirmed === true))) {
+        throw new TypeError('invalid donor hosted suite command');
+      }
+      if (['REVIEW_SLOT', 'APPLY_SLOT'].includes(hostedAction) !== Boolean(hostedSlotKey)) {
+        throw new TypeError('invalid donor hosted suite slot command');
+      }
+      return Object.freeze({
+        contractVersion: CONTRACT_VERSION, type: 'EXECUTE_HOSTED_SUITE',
+        requestId: hostedRequestId, listingWorkflowId: text(item.listingWorkflowId, 200),
+        action: hostedAction, slotKey: hostedSlotKey, decision: hostedDecision,
+        costConfirmed: item.costConfirmed === true,
+      });
+    }
+    if (item.type === 'ASSIGN_HOSTED_SUITE') {
+      var assignmentRequestId = commandBase(item, [
+        'contractVersion', 'type', 'requestId', 'listingWorkflowId',
+      ]);
+      return Object.freeze({
+        contractVersion: CONTRACT_VERSION, type: 'ASSIGN_HOSTED_SUITE',
+        requestId: assignmentRequestId, listingWorkflowId: text(item.listingWorkflowId, 200),
       });
     }
     var requestId = commandBase(item, ['contractVersion', 'type', 'requestId']);

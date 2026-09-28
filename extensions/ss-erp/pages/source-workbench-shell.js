@@ -208,8 +208,13 @@
       var status = button.querySelector('[data-stage-state]');
       status.textContent = index < projectedIndex ? '完成' : index === projectedIndex ? '当前' : '等待';
     });
+    // The donor workbench is one continuous workspace. Keep every section in
+    // the document and use the stage rail/toolbar only as anchors; hiding the
+    // other sections recreates the old five-page SS ERP flow and breaks the
+    // donor's SKU -> media -> review handoff.
     all('[data-view]').forEach(function (view) {
-      view.hidden = view.dataset.view !== activeStage;
+      view.hidden = false;
+      view.classList.toggle('is-focused', view.dataset.view === activeStage);
     });
     one('[data-role="snapshot-state"]').textContent = projection.handoff
       ? (projection.workbench.status.snapshot.current ? '有效' : '已更新') : '未建立';
@@ -476,10 +481,40 @@
     });
   }
 
+  function renderHostedInline() {
+    var billing = projection.billing || {};
+    var status = one('[data-role="hosted-inline-status"]');
+    var summary = one('[data-role="hosted-plan-summary"]');
+    var create = one('[data-hosted-action="CREATE_AND_REVIEW_PLAN"]');
+    var start = one('[data-hosted-action="START"]');
+    var cont = one('[data-hosted-action="CONTINUE"]');
+    var assign = one('[data-hosted-action="ASSIGN_APPROVED"]');
+    if (!status || !summary) return;
+    if (billing.state === 'error') {
+      summary.textContent = 'ERP 托管套图';
+      status.textContent = billing.error || '托管状态暂不可用';
+    } else if (billing.state !== 'ready') {
+      summary.textContent = 'ERP 托管套图';
+      status.textContent = '正在读取 ERP 权威状态';
+    } else if (!billing.quote) {
+      summary.textContent = 'ERP 托管套图';
+      status.textContent = '计划/报价待创建';
+    } else {
+      summary.textContent = '预估 ' + formatMinor(billing.quote.currency, billing.quote.estimatedCostMinor)
+        + ' · 最高 ' + formatMinor(billing.quote.currency, billing.quote.maximumCostMinor);
+      status.textContent = billing.suite ? statusLabel(billing.suite.status) : '等待启动';
+    }
+    if (create) create.disabled = projection.busy;
+    if (start) start.disabled = projection.busy || !billing.quote || Boolean(billing.suite);
+    if (cont) cont.disabled = projection.busy || !billing.suite;
+    if (assign) assign.disabled = projection.busy || !billing.suite || !['SUCCEEDED', 'PARTIAL_FAILURE'].includes(billing.suite.status);
+  }
+
   function renderMedia() {
     renderReferences();
     renderQueue();
     renderBilling();
+    renderHostedInline();
     syncPromptDraft();
     var openButton = one('[data-action="open-ai-workbench"]');
     openButton.disabled = projection.busy || !currentListing();
@@ -750,6 +785,16 @@
     toastTimer = globalThis.setTimeout(function () { toast.hidden = true; }, 3200);
   }
 
+  function focusView(viewName) {
+    activeStage = viewName;
+    stageUserSelected = true;
+    var target = one('[data-view="' + viewName + '"]');
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    renderStages();
+  }
+
   function render() {
     syncSelections();
     if (!all('[data-stage].is-active').length) activeStage = stageFromProjection();
@@ -761,7 +806,7 @@
     renderMedia();
     renderReview();
     renderProcess();
-    if ((activeStage === 'media' || activeStage === 'review') && currentListing()) {
+    if (currentListing()) {
       globalThis.setTimeout(function () { requestMediaHistory(false); }, 0);
       globalThis.setTimeout(function () { requestBilling(false); }, 0);
     }
@@ -769,9 +814,7 @@
 
   all('[data-stage]').forEach(function (button) {
     button.addEventListener('click', function () {
-      stageUserSelected = true;
-      activeStage = button.dataset.stage;
-      render();
+      focusView(button.dataset.stage);
     });
   });
   one('[data-action="close"]').addEventListener('click', function (event) {
@@ -781,6 +824,54 @@
   one('[data-action="refresh"]').addEventListener('click', function (event) {
     if (!event.isTrusted) return;
     send('REFRESH');
+  });
+  one('[data-action="select-shop"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('draft');
+    var select = one('[data-role="shop-select"]');
+    if (select && !select.disabled) select.focus();
+  });
+  one('[data-action="show-basic"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('collection');
+  });
+  one('[data-action="select-category"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('category');
+  });
+  one('[data-action="start-workflow"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    if (!currentListing()) {
+      focusView('draft');
+      showToast('请先选择店铺并创建草稿', true);
+      return;
+    }
+    focusView('media');
+  });
+  one('[data-action="show-process"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    var panel = one('.process-panel');
+    if (panel && typeof panel.scrollIntoView === 'function') {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+  one('[data-action="show-ai-process"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('media');
+    var queue = one('[data-role="queue-list"]');
+    if (queue && typeof queue.scrollIntoView === 'function') {
+      queue.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+  one('[data-action="show-translation-process"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('media');
+    showToast('图片翻译仍由 ERP 任务队列和审核合同执行', false);
+  });
+  one('[data-action="upload-ozon"]').addEventListener('click', function (event) {
+    if (!event.isTrusted) return;
+    focusView('review');
+    showToast('请在 ERP 审核窗口中确认后再上传 Ozon', false);
   });
   one('[data-action="collect"]').addEventListener('click', function (event) {
     if (!event.isTrusted || projection.busy) return;
@@ -811,11 +902,42 @@
   });
   one('[data-action="open-ai-workbench"]').addEventListener('click', function (event) {
     if (!event.isTrusted || projection.busy) return;
-    openCurrentAiWorkbench(buildCurrentPromptDraft());
+    var listing = currentListing();
+    if (!listing) return showToast('请先创建店铺草稿', true);
+    send('OPEN_MEDIA_WORKBENCH', {
+      listingWorkflowId: listing.id,
+      preferredSkuKey: selectedMediaSkuKey || null,
+      sourceSelectionKey: projection.source.preferredSkuKey || null,
+      choiceBinding: null,
+      promptDraft: buildCurrentPromptDraft(),
+    });
   });
   one('[data-action="open-publish-review"]').addEventListener('click', function (event) {
     if (!event.isTrusted || projection.busy || event.currentTarget.disabled) return;
     openCurrentAiWorkbench(null);
+  });
+  all('[data-hosted-action]').forEach(function (button) {
+    button.addEventListener('click', function (event) {
+      if (!event.isTrusted || button.disabled) return;
+      var action = button.dataset.hostedAction;
+      if (action === 'TRANSLATE' || action === 'AI_MAIN_TRANSLATE' || action === 'AI_SUITE') {
+        all('[data-hosted-action]').forEach(function (item) { item.classList.toggle('is-active', item === button); });
+        return;
+      }
+      var listing = currentListing();
+      if (!listing) return showToast('请先创建店铺草稿', true);
+      if (action === 'ASSIGN_APPROVED') {
+        send('ASSIGN_HOSTED_SUITE', { listingWorkflowId: listing.id });
+        return;
+      }
+      send('EXECUTE_HOSTED_SUITE', {
+        listingWorkflowId: listing.id,
+        action: action,
+        slotKey: null,
+        decision: null,
+        costConfirmed: action === 'START',
+      });
+    });
   });
   one('[data-role="media-sku-select"]').addEventListener('change', function (event) {
     selectedMediaSkuKey = String(event.target.value || '');
@@ -884,7 +1006,10 @@
         : type === 'PREPARE_MEDIA_MUTATION' ? '已打开独立确认窗口'
           : type === 'EXECUTE_MEDIA_TASK' ? '任务命令已确认'
             : type === 'LOAD_BILLING' ? '计费状态已刷新'
-          : type === 'LOAD_MEDIA_HISTORY' ? '候选已刷新' : '操作完成')
+          : type === 'LOAD_MEDIA_HISTORY' ? '候选已刷新'
+            : type === 'EXECUTE_HOSTED_SUITE' ? '托管套图命令已提交'
+              : type === 'ASSIGN_HOSTED_SUITE' ? '已提交草稿写入并等待权威回执'
+                : '操作完成')
         : message.error || '操作失败', message.ok !== true);
     }
   });

@@ -324,6 +324,64 @@ assert.deepEqual(
     action: 'RETRY',
   },
 );
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_HOSTED_SUITE',
+    requestId: 'request-suite-plan-1',
+    listingWorkflowId: 'draft-1',
+    action: 'CREATE_AND_REVIEW_PLAN',
+    slotKey: null,
+    decision: null,
+    costConfirmed: false,
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_HOSTED_SUITE',
+    requestId: 'request-suite-plan-1',
+    listingWorkflowId: 'draft-1',
+    action: 'CREATE_AND_REVIEW_PLAN',
+    slotKey: null,
+    decision: null,
+    costConfirmed: false,
+  },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_HOSTED_SUITE',
+    requestId: 'request-suite-start-1',
+    listingWorkflowId: 'draft-1',
+    action: 'START',
+    slotKey: null,
+    decision: null,
+    costConfirmed: true,
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'EXECUTE_HOSTED_SUITE',
+    requestId: 'request-suite-start-1',
+    listingWorkflowId: 'draft-1',
+    action: 'START',
+    slotKey: null,
+    decision: null,
+    costConfirmed: true,
+  },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(contract.parseFrameCommand({
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'ASSIGN_HOSTED_SUITE',
+    requestId: 'request-suite-assign-1',
+    listingWorkflowId: 'draft-1',
+  }))),
+  {
+    contractVersion: contract.CONTRACT_VERSION,
+    type: 'ASSIGN_HOSTED_SUITE',
+    requestId: 'request-suite-assign-1',
+    listingWorkflowId: 'draft-1',
+  },
+);
 for (const invalid of [
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: [] },
   { contractVersion: contract.CONTRACT_VERSION, type: 'CREATE_DRAFT', requestId: 'r', shopId: 'shop-1', selectedSkuKeys: ['sku-white'], ownerUserId: 'forged' },
@@ -342,6 +400,16 @@ for (const invalid of [
     listingWorkflowId: 'draft-1', mediaWorkflowId: 'media-1', outputAssetId: 'asset-1',
     expectedRevision: 4, action: 'PUBLISH',
   },
+  {
+    contractVersion: contract.CONTRACT_VERSION, type: 'EXECUTE_HOSTED_SUITE', requestId: 'r',
+    listingWorkflowId: 'draft-1', action: 'START', slotKey: null, decision: null,
+    costConfirmed: false,
+  },
+  {
+    contractVersion: contract.CONTRACT_VERSION, type: 'EXECUTE_HOSTED_SUITE', requestId: 'r',
+    listingWorkflowId: 'draft-1', action: 'REVIEW_SLOT', slotKey: null, decision: 'APPROVE',
+    costConfirmed: false,
+  },
   { contractVersion: contract.CONTRACT_VERSION, type: 'PUBLISH', requestId: 'r' },
 ]) {
   assert.throws(() => contract.parseFrameCommand(invalid));
@@ -359,11 +427,16 @@ assert.match(bridge, /allowedShopIds\.has\(command\.shopId\)/);
 assert.match(bridge, /allowedSkuKeys\.has\(skuKey\)/);
 assert.match(bridge, /ss-erp:source-listing-workbench-draft-create/);
 assert.match(bridge, /ss-erp:source-ai-workbench-open/);
+assert.match(bridge, /preferredSkuKey:\s*command\.sourceSelectionKey/);
+assert.match(bridge, /slotKey:\s*command\.slotKey/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-history/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirm-prepare/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-confirmed/);
 assert.match(bridge, /ss-erp:source-listing-workbench-media-command/);
 assert.match(bridge, /ss-erp:source-listing-workbench-ai-image-suite/);
+assert.match(bridge, /EXECUTE_HOSTED_SUITE/);
+assert.match(bridge, /ASSIGN_HOSTED_SUITE/);
+assert.match(bridge, /ss-erp:source-listing-workbench-ai-image-suite-command/);
 assert.doesNotMatch(bridge, /currentBilling\s*=\s*currentProjection\.billing/u);
 assert.match(bridge, /type:\s*'spb-self-hosted:get-ozon-shops',\s*deviceOnly:\s*true/u);
 assert.match(bridge, /response\.result\.state\s*===\s*'choice_required'/);
@@ -372,6 +445,12 @@ assert.match(bridge, /choiceBinding:\s*response\.result\.binding/);
 assert.match(bridge, /promptDraft:\s*command\.promptDraft/);
 assert.match(bridge, /hostname\.includes\('tmall\.com'\)\) return 'tmall'/);
 assert.match(bridge, /if \(wasOpen\) document\.documentElement\.style\.overflow = pageOverflow/);
+assert.match(bridge, /about:blank/);
+assert.match(bridge, /需新标签页/);
+assert.match(bridge, /ss-erp-source-costing-panel/);
+assert.match(bridge, /setLegacySurfaceHidden/);
+assert.match(bridge, /ss-erp-source-media-fab/);
+assert.match(bridge, /unifiedMediaFab\.click\(\)/);
 
 const page = fs.readFileSync(pagePath, 'utf8');
 const pageScript = fs.readFileSync(pageScriptPath, 'utf8');
@@ -380,6 +459,26 @@ assert.match(page, /shared\/donor-workbench\/workspace-contract\.js/);
 assert.match(page, /source-workbench-shell\.js/);
 assert.match(page, /data-action="open-ai-workbench"/);
 assert.match(page, /data-action="open-publish-review"/);
+assert.match(pageScript, /send\('OPEN_MEDIA_WORKBENCH'/);
+assert.match(page, /class="precision-toolbar"/);
+assert.match(page, /data-action="select-shop"/);
+assert.match(page, /data-action="show-basic"/);
+assert.match(page, /data-action="select-category"/);
+assert.match(page, /data-action="start-workflow"/);
+assert.match(page, /data-action="show-process"/);
+assert.match(page, /data-action="show-ai-process"/);
+assert.match(page, /data-action="upload-ozon"/);
+assert.match(page, /class="image-workflow-bar"/);
+assert.match(page, /data-hosted-action="CREATE_AND_REVIEW_PLAN"/);
+assert.match(page, /data-hosted-action="START"/);
+assert.match(page, /data-hosted-action="ASSIGN_APPROVED"/);
+assert.match(page, /class="precision-footer"/);
+assert.match(fs.readFileSync(pageCssPath, 'utf8'), /\.topbar-actions\[hidden\]\s*\{\s*display:\s*none\s*!important;/u);
+const bridgeCss = fs.readFileSync(bridgeCssPath, 'utf8');
+assert.match(bridgeCss, /border-radius:\s*22px/u);
+assert.match(bridgeCss, /box-shadow:[^;]*9999px/u);
+assert.match(bridgeCss, /pointer-events:\s*none/u);
+assert.doesNotMatch(page, /class="stage-rail"/);
 assert.match(page, /data-role="prompt-text"/);
 assert.match(page, /data-role="negative-prompt-text"/);
 assert.doesNotMatch(page, /<script(?![^>]*\bsrc=)/i);

@@ -3080,8 +3080,15 @@ async function executeAuthoritativeSourceAiImageSuitePlan(message) {
     idempotencyKey: createIdempotencyKey,
     galleryGoals: ['scene'],
   });
-  if (!created || !created.plan || created.plan.reviewStatus !== 'PENDING') {
+  if (!created || !created.plan
+    || !['PENDING', 'APPROVED'].includes(created.plan.reviewStatus)) {
     throw new Error('ERP AI 主图/套图计划创建结果无效');
+  }
+  if (created.replayed === true && created.plan.reviewStatus === 'APPROVED') {
+    return {
+      handoff: authority.handoff,
+      result: { state: 'completed', action: 'CREATE_AND_REVIEW_PLAN', replay: true },
+    };
   }
   const reviewIdempotencyKey = await sourceAiImageSuiteOperationKey(
     'source-ai-plan-review:',
@@ -3111,7 +3118,7 @@ async function executeAuthoritativeSourceAiImageSuitePlan(message) {
 async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   const allowedKeys = new Set([
     'type', 'sourceProductId', 'platform', 'listingWorkflowId',
-    'action', 'slotId', 'decision', 'costConfirmed', 'intentWitness',
+    'action', 'slotId', 'slotKey', 'decision', 'costConfirmed', 'intentWitness',
   ]);
   if (!message || typeof message !== 'object' || Array.isArray(message)
     || Object.keys(message).some((key) => !allowedKeys.has(key))) {
@@ -3127,6 +3134,14 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   if (rawSlotId != null && (typeof rawSlotId !== 'string' || slotId !== rawSlotId)) {
     throw new Error('ERP AI 主图/套图槽位无效');
   }
+  const rawSlotKey = message.slotKey;
+  const slotKey = rawSlotKey == null ? null : sourceWorkflowHandoffText(rawSlotKey, 1024);
+  if (rawSlotKey != null && (typeof rawSlotKey !== 'string' || slotKey !== rawSlotKey)) {
+    throw new Error('ERP AI 主图/套图槽位无效');
+  }
+  if (slotId !== null && slotKey !== null) {
+    throw new Error('ERP AI 主图/套图槽位无效');
+  }
   const decision = message.decision == null ? null : message.decision;
   if (decision !== null && decision !== 'APPROVE' && decision !== 'REJECT') {
     throw new Error('ERP AI 主图/套图审核决定无效');
@@ -3136,16 +3151,17 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   }
   const costConfirmed = message.costConfirmed === true;
   const validShape = action === 'CREATE_AND_REVIEW_PLAN'
-    ? slotId === null && decision === null && !costConfirmed && message.intentWitness === undefined
+    ? slotId === null && slotKey === null && decision === null && !costConfirmed
+      && message.intentWitness === undefined
     : action === 'START'
-    ? slotId === null && decision === null && costConfirmed
+    ? slotId === null && slotKey === null && decision === null && costConfirmed
     : action === 'CONTINUE' || action === 'CANCEL'
-      ? slotId === null && decision === null && !costConfirmed
+      ? slotId === null && slotKey === null && decision === null && !costConfirmed
       : action === 'RETRY_SLOT'
-        ? Boolean(slotId) && decision === null && costConfirmed
+        ? Boolean(slotId || slotKey) && decision === null && costConfirmed
         : action === 'REVIEW_SLOT'
-          ? Boolean(slotId) && Boolean(decision) && !costConfirmed
-          : Boolean(slotId) && decision === null && !costConfirmed;
+          ? Boolean(slotId || slotKey) && Boolean(decision) && !costConfirmed
+          : Boolean(slotId || slotKey) && decision === null && !costConfirmed;
   if (!validShape) throw new Error('ERP AI 主图/套图请求字段无效');
 
   if (action === 'CREATE_AND_REVIEW_PLAN') {
@@ -3159,21 +3175,31 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
     || typeof intentContract.matchesAiImageSuiteIntentWitness !== 'function') {
     throw new Error('ERP AI 主图/套图意图校验不可用');
   }
+  let resolvedSlotId = slotId;
+  if (!resolvedSlotId && slotKey) {
+    const suiteSlots = authority.result.projection?.suite?.slots;
+    const matchingSlot = Array.isArray(suiteSlots)
+      ? suiteSlots.find((slot) => slot && slot.slotKey === slotKey)
+      : null;
+    resolvedSlotId = matchingSlot && sourceWorkflowHandoffText(matchingSlot.id, 200);
+    if (!resolvedSlotId) throw new Error('ERP AI 主图/套图槽位已变化，请刷新后重试');
+  }
   let expectedIntentWitness;
   try {
     expectedIntentWitness = intentContract.createAiImageSuiteIntentWitness({
       projection: authority.result.projection,
       action,
-      slotId,
+      slotId: resolvedSlotId,
       decision,
     });
   } catch {
     throw new Error('ERP AI 主图/套图状态已变化，请刷新并重新确认');
   }
-  if (!intentContract.matchesAiImageSuiteIntentWitness(
-    message.intentWitness,
-    expectedIntentWitness,
-  )) {
+  if (message.intentWitness !== undefined
+    && !intentContract.matchesAiImageSuiteIntentWitness(
+      message.intentWitness,
+      expectedIntentWitness,
+    )) {
     throw new Error('ERP AI 主图/套图状态已变化，请刷新并重新确认');
   }
   const input = {
@@ -3181,9 +3207,35 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
     action,
     costConfirmed,
   };
-  if (slotId) input.slotId = slotId;
+  if (resolvedSlotId) input.slotId = resolvedSlotId;
   if (decision) input.decision = decision;
   const result = await authority.client.executeAiImageSuiteCommand(input);
+  return { handoff: authority.handoff, result };
+}
+
+async function assignAuthoritativeSourceAiImageSuite(message) {
+  const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
+  const binding = sourceAiImageSuitePlanBinding(authority);
+  const client = createHostedAiImageSuiteWorkbenchClient();
+  const projected = await client.loadSuite(binding);
+  const slots = projected && projected.suite && Array.isArray(projected.suite.slots)
+    ? projected.suite.slots : [];
+  const intents = slots.map((slot) => slot.applyIntent).filter(Boolean);
+  if (!intents.length) throw new Error('尚无全部已审核候选可写入草稿');
+  const basis = JSON.stringify({ binding, intents: intents.map((intent) => ({
+    slotId: intent.slotId, expectedSlotRevision: intent.commandTemplate.expectedSlotRevision,
+    outputAssetId: intent.commandTemplate.outputAssetId,
+  })) });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(
+    'source-ai-assignment:' + basis,
+  ));
+  const key = 'hosted-assignment-batch-' + Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const result = await client.assignApprovedOutputs({
+    intents,
+    assignmentStartOrdinal: 0,
+    idempotencyKey: key,
+  });
   return { handoff: authority.handoff, result };
 }
 
@@ -6441,6 +6493,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE) {
     Promise.resolve().then(
       () => executeAuthoritativeSourceAiImageSuiteCommand(message),
+    ).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-listing-workbench-ai-image-suite-assignment') {
+    Promise.resolve().then(
+      () => assignAuthoritativeSourceAiImageSuite(message),
     ).then((result) => {
       sendResponse({ ok: true, ...result });
     }).catch((error) => {

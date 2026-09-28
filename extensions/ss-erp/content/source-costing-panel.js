@@ -253,6 +253,17 @@
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" aria-label="刷新工作区" title="刷新">↻</button>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" aria-label="关闭工作区" title="关闭">×</button>',
       '</div>',
+      '<div class="ss-erp-source-precision-toolbar" data-role="precision-toolbar">',
+      '  <button type="button" data-precision-action="select-shop">选择店铺⌄</button>',
+      '  <button type="button" data-precision-action="show-basic">基础信息</button>',
+      '  <button type="button" data-precision-action="select-category">选择类目</button>',
+      '  <button type="button" data-precision-action="start-workflow" class="is-primary">开始执行</button>',
+      '  <span class="ss-erp-source-precision-spacer"></span>',
+      '  <button type="button" data-precision-action="show-process">查看过程</button>',
+      '  <button type="button" data-precision-action="show-ai-process">AI生图过程</button>',
+      '  <button type="button" data-precision-action="show-translation-process">AI翻译过程</button>',
+      '  <button type="button" data-precision-action="upload-ozon" class="is-primary">上传 Ozon</button>',
+      '</div>',
       '<div class="ss-erp-source-body">',
       '  <section class="ss-erp-source-section" data-role="ozon-card"></section>',
       '  <section class="ss-erp-source-section" data-role="source-card"></section>',
@@ -304,6 +315,24 @@
     panel.querySelector('[data-action="run-costing"]').addEventListener('click', runCosting);
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
     panel.querySelector('[data-action="open-source-workflow"]').addEventListener('click', openSourceWorkflow);
+    panel.querySelectorAll('[data-precision-action]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var action = button.dataset.precisionAction;
+        if (action === 'show-translation-process') {
+          selectSourceMediaWorkflow('TRANSLATE_ONLY');
+        } else if (action === 'start-workflow' || action === 'show-ai-process') {
+          selectSourceMediaWorkflow('AI_SUITE');
+        } else if (action === 'select-category') {
+          focusSourceMediaWorkbench(panel, 'CATEGORY');
+        } else if (action === 'show-process') {
+          focusSourceMediaWorkbench(panel, state.sourceWorkbenchFocusMode || 'AI_SUITE');
+        } else if (action === 'upload-ozon') {
+          setStatus('请先在 ERP 审核流程中确认媒体，再执行 Ozon 上传。', '');
+        } else {
+          focusSourceMediaWorkbench(panel, state.sourceWorkbenchFocusMode || 'AI_SUITE');
+        }
+      });
+    });
     panel.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1119,7 +1148,13 @@
       }
       var listing = currentSourceWorkbenchListing();
       if (listing && state.sourceWorkflowHandoff) {
-        await openSourceAiWorkbench(listing);
+        // Keep the image workflow in the same donor-style card surface. The
+        // old path opened a second extension tab, which split SKU, review and
+        // billing context and made the feature feel like a global overlay.
+        openPanel(null, { focus: 'media', trigger: trigger });
+        await refreshSourceWorkbenchStatus({ force: true });
+        state.pendingSourceWorkbenchFocus = true;
+        renderContent();
         return;
       }
     } catch (error) {
@@ -1368,6 +1403,11 @@
     var runButton = panel.querySelector('[data-action="run-costing"]');
     var collectButton = panel.querySelector('[data-action="collect-erp"]');
     var openWorkflowButton = panel.querySelector('[data-action="open-source-workflow"]');
+    if (sourceWorkbench) {
+      // The calculator surface owns only pricing/logistics. Image workflows
+      // appear only after the user explicitly enters the unified media card.
+      sourceWorkbench.hidden = !panel.classList.contains('media-focus');
+    }
 
     var cost = Number(product.totalCostCny || product.priceCny || product.price) || 0;
     if (titleNode) {
