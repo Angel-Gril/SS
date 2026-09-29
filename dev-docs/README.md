@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 Wanx 尺寸归一化与 1688 工作台几何修复
+
+- `3bd0aa51` 修复 Wanx 套图输出尺寸 owner：保留冻结的 `1024x1024` 请求合同，同时只接受已知的 `1024x1536` Wanx fallback，并按已验证实际像素设置 Sharp 解码上限；新增 fallback→`900x1200` PNG 回归。server 定向联合测试 `64/64`、typecheck、lint 通过。该修复尚未重新发起 Provider suite，也未部署。
+- `68773748` 修复 unified `media-focus` 入口的全屏几何：桌面为居中、最大 `1440x960` 且保留 24px 视口边距，移动端保留 8px 边距；普通核价面板拖拽与旧入口不变。1688 正例真实页面复现确认旧规则几乎占满 `2048x1018` 视口，新规则静态注入测得 `1440x960` 居中。extension source/donor 合同通过，cloud/local 包 verifier 分别 `495`/`491` pass，未部署。
+- 当前 fresh normal suite `cmum819lz00185oz5tlayxch3` 仍因旧运行代码的 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH` 失败并已结算 CNY `0.28`；QA04、assignment、website approval/canary/CAS 与官网 pointer 切换仍未完成。后续真实 suite 需要新的费用授权。
+
 ## 2026-09-29 `f211bb02` Wanx prompt compaction 与 fresh suite 真实边界
 
 - `8d9ec11a` 修复 Wanx 套图重复通用安全策略并压缩事实 JSON；`f211bb02` 进一步保留完整事实值、序号和短路径，去除超长 URL 编码 SKU 主键。两次定向 prompt 测试均 RED→GREEN，最终 `26/26`、server typecheck/lint 通过。
