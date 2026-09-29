@@ -6,6 +6,13 @@
 - `68773748` 修复 unified `media-focus` 入口的全屏几何：桌面为居中、最大 `1440x960` 且保留 24px 视口边距，移动端保留 8px 边距；普通核价面板拖拽与旧入口不变。1688 正例真实页面复现确认旧规则几乎占满 `2048x1018` 视口，新规则静态注入测得 `1440x960` 居中。extension source/donor 合同通过，cloud/local 包 verifier 分别 `495`/`491` pass，未部署。
 - 当前 fresh normal suite `cmum819lz00185oz5tlayxch3` 仍因旧运行代码的 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH` 失败并已结算 CNY `0.28`；QA04、assignment、website approval/canary/CAS 与官网 pointer 切换仍未完成。后续真实 suite 需要新的费用授权。
 
+## 2026-09-29 `5104bcdf` 双区部署与 live canary 边界
+
+- COM/CN 已受控部署 `5104bcdf4e3cede661bec0c3bf6cd136fb13c85e / 1.0.392`。COM 保持精确 hosted pilot（owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、session `45286e40-6f41-4c5e-994d-b31e559b0405`、仅 `IMAGE_TO_IMAGE/SUITE`）；CN 保持 direct-origin/RDS、AI/BYOK/Ozon dark。两区 `/ready` 正常，COM verifier 在 pilot expectation 下通过 `0 failure / 1 warning`，CN direct verifier `0 failure / 1 warning`；唯一 warning 为既定未配置远端备份。
+- 区域候选为独立 origin：COM cloud ZIP SHA-256 `565b66c56c41e12f9996c4e4d1a8981a132132bd24da38fb8ca894d87b35960f`，CN cloud ZIP SHA-256 `e6a75fedfa936135cc6606291c184595933cb58fa19e710bade349a8b5312ab5`；COM/CN 使用不同 release evidence/signature，均为 Ed25519 key `ss-erp-extension-release-2026-09-05-01`。
+- 新候选的真实 1688 canary 已启动但在统一 media-focus 打开断言处超时；诊断显示 trigger/media-fab/panel 存在但未进入 `media-focus`，未生成 PASS 回执。Provider/Ozon/ERP mutations=0，未新增费用；该失败不能重标为通过，下一步继续排查候选扩展注入/入口事件链。
+- 官网仍安全服务旧 pointer `6378b62e / 1.0.364`；本轮未执行 website approval、distribution probe 或 CAS。
+
 ## 2026-09-29 `f211bb02` Wanx prompt compaction 与 fresh suite 真实边界
 
 - `8d9ec11a` 修复 Wanx 套图重复通用安全策略并压缩事实 JSON；`f211bb02` 进一步保留完整事实值、序号和短路径，去除超长 URL 编码 SKU 主键。两次定向 prompt 测试均 RED→GREEN，最终 `26/26`、server typecheck/lint 通过。
