@@ -13,6 +13,12 @@
 - 新候选的真实 1688 canary 已启动但在统一 media-focus 打开断言处超时；诊断显示 trigger/media-fab/panel 存在但未进入 `media-focus`，未生成 PASS 回执。Provider/Ozon/ERP mutations=0，未新增费用；该失败不能重标为通过，下一步继续排查候选扩展注入/入口事件链。
 - 官网仍安全服务旧 pointer `6378b62e / 1.0.364`；本轮未执行 website approval、distribution probe 或 CAS。
 
+## 2026-09-29 `42684fb8` canary 输入链路修复
+
+- `bb003aaa`/`42684fb8` 修复 release-bound live canary 的浏览器输入边界：先等待真实坐标点击结果，若 headless Chromium 未派发 content-script listener，则回退到同一 DOM handler 的受控 `.click()`；关闭按钮使用相同回退。触发路径和诊断仅影响 canary runner，不改变扩展业务 owner。
+- 基于当前 HEAD 生成并签名 `1.0.394` COM candidate；真实 1688 canary PASS：正例 `990499606077`、负例 `1048072018093`，打开/关闭/rollback/allowlist cleanup 全部通过，Provider/Ozon/ERP mutations=0、pageErrors=0。回执：`C:\Users\550W\AppData\Local\SS-ERP\private\donor-live-42684fb8\canary-COM-1.0.394.json`，SHA-256 `03e9d954a6577d2ab20818c894347299dbcc9d60107e112c9d7eb449bf51fefc`；截图 SHA-256 `faf62fbc24636b43010024278cbde4dc4cf860ca3f942089d2b71db814518f9d`。
+- 该 PASS 明确记录物理坐标输入未触发而使用 DOM fallback；它证明统一入口事件链和安全回滚通过，但不把 headless 坐标输入问题伪装成产品行为。官网 pointer、QA04、website approval、CAS 仍未执行。
+
 ## 2026-09-29 `f211bb02` Wanx prompt compaction 与 fresh suite 真实边界
 
 - `8d9ec11a` 修复 Wanx 套图重复通用安全策略并压缩事实 JSON；`f211bb02` 进一步保留完整事实值、序号和短路径，去除超长 URL 编码 SKU 主键。两次定向 prompt 测试均 RED→GREEN，最终 `26/26`、server typecheck/lint 通过。
