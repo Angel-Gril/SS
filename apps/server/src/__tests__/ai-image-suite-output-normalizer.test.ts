@@ -75,6 +75,14 @@ describe('AI image suite output normalizer', () => {
     expect(result).toMatchObject({ width: 900, height: 1200, mimeType: 'image/png' });
   });
 
+  it('accepts the verified 880x880 Wanx fallback and still normalizes to the frozen 3:4 output', async () => {
+    const result = await normalizeAiImageSuiteProviderOutput({
+      buffer: await providerPng(880, 880), mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1024 },
+    } as any);
+    expect(result).toMatchObject({ width: 900, height: 1200, mimeType: 'image/png' });
+  });
+
   it('does not accept square output under a portrait request or an arbitrary new Provider size', async () => {
     await expect(normalizeAiImageSuiteProviderOutput({
       buffer: await providerPng(1024, 1024), mimeType: 'image/png',
@@ -129,13 +137,20 @@ describe('AI image suite output normalizer', () => {
     })).rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_INVALID_IMAGE'));
   });
 
-  it('rejects Provider images whose decoded pixel dimensions are not 1024x1536', async () => {
+  it('rejects Provider images outside the verified Wanx fallback dimensions', async () => {
     const wrongSize = await providerPng(1024, 1535);
 
     await expect(normalizeAiImageSuiteProviderOutput({
       buffer: wrongSize,
       mimeType: 'image/png',
     })).rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'));
+
+    const nearSquare = await providerPng(881, 881);
+    await expect(normalizeAiImageSuiteProviderOutput({
+      buffer: nearSquare,
+      mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1024 },
+    } as any)).rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'));
   });
 
   it('rejects a Provider buffer above the 20 MiB boundary before decoding', async () => {

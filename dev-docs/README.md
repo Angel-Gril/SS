@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 Wanx 880x880 实际输出边界（fresh suite 诊断）
+
+- 新鲜 DOTH 草稿 `draft-8e329820-e9f2-491a-9d57-19131b23c899`、快照 `3fe7c02d-e38a-4a80-804b-e8e72826490c` 的两槽 hosted SUITE 已按授权执行一次：计划批准、`START -> CONTINUE` 只各派发一次 Provider 请求，未执行 Ozon。
+- 两个已接受的 Wanx task 均实际返回 `880x880 PNG`；当前部署的 `3bd0aa51` 归一化只允许冻结 `1024x1024` 请求或已验证 `1024x1536` fallback，因此两槽安全失败为 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH`。两笔 reservation 目前均为 `RECONCILIATION_REQUIRED`、`billedUnits=0`，没有伪造结算或重试未知结果。
+- 该真实证据证明应在同一 owner 增加精确 `880x880` fallback→`900x1200 PNG`，而不是放宽任意尺寸。对应本地回归已补齐；修复需形成新 commit、部署 COM pilot 后，优先用原已接受 task 做只读 recovery/对账，不新增 Provider POST；若 recovery 不能闭合，再另行取得新的费用授权。
+
 ## 2026-09-29 Wanx 尺寸归一化与 1688 工作台几何修复
 
 - `3bd0aa51` 修复 Wanx 套图输出尺寸 owner：保留冻结的 `1024x1024` 请求合同，同时只接受已知的 `1024x1536` Wanx fallback，并按已验证实际像素设置 Sharp 解码上限；新增 fallback→`900x1200` PNG 回归。server 定向联合测试 `64/64`、typecheck、lint 通过。该修复尚未重新发起 Provider suite，也未部署。

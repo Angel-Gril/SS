@@ -1,5 +1,11 @@
 # SS ERP 当前状态审计
 
+## 2026-09-29 fresh suite Wanx 输出尺寸诊断
+
+- 新草稿 `draft-8e329820-e9f2-491a-9d57-19131b23c899` 绑定新快照 `3fe7c02d-e38a-4a80-804b-e8e72826490c`，计划 `cmummfk8p001g5on8i5s3yanf` 已批准，报价两槽各 CNY 0.14、总上限 CNY 0.28。`START` 与 `CONTINUE` 均只执行一次。
+- 两个 Wanx task 均被 Provider 接受并返回真实 `880x880 PNG`；COM 当前运行归一化 owner 只接受冻结 `1024x1024` 或 `1024x1536` fallback，故两槽均 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH`。作业 `cmummm6g700285on88alzy3a8` / `cmummm6gl002h5on82kzsvpds` 与 suite `cmummglfg001q5on803uyzv2b` 均无输出、无 assignment、无 Ozon 写入；reservation/settlement 为 `RECONCILIATION_REQUIRED` / `billedUnits=0`，不得重试或手工改写。
+- 本轮本地 owner 修复增加精确 `880x880` fallback→`900x1200 PNG`，新增归一化回归，server focused test `11/11`、typecheck、lint 通过。该修复尚未部署；正式 fresh evidence、QA04、canary、website approval/CAS 仍未完成。
+
 ## 2026-09-27 `e83f4e57` Cloud source handoff 热修与 donor 工作台迁移边界
 
 - 根因：Cloud 扩展 source-workflow handoff 由通用 mutable runtime endpoint 决定；空值回退 local `127.0.0.1:3001`，再被 Web URL 逻辑映射成 `127.0.0.1:3000`。Cloud 包本身的签名 `deployment-defaults.erpBaseUrl` 未被使用。修复后 Cloud 强制使用打包 Web origin；Local/source 保持可配置本地行为。popup/source panel 仅报告标签页创建，不声称页面可达。

@@ -13,6 +13,11 @@ export const AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION =
 export const AI_IMAGE_SUITE_OUTPUT_NORMALIZER_MAX_INPUT_BYTES = 20 * 1024 * 1024;
 export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH = 1024;
 export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT = 1536;
+// Wanx has also returned a verified 880x880 PNG for the same frozen 1024x1024
+// edit request. Keep this exact fallback allowlisted; arbitrary dimensions must
+// still fail closed before any candidate is persisted.
+export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_WIDTH = 880;
+export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_HEIGHT = 880;
 
 const AI_IMAGE_SUITE_OUTPUT_NORMALIZER_MAX_METADATA_PIXELS = 16_000_000;
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 } as const;
@@ -178,7 +183,11 @@ export async function normalizeAiImageSuiteProviderOutput(
     && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
     && metadata.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH
     && metadata.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT;
-  if (!matchesRequestedProfile && !matchesKnownWanxFallback) {
+  const matchesKnownWanxSquareFallback = providerRequest.width === AI_IMAGE_WANX21_EDIT_PROFILE.width
+    && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
+    && metadata.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_WIDTH
+    && metadata.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_HEIGHT;
+  if (!matchesRequestedProfile && !matchesKnownWanxFallback && !matchesKnownWanxSquareFallback) {
     throw new AiImageSuiteOutputNormalizerError(
       'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
       `Provider output must be exactly ${providerRequest.width}x${providerRequest.height} pixels`,
@@ -190,8 +199,8 @@ export async function normalizeAiImageSuiteProviderOutput(
     normalized = await sharp(input.buffer, {
       animated: false,
       failOn: 'warning',
-      // The accepted Wanx fallback may be 1024x1536 while the frozen request
-      // profile is 1024x1024; bound decoding by the validated actual image,
+      // Accepted Wanx fallbacks may differ from the frozen request profile;
+      // bound decoding by the validated actual image,
       // not the smaller request profile.
       limitInputPixels: (metadata.width || 0) * (metadata.height || 0),
     })
