@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 `761e003c` COM pilot recovery 与 fresh normal suite
+
+- `761e003c2db04d0581fedf52ec14296bd258011b` 已推送并受控部署到 COM pilot；`/ready`、DB/Redis、150 migrations、AI media post-migration guard 与 hosted-pilot 合同均通过。COM 仍限制为 DOTH、原 owner/设备 session、`IMAGE_TO_IMAGE/SUITE`，未执行官网 CAS 或公开 pointer 切换。
+- 对旧 fresh suite 的两个已接受 Wanx task 只读 recovery 均使用正确 Provider reconciliation evidence hash，保留原 task ID；Worker 查询后因冻结 edit recovery contract 不完整安全回到 `MANUAL_REVIEW`。未重发 Provider POST，旧 reservation 仍为 `RECONCILIATION_REQUIRED`、`billedUnits=0`，未伪造结算。
+- 在单独批准最高 CNY 0.28 后，新建独立计划 `cmumsdxzt000h5o4hugj6omgh`，严格指定 `galleryGoals=[scene]`，预览确认两槽/最高 CNY 0.28；suite `cmumseuo4000r5o4hefxfmvei` 仅派发一次，两个槽各 `attempt=1`，均 `SUCCEEDED`，输出均为归一化 `900x1200 PNG`。两槽已人工审核 `APPROVED`；本轮未执行 Ozon 写入、store-draft assignment、官网 approval/canary/CAS。
+
 ## 2026-09-29 Wanx 880x880 实际输出边界（fresh suite 诊断）
 
 - 新鲜 DOTH 草稿 `draft-8e329820-e9f2-491a-9d57-19131b23c899`、快照 `3fe7c02d-e38a-4a80-804b-e8e72826490c` 的两槽 hosted SUITE 已按授权执行一次：计划批准、`START -> CONTINUE` 只各派发一次 Provider 请求，未执行 Ozon。

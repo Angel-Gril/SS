@@ -1,5 +1,11 @@
 # SS ERP 当前状态审计
 
+## 2026-09-29 `761e003c` COM pilot recovery 与 fresh normal suite
+
+- `761e003c2db04d0581fedf52ec14296bd258011b` 已推送并受控部署到 COM pilot；API/Web/Worker active，`/ready`、DB/Redis、150 migrations、AI media guard 与 hosted-pilot 合同通过。COM 继续精确限制 DOTH/原 owner/设备 session/`IMAGE_TO_IMAGE+SUITE`，官网 pointer、QA04、website approval、canary、distribution probe 与 CAS 均未执行。
+- 对旧 suite `cmummglfg001q5on803uyzv2b` 的已接受 task `fb4909c4-422c-4c50-b6d7-c9d3a16834b2`、`3f657480-0ab6-4649-8d2a-55c8655e7182` 只读 recovery 已完成：使用 Provider reconciliation evidence hash `11ca5917...6667c6`、`221ef9ca...4616`，原 task ID 未变、未重发 POST。Worker 查询后因 `PROVIDER_RECONCILIATION_INVALID / Frozen edit recovery contract is incomplete` 回到 `MANUAL_REVIEW`；旧 reservation 仍 `RECONCILIATION_REQUIRED`、`billedUnits=0`，没有手工改写或伪造结算。
+- 单独取得最高 CNY 0.28 授权后，创建计划 `cmumsdxzt000h5o4hugj6omgh`（仅 `galleryGoals=[scene]`），预览确认两槽/最高 CNY 0.28；suite `cmumseuo4000r5o4hefxfmvei` 只派发一次，两个槽 `attempt=1`、均 `SUCCEEDED`，输出均为 `900x1200 PNG`，suite 已审核 `APPROVED`。本次未执行 Ozon 写入、store-draft assignment 或官网 CAS，未出现重试/额外 Provider POST。
+
 ## 2026-09-29 fresh suite Wanx 输出尺寸诊断
 
 - 新草稿 `draft-8e329820-e9f2-491a-9d57-19131b23c899` 绑定新快照 `3fe7c02d-e38a-4a80-804b-e8e72826490c`，计划 `cmummfk8p001g5on8i5s3yanf` 已批准，报价两槽各 CNY 0.14、总上限 CNY 0.28。`START` 与 `CONTINUE` 均只执行一次。
