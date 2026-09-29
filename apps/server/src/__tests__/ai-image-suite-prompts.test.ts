@@ -224,6 +224,7 @@ describe('AI image suite prompt freeze', () => {
   });
 
   it('does not duplicate the provider-neutral safety policy for a production-sized Wanx fact set', async () => {
+    const productionSku = encodeURIComponent('sku:5961157345116|尺码=XXL;颜色=开衫卫衣黑色 加绒|开衫卫衣黑色 加绒 / XXL');
     const facts = [
       { path: '/facts/title', value: '潮牌加绒加厚连帽外套女士卫衣oversize2025新款春秋冬季美式复古', evidenceIds: ['title'] },
       { path: '/facts/shopName', value: '揭阳市麦尔斯服装有限公司', evidenceIds: ['shop'] },
@@ -231,8 +232,8 @@ describe('AI image suite prompt freeze', () => {
       { path: '/facts/shippingCny', value: 0, evidenceIds: ['shipping'] },
       { path: '/facts/shippingFree', value: true, evidenceIds: ['free'] },
       { path: '/facts/packageWeightG', value: 1, evidenceIds: ['weight'] },
-      { path: '/skus/sku-1/attributes/0', value: { name: '尺码', value: 'XXL' }, evidenceIds: ['size'], skuKeys: ['sku-1'] },
-      { path: '/skus/sku-1/attributes/1', value: { name: '颜色', value: '开衫卫衣黑色 加绒' }, evidenceIds: ['color'], skuKeys: ['sku-1'] },
+      { path: `/skus/${productionSku}/attributes/0`, value: { name: '尺码', value: 'XXL' }, evidenceIds: ['size'], skuKeys: ['sku-1'] },
+      { path: `/skus/${productionSku}/attributes/1`, value: { name: '颜色', value: '开衫卫衣黑色 加绒' }, evidenceIds: ['color'], skuKeys: ['sku-1'] },
     ];
     const planned = slot({ id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero',
       ownershipLevel: 'sku', ownershipKey: 'sku-1', candidateIds: ['candidate-1'], factEvidenceIds: facts.flatMap(fact => fact.evidenceIds) });
@@ -246,7 +247,9 @@ describe('AI image suite prompt freeze', () => {
     const prompt = vi.mocked(repo.commitPromptSet).mock.calls[0]![0].prompts[0]!;
     expect(Array.from(prompt.resolvedPrompt).length).toBeLessThanOrEqual(800);
     expect(prompt.resolvedPrompt).toContain('潮牌加绒加厚连帽外套');
-    expect(prompt.resolvedPrompt).toContain('/facts/packageWeightG');
+    expect(prompt.resolvedPrompt).toContain('packageWeightG');
+    expect(prompt.resolvedPrompt).toContain('"尺码","value":"XXL"');
+    expect(prompt.resolvedPrompt).not.toContain(productionSku);
     expect(prompt.resolvedPrompt).not.toContain("Preserve the product's exact identity");
   });
 

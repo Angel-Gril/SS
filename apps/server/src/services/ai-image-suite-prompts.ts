@@ -474,6 +474,19 @@ function compositionGuidance(
   return SLOT_COMPOSITION_GUIDANCE[goal] || [];
 }
 
+function compactWanxFactPath(path: string): string {
+  const segments = path.split('/').filter(Boolean);
+  if (segments[0] === 'facts') return `/facts/${segments.slice(1).join('/')}`;
+  if (segments[0] === 'skus' && segments.length >= 3) {
+    // The full encoded SKU key is already enforced by the server-side scope
+    // check. Wanx only needs the short fact location plus the verified value;
+    // retaining the encoded owner here would consume the 800-character wire
+    // contract without adding product evidence.
+    return `/skus/${segments.slice(2).join('/')}`;
+  }
+  return `/${segments.slice(-3).join('/')}`;
+}
+
 function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
   if (authority.revision !== 2 || authority.status !== 'PLANNED') {
     return authorityFailure('AI media suite is not at the prompt freeze boundary');
@@ -599,7 +612,9 @@ function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
           // provider's 800-character contract is spent on facts rather than
           // repeated object-label syntax. The tuple order is fixed as
           // [fact path, verified value].
-          verifiedFactsJson: JSON.stringify({ f: scopedFacts.map(fact => [fact.path, fact.value]) }),
+          verifiedFactsJson: JSON.stringify({ f: scopedFacts.map((fact, index) => [
+            index, compactWanxFactPath(fact.path), fact.value,
+          ]) }),
           safetyConstraintsJson: JSON.stringify({ constraints: slot.data.safetyConstraints.map(rule => compactWanxRule(rule, row.goal)) }),
         } };
       }
