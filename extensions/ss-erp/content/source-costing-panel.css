@@ -99,14 +99,23 @@ html.ss-erp-source-media-modal-open {
 }
 
 #ss-erp-source-costing-panel.media-focus {
-  inset: 24px;
-  width: auto;
-  max-width: none;
-  height: auto;
-  max-height: none;
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  width: min(1440px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  height: min(960px, calc(100vh - 48px));
+  max-height: calc(100vh - 48px);
+  transform: translate(-50%, -50%);
   border-color: rgba(15, 118, 110, 0.24);
   background: #f8fafa;
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.3);
+}
+
+#ss-erp-source-costing-panel.media-focus.open {
+  animation: ss-erp-source-panel-in-centered 0.18s ease-out;
 }
 
 #ss-erp-source-costing-panel.media-focus [data-role="source-listing-workbench"] {
@@ -193,6 +202,11 @@ html.ss-erp-source-media-modal-open {
 @keyframes ss-erp-source-panel-in {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes ss-erp-source-panel-in-centered {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.985); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 .ss-erp-source-head {
@@ -531,10 +545,18 @@ html.ss-erp-source-media-modal-open {
 
 
   #ss-erp-source-costing-panel.media-focus {
-    inset: 0;
-    width: auto;
+    inset: auto;
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    max-height: calc(100vh - 16px);
+    transform: translate(-50%, -50%);
     border: 0;
-    border-radius: 0;
+    border-radius: 14px;
   }
 
   .ss-erp-source-actions {

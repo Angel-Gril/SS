@@ -66,8 +66,8 @@ assert.match(panel, /getClientRects\(\)\.length\s*>\s*0/u);
 assert.match(panel, /aria-label=["']关闭工作区["']/u);
 assert.match(
   panelCss,
-  /#ss-erp-source-costing-panel\.media-focus\s*\{[\s\S]{0,360}inset:\s*24px;[\s\S]{0,180}width:\s*auto;[\s\S]{0,180}height:\s*auto/u,
-  'the AI entry should use a stable full-viewport workspace instead of the costing drawer',
+  /#ss-erp-source-costing-panel\.media-focus\s*\{[\s\S]{0,520}left:\s*50%;[\s\S]{0,120}top:\s*50%;[\s\S]{0,180}width:\s*min\(1440px,\s*calc\(100vw\s*-\s*48px\)\);[\s\S]{0,220}height:\s*min\(960px,\s*calc\(100vh\s*-\s*48px\)\);[\s\S]{0,220}transform:\s*translate\(-50%,\s*-50%\)/u,
+  'the AI entry should use a centered donor-sized workspace instead of a viewport-sized overlay',
 );
 assert.match(
   panelCss,
