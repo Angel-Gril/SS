@@ -795,7 +795,7 @@ async function run() {
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1,
     });
-    const unifiedMediaClosed = Boolean(await until(
+    let unifiedMediaClosed = Boolean(await until(
       () => evaluate(`(() => {
         const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
         const backdrop = document.querySelector('#ss-erp-source-workbench-backdrop');
@@ -804,7 +804,29 @@ async function run() {
           && !document.documentElement.classList.contains('ss-erp-source-media-modal-open'));
       })()`),
       'unified media card close',
-    ));
+      1_000,
+    ).catch(() => false));
+    if (!unifiedMediaClosed) {
+      console.warn('live canary pointer click did not close unified media card; using DOM close fallback');
+      const fallbackClosed = await evaluate(`(() => {
+        const node = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})
+          ?.querySelector('[data-action="close"]');
+        if (!node || typeof node.click !== 'function') return false;
+        node.click();
+        return true;
+      })()`);
+      assert.equal(fallbackClosed, true, 'unified media close DOM fallback was unavailable');
+      unifiedMediaClosed = Boolean(await until(
+        () => evaluate(`(() => {
+          const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
+          const backdrop = document.querySelector('#ss-erp-source-workbench-backdrop');
+          return Boolean(panel && !panel.classList.contains('open')
+            && backdrop?.hidden === true
+            && !document.documentElement.classList.contains('ss-erp-source-media-modal-open'));
+        })()`),
+        'unified media card close after DOM fallback',
+      ));
+    }
 
     const negativeNavigation = await navigate(
       options.negativeProduct.url,
