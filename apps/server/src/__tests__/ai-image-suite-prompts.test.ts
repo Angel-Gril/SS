@@ -223,6 +223,33 @@ describe('AI image suite prompt freeze', () => {
     expect(committed.templateSnapshot.templateKey).toBe('ai_media_suite_generation_wanx');
   });
 
+  it('does not duplicate the provider-neutral safety policy for a production-sized Wanx fact set', async () => {
+    const facts = [
+      { path: '/facts/title', value: '潮牌加绒加厚连帽外套女士卫衣oversize2025新款春秋冬季美式复古', evidenceIds: ['title'] },
+      { path: '/facts/shopName', value: '揭阳市麦尔斯服装有限公司', evidenceIds: ['shop'] },
+      { path: '/facts/currency', value: 'CNY', evidenceIds: ['currency'] },
+      { path: '/facts/shippingCny', value: 0, evidenceIds: ['shipping'] },
+      { path: '/facts/shippingFree', value: true, evidenceIds: ['free'] },
+      { path: '/facts/packageWeightG', value: 1, evidenceIds: ['weight'] },
+      { path: '/skus/sku-1/attributes/0', value: { name: '尺码', value: 'XXL' }, evidenceIds: ['size'], skuKeys: ['sku-1'] },
+      { path: '/skus/sku-1/attributes/1', value: { name: '颜色', value: '开衫卫衣黑色 加绒' }, evidenceIds: ['color'], skuKeys: ['sku-1'] },
+    ];
+    const planned = slot({ id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero',
+      ownershipLevel: 'sku', ownershipKey: 'sku-1', candidateIds: ['candidate-1'], factEvidenceIds: facts.flatMap(fact => fact.evidenceIds) });
+    planned.slotSnapshot.safetyConstraints = ['preserve_product_identity', 'use_verified_facts_only', 'do_not_invent_text_or_certifications', 'do_not_change_bundle_or_packaging'];
+    planned.slotSnapshot.acceptanceChecks = ['aspect_ratio_3_4', 'product_matches_references', 'no_unverified_claims', 'goal_sku_hero_is_visually_satisfied'];
+    planned.slotHash = hashAiMediaPlanningJson(planned.slotSnapshot);
+    const repo = repository({ loadAuthority: async () => ({ kind: 'ready', authority: authority({ provider: 'dashscope-wanx',
+      model: 'wanx2.1-imageedit', slots: [planned], planPayload: { compatibilityGroups: [], verifiedFacts: facts } }) }) });
+    const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' });
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: registry }).freeze(request);
+    const prompt = vi.mocked(repo.commitPromptSet).mock.calls[0]![0].prompts[0]!;
+    expect(Array.from(prompt.resolvedPrompt).length).toBeLessThanOrEqual(800);
+    expect(prompt.resolvedPrompt).toContain('潮牌加绒加厚连帽外套');
+    expect(prompt.resolvedPrompt).toContain('/facts/packageWeightG');
+    expect(prompt.resolvedPrompt).not.toContain("Preserve the product's exact identity");
+  });
+
   it('preserves Wanx administrator instructions and refuses oversized prompts before persistence', async () => {
     const single = slot({ id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero',
       ownershipLevel: 'sku', ownershipKey: 'sku-1', candidateIds: ['candidate-1'], factEvidenceIds: ['fact-color', 'fact-material'] });

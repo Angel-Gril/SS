@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import { compareAiMediaPlanningStrings } from './ai-media-planning-contract.js';
 import { AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY } from './ai-prompt-template-registry.js';
-import { AiPromptTemplateError, AI_MEDIA_SUITE_WANX_GENERATION_TEMPLATE_KEY, AI_MEDIA_SUITE_WANX_SAFETY_POLICY } from './ai-prompt-templates.js';
+import {
+  AiPromptTemplateError,
+  AI_MEDIA_SUITE_WANX_GENERATION_TEMPLATE_KEY,
+  AI_MEDIA_SUITE_WANX_SAFETY_POLICY,
+  AI_PROMPT_SAFETY_POLICY,
+} from './ai-prompt-templates.js';
 import { isWanxAiImageSuiteProvider } from './ai-image-suite-provider-runtime.js';
 import { compileWanxImageToImagePrompt } from './ai-image-wanx-image-to-image.js';
 
@@ -590,7 +595,11 @@ function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
             新增文字: visibleTextPolicy(row.goal) === 'NO_VISIBLE_TEXT' ? '禁止' : '可选已核事实简短俄语',
             验收: slot.data.acceptanceChecks.map(rule => compactWanxRule(rule, row.goal)) }),
           referenceManifestJson: JSON.stringify({ 图序: 0, 角色: manifest[0]!.sourceRole }),
-          verifiedFactsJson: JSON.stringify({ facts: scopedFacts.map(fact => ({ 项: fact.path, 值: fact.value })) }),
+          // Keep every scoped fact, but use a compact tuple form so the
+          // provider's 800-character contract is spent on facts rather than
+          // repeated object-label syntax. The tuple order is fixed as
+          // [fact path, verified value].
+          verifiedFactsJson: JSON.stringify({ f: scopedFacts.map(fact => [fact.path, fact.value]) }),
           safetyConstraintsJson: JSON.stringify({ constraints: slot.data.safetyConstraints.map(rule => compactWanxRule(rule, row.goal)) }),
         } };
       }
@@ -796,7 +805,15 @@ export function createAiImageSuitePromptService(dependencies: {
         let resolvedPrompt = `${resolved.resolvedPrompt.trim()}\n\n${IMMUTABLE_POLICY_TEXT}`;
         let resolvedNegativePrompt = `${resolved.resolvedNegativePrompt.trim()}\n\n${IMMUTABLE_NEGATIVE_POLICY_TEXT}`;
         if (wanx) {
-          const text = resolved.resolvedPrompt.trim();
+          const providerNeutralPrefix = `${AI_PROMPT_SAFETY_POLICY}\n\n`;
+          const rendered = resolved.resolvedPrompt.trim();
+          // The generic prompt registry prepends its provider-neutral policy to
+          // every media template. Wanx has its own compact policy and an 800
+          // Unicode-character transport contract; retaining both policies
+          // needlessly consumes the contract and rejects legitimate captures.
+          const text = rendered.startsWith(providerNeutralPrefix)
+            ? rendered.slice(providerNeutralPrefix.length).trim()
+            : rendered;
           try {
             const compiled = compileWanxImageToImagePrompt({
               prompt: text.startsWith(AI_MEDIA_SUITE_WANX_SAFETY_POLICY)
