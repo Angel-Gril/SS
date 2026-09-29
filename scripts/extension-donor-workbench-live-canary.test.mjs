@@ -341,6 +341,9 @@ test('accepts the unified media card cutover without opening the donor iframe', 
   assert.match(source, /donor iframe suppression/u);
   assert.match(source, /calculator media separation/u);
   assert.doesNotMatch(source, /donor workbench iframe open/u);
+  assert.match(source, /pointer unified media card open/u);
+  assert.match(source, /dom-click-fallback/u);
+  assert.match(source, /triggerRect/u);
 });
 
 test('attributes mutations from workers, extension iframes, and content-script initiators', () => {

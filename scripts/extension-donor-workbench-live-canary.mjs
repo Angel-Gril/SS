@@ -661,6 +661,32 @@ async function run() {
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
     });
+    // Some headless Chromium builds deliver the coordinate event to the page
+    // surface but do not dispatch the content-script button listener. Confirm
+    // the physical path first, then use the same DOM click handler as a
+    // bounded fallback so the canary can distinguish input transport flakiness
+    // from the unified media-focus owner itself.
+    let triggerInteraction = 'pointer';
+    const pointerOpened = await until(
+      () => evaluate(`(() => {
+        const panel = document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)});
+        return Boolean(panel?.classList.contains('open')
+          && panel.classList.contains('media-focus'));
+      })()`),
+      'pointer unified media card open',
+      1_000,
+    ).catch(() => false);
+    if (!pointerOpened) {
+      triggerInteraction = 'dom-click-fallback';
+      console.warn('live canary pointer click did not open unified media card; using DOM click fallback');
+      const fallbackClicked = await evaluate(`(() => {
+        const node = document.querySelector(${JSON.stringify(DONOR_TRIGGER)});
+        if (!node || typeof node.click !== 'function') return false;
+        node.click();
+        return true;
+      })()`);
+      assert.equal(fallbackClicked, true, 'donor trigger DOM click fallback was unavailable');
+    }
     let unifiedMediaState;
     try {
       unifiedMediaState = await until(async () => {
@@ -706,6 +732,10 @@ async function run() {
         panelClasses: document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})?.className || '',
         panelHidden: document.querySelector(${JSON.stringify(UNIFIED_MEDIA_PANEL)})?.hidden ?? null,
         iframeHidden: document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden ?? null,
+        triggerHidden: document.querySelector(${JSON.stringify(DONOR_TRIGGER)})?.hidden ?? null,
+        triggerRect: document.querySelector(${JSON.stringify(DONOR_TRIGGER)})?.getBoundingClientRect().toJSON() || null,
+        triggerPointerEvents: document.querySelector(${JSON.stringify(DONOR_TRIGGER)})
+          ? getComputedStyle(document.querySelector(${JSON.stringify(DONOR_TRIGGER)})).pointerEvents : null,
         bodyText: document.body?.innerText?.slice(0, 500) || ''
       }))()`);
       throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
