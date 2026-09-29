@@ -1141,7 +1141,11 @@
   }
 
   async function openPrimaryAiWorkbench(trigger) {
-    if (state.sourceAiWorkbenchOpening || state.sourceAiWorkbenchState === 'refreshing') return;
+    // Opening the unified card must not wait for the initial ERP/source
+    // hydration pass.  Marketplace pages can enter this handler while the
+    // projection is refreshing; the card is the immediate visual response and
+    // the async refresh settles its contents afterwards.
+    if (state.sourceAiWorkbenchOpening) return;
     state.panelTrigger = trigger || state.panelTrigger;
     // Open the unified media card synchronously. Product/ERP hydration may be
     // slow or unavailable on a marketplace page, but that must not make the

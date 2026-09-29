@@ -125,6 +125,16 @@ assert.match(
   /async function openPrimaryAiWorkbench\(trigger\)[\s\S]{0,1600}openPanel\(null, \{ focus: 'media', trigger: trigger \}\)/u,
   'the primary AI entry should keep the workflow inside the unified media panel',
 );
+assert.match(
+  primaryAiWorkbenchSource,
+  /if \(state\.sourceAiWorkbenchOpening\) return;/u,
+  'the unified media card must open while source hydration is still refreshing',
+);
+assert.doesNotMatch(
+  primaryAiWorkbenchSource,
+  /state\.sourceAiWorkbenchState\s*===\s*['"]refreshing['"]/u,
+  'source hydration must not block the immediate unified media card entry',
+);
 assert.match(panel, /ss-erp-source-precision-toolbar/u);
 assert.match(panel, /data-precision-action="show-ai-process"/u);
 assert.match(panelCss, /ss-erp-source-precision-toolbar/u);
