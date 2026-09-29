@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 `f211bb02` Wanx prompt compaction 与 fresh suite 真实边界
+
+- `8d9ec11a` 修复 Wanx 套图重复通用安全策略并压缩事实 JSON；`f211bb02` 进一步保留完整事实值、序号和短路径，去除超长 URL 编码 SKU 主键。两次定向 prompt 测试均 RED→GREEN，最终 `26/26`、server typecheck/lint 通过。
+- COM 已受控部署 `f211bb02765e9ae6ffb4a19e64b24d8d75949c78 / 1.0.391`，三服务、`/ready`、pilot allowlist 和 commit-bound backup/restore（144 public tables）通过；官网 pointer 未切换。
+- fresh normal 两槽 suite `cmum819lz00185oz5tlayxch3` 已完成 prepare/dispatch；两槽各仅一次 Provider attempt，均安全失败于 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH`，没有 UNKNOWN_OUTCOME、重试、Ozon 写入或 assignment。两笔已接受请求按 CNY 0.14/槽做 `RECONCILED_CHARGE`，总计 CNY 0.28；没有读取第三方费用控制台。
+- 旧误创建的 planned suite `cmum7qkbg000h5oz5upg5m682` 已通过同一 owner 物化后按 revision CAS cancel，未 dispatch；所有 active jobs/suites/reservations 已清零。临时 Wanx provider 配置已按受控 CAS 恢复为原 custom 配置；正式 QA04、website approval、canary、CAS 和官网公开发布仍未完成。
+
 ## 2026-09-29 1.0.388 hydration fix、双区部署与真实 unified media-card canary
 
 - `0116a88288203400362d26a11ca39ab6ae54c8de` 修复 `openPrimaryAiWorkbench` 在 source hydration 为 `refreshing` 时错误提前返回的问题；定向合同与完整 `pnpm preflight` 通过（Server `6340 passed / 325 skipped`）。
