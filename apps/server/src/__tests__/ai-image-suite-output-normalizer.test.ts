@@ -67,6 +67,14 @@ describe('AI image suite output normalizer', () => {
     }
   });
 
+  it('accepts the known 1024x1536 Wanx fallback and still normalizes to the frozen 3:4 output', async () => {
+    const result = await normalizeAiImageSuiteProviderOutput({
+      buffer: await providerPng(1024, 1536), mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1024 },
+    } as any);
+    expect(result).toMatchObject({ width: 900, height: 1200, mimeType: 'image/png' });
+  });
+
   it('does not accept square output under a portrait request or an arbitrary new Provider size', async () => {
     await expect(normalizeAiImageSuiteProviderOutput({
       buffer: await providerPng(1024, 1024), mimeType: 'image/png',

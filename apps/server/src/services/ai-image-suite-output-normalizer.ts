@@ -172,10 +172,13 @@ export async function normalizeAiImageSuiteProviderOutput(
       'Provider output must contain exactly one still image',
     );
   }
-  if (
-    metadata.width !== providerRequest.width
-    || metadata.height !== providerRequest.height
-  ) {
+  const matchesRequestedProfile = metadata.width === providerRequest.width
+    && metadata.height === providerRequest.height;
+  const matchesKnownWanxFallback = providerRequest.width === AI_IMAGE_WANX21_EDIT_PROFILE.width
+    && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
+    && metadata.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH
+    && metadata.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT;
+  if (!matchesRequestedProfile && !matchesKnownWanxFallback) {
     throw new AiImageSuiteOutputNormalizerError(
       'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
       `Provider output must be exactly ${providerRequest.width}x${providerRequest.height} pixels`,
@@ -187,7 +190,10 @@ export async function normalizeAiImageSuiteProviderOutput(
     normalized = await sharp(input.buffer, {
       animated: false,
       failOn: 'warning',
-      limitInputPixels: providerRequest.width * providerRequest.height,
+      // The accepted Wanx fallback may be 1024x1536 while the frozen request
+      // profile is 1024x1024; bound decoding by the validated actual image,
+      // not the smaller request profile.
+      limitInputPixels: (metadata.width || 0) * (metadata.height || 0),
     })
       .toColourspace('srgb')
       .resize({
