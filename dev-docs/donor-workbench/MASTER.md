@@ -17,16 +17,16 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 - [x] Phase 1: Donor Workbench Shell (3/3 tasks) [details](./phase-1-shell.md)
 - [x] Phase 2: Draft and Media Parity (4/4 tasks) [details](./phase-2-parity.md)
 - [x] Phase 3: Shop, Billing, Publish (3/3 tasks) [details](./phase-3-operations.md)
-- [ ] Phase 4: Release and Cutover (2/3 tasks) [details](./phase-4-cutover.md)
+- [x] Phase 4: Release and Cutover (3/3 tasks) [details](./phase-4-cutover.md)
 
 ## Current Status
 
-Phases 0-3 are complete locally and Phase 4 is active with `D4.1-D4.2` complete. The unified media entry shipped to both application regions as `0db36e3d / 1.0.384`, while the website pointer remains on `6378b62e / 1.0.364`. D4.3 still has no PASS receipt: the first signed real-product rerun reached a complete logged-in 1688 document, but the old canary still waited for the donor iframe that the new unified entry intentionally suppresses.
+Phases 0-3 are complete locally and Phase 4 is complete through `D4.3`. The final unified media entry `0116a88288203400362d26a11ca39ab6ae54c8de / 1.0.388` is signed and deployed to COM/CN, with a release-bound real 1688 PASS receipt and rollback evidence. The website pointer remains on `6378b62e / 1.0.364`.
 
-The current continuation updates the release-bound canary owner to the shipped product model. It must prove the donor trigger opens the existing media-focus card, the calculator-only surface is hidden there, the donor iframe stays hidden, close/rollback restores the legacy entry, the negative product remains blocked, and Provider/Ozon/ERP mutations remain zero. The next candidate must be rebuilt and signed from this final commit before that evidence can close D4.3.
+The release-bound canary owner proves the donor trigger opens the existing media-focus card during source hydration, the calculator-only surface is hidden there, the donor iframe stays hidden, close/rollback restores the legacy entry, the negative product remains blocked, and Provider/Ozon/ERP mutations remain zero. Those checks passed on the signed 1.0.388 candidate.
 
 ## Next Steps
 
-1. Rebuild/sign the final commit and rerun the updated release-bound real-product canary with the already authorized logged-in 1688 cookie source.
-2. After that canary passes, obtain final-commit fresh normal SUITE/QA04 evidence under the separate cost and mutation boundary.
-3. Generate regional canaries, website approval and CAS only after the final commit is deployed and every publication gate passes.
+1. Obtain final-commit fresh normal SUITE/QA04 evidence under the separate cost and mutation boundary.
+2. Generate regional publication canaries and website approval only after the QA04/publication gates pass.
+3. Run distribution probe and CAS separately; do not infer public release from the dual-region deployment.

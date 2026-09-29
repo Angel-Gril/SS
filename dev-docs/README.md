@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-09-29 1.0.388 hydration fix、双区部署与真实 unified media-card canary
+
+- `0116a88288203400362d26a11ca39ab6ae54c8de` 修复 `openPrimaryAiWorkbench` 在 source hydration 为 `refreshing` 时错误提前返回的问题；定向合同与完整 `pnpm preflight` 通过（Server `6340 passed / 325 skipped`）。
+- COM/CN 均运行 `0116a88288203400362d26a11ca39ab6ae54c8de / 1.0.388`。COM 受限 hosted pilot 仍只允许 `IMAGE_TO_IMAGE/SUITE`；CN 继续 direct-origin/RDS/AI dark。两区 `/ready`、服务、签名候选、数据库 migration 与 backup/restore gate 均通过；VPS canonical evidence SHA-256 为 COM `51a7e52a69f5639c70327d08e8cf91145e4ffcafba90bc5286902dc0961056e`、CN `74a8e60e87e587cfa07a5cf4f42467d1207832d24f45b07cd8da80f7e66aa8d6`，各唯一 warning 为远端备份未配置。
+- 真实 1688 release-bound canary 已 PASS：正例 `1688:990499606077` 统一 media card、8 个 precision actions、iframe 隐藏、关闭/rollback 与 legacy restoration 全部通过；负例 `1688:1048072018093` 被拒绝；Provider/Ozon/ERP mutations=0，pageErrors=0。receipt SHA-256 `06d44e2ba7600d78f5cc6a06294bee31554dd90962b679d1ea778d64960fbbdc`。
+- COM/CN website pointer 仍安全服务旧 `6378b62e / 1.0.364`；本轮未执行 final fresh normal QA04、website approval、distribution probe 或 CAS，不能宣称官网最新版已公开。
+
 ## 2026-09-29 统一 media card 双区部署与 D4.3 canary owner 修正
 
 - `05a4156a` 将 donor、AI 图片与原 source-costing 图片入口统一到同一个 `media-focus` 卡片；真实 marketplace 页面优先复用该卡片，不再打开全屏 `chrome-extension://` iframe。利润/核价 owner 仍保留物流、汇率和费用能力，图片工作流只在显式 media-focus 中显示。`0db36e3d` 另修复 Windows/Git Bash 部署归档所有权，并已推送到 `origin/feat/ai-media-prompt-registry`。
