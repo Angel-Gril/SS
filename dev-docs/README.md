@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-09-30 `761e003c` CN 部署与 direct-mode verifier 收口
+
+- CN 已受控切换到 `761e003c2db04d0581fedf52ec14296bd258011b / 1.0.393`。RDS 150 migrations 无待迁移，post-migration AI suite guard、AI dark gate、systemd、API/Worker/Web 和 `https://ss-erp.cn/ready` 均通过；`current`、三服务和候选签名均绑定目标 commit。
+- CN 候选继续使用 cloud ZIP `71c7a9047c33f306dac3dd44b22e3349081a9123f277e13cb11166959c036633`、local ZIP `e0d3f3073ad459ae5639336d8e961d5fb3d9511027c0d29a64d09e42a069f51d`、release evidence `f67a5ffc4544adda0c8343d25ee7fc68987f0dab4f9fe13a9964d172f86ed9b7` 和 detached signature `401a1a43ef9a91daa743b793d3b071e083d2fe5ce0d876f3d97952731b3582a9`。
+- 首次 verifier 发现 CN 的 `BACKUP_LOCAL_DIR` 与 `DEPLOY_BACKUP_LOCAL_DIR` 误指向同一目录；未改写原件或绕过 gate，已将 deployment 备份原件复制到 `/var/backups/ss-erp`，保留 runtime 定时备份在 `/var/backups/ss-erp-runtime`，并把共享环境的 `DEPLOY_BACKUP_LOCAL_DIR` 修正为 deployment 目录。修复后 direct-mode 完整 verifier 为 `0 failure / 1 warning`，唯一 warning 为远端备份未配置。
+- CN canonical VPS evidence 已由修复后的普通 Node 22 runtime writer 写入 root-owned `0600` 文件 `/var/lib/ss-erp-rel04-evidence/761e003c2db04d0581fedf52ec14296bd258011b/vps-verification.canonical.json`，SHA-256 `0f6ccb260d39d92502a48524bc724f898ac8c5813e902ed6d51db26a600cd980`。本轮没有 Provider POST、Ozon 写入、新增费用或官网 CAS。
+- 官网仍安全服务旧 pointer；CN dark canary、COM hosted pilot canary、website approval、distribution probe 和 CAS 尚未执行。后续必须消费同一 commit 的正式 QA04 与双区 canary/approval，不能把应用部署或 VPS evidence 当作官网公开发布。
+
 ## 2026-09-29 `761e003c` COM pilot recovery 与 fresh normal suite
 
 - `761e003c2db04d0581fedf52ec14296bd258011b` 已推送并受控部署到 COM pilot；`/ready`、DB/Redis、150 migrations、AI media post-migration guard 与 hosted-pilot 合同均通过。COM 仍限制为 DOTH、原 owner/设备 session、`IMAGE_TO_IMAGE/SUITE`，未执行官网 CAS 或公开 pointer 切换。

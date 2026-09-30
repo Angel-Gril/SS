@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-30 `761e003c` CN 受控部署完成
+
+- CN 已受控切换到 `761e003c2db04d0581fedf52ec14296bd258011b / 1.0.393`；`/opt/ss-erp/current`、API/Worker/Web、150 migrations、post-migration suite guard、AI dark gate 和 `https://ss-erp.cn/ready` 均通过。配置仍为 direct-origin/RDS，AI/BYOK/Ozon 保持 dark。
+- CN 候选 cloud/local/release evidence/signature SHA-256 分别为 `71c7a9047c33f306dac3dd44b22e3349081a9123f277e13cb11166959c036633`、`e0d3f3073ad459ae5639336d8e961d5fb3d9511027c0d29a64d09e42a069f51d`、`f67a5ffc4544adda0c8343d25ee7fc68987f0dab4f9fe13a9964d172f86ed9b7`、`401a1a43ef9a91daa743b793d3b071e083d2fe5ce0d876f3d97952731b3582a9`。
+- 部署后的 direct-mode VPS verifier 为 `0 failure / 1 warning`；唯一 warning 是远端备份未配置。首次复核发现 runtime 与 deployment 备份目录复用，已将 deployment 原件放入 `/var/backups/ss-erp`、runtime 定时备份保留在 `/var/backups/ss-erp-runtime`，并修正 `DEPLOY_BACKUP_LOCAL_DIR` 后重新验证通过。
+- canonical evidence：`/var/lib/ss-erp-rel04-evidence/761e003c2db04d0581fedf52ec14296bd258011b/vps-verification.canonical.json`，SHA-256 `0f6ccb260d39d92502a48524bc724f898ac8c5813e902ed6d51db26a600cd980`，`status=PASS`、`failures=0`、`warnings=1`。没有 Provider POST、Ozon 写入或新增费用。
+- 官网 pointer、CN dark canary、COM hosted pilot canary、website approval、distribution probe 和 CAS 仍未完成；当前只能称为 CN 应用部署完成，不能称为官网最新版已公开。
+
 ## 2026-09-29 `761e003c` COM pilot recovery 与 fresh normal suite
 
 - `761e003c2db04d0581fedf52ec14296bd258011b` 已推送并受控部署到 COM pilot；API/Web/Worker active，`/ready`、DB/Redis、150 migrations、AI media guard 与 hosted-pilot 合同通过。COM 继续精确限制 DOTH/原 owner/设备 session/`IMAGE_TO_IMAGE+SUITE`，官网 pointer、QA04、website approval、canary、distribution probe 与 CAS 均未执行。
