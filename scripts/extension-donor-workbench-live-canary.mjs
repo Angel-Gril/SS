@@ -759,7 +759,6 @@ async function run() {
     const sourcePageFrame = (await send('Page.getFrameTree')).frameTree?.frame;
     const donorIframe = await until(async () => {
       for (const [targetId, targetInfo] of iframeTargets) {
-        if (targetInfo.url !== `chrome-extension://${extensionId}/pages/source-workbench-shell.html`) continue;
         let tree;
         try {
           tree = (await cdp.send('Page.getFrameTree', {}, targetInfo.sessionId)).frameTree;
@@ -768,14 +767,34 @@ async function run() {
         }
         const frame = tree?.frame;
         if (frame?.id !== targetId
-          || frame.url !== targetInfo.url
+          || frame.url !== `chrome-extension://${extensionId}/pages/source-workbench-shell.html`
           || frame.parentId !== sourcePageFrame?.id) continue;
         const contextId = extensionContexts.get(`${targetInfo.sessionId}:${frame.id}`);
         if (!contextId) continue;
-        return { ...targetInfo, targetId, frameId: frame.id, contextId };
+        return { ...targetInfo, targetId, frameId: frame.id, url: frame.url, contextId };
       }
       return null;
-    }, 'exact donor extension iframe context', 15_000);
+    }, 'exact donor extension iframe context', 15_000).catch(async (error) => {
+      const diagnostics = [];
+      for (const [targetId, targetInfo] of iframeTargets) {
+        let frame = null;
+        try {
+          frame = (await cdp.send('Page.getFrameTree', {}, targetInfo.sessionId)).frameTree?.frame || null;
+        } catch {}
+        diagnostics.push({
+          targetId,
+          targetUrl: targetInfo.url,
+          frameId: frame?.id || null,
+          frameUrl: frame?.url || null,
+          parentId: frame?.parentId || null,
+          expectedParentId: sourcePageFrame?.id || null,
+          hasDefaultContext: Boolean(
+            frame?.id && extensionContexts.has(`${targetInfo.sessionId}:${frame.id}`),
+          ),
+        });
+      }
+      throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
+    });
     const donorContext = await cdp.send('Runtime.evaluate', {
       expression: '({ origin: location.origin, href: location.href })',
       contextId: donorIframe.contextId,
