@@ -262,6 +262,10 @@ test('arms paused extension observation before opening the unified media card', 
   assert.match(source, /context\.auxData\.isDefault !== true/u);
   assert.doesNotMatch(source, /autoAttach: false/u);
   assert.match(source, /iframe target/u);
+  assert.match(source, /iframeTargets = new Map/u);
+  assert.match(source, /Page\.getFrameTree', \{\}, targetInfo\.sessionId/u);
+  assert.match(source, /frame\.parentId !== sourcePageFrame\?\.id/u);
+  assert.match(source, /exact donor extension iframe context/u);
   assert.match(source, /donor iframe suppression/u);
 });
 

@@ -370,6 +370,8 @@ async function run() {
     let workerSession = '';
     let iframeObserverArmed = false;
     const extensionSessions = new Set();
+    const iframeTargets = new Map();
+    const extensionContexts = new Map();
     const observerTasks = new Set();
     const observerErrors = [];
     const trackObserver = (promise, label, rejectReady) => {
@@ -552,13 +554,22 @@ async function run() {
       if (!context?.id || context.origin !== `chrome-extension://${extensionId}`
         || !context.auxData?.frameId || context.auxData.isDefault !== true) return;
       const observedSession = sessionId || pageSession;
-      if (observedSession !== pageSession) extensionSessions.add(observedSession);
+      if (observedSession !== pageSession) {
+        extensionSessions.add(observedSession);
+        extensionContexts.set(`${observedSession}:${context.auxData.frameId}`, context.id);
+      }
     });
     iframeObserverArmed = true;
     cdp.on('Target.attachedToTarget', (event) => {
       const childSession = event?.sessionId;
       if (!childSession || event.targetInfo?.type !== 'iframe') return;
       extensionSessions.add(childSession);
+      if (event.targetInfo.targetId) {
+        iframeTargets.set(event.targetInfo.targetId, {
+          sessionId: childSession,
+          url: event.targetInfo.url || '',
+        });
+      }
       trackObserver((async () => {
         let failure;
         try {
@@ -741,6 +752,39 @@ async function run() {
       throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
     }
     const unifiedMediaOpened = true;
+
+    // Extension iframes are OOPIF targets. The parent page frame tree cannot
+    // contain them, so bind the live canary to the child target/session and
+    // verify its own exact frame tree plus default extension context.
+    const sourcePageFrame = (await send('Page.getFrameTree')).frameTree?.frame;
+    const donorIframe = await until(async () => {
+      for (const [targetId, targetInfo] of iframeTargets) {
+        if (targetInfo.url !== `chrome-extension://${extensionId}/pages/source-workbench-shell.html`) continue;
+        let tree;
+        try {
+          tree = (await cdp.send('Page.getFrameTree', {}, targetInfo.sessionId)).frameTree;
+        } catch {
+          continue;
+        }
+        const frame = tree?.frame;
+        if (frame?.id !== targetId
+          || frame.url !== targetInfo.url
+          || frame.parentId !== sourcePageFrame?.id) continue;
+        const contextId = extensionContexts.get(`${targetInfo.sessionId}:${frame.id}`);
+        if (!contextId) continue;
+        return { ...targetInfo, targetId, frameId: frame.id, contextId };
+      }
+      return null;
+    }, 'exact donor extension iframe context', 15_000);
+    const donorContext = await cdp.send('Runtime.evaluate', {
+      expression: '({ origin: location.origin, href: location.href })',
+      contextId: donorIframe.contextId,
+      returnByValue: true,
+    }, donorIframe.sessionId);
+    assert.equal(donorContext.result?.value?.origin, `chrome-extension://${extensionId}`,
+      'donor iframe execution context origin is not the loaded candidate');
+    assert.equal(donorContext.result?.value?.href, donorIframe.url,
+      'donor iframe execution context URL changed');
     const iframeSuppressed = await remainsTrue(
       `document.querySelector(${JSON.stringify(DONOR_FRAME)})?.hidden === true`,
       'donor iframe suppression',
