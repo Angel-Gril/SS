@@ -1,5 +1,13 @@
 # SS ERP 当前状态审计
 
+## 2026-09-30 `3723f5dd` 正式 QA04、双区发布与官网公开完成
+
+- `cbafe7a1` / `3723f5dd` 修复 release-bound donor canary 的 OOPIF owner：extension iframe 在独立 target/session 中核验 exact shell URL、父页面 frame 和默认 extension context。定向合同 `13/13` 通过；真实 1688 canary PASS，COM receipt SHA-256 `d4349c6856c0eb2222bacbd155ac4c56e49b21d2ebdbda118d45397a558f5917`，Provider/Ozon/ERP mutations=0。
+- 当前 HEAD 的完整 offline receipt/log SHA-256 为 `b6da8a1d4b9c10febd3dc64bef15b759647ae8918de8ee35b92891a99e4ece36` / `7a8ac01757883de73c8b30e4de31d801fd44cd4c3f111fd9a2fbd5726033e653`；正式 `QA04_FINAL_ACCEPTANCE` SHA-256 `daabe132cc64469dd8119b8bec41572334bd959117a37522188495cb918ad8f8`，绑定同一 `3723f5dd`。
+- COM/CN 已同 commit/version 部署并通过 migration、suite guard、签名和 readiness。COM 精确受限 hosted pilot 绑定 DOTH/owner/session `5886ecc8-0d79-45a2-a924-f48121a92f3a`，CN 继续 direct-origin/RDS、AI/BYOK/Ozon dark。canonical VPS evidence SHA-256 为 COM `ea71a067435e6824146dc55ff734c29385c631e27f9f80743a91d6096366b5e0`、CN `be525b8f484c98600fd2e3fc2b7d3e6eb32035ec3130cb3c096600106f57ac42`。
+- 双区 canary、website approval、CAS、匿名 distribution probe 和最终 publication verifier 均通过。COM/CN canary SHA-256 为 `d4349c6856c0eb2222bacbd155ac4c56e49b21d2ebdbda118d45397a558f5917` / `f8824df7fe650c3fc1b90149d8546232e33e887f4e512ee5ee56fd750fbead4c`；distribution receipt SHA-256 为 `4ed36b133ea23d6bfa1de274870b2ecfd2239aebf0d715a7a1afbabe611e785a` / `b248f319c500b5a41565d665ee23202db91c40b2d6fc2cf4562155c1262a5600`。
+- 官网 COM/CN `/api/extensions/latest` 现公开返回 `3723f5dd / 1.0.395`，两区 cloud/local 下载摘要与各自区域候选一致。最终 verifier 均 `0 failure / 1 warning`，唯一 warning 为远端备份未配置；没有 Provider POST、Ozon 写入或新增费用。
+
 ## 2026-09-30 `761e003c` CN 受控部署完成
 
 - CN 已受控切换到 `761e003c2db04d0581fedf52ec14296bd258011b / 1.0.393`；`/opt/ss-erp/current`、API/Worker/Web、150 migrations、post-migration suite guard、AI dark gate 和 `https://ss-erp.cn/ready` 均通过。配置仍为 direct-origin/RDS，AI/BYOK/Ozon 保持 dark。

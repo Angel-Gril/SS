@@ -1,5 +1,15 @@
 # SS ERP 内部开发真源
 
+## 2026-09-30 `3723f5dd` OOPIF canary 修复、双区发布与官网切换
+
+- `cbafe7a1` / `3723f5dd` 修复 donor live canary 对 extension OOPIF 的误判：runner 现在保存 `Target.attachedToTarget` 的 iframe session/target，在子 session 自己的 `Page.getFrameTree` 上核验 exact shell URL、父页面 frame、默认 extension execution context；不再从父页面 frame tree 查找 extension iframe。定向 canary 合同 `13/13` 通过。
+- 真实 1688 release-bound canary 已 PASS，候选 `3723f5dd1a175537a183bd750f8c168a2f742baf / 1.0.395`，正例 `990499606077`、负例 `1048072018093`，统一 media-focus、OOPIF context、iframe 隐藏、关闭/rollback 和 storage cleanup 均通过。COM canary SHA-256 `d4349c6856c0eb2222bacbd155ac4c56e49b21d2ebdbda118d45397a558f5917`；物理坐标路径仍记录为受控 DOM fallback。Provider/Ozon/ERP mutations 均为 0。
+- `3723f5dd` 的完整 `pnpm qa:04:offline -- --output` 已通过，offline receipt SHA-256 `b6da8a1d4b9c10febd3dc64bef15b759647ae8918de8ee35b92891a99e4ece36`、日志 SHA-256 `7a8ac01757883de73c8b30e4de31d801fd44cd4c3f111fd9a2fbd5726033e653`；正式 QA04 SHA-256 `daabe132cc64469dd8119b8bec41572334bd959117a37522188495cb918ad8f8`。
+- COM pilot 与 CN direct/RDS 已同 commit 部署 `1.0.395`。COM 精确绑定 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、session `5886ecc8-0d79-45a2-a924-f48121a92f3a`、`IMAGE_TO_IMAGE/SUITE`；CN AI/BYOK/Ozon 保持 dark。两区 `/ready`、150 migrations、post-migration guard、签名候选和服务均通过。
+- 部署后 canonical VPS evidence：COM `ea71a067435e6824146dc55ff734c29385c631e27f9f80743a91d6096366b5e0`，CN `be525b8f484c98600fd2e3fc2b7d3e6eb32035ec3130cb3c096600106f57ac42`；最终 website-publication=true verifier 两区均 `0 failure / 1 warning`，唯一 warning 为远端备份未配置。
+- 双区 REL-04 canary 已通过：COM hosted-pilot `d4349c6856c0eb2222bacbd155ac4c56e49b21d2ebdbda118d45397a558f5917`，CN no-shop dark `f8824df7fe650c3fc1b90149d8546232e33e887f4e512ee5ee56fd750fbead4c`。双区 website approval、CAS、匿名 distribution probe 和 publication verifier 均通过；distribution receipts 为 COM `4ed36b133ea23d6bfa1de274870b2ecfd2239aebf0d715a7a1afbabe611e785a`、CN `b248f319c500b5a41565d665ee23202db91c40b2d6fc2cf4562155c1262a5600`。
+- COM/CN 官网 pointer 现已公开服务 `3723f5dd / 1.0.395`；cloud/local ZIP 摘要分别为 COM `cd344d560c9e7fe374bc0df81e09a88a5cf151d3709508f655297646014d657a` / `ef403ef49e7f7efef46cdf036de3444b2911e7a447e164e51dfd3ca52956a0ad`，CN `49a448aa04d47c87450aa701c43efbaadda1eda4bda074bde3c04ea831ad2478` / `d936047cc3984a30eb38427822e141ebe010e23391e60d1b27e57ecbdc7427c1`。本轮没有新增 Provider 请求、Ozon 写入或业务费用。
+
 ## 2026-09-30 `761e003c` CN 部署与 direct-mode verifier 收口
 
 - CN 已受控切换到 `761e003c2db04d0581fedf52ec14296bd258011b / 1.0.393`。RDS 150 migrations 无待迁移，post-migration AI suite guard、AI dark gate、systemd、API/Worker/Web 和 `https://ss-erp.cn/ready` 均通过；`current`、三服务和候选签名均绑定目标 commit。
