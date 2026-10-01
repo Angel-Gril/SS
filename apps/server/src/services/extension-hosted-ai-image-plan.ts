@@ -452,6 +452,19 @@ function safeText(value: unknown, maximum: number): string | null {
   return value;
 }
 
+// Source captures use a structured media key whose final segment is the
+// observed source URL. Keep the URL inside the opaque key; never expose a
+// standalone URL as a public plan identifier.
+function safeCandidateId(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 500
+    // eslint-disable-next-line no-control-regex
+    || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+  if (!/(?:https?|blob|data|file|ftp):/iu.test(value)) return value;
+  return /^media:[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+\|\d+\|https:\/\/[^\s|]+$/u.test(value)
+    ? value
+    : null;
+}
+
 function safeOwnership(value: unknown) {
   const item = record(value);
   const level = item?.level === 'sku' || item?.level === 'compatibility_group'
@@ -476,7 +489,7 @@ function safeVersion(version: AiMediaPlanVersionRecord | null | undefined) {
     if (!slotKey || !goal || !status || !aspectRatio || !owner) return [];
     const references = Array.isArray(item?.references)
       ? item.references.flatMap((reference) => {
-        const candidateId = safeText(record(reference)?.candidateId, 500);
+        const candidateId = safeCandidateId(record(reference)?.candidateId);
         return candidateId ? [{ candidateId }] : [];
       }).slice(0, 4)
       : [];

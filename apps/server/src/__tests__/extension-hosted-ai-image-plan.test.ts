@@ -207,6 +207,28 @@ describe('extension hosted AI image plan service', () => {
     frozen.candidates = [{ id: 'media-1' }, { id: 'media-2' }];
     await expect(fixture.service.getCurrent({ identity, binding })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
   });
+
+  it('preserves structured source media keys whose final segment is an HTTPS URL', async () => {
+    const mediaKey = 'media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg';
+    const base = version();
+    const basePayload = base.planPayload as Record<string, unknown>;
+    const baseSlots = basePayload.slots as Array<Record<string, unknown>>;
+    const current = plan({
+      currentVersion: version({
+        planPayload: {
+          ...basePayload,
+          slots: [{
+            ...baseSlots[0],
+            references: [{ candidateId: mediaKey, evidenceIds: ['evidence-1'] }],
+          }],
+        },
+      }),
+    });
+    const fixture = setup({ plan: current });
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { plan: { currentVersion: { slots: [{ references: [{ candidateId: mediaKey }] }] } } },
+    });
+  });
   it.each([[], ['media-attacker'], ['media-1', 'media-1'], ['https://private.example'], null].map((value) => [value]))(
     'rejects invalid or ineligible explicit reference keys %j before planning', async (candidateMediaKeys) => {
       const fixture = setup();
