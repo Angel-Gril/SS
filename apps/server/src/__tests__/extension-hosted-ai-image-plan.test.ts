@@ -208,7 +208,7 @@ describe('extension hosted AI image plan service', () => {
     await expect(fixture.service.getCurrent({ identity, binding })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
   });
 
-  it('preserves structured source media keys whose final segment is an HTTPS URL', async () => {
+  it('preserves source references without exposing their URLs and is accepted by the shipped MV3 client', async () => {
     const mediaKey = 'media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg';
     const base = version();
     const basePayload = base.planPayload as Record<string, unknown>;
@@ -225,9 +225,21 @@ describe('extension hosted AI image plan service', () => {
       }),
     });
     const fixture = setup({ plan: current });
-    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
-      data: { plan: { currentVersion: { slots: [{ references: [{ candidateId: mediaKey }] }] } } },
+    const response = await fixture.service.getCurrent({ identity, binding });
+    expect(response).toMatchObject({ data: { plan: { currentVersion: { slots: [{
+      references: [{ candidateId: expect.stringMatching(/^media-key-sha256:[a-f0-9]{64}$/u) }],
+    }] } } } });
+    expect(JSON.stringify(response)).not.toContain('https:');
+    const sandbox: Record<string, any> = { Date, JSON, URL, URLSearchParams, setTimeout, clearTimeout };
+    runInNewContext(readFileSync(new URL('../../../../extensions/ss-erp/shared/hosted/ai-image-suite-workbench-client.js', import.meta.url), 'utf8'), sandbox);
+    const client = sandbox.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT.createClient({
+      transport: { get: async () => ({ state: 'response', body: { code: 1, ...response } }), post: vi.fn() },
+      listingClient: { getAiImageSuite: vi.fn(), executeAiImageSuiteCommand: vi.fn() },
+      adapter: { project: vi.fn() }, previewBridge: { open: vi.fn(), revoke: vi.fn() },
     });
+    await expect(client.getCurrentPlan(binding)).resolves.toMatchObject({ plan: { currentVersion: { slots: [{
+      references: [{ candidateId: expect.stringMatching(/^media-key-sha256:[a-f0-9]{64}$/u) }],
+    }] } } });
   });
   it.each([[], ['media-attacker'], ['media-1', 'media-1'], ['https://private.example'], null].map((value) => [value]))(
     'rejects invalid or ineligible explicit reference keys %j before planning', async (candidateMediaKeys) => {
