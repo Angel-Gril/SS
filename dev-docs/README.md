@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-01 donor 适配版签名与双区部署
+
+`94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a` 已推送并使用区域独立的 `1.0.396` Cloud/Local 候选完成 Ed25519 签名、COM pilot 与 CN direct/RDS 部署。两区完整 VPS verifier 均 `0 failure / 1 warning`，唯一 warning 为远端备份未配置；150 migrations、suite DB guard、三服务、本机/公网 `/ready` 均通过。COM 保持 DOTH 既有受限 pilot，CN 保持 AI/BYOK/Ozon dark，donor precision 仍为默认关闭的预览入口。官网 pointer 仍为 `3723f5dd / 1.0.395`；本次没有 website approval、REL-04 publication canary、distribution probe、CAS 或 Provider/Ozon 写入。签名、备份与验收摘要只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-01-签名与双区部署)。
+
 ## 2026-10-01 旧扩展直接适配的本地开发
 
 当前直接复用 `jp20260803` 的原界面和 1688 采集器，同窗口已接采集、草稿编辑、自定义托管方向、BYOK 单图、参考图/FULL_EDIT/INPAINT 控件与 owner flow、图片翻译入口、套图审核/应用及发布预览/确认/回执；每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session 和 BYOK 设置也已完成本地 owner 接线。当前 HEAD `1f9d8eba` 的默认 donor fixture 已覆盖采集、全部草稿字段、托管套图审核/assignment、publish preview/receipt；`--byok-flow --translation` 额外覆盖 BYOK 单图未知结果恢复、Blob 预览、审核、ingest/readback 和翻译 owner。参考图、全图修图和圈选重绘的独立浏览器 fixture 也均已通过。保存与生成/发布流程仍是本地 owner/browser fixture 验证，尚未生产验收；复制 SKU 行持久化、donor 淘宝/PDD collector、翻译质量和最终安装版验收仍有缺口。功能完整通过后按用户要求退出旧默认流程。任务、源码映射和证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。官网仍为 `3723f5dd / 1.0.395`；本轮已提交但未 push、未部署，未产生 Provider/Ozon 费用。

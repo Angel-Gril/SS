@@ -1,10 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：donor 工作台本地功能收口完成；最终包门禁已覆盖 precision/BYOK 模块
+## 当前结果：本地接线与双区签名部署完成；官网分发与真实运行验收待完成
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前正式官网已发布 `3723f5dd / 1.0.395`，旧 MASTER 中 `1.0.388 / 1.0.364` 状态已失效；发布事实以 `current-state-audit.md` 的 2026-09-30 顶部记录为依据。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `94fc7460 / 1.0.396`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
 
 ## 唯一 owner 与数据路径
 
@@ -43,6 +43,25 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 ```
 
 ## 验证与限制
+
+### 2026-10-01 签名与双区部署
+
+- 用户明确授权 push、签名和部署；固定目标 `94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a / 1.0.396`。构建只读 Git blobs，两区串行使用独立输出，COM origin 为 `app/admin/ss-erp.com`，CN 为 `app/admin/ss-erp.cn`，Local API origin 固定 `http://127.0.0.1:3001`。正式归档 verifier 各区 Cloud `575 pass`、Local `565 pass`，无 failure/warning；使用现有 Ed25519 key `ss-erp-extension-release-2026-09-05-01`，未轮换 key。
+
+| 产物/证据 SHA-256 | COM | CN |
+| --- | --- | --- |
+| Cloud ZIP | `51086cb30b5032afd86d3e9814417bf2fe07d7ead9cf514f7e757cf1d52f1565` | `2ada355cbe0175e4d0c7f52cd0b6f347d351447489d606de097ddb96d81da080` |
+| Local ZIP | `5c3ffea23f2ba84726c8d10753a2cce03b028960e04d57a03b8d7540ccd37223` | `2462091a0d3c3bbe8a994fd449925325ee026a5e26daeb71839dfdba0320c7d9` |
+| Release evidence | `4dd190cc0ba5c019c754beb4714a1b088fab60a3396978c8d95f3e7cf7ec5ac6` | `5de64df6686d7a22c5860191c90ba1cbcfddc6e017cfe5fab09bfd87c1f8bb43` |
+| Detached signature | `858ccb3d62ad0d44114186e624b5998e7b7654ae48f6c7e2d5115a068443a975` | `fad70abd6cee1a256708db020a2f95a8a35c9654d19b2a7511ed70a18002c9b8` |
+| Deployment backup attestation | `f1661d34f965b5c1c080158dc67240ef99a31b4a61a4cafc074a9bbc927c5ee2` | `1605385aeb982606b8955d840d3d513ac9b012d02240ca217573c6ec59a9b06e` |
+| Full VPS verifier | `ea9a111357a4fa77f2a8a3a79201679989f58133498ad0ce365fcb3f426e4412` | `b995af431259ca81c2e0c1c88ff083ea4c8d582d0dab7867f8fbe08814b687f8` |
+
+- COM 首次尝试因缺少 target-bound backup attestation 在 migration 前停止，没有切换 current；立即恢复旧 API/Worker。标准本机 `postgres` 恢复路径验证 61 MiB 备份、144 张 public 表，删除临时库后生成认证；未激活 release 保留在 `/opt/ss-erp/failed-releases/94fc7460-backup-gate-20261001`，随后重新执行 `deploy-pilot.sh` 成功。CN RDS 的既有恢复路径验证 22 MiB 备份、143 张 public 表并成功删除临时库，无需创建新的 maintenance 账号。
+- CN 误预置的 COM 原件在部署前按摘要核对并保留为 `94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a-wrong-region-COM`，正式候选已替换为独立 `.cn` 构建；两区 current 与各服务 cwd、区域签名均准确绑定目标 commit。
+- 两区 150 migrations 无待执行项，suite DB guard（8 functions/14 triggers）、源码封存、SystemConfig OSS、systemd、DB/Redis、本机与公网 `/ready` 通过；CN 四个合法 `.cn` hostname 的证书/就绪检查通过。完整 verifier 各 `0 failure / 1 warning`，唯一 warning 为远端备份未配置；正式原生 JSON 在各 VPS `/var/lib/ss-erp-donor-deploy-evidence/94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a/`，不写入 Git。部署备份 `/var/backups/ss-erp` 和日常备份 `/var/backups/ss-erp-runtime` 分离，后者已经刷新为当前 commit；CN 例行 retention 清理 1 个超过 7 天且无证据引用的旧备份。
+- COM 保持原 owner `cmpsj2g6800005ow9rrtvqhay`、DOTH `cmq7r8n1700095o7exbet1xle`、active session `cac55bf3-b924-4327-aae4-6bb8db90894e`、rollout revision `15` 和既有 source policy revision，仅 `IMAGE_TO_IMAGE/SUITE`；CN AI/BYOK/Ozon 全暗。donor precision 仍默认关闭且按精确来源 allowlist 预览，未切换所有用户入口。新 editor 匿名调用返回 `401`，两区登录/下载页 `200`。
+- 官网仍服务 `3723f5dd / 1.0.395`。本次没有 website approval、REL-04 publication canary、distribution probe、CAS、真实 Provider/Ozon 写入或新增业务费用；应用部署通过不代表官网最新版公开或真实第三方功能验收通过。
 
 ### 2026-10-01 自定义托管方向与同窗口审核
 
@@ -97,7 +116,7 @@ chrome.storage.local.set({
 
 刷新同一商品页后“工作台”和 AI 按钮使用新界面。关闭 precision flag 会回到旧入口；清除 donor enabled 或该商品 allowlist 会卸载预览。禁止据此开启新的服务端 pilot 权限。
 
-最新已验证的本地测试包输出在 `.tmp-precision-workbench-ai-20261001/ss-erp-cloud` 与 `ss-erp-local`，它早于继续进行的参考图/属性接线。之前阶段测试包仍保留；均不覆盖旧 release 产物，不是签名公开版本。
+签名部署候选：COM 本机四件套在 `C:\Users\550W\AppData\Local\SS-ERP\private\extension-release-candidates\94fc7460-1.0.396`；CN 在 `build/donor-release-cn-94fc7460-1.0.396`。各区 VPS `/var/lib/ss-erp-extension-releases/94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a` 为不可变四件套，detached signature 在对应 `/var/lib/ss-erp-extension-release-signatures/` 目录。旧测试包继续保留，不能替代正式区域候选或官网分发证据。
 
 ## 持续开发顺序
 
