@@ -196,6 +196,8 @@
         "shared/source-costing/ai-image-suite-controller.js",
         "shared/source-costing/ai-workbench-launch-context.js",
         "shared/donor-workbench/workspace-contract.js",
+        "content/donor/adapter-1688.js",
+        "shared/collectors/donor-1688-capture.js",
         "content/donor-workbench-bridge.js",
         "content/source-listing-workbench.js",
         "content/source-costing-panel.js"
@@ -285,7 +287,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "pages/source-workbench-shell.html"
+        "pages/source-workbench-shell.html",
+        "pages/precision-workbench.html"
       ],
       "matches": [
         "https://detail.1688.com/*",

@@ -12,7 +12,7 @@ Build the next SS ERP browser extension from the user-owned `jp20260803` workben
 
 ## Target Shape
 
-The donor UI becomes the extension workbench shell and state/presentation layer. SS ERP server remains the owner for identity, shop access, draft creation/revision, Provider calls, cost reservation/settlement, review, assignments and Ozon publish. The migration uses a strangler path: add a donor-based workbench beside the current panel, prove contracts, then switch entrypoints.
+Adapt the actual donor UI, editor and workflow modules with minimal CSS changes and replace their infrastructure adapters with SS ERP services. SS ERP remains the owner for identity, shop access, draft creation/revision, Provider calls, cost reservation/settlement, review, assignments and Ozon publish. Current functional scope and evidence live in [direct-adaptation.md](./direct-adaptation.md); the previous shell-only cutover is not complete donor parity.
 
 ## Non-Goals
 

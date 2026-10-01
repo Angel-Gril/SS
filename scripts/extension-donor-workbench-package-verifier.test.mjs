@@ -47,6 +47,8 @@ try {
     pagePath,
     `${readFileSync(pagePath, 'utf8')}\nfetch('https://api.ozon.ru/v1/product/import/info');\n`,
   );
+  const precisionPath = path.join(extensionDir, 'pages/precision-workbench.js');
+  writeFileSync(precisionPath, `${readFileSync(precisionPath, 'utf8')}\nfetch('https://unapproved-provider.invalid');\n`);
 
   const htmlPath = path.join(extensionDir, 'pages/source-workbench-shell.html');
   const html = readFileSync(htmlPath, 'utf8');
@@ -65,6 +67,7 @@ try {
   assert.match(output, /donor workbench web-accessible boundary is not exact/u);
   assert.match(output, /donor workbench entrypoint is not default-off and allowlisted/u);
   assert.match(output, /donor workbench contains a forbidden direct network or broad-permission path/u);
+  assert.match(output, /precision workbench contains a forbidden direct network path/u);
   assert.match(
     output,
     /donor workbench page script order invalid: .*workspace-contract\.js must load before .*prompt-adapter\.js/u,

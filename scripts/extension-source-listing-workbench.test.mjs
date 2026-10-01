@@ -1426,6 +1426,7 @@ const authoritativeSuiteContext = {
   createHostedAiImageSuiteWorkbenchClient() { return planClient; },
 };
 authoritativeSuiteContext.globalThis = authoritativeSuiteContext;
+vm.runInNewContext(fs.readFileSync('extensions/ss-erp/shared/hosted/ai-image-suite-workbench-client.js', 'utf8'), authoritativeSuiteContext);
 vm.runInNewContext(
   `${extractAsyncWorkerFunction('loadAuthoritativeSourceAiImageSuiteProjection')}\n`
     + `${extractAsyncWorkerFunction('sourceAiImageSuitePlanBinding')}\n`
@@ -1520,6 +1521,20 @@ assert.equal(planCreateCalls[0].input.galleryGoals[0], 'scene');
 assert.equal(planCreateCalls[1].input.planId, 'plan-created');
 assert.equal(planCreateCalls[1].input.expectedRevision, 1);
 assert.equal(Object.prototype.hasOwnProperty.call(planCreateCalls[0].input, 'ownerUserId'), false);
+const brief = { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要道具' };
+const originalPlanKey = planCreateCalls[0].input.idempotencyKey;
+await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext, type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'CREATE_AND_REVIEW_PLAN', creativeBrief: brief,
+  candidateMediaKeys: ['media-1'],
+});
+assert.deepEqual(JSON.parse(JSON.stringify(planCreateCalls[2].input.creativeBrief)), brief);
+assert.equal(planCreateCalls[2].input.idempotencyKey, originalPlanKey);
+assert.deepEqual(JSON.parse(JSON.stringify(planCreateCalls[2].input.candidateMediaKeys)), ['media-1']);
+await assert.rejects(authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext, type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'START', costConfirmed: true, creativeBrief: brief,
+}), /请求字段无效/u);
 planCreateCalls.length = 0;
 planClient.createPlan = async function (input) {
   planCreateCalls.push({ method: 'createPlan', input });
@@ -1575,6 +1590,19 @@ assert.equal(
 assert.notEqual(authoritativeSuiteCalls[2].input.projection, staleClientProjection);
 assert.deepEqual(JSON.parse(JSON.stringify(authoritativeSuiteCalls[2].input)), {
   projection: suiteProjection, action: 'START', costConfirmed: true,
+});
+const displayedQuote = { previewHash: suiteProjection.plan.preview.hash,
+  currency: suiteProjection.plan.preview.currency || 'USD', itemCount: suiteProjection.plan.preview.itemCount,
+  maxCostMinor: suiteProjection.plan.preview.maximumCostCents };
+const executionsBeforeQuote = authoritativeSuiteCalls.filter((call) => call.method === 'executeAiImageSuiteCommand').length;
+await assert.rejects(authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext, type: 'ss-erp:source-listing-workbench-ai-image-suite-command', action: 'START', costConfirmed: true,
+  quoteWitness: { ...displayedQuote, maxCostMinor: displayedQuote.maxCostMinor + 1 },
+}), /报价.*变化/u);
+assert.equal(authoritativeSuiteCalls.filter((call) => call.method === 'executeAiImageSuiteCommand').length, executionsBeforeQuote);
+await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext, type: 'ss-erp:source-listing-workbench-ai-image-suite-command', action: 'START', costConfirmed: true,
+  quoteWitness: displayedQuote,
 });
 
 const slotKeyProjection = currentSuiteProjectionFixture('REVIEW_SLOT');

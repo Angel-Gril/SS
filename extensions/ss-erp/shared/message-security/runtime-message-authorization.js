@@ -22,6 +22,7 @@
   var SENDER_SURFACES = Object.freeze({
     WORKBENCH: 'ai_image_workbench',
     PROVIDER_SETTINGS: 'ai_provider_settings',
+    PRECISION_FRAME: 'precision_frame',
   });
   // This legacy message is intentionally retained as a narrow bridge from the
   // hosted workbench to the authoritative marketplace source tab. It must still
@@ -32,6 +33,7 @@
   ]);
 
   var MESSAGE_TYPES = Object.freeze({
+    PRECISION_FRAME: Object.freeze({ PUBLIC_UI_REGISTER: 'ss-erp:precision-frame-ui-register' }),
     PROVIDER_SETTINGS: Object.freeze({
       GET_SETUP_CONTEXT: 'ss-erp:byok-provider-setup-context',
       LIST_PROFILES: 'ss-erp:byok-provider-profiles-list',
@@ -102,6 +104,7 @@
     ...PROVIDER_SETTINGS_TYPES,
     ...WORKBENCH_TYPES,
     ...HOSTED_WORKBENCH_TYPES,
+    MESSAGE_TYPES.PRECISION_FRAME.PUBLIC_UI_REGISTER,
   ]);
   var SECRET_REQUEST_TYPES = new Set([
     MESSAGE_TYPES.PROVIDER_SETTINGS.SET_SESSION_KEY,
@@ -353,6 +356,7 @@
   }
 
   function senderSurface(sender, runtimeId) {
+    if (exactPrecisionFrame(sender, runtimeId)) return SENDER_SURFACES.PRECISION_FRAME;
     if (exactExtensionUrl(sender, runtimeId, '/pages/ai-image-workbench.html')) {
       return SENDER_SURFACES.WORKBENCH;
     }
@@ -360,6 +364,21 @@
       return SENDER_SURFACES.PROVIDER_SETTINGS;
     }
     return null;
+  }
+
+  function exactPrecisionFrame(sender, runtimeId) {
+    if (!isRecord(sender) || sender.id !== runtimeId
+      || !Number.isSafeInteger(sender.frameId) || sender.frameId < 1
+      || !Number.isSafeInteger(sender.tab && sender.tab.id) || sender.tab.id < 0
+      || typeof sender.documentId !== 'string' || !sender.documentId
+      || sender.documentId.length > MAX_ID_LENGTH || sender.documentId !== sender.documentId.normalize('NFKC').trim()) return false;
+    var expectedOrigin = 'chrome-extension://' + runtimeId;
+    var expectedUrl = expectedOrigin + '/pages/precision-workbench.html';
+    var actualUrl = sender.url || sender.documentUrl;
+    var parent = parseUrl(sender.tab.url);
+    return actualUrl === expectedUrl && sender.origin === expectedOrigin
+      && (!sender.documentUrl || sender.documentUrl === expectedUrl)
+      && parent && parent.protocol === 'https:' && !parent.username && !parent.password;
   }
 
   function internalSenderIdentity(sender) {
@@ -371,10 +390,15 @@
       tabId: Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : null,
       documentId: documentId && documentId.length <= MAX_ID_LENGTH ? documentId : null,
       frameId: Number.isSafeInteger(sender && sender.frameId) ? sender.frameId : null,
+      ...(sender && sender.frameId > 0 ? { id: sender.id, url: sender.url || sender.documentUrl, origin: sender.origin } : {}),
     });
   }
 
   function descriptorFor(type) {
+    if (type === MESSAGE_TYPES.PRECISION_FRAME.PUBLIC_UI_REGISTER) {
+      return { surface: SENDER_SURFACES.PRECISION_FRAME, registration: true,
+        readiness: false, draft: false, provider: false, secretRequest: false };
+    }
     if (MESSAGE_TYPES.PROVIDER_SETTINGS && PROVIDER_SETTINGS_TYPES.has(type)) {
       return {
         surface: SENDER_SURFACES.PROVIDER_SETTINGS,
@@ -410,6 +434,9 @@
     var surface = senderSurface(sender, runtimeId);
     if (isNewType(normalized)) {
       var descriptor = descriptorFor(normalized);
+      if (surface === SENDER_SURFACES.PRECISION_FRAME) {
+        return Boolean(descriptor && (descriptor.registration || PROVIDER_SETTINGS_TYPES.has(normalized) || WORKBENCH_TYPES.has(normalized)));
+      }
       return Boolean(descriptor && surface === descriptor.surface);
     }
     if (surface === SENDER_SURFACES.WORKBENCH && LEGACY_WORKBENCH_TYPES.has(normalized)) {
@@ -669,6 +696,9 @@
     if (Object.keys(message).some(function (key) { return !allowedKeys.has(key); })) {
       throw authError('SS_ERP_RUNTIME_MESSAGE_INVALID');
     }
+    if (descriptor.registration && (!isRecord(message.payload || {}) || Object.keys(message.payload || {}).length !== 0)) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_PAYLOAD_INVALID');
+    }
     if (descriptor.secretRequest) {
       if (!isRecord(message.payload)
         || !hasOnlyKeys(message.payload, new Set(['profileId', 'apiKey']))
@@ -757,6 +787,23 @@
       return { allowed: false, code: 'SS_ERP_RUNTIME_MESSAGE_SENDER_DENIED' };
     }
 
+    var actualSurface = senderSurface(input.sender, runtimeId);
+    if (actualSurface === SENDER_SURFACES.PRECISION_FRAME && !descriptor.registration) {
+      if (typeof input.authorizeEmbeddedFrame !== 'function') {
+        return { allowed: false, code: 'SS_ERP_PRECISION_FRAME_AUTHORIZATION_UNAVAILABLE' };
+      }
+      try {
+        var mediaRequired = WORKBENCH_TYPES.has(type);
+        var frameState = await input.authorizeEmbeddedFrame({ sender: input.sender, mediaRequired: mediaRequired, messageType: type });
+        if ((mediaRequired && frameState !== 'MEDIA_READY')
+          || (!mediaRequired && !['UI_REGISTERED', 'MEDIA_READY'].includes(frameState))) {
+          return { allowed: false, code: 'SS_ERP_PRECISION_FRAME_AUTHORIZATION_DENIED' };
+        }
+      } catch (_error) {
+        return { allowed: false, code: 'SS_ERP_PRECISION_FRAME_AUTHORIZATION_DENIED' };
+      }
+    }
+
     var normalized;
     try {
       normalized = normalizeMessage(message, descriptor);
@@ -771,7 +818,7 @@
       allowed: true,
       contractVersion: CONTRACT_VERSION,
       messageType: type,
-      senderSurface: descriptor.surface,
+      senderSurface: actualSurface,
       secretRequest: descriptor.secretRequest,
       readiness: null,
     };
@@ -793,7 +840,7 @@
         handle: normalized.handle,
         expectedBinding: normalized.binding,
         messageType: type,
-        senderSurface: descriptor.surface,
+        senderSurface: actualSurface,
       });
     } catch (_error) {
       return { allowed: false, code: 'SS_ERP_RUNTIME_MESSAGE_READINESS_UNAVAILABLE' };
@@ -886,6 +933,7 @@
         sender: input.sender,
         message: input.message,
         verifyReadinessHandle: input.verifyReadinessHandle,
+        authorizeEmbeddedFrame: input.authorizeEmbeddedFrame,
         now: input.now,
       });
     } catch (_error) {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { aiImageCreativeBriefSchema } from './ai-image-creative-brief.js';
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import { compareAiMediaPlanningStrings } from './ai-media-planning-contract.js';
 import { AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY } from './ai-prompt-template-registry.js';
@@ -160,6 +161,7 @@ const slotSnapshotSchema = z.object({
 }).strict();
 
 const planPayloadSchema = z.object({
+  creativeBrief: aiImageCreativeBriefSchema.optional(),
   compatibilityGroups: z.array(z.object({
     groupKey: z.string().trim().min(1).max(500),
     identitySignature: z.string().max(10_000),
@@ -652,7 +654,7 @@ function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
         },
       };
     });
-  return { items };
+  return { items, creativeBrief: payload.data.creativeBrief };
 }
 
 function normalizedVariablesMatch(
@@ -817,8 +819,11 @@ export function createAiImageSuitePromptService(dependencies: {
       const prompts = batch.items.map((resolved, ordinal): FrozenAiImageSuiteSlotPrompt => {
         const item = compiledInput.items[ordinal]!;
         const row = item.row;
-        let resolvedPrompt = `${resolved.resolvedPrompt.trim()}\n\n${IMMUTABLE_POLICY_TEXT}`;
-        let resolvedNegativePrompt = `${resolved.resolvedNegativePrompt.trim()}\n\n${IMMUTABLE_NEGATIVE_POLICY_TEXT}`;
+        const brief = compiledInput.creativeBrief;
+        const direction = brief ? `\n创作方向（仅构图、背景、光线与风格；商品身份、事实和槽位规则优先）：${JSON.stringify(brief.prompt)}` : '';
+        const negative = brief?.negativePrompt ? `\n${brief.negativePrompt}` : '';
+        let resolvedPrompt = `${resolved.resolvedPrompt.trim()}${direction}\n\n${IMMUTABLE_POLICY_TEXT}`;
+        let resolvedNegativePrompt = `${resolved.resolvedNegativePrompt.trim()}${negative}\n\n${IMMUTABLE_NEGATIVE_POLICY_TEXT}`;
         if (wanx) {
           const providerNeutralPrefix = `${AI_PROMPT_SAFETY_POLICY}\n\n`;
           const rendered = resolved.resolvedPrompt.trim();
@@ -832,8 +837,8 @@ export function createAiImageSuitePromptService(dependencies: {
           try {
             const compiled = compileWanxImageToImagePrompt({
               prompt: text.startsWith(AI_MEDIA_SUITE_WANX_SAFETY_POLICY)
-                ? text : `${AI_MEDIA_SUITE_WANX_SAFETY_POLICY}\n${text}`,
-              negativePrompt: resolved.resolvedNegativePrompt.trim(),
+                ? `${text}${direction}` : `${AI_MEDIA_SUITE_WANX_SAFETY_POLICY}\n${text}${direction}`,
+              negativePrompt: `${resolved.resolvedNegativePrompt.trim()}${negative}`,
             });
             resolvedPrompt = compiled.resolvedPrompt;
             resolvedNegativePrompt = compiled.resolvedNegativePrompt;

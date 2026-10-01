@@ -69,6 +69,42 @@ function authority(): AiMediaPlanningAuthority {
 }
 
 describe('AI media planning rule worker', () => {
+  it('persists the server-owned reference scope seal only when explicit references were selected', () => {
+    const first = buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput({
+      ...planningInput(), referenceSelectionScopeHash: 'a'.repeat(64),
+    } as never, authority()));
+    expect(first.inputSnapshot.referenceSelection).toEqual({ authorityCandidateMediaHash: 'a'.repeat(64) });
+    const original = buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput(planningInput(), authority()));
+    expect(original.inputSnapshot).not.toHaveProperty('referenceSelection');
+    expect(first.inputHash).not.toBe(original.inputHash);
+  });
+  it('freezes creative direction separately from facts and binds changes to the request', () => {
+    const build = (creativeBrief?: { prompt: string; negativePrompt?: string }) => buildRuleBasedAiMediaPlanningArtifacts(
+      resolveRuleBasedAiMediaPlanningInput({ ...planningInput(), ...(creativeBrief ? { creativeBrief } : {}) }, authority()),
+    );
+    const original = build();
+    const brief = { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要装饰道具' };
+    const first = build(brief);
+    const changed = build({ ...brief, prompt: '暖色背景' });
+    expect(first.inputSnapshot.creativeBrief).toEqual(brief);
+    expect(first.plan).toMatchObject({ creativeBrief: brief });
+    expect(first.plan.verifiedFacts).toEqual(original.plan.verifiedFacts);
+    expect(first.plan.slots).toEqual(original.plan.slots);
+    expect(first.requestFingerprint).not.toBe(original.requestFingerprint);
+    expect(changed.requestFingerprint).not.toBe(first.requestFingerprint);
+    expect(changed.planHash).not.toBe(first.planHash);
+    expect(original.inputSnapshot).not.toHaveProperty('creativeBrief');
+    expect(original.plan).not.toHaveProperty('creativeBrief');
+    expect(build()).toEqual(original);
+  });
+
+  it.each([null, {}, { prompt: '' }, { prompt: 'x'.repeat(301) },
+    { prompt: 'scene', negativePrompt: 'x'.repeat(151) }, { prompt: 'scene', apiKey: 'private' },
+    { prompt: 'https://private.example' }, { prompt: 'Authorization: Bearer secret' },
+    { prompt: 'scene\u0000' }])('rejects invalid creative direction %j before persistence', (creativeBrief) => {
+    expect(() => resolveRuleBasedAiMediaPlanningInput({ ...planningInput(), creativeBrief } as never, authority())).toThrow();
+  });
+
   it('uses a locale-independent canonical hash order', () => {
     expect(hashAiMediaPlanningJson({ 'é': 1, Z: 2, '中': 3, a: 4 }))
       .toBe('60ae282b935f7056a4e8ff69d5fff3720d0b2231e5f6fa4141239d85b10b2534');

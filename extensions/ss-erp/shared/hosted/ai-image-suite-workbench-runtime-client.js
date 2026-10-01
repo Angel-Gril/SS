@@ -163,6 +163,38 @@
     return value.slice();
   }
 
+  function normalizeCandidateMediaKeys(value, code) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length < 1 || value.length > 25 || new Set(value).size !== value.length) fail(code);
+    return value.map(function (key) {
+      var normalized = opaqueText(key, 1, 500, code);
+      if (/(?:javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(normalized)) fail(code);
+      return normalized;
+    });
+  }
+
+  function normalizeCreativeBrief(value, code) {
+    if (value === undefined) return undefined;
+    var keys = ['prompt'];
+    if (record(value) && Object.prototype.hasOwnProperty.call(value, 'negativePrompt')) keys.push('negativePrompt');
+    if (!exactKeys(value, keys)) fail(code);
+    function creativeText(input, minimum, maximum) {
+      if (typeof input !== 'string'
+        || input.length > maximum * 2
+        || input !== input.trim()
+        || Array.from(input).length < minimum
+        || Array.from(input).length > maximum
+        || /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(input)
+        || /(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(input)
+        || /\b(?:api[_ -]?key|authorization|bearer)\b|\bsk-[A-Za-z0-9]/iu.test(input)
+        || /^(?:rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(input)) fail(code);
+      return input;
+    }
+    var result = { prompt: creativeText(value.prompt, 1, 300) };
+    if (keys.includes('negativePrompt')) result.negativePrompt = creativeText(value.negativePrompt, 0, 150);
+    return deepFreeze(result);
+  }
+
   function normalizeSuiteCommand(value, action, outerSlotId, decision, code) {
     if (action === 'START') {
       if (!exactKeys(value, [
@@ -311,11 +343,17 @@
       && !/^(?:sk-|rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(value);
   }
 
-  function clonePublic(value, depth, state, ancestors) {
+  function clonePublic(value, depth, state, ancestors, path) {
     if (state.count > 50000 || depth > 16) {
       fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
     }
     state.count += 1;
+    // Keep this exception confined to the safe plan-version projection.
+    if (state.allowCreativeBrief && path.length === 3 && path[0] === 'plan'
+      && ['currentVersion', 'approvedVersion'].includes(path[1]) && path[2] === 'creativeBrief') {
+      if (value === undefined) fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
+      return normalizeCreativeBrief(value, 'SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
+    }
     if (value === null || typeof value === 'boolean') return value;
     if (typeof value === 'number') {
       if (!Number.isSafeInteger(value)) fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
@@ -332,8 +370,8 @@
     var result;
     if (Array.isArray(value)) {
       if (value.length > 500) fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
-      result = value.map(function (item) {
-        return clonePublic(item, depth + 1, state, ancestors);
+      result = value.map(function (item, index) {
+        return clonePublic(item, depth + 1, state, ancestors, path.concat(index));
       });
     } else {
       var keys = Object.keys(value);
@@ -347,15 +385,15 @@
           || FORBIDDEN_KEY_MARKERS.some(function (marker) {
             return markerKey.includes(marker);
           })) fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
-        result[key] = clonePublic(value[key], depth + 1, state, ancestors);
+        result[key] = clonePublic(value[key], depth + 1, state, ancestors, path.concat(key));
       });
     }
     ancestors.delete(value);
     return result;
   }
 
-  function publicData(value) {
-    var result = clonePublic(value, 0, { count: 0 }, new Set());
+  function publicData(value, allowCreativeBrief) {
+    var result = clonePublic(value, 0, { count: 0, allowCreativeBrief: allowCreativeBrief === true }, new Set(), []);
     if (!record(result)) fail('SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
     return result;
   }
@@ -381,7 +419,7 @@
   }
 
   function normalizePlanData(value, expectedBinding) {
-    var result = publicData(value);
+    var result = publicData(value, true);
     if (!exactKeys(result, [
       'contractVersion', 'replayed', 'policyRevision', 'binding', 'plan',
     ])
@@ -648,8 +686,12 @@
         var code = 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
         var keys = ['binding', 'idempotencyKey'];
         if (record(value) && Object.prototype.hasOwnProperty.call(value, 'galleryGoals')) keys.push('galleryGoals');
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'creativeBrief')) keys.push('creativeBrief');
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'candidateMediaKeys')) keys.push('candidateMediaKeys');
         if (!exactKeys(value, keys)) fail(code);
         var galleryGoals = normalizeGalleryGoals(value.galleryGoals, code);
+        var creativeBrief = normalizeCreativeBrief(value.creativeBrief, code);
+        var candidateMediaKeys = normalizeCandidateMediaKeys(value.candidateMediaKeys, code);
         var binding = pin(value.binding);
         var idempotencyKey = identifier(value.idempotencyKey, 8, 128, code);
         return send(
@@ -657,6 +699,8 @@
           {
             binding: clone(binding), idempotencyKey: idempotencyKey,
             ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
+            ...(creativeBrief === undefined ? {} : { creativeBrief: clone(creativeBrief) }),
+            ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys: candidateMediaKeys }),
           },
           function (data) { return normalizePlanData(data, binding); },
         );

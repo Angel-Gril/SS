@@ -249,6 +249,62 @@ async function rejectsCode(value, code, predicate) {
 
 const api = loadApi();
 {
+  const creativeBrief = { prompt: '浅灰背景\n柔光', negativePrompt: '' };
+  const selected = harness(api, { respond() {
+    return { ok: true, data: planData({ plan: {
+      currentVersion: { creativeBrief: plain(creativeBrief) },
+      approvedVersion: { creativeBrief: plain(creativeBrief) },
+    } }) };
+  } });
+  const result = await selected.client.createPlan({ binding: binding(), idempotencyKey: 'brief-plan-1', creativeBrief });
+  assert.deepEqual(plain(selected.calls[0].payload.creativeBrief), creativeBrief);
+  assert.equal(Object.isFrozen(selected.calls[0].payload.creativeBrief), true);
+  assert.deepEqual(plain(result.plan.currentVersion.creativeBrief), creativeBrief);
+  assert.deepEqual(plain(result.plan.approvedVersion.creativeBrief), creativeBrief);
+  creativeBrief.prompt = 'changed';
+  assert.equal(selected.calls[0].payload.creativeBrief.prompt, '浅灰背景\n柔光');
+  for (const invalid of [
+    null, [], {}, { prompt: '' }, { prompt: ' padded ' }, { prompt: '😀'.repeat(301) },
+    { prompt: 'light', negativePrompt: '😀'.repeat(151) }, { prompt: 'light', negativePrompt: null },
+    { prompt: 'light', provider: 'test' }, { prompt: 'light\tbackground' }, { prompt: 'light\u0085background' },
+    ...['https://invalid.test', 'custom://invalid', 'www.invalid.test', 'data:image/png',
+      'Authorization: Bearer secret', 'API key=secret', '方向 sk-secret123'].map((prompt) => ({ prompt })),
+  ]) {
+    assert.throws(() => selected.client.createPlan({
+      binding: binding(), idempotencyKey: 'brief-plan-1', creativeBrief: invalid,
+    }), { code: 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID' });
+  }
+  assert.equal(selected.calls.length, 1);
+  const unicode = harness(api);
+  await unicode.client.createPlan({ binding: binding(), idempotencyKey: 'unicode-brief-1',
+    creativeBrief: { prompt: '😀'.repeat(300), negativePrompt: '😀'.repeat(150) } });
+  for (const plan of [
+    { creativeBrief: { prompt: 'light' } },
+    { currentVersion: { creativeBrief: { prompt: 'light', provider: 'test' } } },
+    { currentVersion: { creativeBrief: { prompt: 'API key=secret' } } },
+    { currentVersion: { creativeBrief: { prompt: 'light' }, prompt: 'provider raw prompt' } },
+  ]) {
+    const bad = harness(api, { respond() { return { ok: true, data: planData({ plan }) }; } });
+    await rejectsCode(bad.client.getCurrentPlan(binding()), 'SS_ERP_HOSTED_WORKBENCH_RESPONSE_INVALID');
+  }
+}
+{
+  const selected = harness(api);
+  const candidateMediaKeys = ['reference-1', 'reference-2'];
+  await selected.client.createPlan({ binding: binding(), idempotencyKey: 'refs-plan-1', candidateMediaKeys });
+  assert.deepEqual(plain(selected.calls[0].payload.candidateMediaKeys), ['reference-1', 'reference-2']);
+  assert.equal(Object.isFrozen(selected.calls[0].payload.candidateMediaKeys), true);
+  candidateMediaKeys.push('mutated');
+  assert.deepEqual(plain(selected.calls[0].payload.candidateMediaKeys), ['reference-1', 'reference-2']);
+  for (const invalid of [null, [], 'reference-1', ['reference-1', 'reference-1'], [''], [' padded '],
+    ['x'.repeat(501)], Array.from({ length: 26 }, (_, index) => 'reference-' + index),
+    ['ＡＢＣ'], ['reference\n1'], ['reference\u007f1'], ['https://invalid.test'],
+    ['custom://invalid'], ['data:image/png'], ['javascript:alert'], ['ws:socket'], ['www.invalid.test'], ['ref?query'], ['ref#hash']]) {
+    assert.throws(() => selected.client.createPlan({ binding: binding(), idempotencyKey: 'refs-plan-1', candidateMediaKeys: invalid }), { code: 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID' });
+  }
+  assert.equal(selected.calls.length, 1);
+}
+{
   const selected = harness(api);
   const galleryGoals = ['scene'];
   await selected.client.createPlan({ binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals });

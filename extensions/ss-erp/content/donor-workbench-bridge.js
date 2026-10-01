@@ -3,6 +3,7 @@
 
   var FEATURE_KEY = 'ss-erp:donor-workbench-preview-enabled';
   var ALLOWLIST_KEY = 'ss-erp:donor-workbench-preview-allowlist:v1';
+  var PRECISION_KEY = 'ss-erp:precision-workbench-preview-enabled';
   var ALLOWLIST_LIMIT = 20;
   var HOST_ID = 'ss-erp-donor-workbench-host';
   var TRIGGER_ID = 'ss-erp-donor-workbench-trigger';
@@ -19,6 +20,8 @@
   var pageOverflow = '';
   var open = false;
   var frameLoadTimer = 0;
+  var precisionEnabled = false;
+  var frameReady = false;
   var legacySurfaceStyles = new Map();
   var busy = false;
   var refreshEpoch = 0;
@@ -126,7 +129,7 @@
     });
   }
 
-  function commandResult(requestId, ok, error, receipt) {
+  function commandResult(requestId, ok, error, receipt, data, outcome, code) {
     postToFrame({
       contractVersion: Contract.CONTRACT_VERSION,
       type: 'COMMAND_RESULT',
@@ -134,6 +137,9 @@
       ok: ok === true,
       error: ok === true ? '' : String(error || '操作失败').slice(0, 500),
       ...(receipt ? { receipt: receipt } : {}),
+      ...(data === undefined ? {} : { data: data }),
+      ...(outcome ? { outcome: outcome } : {}),
+      ...(code ? { code: code } : {}),
     });
   }
 
@@ -169,10 +175,15 @@
     }
     setBusy(true, '');
     try {
-      var collected = await sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' });
+      var collected = precisionEnabled && sourcePlatform() === '1688'
+        ? { ok: true, data: await globalThis.SS_ERP_DONOR_1688_CAPTURE.collect({
+          url: location.href, extensionVersion: chrome.runtime.getManifest().version,
+        }) }
+        : await sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' });
       if (!collected || !collected.ok || !collected.data) {
         throw new Error(collected && collected.error || '读取当前商品失败');
       }
+      if (epoch !== refreshEpoch) return false;
       currentProduct = collected.data;
       var baseProjection = Contract.createProjection({
         platform: sourcePlatform(),
@@ -180,6 +191,16 @@
         busy: true,
       });
       if (!baseProjection.source.sourceProductId) throw new Error('当前商品缺少稳定商品 ID');
+      var sameSource = currentProjection.source.sourceProductId === baseProjection.source.sourceProductId
+        && currentProjection.source.platform === baseProjection.source.platform;
+      currentProjection = Contract.createProjection({
+        platform: sourcePlatform(), product: currentProduct, busy: true,
+        shops: currentProjection.shops,
+        handoff: sameSource ? currentProjection.handoff : null,
+        workbench: sameSource ? currentProjection.workbench : { state: 'unavailable' },
+        history: sameSource ? currentHistory : {}, billing: sameSource ? currentBilling : {},
+      });
+      publishProjection();
 
       var results = await Promise.all([
         sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops', deviceOnly: true }).catch(function (error) {
@@ -237,8 +258,8 @@
         payload: { product: currentProduct },
       });
       if (!response || !response.ok) throw new Error(response && response.error || '采集到 ERP 失败');
+      if (!await loadProjection({ force: true })) throw new Error('采集响应已返回，但快照尚未核对，请重新读取');
       commandResult(requestId, true, '');
-      await loadProjection({ force: true });
     } catch (error) {
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(requestId, false, error && error.message ? error.message : String(error));
@@ -274,8 +295,8 @@
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || '创建 ERP 草稿失败');
       }
+      if (!await loadProjection({ force: true })) throw new Error('草稿响应已返回，但草稿尚未核对，请重新读取');
       commandResult(command.requestId, true, '');
-      await loadProjection({ force: true });
     } catch (error) {
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
@@ -339,6 +360,28 @@
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
     }
+  }
+
+  async function openEmbeddedMedia(command) {
+    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成');
+    const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+    const handoff = currentProjection.handoff;
+    if (!precisionEnabled || !listing || !handoff) return commandResult(command.requestId, false, '请先采集并创建所选店铺草稿');
+    setBusy(true, '');
+    try {
+      const binding = { sourcePlatform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
+        sourceCaptureSnapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId,
+        shopId: listing.shopId, workflowId: listing.id, draftRevision: listing.revision, draftVersion: listing.draftVersion };
+      const response = await sendRuntimeMessage({ type: 'ss-erp:precision-media-open',
+        platform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
+        listingWorkflowId: listing.id, preferredSkuKey: command.preferredSkuKey,
+        choiceBinding: binding, sourceSelectionKey: currentProjection.source.preferredSkuKey || null, promptDraft: null });
+      if (!response || !response.ok || response.result?.state !== 'workbench_embedded') {
+        throw new Error(response && response.error || '当前草稿未能建立图片会话，请重新读取');
+      }
+      commandResult(command.requestId, true, '', null, response.result);
+    } catch (error) { commandResult(command.requestId, false, error.message || String(error)); }
+    finally { setBusy(false, ''); }
   }
 
   async function loadMediaHistory(command) {
@@ -460,6 +503,9 @@
         slotKey: command.slotKey,
         decision: command.decision,
         costConfirmed: command.costConfirmed,
+        ...(command.creativeBrief === undefined ? {} : { creativeBrief: command.creativeBrief }),
+        ...(command.candidateMediaKeys === undefined ? {} : { candidateMediaKeys: command.candidateMediaKeys }),
+        ...(command.quoteWitness === undefined ? {} : { quoteWitness: command.quoteWitness }),
       });
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || 'ERP 托管套图操作失败');
@@ -586,10 +632,86 @@
     }
   }
 
+  async function createTranslation(command) {
+    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+    const sourceMediaKey = String(command.sourceMediaKey || '').normalize('NFKC').trim();
+    const allowed = currentProjection.media.some(function (item) { return item.key === sourceMediaKey; });
+    if (!listing || !currentProjection.handoff || !sourceMediaKey || !allowed) return commandResult(command.requestId, false, '当前图片不在 ERP 允许的来源列表中');
+    setBusy(true, '');
+    try {
+      const response = await sendRuntimeMessage({ type: 'ss-erp:source-listing-workbench-media-command',
+        sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id, sourceMediaKey, action: 'CREATE_TRANSLATION' });
+      if (!response || !response.ok || !response.result) throw new Error(response && response.error || '图片翻译任务创建失败');
+      commandResult(command.requestId, true, '', null, response.result);
+      await loadProjection({ force: true });
+    } catch (error) { commandResult(command.requestId, false, error.message || String(error)); }
+    finally { setBusy(false, ''); }
+  }
+
+  async function editorCommand(command) {
+    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+    if (!listing || !currentProjection.handoff || command.binding.shopId !== listing.shopId
+      || command.binding.snapshotId !== currentProjection.handoff.snapshotId
+      || command.binding.supplyGoodsId !== currentProjection.handoff.supplyGoodsId) {
+      return commandResult(command.requestId, false, '草稿编辑上下文已变化');
+    }
+    setBusy(true, '');
+    try {
+      const type = command.type === 'EDITOR_SAVE' ? 'save' : command.type === 'EDITOR_CATALOG' ? 'catalog'
+        : command.type === 'EDITOR_ATTRIBUTES' ? 'attributes' : command.type === 'EDITOR_DICTIONARY' ? 'dictionary' : 'read';
+      const response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-editor-' + type,
+        sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id, binding: command.binding,
+        ...(command.type === 'EDITOR_SAVE' ? { action: command.action, operationKey: command.operationKey, value: command.value } : {}),
+        ...(command.type === 'EDITOR_CATALOG' ? { query: command.query } : {}),
+        ...(command.type === 'EDITOR_DICTIONARY' ? { schemaRevision: command.schemaRevision, attributeId: command.attributeId,
+          query: command.query, limit: command.limit } : {}),
+      });
+      if (!response || !response.ok || !response.result) throw Object.assign(new Error(response && response.error || 'ERP 草稿编辑未完成'), {
+        outcome: response && response.outcome || (command.type === 'EDITOR_SAVE' ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
+        code: response && response.code || null,
+      });
+      if (command.type === 'EDITOR_SAVE') await loadProjection({ force: true });
+      commandResult(command.requestId, true, '', null, response.result);
+    } catch (error) {
+      commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code);
+    } finally {
+      setBusy(false, '');
+    }
+  }
+
+  async function publishListing(command) {
+    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成');
+    const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+    if (!listing || !currentProjection.handoff) return commandResult(command.requestId, false, '请先创建所选店铺草稿');
+    setBusy(true, '');
+    try {
+      const response = await sendRuntimeMessage({ type: 'ss-erp:source-listing-workbench-publish',
+        platform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
+        listingWorkflowId: listing.id, action: command.action,
+        ...(command.action === 'CONFIRM' ? { previewHash: command.previewHash } : {}) });
+      if (!response || !response.ok || !Object.prototype.hasOwnProperty.call(response, 'result')
+        || (response.result === null && command.action !== 'STATUS')) {
+        postToFrame({ contractVersion: Contract.CONTRACT_VERSION, type: 'COMMAND_RESULT', requestId: command.requestId,
+          ok: false, error: response && response.error || 'ERP 上传尚未完成', outcome: response && response.outcome || 'UNKNOWN_OUTCOME' });
+        return;
+      }
+      commandResult(command.requestId, true, '', null, response.result);
+      if (command.action === 'CONFIRM' || command.action === 'STATUS') await loadProjection({ force: true });
+    } catch (error) {
+      postToFrame({ contractVersion: Contract.CONTRACT_VERSION, type: 'COMMAND_RESULT', requestId: command.requestId,
+        ok: false, error: error.message || String(error), outcome: error.outcome || 'UNKNOWN_OUTCOME' });
+    } finally { setBusy(false, ''); }
+  }
+
   function showFrame() {
     if (!frame || !trigger) return;
     var unifiedMediaFab = document.getElementById('ss-erp-source-media-fab');
-    if (unifiedMediaFab && typeof unifiedMediaFab.click === 'function') {
+    if (!precisionEnabled && unifiedMediaFab && typeof unifiedMediaFab.click === 'function') {
       // On real marketplace pages the page CSP can reject extension iframes.
       // The existing media-focus card already owns the same server contracts,
       // so use it as the unified donor entry instead of creating a second
@@ -610,19 +732,19 @@
     void loadProjection({ force: true });
     globalThis.clearTimeout(frameLoadTimer);
     frameLoadTimer = globalThis.setTimeout(function () {
-      if (!open || !frame) return;
+      if (!open || !frame || frameReady) return;
       try {
         // A CSP-blocked extension frame stays as same-origin about:blank.
         // Do not leave an opaque empty overlay over the marketplace page.
         if (frame.contentWindow && frame.contentWindow.location.href === 'about:blank') {
-          trigger.textContent = '工作台（需新标签页）';
-          trigger.title = '当前来源页禁止嵌入扩展工作台，请使用 ERP 工作台入口';
+          trigger.textContent = '工作台（加载失败）';
+          trigger.title = '来源页未能加载扩展工作台，请刷新页面后重试';
           hideFrame();
         }
       } catch (_error) {
         // A loaded extension frame is cross-origin and intentionally unreadable here.
       }
-    }, 1200);
+    }, 10000);
   }
 
   function hideFrame() {
@@ -679,7 +801,8 @@
 
     frame = document.createElement('iframe');
     frame.id = FRAME_ID;
-    frame.src = chrome.runtime.getURL('pages/source-workbench-shell.html');
+    frame.src = chrome.runtime.getURL(precisionEnabled ? 'pages/precision-workbench.html' : 'pages/source-workbench-shell.html');
+    frameReady = false;
     frame.title = 'SS ERP 商品工作台';
     frame.hidden = true;
     frame.setAttribute('allow', 'clipboard-write');
@@ -700,19 +823,24 @@
     frame = null;
   }
 
-  function setEnabled(enabled, allowlist) {
+  function setEnabled(enabled, allowlist, precision) {
     if (enabled !== true || !normalizedAllowlist(allowlist).has(currentSourceAllowlistKey())) {
       unmount();
       return;
+    }
+    if (precisionEnabled !== (precision === true)) {
+      unmount();
+      precisionEnabled = precision === true;
     }
     mount();
   }
 
   function refreshRolloutState() {
-    chrome.storage.local.get([FEATURE_KEY, ALLOWLIST_KEY], function (result) {
+    chrome.storage.local.get([FEATURE_KEY, ALLOWLIST_KEY, PRECISION_KEY], function (result) {
       setEnabled(
         Boolean(result && result[FEATURE_KEY] === true),
         result && result[ALLOWLIST_KEY],
+        result && result[PRECISION_KEY],
       );
     });
   }
@@ -726,7 +854,10 @@
       return;
     }
     if (command.type === 'READY') {
+      frameReady = true;
+      globalThis.clearTimeout(frameLoadTimer);
       publishProjection();
+      commandResult(command.requestId, true, '');
       return;
     }
     if (command.type === 'CLOSE') {
@@ -747,16 +878,32 @@
       return;
     }
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
+    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(command.type)) void editorCommand(command);
+    if (command.type === 'PUBLISH') void publishListing(command);
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
     if (command.type === 'LOAD_MEDIA_HISTORY') void loadMediaHistory(command);
     if (command.type === 'LOAD_BILLING') void loadBilling(command);
     if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
     if (command.type === 'EXECUTE_MEDIA_TASK') void executeMediaTask(command);
     if (command.type === 'EXECUTE_HOSTED_SUITE') void executeHostedSuite(command);
+    if (command.type === 'OPEN_EMBEDDED_MEDIA') void openEmbeddedMedia(command);
+    if (command.type === 'CREATE_TRANSLATION') void createTranslation(command);
     if (command.type === 'ASSIGN_HOSTED_SUITE') void assignHostedSuite(command);
   });
 
-  chrome.runtime.onMessage.addListener(function (message) {
+  chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (message && message.type === 'ss-erp:precision-source-attest') {
+      if (!sender || sender.id !== chrome.runtime.id || !precisionEnabled || !frame
+        || !/^[a-f0-9]{48}$/u.test(message.nonce || '')
+        || message.sourcePlatform !== currentProjection.source.platform
+        || message.sourceProductId !== currentProjection.source.sourceProductId) {
+        sendResponse({ ok: false }); return false;
+      }
+      sendRuntimeMessage({ type: 'ss-erp:precision-source-attestation', nonce: message.nonce })
+        .then((response) => sendResponse({ ok: response && response.ok === true }))
+        .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
     if (!message || message.type !== 'ss-erp:source-listing-workbench-media-confirmed'
       || message.resultKind !== 'MUTATION_COMPLETED'
       || typeof message.replay !== 'boolean'
@@ -785,9 +932,17 @@
     refreshRolloutState();
   });
   chrome.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName === 'local' && (changes[FEATURE_KEY] || changes[ALLOWLIST_KEY])) {
+    if (areaName === 'local' && (changes[FEATURE_KEY] || changes[ALLOWLIST_KEY] || changes[PRECISION_KEY])) {
       refreshRolloutState();
     }
   });
+
+  document.addEventListener('click', function (event) {
+    if (!precisionEnabled || !host || !event.target || typeof event.target.closest !== 'function'
+      || !event.target.closest('#ss-erp-source-media-fab')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    showFrame();
+  }, true);
   refreshRolloutState();
 }());

@@ -202,29 +202,38 @@ function categoryIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
 
 function copyIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
   const title = normalizedText(draft.copy.publishTitleRu);
-  const lastApply = draft.copy.applyAudit.at(-1);
-  const candidate = lastApply
-    ? draft.copy.candidates.find((entry) => entry.id === lastApply.candidateId)
-    : undefined;
+  const reviewedCandidate = (field: 'title' | 'description') => {
+    for (let index = draft.copy.applyAudit.length - 1; index >= 0; index -= 1) {
+      const candidate = draft.copy.candidates.find((entry) => entry.id === draft.copy.applyAudit[index]!.candidateId);
+      if (!candidate) continue;
+      const fields = candidate.fields || candidate.generation?.fields || ['title', 'description'];
+      if (fields.includes(field)) return candidate;
+    }
+    return undefined;
+  };
+  const titleCandidate = reviewedCandidate('title');
   const invalidTitle = !title
     || title !== draft.copy.publishTitleRu
     || title.length > 500
     || !/[А-Яа-яЁё]/u.test(title)
     || /[\u3400-\u9fff]/u.test(title);
-  const staleCandidate = !candidate
-    || candidate.titleRu !== title
-    || candidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
-    || candidate.sourceCaptureHash !== draft.sourceCaptureHash;
+  const staleCandidate = !titleCandidate
+    || titleCandidate.titleRu !== title
+    || titleCandidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
+    || titleCandidate.sourceCaptureHash !== draft.sourceCaptureHash;
   let invalidDescription = false;
   if (draft.copy.publishDescriptionRu !== null) {
     const description = draft.copy.publishDescriptionRu;
+    const descriptionCandidate = reviewedCandidate('description');
     invalidDescription = typeof description !== 'string'
       || !description.trim()
       || description.trim() !== description
       || description.normalize('NFKC') !== description
       || description.length > 200_000
       || /[\u3400-\u9fff]/u.test(description)
-      || candidate?.descriptionRu !== description;
+      || !descriptionCandidate || descriptionCandidate.descriptionRu !== description
+      || descriptionCandidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
+      || descriptionCandidate.sourceCaptureHash !== draft.sourceCaptureHash;
   }
   return invalidTitle || staleCandidate || invalidDescription
     ? [issue(

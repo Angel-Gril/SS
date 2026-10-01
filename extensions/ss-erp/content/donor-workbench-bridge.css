@@ -36,9 +36,11 @@
 
 #ss-erp-donor-workbench-frame {
   position: fixed;
-  inset: 16px;
-  width: calc(100vw - 32px);
-  height: calc(100vh - 32px);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1440px, calc(100vw - 16px));
+  height: min(960px, calc(100vh - 16px));
   border: 1px solid rgba(255, 255, 255, .72);
   border-radius: 22px;
   background: #f7f8fa;
@@ -53,7 +55,9 @@
 
 @media (max-width: 820px) {
   #ss-erp-donor-workbench-frame {
-    inset: 0;
+    top: 0;
+    left: 0;
+    transform: none;
     width: 100vw;
     height: 100vh;
     border: 0;

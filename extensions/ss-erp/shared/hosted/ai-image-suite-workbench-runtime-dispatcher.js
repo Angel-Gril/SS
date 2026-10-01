@@ -75,6 +75,28 @@
       && Object.keys(item).every(function (key) { return keys.includes(key); });
   }
 
+  function normalizeCreativeBrief(value, code) {
+    if (value === undefined) return undefined;
+    var keys = ['prompt'];
+    if (record(value) && Object.prototype.hasOwnProperty.call(value, 'negativePrompt')) keys.push('negativePrompt');
+    if (!exactKeys(value, keys)) fail(code);
+    function creativeText(input, minimum, maximum) {
+      if (typeof input !== 'string'
+        || input.length > maximum * 2
+        || input !== input.trim()
+        || Array.from(input).length < minimum
+        || Array.from(input).length > maximum
+        || /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(input)
+        || /(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(input)
+        || /\b(?:api[_ -]?key|authorization|bearer)\b|\bsk-[A-Za-z0-9]/iu.test(input)
+        || /^(?:rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(input)) fail(code);
+      return input;
+    }
+    var result = { prompt: creativeText(value.prompt, 1, 300) };
+    if (keys.includes('negativePrompt')) result.negativePrompt = creativeText(value.negativePrompt, 0, 150);
+    return deepFreeze(result);
+  }
+
   function hasControlCharacter(value) {
     for (var index = 0; index < value.length; index += 1) {
       var code = value.charCodeAt(index);
@@ -178,6 +200,16 @@
       || value.some(function (goal) { return !GALLERY_GOALS.includes(goal); })
       || new Set(value).size !== value.length) fail(code);
     return value.slice();
+  }
+
+  function normalizeCandidateMediaKeys(value, code) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length < 1 || value.length > 25 || new Set(value).size !== value.length) fail(code);
+    return value.map(function (key) {
+      var normalized = opaqueText(key, 1, 500, code);
+      if (/(?:javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(normalized)) fail(code);
+      return normalized;
+    });
   }
 
   function suiteCommand(value, action, outerSlotId, decision, code) {
@@ -332,11 +364,17 @@
       && !/^(?:sk-|rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(value);
   }
 
-  function clonePublic(value, depth, state, ancestors) {
+  function clonePublic(value, depth, state, ancestors, path) {
     if (state.count >= 50000 || depth > 16) {
       fail('SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
     }
     state.count += 1;
+    // Keep this exception confined to the safe plan-version projection.
+    if (state.allowCreativeBrief && path.length === 3 && path[0] === 'plan'
+      && ['currentVersion', 'approvedVersion'].includes(path[1]) && path[2] === 'creativeBrief') {
+      if (value === undefined) fail('SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
+      return normalizeCreativeBrief(value, 'SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
+    }
     if (value === null || typeof value === 'boolean') return value;
     if (typeof value === 'number') {
       if (!Number.isSafeInteger(value)) fail('SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
@@ -353,8 +391,8 @@
     var result;
     if (Array.isArray(value)) {
       if (value.length > 500) fail('SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
-      result = value.map(function (item) {
-        return clonePublic(item, depth + 1, state, ancestors);
+      result = value.map(function (item, index) {
+        return clonePublic(item, depth + 1, state, ancestors, path.concat(index));
       });
     } else {
       if (Object.prototype.toString.call(value) !== '[object Object]') {
@@ -370,7 +408,7 @@
           || FORBIDDEN_OUTPUT_KEYS.has(outputKey(key))) {
           fail('SS_ERP_HOSTED_WORKBENCH_OUTPUT_INVALID');
         }
-        result[key] = clonePublic(value[key], depth + 1, state, ancestors);
+        result[key] = clonePublic(value[key], depth + 1, state, ancestors, path.concat(key));
       });
     }
     ancestors.delete(value);
@@ -378,7 +416,8 @@
   }
 
   function publicOutput(value) {
-    var result = clonePublic(value, 0, { count: 0 }, new Set());
+    var allowCreativeBrief = Boolean(value && value.contractVersion === 'extension-hosted-ai-image-suite-workbench-client/v1');
+    var result = clonePublic(value, 0, { count: 0, allowCreativeBrief: allowCreativeBrief }, new Set(), []);
     if (!record(result)
       || typeof result.contractVersion !== 'string'
       || !PUBLIC_CONTRACT_VERSIONS.has(result.contractVersion)) {
@@ -478,8 +517,12 @@
     handlers[messageTypes.CREATE_PLAN] = guarded(async function (context) {
       var keys = ['binding', 'idempotencyKey'];
       if (record(context.payload) && Object.prototype.hasOwnProperty.call(context.payload, 'galleryGoals')) keys.push('galleryGoals');
+      if (record(context.payload) && Object.prototype.hasOwnProperty.call(context.payload, 'creativeBrief')) keys.push('creativeBrief');
+      if (record(context.payload) && Object.prototype.hasOwnProperty.call(context.payload, 'candidateMediaKeys')) keys.push('candidateMediaKeys');
       var input = payload(context, keys);
       var galleryGoals = normalizeGalleryGoals(input.galleryGoals, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
+      var creativeBrief = normalizeCreativeBrief(input.creativeBrief, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
+      var candidateMediaKeys = normalizeCandidateMediaKeys(input.candidateMediaKeys, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
       var pinnedBinding = normalizeBinding(
         input.binding,
         'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID',
@@ -495,6 +538,8 @@
         binding: clone(pinnedBinding),
         idempotencyKey: idempotencyKey,
         ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
+        ...(creativeBrief === undefined ? {} : { creativeBrief: clone(creativeBrief) }),
+        ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys: candidateMediaKeys }),
       })));
     });
 

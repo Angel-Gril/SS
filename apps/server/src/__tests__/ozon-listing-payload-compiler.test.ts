@@ -230,6 +230,32 @@ function addUnselectedCaptureSku(input: ReturnType<typeof buildInput>, key: stri
 }
 
 describe('Ozon listing payload compiler', () => {
+  it('compiles distinct SKU packages from the reviewed leaf and exact validation map', () => {
+    const input = buildInput();
+    const packages = { 'sku-0': { weightG: 100, lengthMm: 40, widthMm: 30, heightMm: 20 },
+      'sku-1': { weightG: 900, lengthMm: 400, widthMm: 300, heightMm: 200 } };
+    input.draft.attributes.values.packaging = { value: null, source: 'MANUAL', reviewed: true, evidence: ['owner:measured'],
+      skuValues: Object.fromEntries(Object.entries(packages).map(([key, value]) => [key, { value, source: 'MANUAL', reviewed: true, evidence: ['owner:measured'] }])) };
+    const operational = input.validationReport.operationalFacts as Record<string, unknown>;
+    operational.packageWeightG = null;
+    operational.packageDimensionsMm = { lengthMm: null, widthMm: null, heightMm: null };
+    operational.skuPackaging = { contractVersion: 'source-listing-sku-packaging/v1', items: structuredClone(packages) };
+    input.draft.validation.report = structuredClone(input.validationReport);
+    const compiled = compileOzonListingPayload(input);
+    expect(compiled.payload.items.map(({ weight, depth, width, height }) => ({ weight, depth, width, height })))
+      .toEqual([{ weight: 100, depth: 40, width: 30, height: 20 }, { weight: 900, depth: 400, width: 300, height: 200 }]);
+    for (const mutate of [
+      (value: typeof input) => { (value.validationReport.operationalFacts as { skuPackaging: { items: Record<string, typeof packages['sku-0']> } }).skuPackaging.items['sku-0']!.weightG = 101; },
+      (value: typeof input) => { delete (value.validationReport.operationalFacts as { skuPackaging: { items: Record<string, typeof packages['sku-0']> } }).skuPackaging.items['sku-0']; },
+      (value: typeof input) => { (value.validationReport.operationalFacts as { skuPackaging: { items: Record<string, typeof packages['sku-0']> } }).skuPackaging.items.foreign = packages['sku-0']; },
+      (value: typeof input) => { value.draft.attributes.values.packaging!.skuValues!['sku-0']!.reviewed = false; },
+    ]) {
+      const hostile = structuredClone(input);
+      mutate(hostile);
+      hostile.draft.validation.report = structuredClone(hostile.validationReport);
+      expectCompileCode(hostile, 'OZON_LISTING_COMPILE_PACKAGE_INVALID');
+    }
+  });
   it('compiles one immutable v3 import item per canonical SKU without deriving commercial facts', () => {
     const result = compileOzonListingPayload(buildInput());
 

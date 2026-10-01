@@ -1,5 +1,9 @@
 # SS ERP 当前状态审计
 
+## 2026-10-01 旧扩展直接适配：同窗口图片与发布接线
+
+当前以实际 `jp20260803` 程序为基础适配接口；A1.1/A1.2、A2.2 和 A2.4 已完成本地接线。新增自定义托管方向、BYOK 单图生成→预览→审核→ingest/readback、每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session、BYOK 设置及原窗口套图审核/assignment、发布预览/确认/回执已通过明确 fixture。参考图/修图/翻译、复制 SKU 行持久化、donor 淘宝/PDD collector、真实 Provider/Ozon 和最终安装版验收仍未完成；不能把 local owner/browser fixture 或实时只读 collector 结果表述成生产全链验收。本轮未提交、付费生图、真实 Ozon 写入、签名、部署或官网发布。
+
 ## 2026-09-30 `3723f5dd` 正式 QA04、双区发布与官网公开完成
 
 - `cbafe7a1` / `3723f5dd` 修复 release-bound donor canary 的 OOPIF owner：extension iframe 在独立 target/session 中核验 exact shell URL、父页面 frame 和默认 extension context。定向合同 `13/13` 通过；真实 1688 canary PASS，COM receipt SHA-256 `d4349c6856c0eb2222bacbd155ac4c56e49b21d2ebdbda118d45397a558f5917`，Provider/Ozon/ERP mutations=0。

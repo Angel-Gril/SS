@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { aiImageCreativeBriefSchema, type AiImageCreativeBrief } from './ai-image-creative-brief.js';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
   type SourceCaptureEvidence,
@@ -72,6 +73,9 @@ export interface CreateRuleBasedAiMediaPlanningInput {
   selectedSkuKeys: string[];
   candidateMediaKeys?: string[];
   galleryGoals?: AiMediaGalleryGoal[];
+  creativeBrief?: AiImageCreativeBrief;
+  /** Internal seal supplied by the device plan owner, never from an HTTP planner caller. */
+  referenceSelectionScopeHash?: string;
 }
 
 export type CreateCurrentRuleBasedAiMediaPlanningInput = Omit<
@@ -138,7 +142,7 @@ export interface RuleBasedAiMediaPlanningArtifacts {
   curationHash: string;
   visionEvidence: NormalizedAiImageVisionOutput;
   visionEvidenceHash: string;
-  plan: ImagePromptPlan;
+  plan: ImagePromptPlan & { creativeBrief?: AiImageCreativeBrief };
   planSchemaVersion: string;
   planHash: string;
   planBytes: number;
@@ -689,6 +693,10 @@ function normalizeCreateInput(
     selectedSkuKeys,
     ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys }),
     ...(galleryGoals === undefined ? {} : { galleryGoals }),
+    ...(input.creativeBrief === undefined ? {} : { creativeBrief: aiImageCreativeBriefSchema.parse(input.creativeBrief) }),
+    ...(input.referenceSelectionScopeHash === undefined ? {} : {
+      referenceSelectionScopeHash: sha256(input.referenceSelectionScopeHash, 'referenceSelectionScopeHash'),
+    }),
   });
 }
 
@@ -903,7 +911,7 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
     modelOutput: null,
   });
   const decisions = new Map(curation.decisions.map((decision) => [decision.candidateId, decision]));
-  const plan = createRuleBasedImagePromptPlan({
+  const basePlan = createRuleBasedImagePromptPlan({
     skus: input.skus,
     images: input.candidates.filter((candidate) => selected.has(candidate.id)).map((candidate) => ({
       candidateId: candidate.id,
@@ -914,6 +922,8 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
     verifiedFacts: input.verifiedFacts,
     ...(input.galleryGoals ? { galleryGoals: input.galleryGoals } : {}),
   });
+  const creativeBrief = input.creativeBrief === undefined ? undefined : aiImageCreativeBriefSchema.parse(input.creativeBrief);
+  const plan = creativeBrief === undefined ? basePlan : { ...basePlan, creativeBrief };
   const selectedSkuKeys = [...new Set(input.skus.map((sku) => sku.skuKey))]
     .sort(compareAiMediaPlanningStrings);
   const selectedSkuHash = hashAiMediaPlanningJson(selectedSkuKeys);
@@ -934,6 +944,10 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
     candidates: input.candidates,
     verifiedFacts: input.verifiedFacts,
     galleryGoals: input.galleryGoals || null,
+    ...(creativeBrief === undefined ? {} : { creativeBrief }),
+    ...(input.referenceSelectionScopeHash === undefined ? {} : {
+      referenceSelection: { authorityCandidateMediaHash: input.referenceSelectionScopeHash },
+    }),
   });
   const inputSerialized = canonicalJson(inputSnapshot);
   const inputBytes = Buffer.byteLength(inputSerialized, 'utf8');

@@ -930,12 +930,16 @@
         send('ASSIGN_HOSTED_SUITE', { listingWorkflowId: listing.id });
         return;
       }
+      var quote = projection.billing && projection.billing.quote;
+      if (action === 'START' && (!quote || !quote.previewHash)) return showToast('请重新读取套图计划和报价后确认', true);
       send('EXECUTE_HOSTED_SUITE', {
         listingWorkflowId: listing.id,
         action: action,
         slotKey: null,
         decision: null,
         costConfirmed: action === 'START',
+        ...(action === 'START' ? { quoteWitness: { previewHash: quote.previewHash, currency: quote.currency,
+          itemCount: quote.itemCount, maxCostMinor: quote.maximumCostMinor } } : {}),
       });
     });
   });

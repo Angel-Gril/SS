@@ -717,6 +717,36 @@ assert.throws(
 );
 const dispatcher = api.createDispatcher({ ...dispatcherOptions, assertSourceCurrent });
 
+{
+  const actualFrame = { tabId: 12, frameId: 7, documentId: 'precision-document-1',
+    url: 'chrome-extension://extension-id/pages/precision-workbench.html', origin: 'chrome-extension://extension-id' };
+  const embeddedCalls = [];
+  const embeddedDispatcher = api.createDispatcher({ ...dispatcherOptions, assertSourceCurrent: async () => {},
+    sessionManager: { ...sessionManager, async openEmbedded(value) {
+      embeddedCalls.push(['openEmbedded', value]);
+      return { state: 'workbench_embedded', tabId: 12, frameId: 7 };
+    } },
+    precisionFrameRegistry: {
+      async getFrameBySource(value) {
+        embeddedCalls.push(['getFrameBySource', value]);
+        return { frame: actualFrame, source: { tabId: 12, documentId: 'source-document-1' } };
+      },
+      async bindMedia(frame, value) { embeddedCalls.push(['bindMedia', frame, value]); return { state: 'MEDIA_READY' }; },
+    },
+  });
+  assert.equal(typeof embeddedDispatcher.openEmbeddedFromSource, 'function');
+  const opened = await embeddedDispatcher.openEmbeddedFromSource({
+    sourceSender: { tabId: 12, documentId: 'source-document-1', frameId: 0 }, sourceSelectionKey: null,
+    request: { ...launchBinding, preferredSkuKey: 'sku-1', selectionKind: 'EXPLICIT' },
+  });
+  assert.equal(opened.state, 'workbench_embedded');
+  assert.equal(opened.frameId, 7);
+  assert.equal(embeddedCalls.find(([method]) => method === 'openEmbedded')[1].frameSender.frameId, 7);
+  assert.equal(embeddedCalls.find(([method]) => method === 'openEmbedded')[1].frameSender.documentId, 'precision-document-1');
+  assert.equal(embeddedCalls.find(([method]) => method === 'bindMedia')[1], actualFrame);
+  assert.deepEqual(embeddedCalls.map(([method]) => method), ['getFrameBySource', 'openEmbedded', 'bindMedia']);
+}
+
 resolvedLaunchDecision = choiceLaunchDecision();
 const choiceRequired = await dispatcher.openFromSource({
   request: {

@@ -1545,7 +1545,7 @@
         : operation();
     });
 
-    async function openFromSource(value) {
+    async function prepareSourceLaunch(value) {
       var sender = sourceSender(value && value.sourceSender);
       var sourceSelectionKey = value && value.sourceSelectionKey === null
         ? null
@@ -1562,12 +1562,12 @@
           request: value && value.request,
           sourceSelectionKey: sourceSelectionKey,
         });
-        if (!choiceSourceCurrent) return Object.freeze({ state: 'stale' });
-        return Object.freeze({
+        if (!choiceSourceCurrent) return { result: Object.freeze({ state: 'stale' }) };
+        return { result: Object.freeze({
           state: 'choice_required',
           binding: choice.binding,
           skuKeys: choice.skuKeys,
-        });
+        }) };
       }
       var context = readyLaunchContext(decision);
       if (!context) throw handlerError('SS_ERP_BYOK_WORKBENCH_LAUNCH_RESPONSE_INVALID');
@@ -1576,7 +1576,15 @@
         request: value && value.request,
         sourceSelectionKey: sourceSelectionKey,
       });
-      if (!readySourceCurrent) return Object.freeze({ state: 'stale' });
+      if (!readySourceCurrent) return { result: Object.freeze({ state: 'stale' }) };
+      return { sender: sender, context: context };
+    }
+
+    async function openFromSource(value) {
+      var prepared = await prepareSourceLaunch(value);
+      if (prepared.result) return prepared.result;
+      var sender = prepared.sender;
+      var context = prepared.context;
       var opened = await openSession({
         context: context,
         sourceTabId: sender.tabId,
@@ -1590,6 +1598,26 @@
         value: context.skuKey,
         enumerable: false,
       });
+      return Object.freeze(result);
+    }
+
+    async function openEmbeddedFromSource(value) {
+      var prepared = await prepareSourceLaunch(value);
+      if (prepared.result) return prepared.result;
+      var registry = config.precisionFrameRegistry;
+      var registered = await requiredMethod(registry, 'getFrameBySource')(prepared.sender);
+      if (!registered || !isRecord(registered.frame) || !isRecord(registered.source)
+        || registered.frame.tabId !== prepared.sender.tabId || registered.frame.frameId < 1
+        || registered.source.documentId !== prepared.sender.documentId) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_LAUNCH_SENDER_DENIED');
+      }
+      var opened = await requiredMethod(sessionManager, 'openEmbedded')({
+        context: prepared.context, sourceTabId: prepared.sender.tabId,
+        sourceDocumentId: prepared.sender.documentId, frameSender: registered.frame,
+      });
+      await requiredMethod(registry, 'bindMedia')(registered.frame, prepared.context);
+      var result = { state: opened.state, tabId: opened.tabId, frameId: registered.frame.frameId };
+      Object.defineProperty(result, 'resolvedSkuKey', { value: prepared.context.skuKey, enumerable: false });
       return Object.freeze(result);
     }
 
@@ -1615,6 +1643,7 @@
     return Object.freeze({
       handlers: Object.freeze(handlers),
       openFromSource: openFromSource,
+      openEmbeddedFromSource: openEmbeddedFromSource,
       removeTab: removeTab,
     });
   }

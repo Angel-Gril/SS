@@ -54,6 +54,35 @@ async function setup(input: {
 }
 
 describe('extension hosted AI image plan routes', () => {
+  it('accepts a bounded creative brief while retaining server-derived identity', async () => {
+    const fixture = await setup();
+    const creativeBrief = { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要道具' };
+    try {
+      const response = await fixture.app.inject({ method: 'POST', url: '/plans', payload: {
+        contractVersion: 'extension-hosted-ai-image-plan-create/v1', context,
+        idempotencyKey: 'client-brief-operation-1', creativeBrief,
+      } });
+      expect(response.statusCode).toBe(202);
+      expect(fixture.service.create).toHaveBeenCalledWith(expect.objectContaining({ binding: context, creativeBrief,
+        identity: { ownerUserId: 'owner-1', actorUserId: 'owner-1', deviceSessionId: 'session-1' } }));
+    } finally { await fixture.app.close(); }
+  });
+
+  it.each([null, { prompt: 'x'.repeat(301) }, { prompt: 'scene', verifiedFacts: ['fabricated'] },
+    { prompt: 'https://private.example' }, { prompt: 'Authorization: Bearer hidden' }])(
+    'rejects invalid creative brief %j at the HTTP boundary', async (creativeBrief) => {
+      const fixture = await setup();
+      try {
+        const response = await fixture.app.inject({ method: 'POST', url: '/plans', payload: {
+          contractVersion: 'extension-hosted-ai-image-plan-create/v1', context,
+          idempotencyKey: 'client-brief-operation-1', creativeBrief,
+        } });
+        expect(response.statusCode).toBe(400);
+        expect(fixture.service.create).not.toHaveBeenCalled();
+      } finally { await fixture.app.close(); }
+    },
+  );
+
   it('accepts selected gallery goals through the authenticated create contract', async () => {
     const fixture = await setup();
     try {

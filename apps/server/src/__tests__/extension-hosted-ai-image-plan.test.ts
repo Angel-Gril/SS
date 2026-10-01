@@ -190,6 +190,31 @@ function setup(input: {
 }
 
 describe('extension hosted AI image plan service', () => {
+  it('freezes an explicit eligible reference subset while retaining the full authority binding', async () => {
+    const current = plan();
+    const fixture = setup({ plan: current });
+    const frozen = current.currentVersion!.inputSnapshot as Record<string, unknown>;
+    frozen.candidates = [{ id: 'media-1' }];
+    frozen.referenceSelection = { authorityCandidateMediaHash: fixture.seededBinding.candidateMediaHash };
+    await fixture.service.create({ identity, binding, idempotencyKey: 'reference-choice-operation', candidateMediaKeys: ['media-1'] } as never);
+    expect(fixture.planning.createRuleBased).toHaveBeenCalledWith(expect.objectContaining({
+      candidateMediaKeys: ['media-1'], referenceSelectionScopeHash: fixture.seededBinding.candidateMediaHash,
+    }));
+    expect(fixture.bindings.bind).toHaveBeenCalledWith(fixture.seededBinding);
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({ data: { plan: { id: 'plan-1' } } });
+    frozen.referenceSelection = { authorityCandidateMediaHash: '0'.repeat(64) };
+    await expect(fixture.service.getCurrent({ identity, binding })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
+    frozen.candidates = [{ id: 'media-1' }, { id: 'media-2' }];
+    await expect(fixture.service.getCurrent({ identity, binding })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
+  });
+  it.each([[], ['media-attacker'], ['media-1', 'media-1'], ['https://private.example'], null].map((value) => [value]))(
+    'rejects invalid or ineligible explicit reference keys %j before planning', async (candidateMediaKeys) => {
+      const fixture = setup();
+      await expect(fixture.service.create({ identity, binding, idempotencyKey: 'reference-choice-operation', candidateMediaKeys } as never))
+        .rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST' });
+      expect(fixture.planning.createRuleBased).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     'CATEGORY_REVIEW', 'ATTRIBUTE_REVIEW', 'CONTENT_REVIEW',
     'MEDIA_REVIEW', 'PRICING_REVIEW', 'VALIDATION',
@@ -305,6 +330,23 @@ describe('extension hosted AI image plan service', () => {
     expect(second.galleryGoals).toEqual(['detail']);
     expect(fixture.bindings.bind).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards creative direction without creating another plan identity when it changes', async () => {
+    const fixture = setup();
+    const request = { identity, binding, idempotencyKey: 'client-brief-operation-1' };
+    const creativeBrief = { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要道具' };
+    await fixture.service.create({ ...request, creativeBrief });
+    const first = fixture.planning.createRuleBased.mock.calls[0]![0] as unknown as { idempotencyKey: string; creativeBrief: unknown };
+    expect(first.creativeBrief).toEqual(creativeBrief);
+    fixture.planning.createRuleBased.mockRejectedValueOnce(new AiMediaPlanningError(
+      'AI_MEDIA_PLANNING_IDEMPOTENCY_CONFLICT', 'Different frozen brief', 409,
+    ));
+    await expect(fixture.service.create({ ...request, creativeBrief: { prompt: '暖色背景' } }))
+      .rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT' });
+    expect((fixture.planning.createRuleBased.mock.calls[1]![0] as unknown as { idempotencyKey: string }).idempotencyKey).toBe(first.idempotencyKey);
+    expect(fixture.bindings.bind).toHaveBeenCalledTimes(1);
+  });
+
 
   it.each([null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
     'rejects invalid gallery goals %j before planning', async (galleryGoals) => {

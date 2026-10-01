@@ -202,6 +202,37 @@ const request = {
 };
 
 describe('AI image suite prompt freeze', () => {
+  it('rejects an over-budget Wanx prompt without truncating direction or persisting a prompt set', async () => {
+    const base = authority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', slots: [slot({
+      id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero', ownershipLevel: 'sku', ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'], factEvidenceIds: ['fact-color', 'fact-material'],
+    })] });
+    base.planPayload = { ...(base.planPayload as object), creativeBrief: { prompt: '亮'.repeat(300), negativePrompt: '暗'.repeat(150) } };
+    const repo = repository({ loadAuthority: async () => ({ kind: 'ready', authority: base }) });
+    const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' });
+    await expect(createAiImageSuitePromptService({ repository: repo, templateResolver: registry }).freeze(request))
+      .rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_PROMPT_LIMIT_EXCEEDED', statusCode: 413 });
+    expect(repo.commitPromptSet).not.toHaveBeenCalled();
+  });
+
+  it.each(['fake', 'dashscope-wanx'])('uses the frozen editable direction in the final %s provider prompt', async (provider) => {
+    const base = authority({ provider, model: provider === 'fake' ? 'fake-image-suite-v1' : 'wanx2.1-imageedit', slots: [slot({
+      id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero', ownershipLevel: 'sku', ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'], factEvidenceIds: ['fact-color', 'fact-material'],
+    })] });
+    base.planPayload = { ...(base.planPayload as object), creativeBrief: { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要装饰道具' } };
+    const repo = repository({ loadAuthority: async () => ({ kind: 'ready', authority: base }) });
+    const registry = new AiPromptTemplateRegistryService(new InMemoryAiPromptTemplateStore(), { getLegacyPrompt: async () => 'unused' });
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: registry }).freeze(request);
+    const prompt = vi.mocked(repo.commitPromptSet).mock.calls[0]![0].prompts[0]!;
+    expect(prompt.resolvedPrompt).toContain('浅灰背景，柔和侧光');
+    expect(prompt.resolvedPrompt).toContain('red');
+    expect(prompt.resolvedPrompt).toContain('steel');
+    expect(`${prompt.resolvedPrompt} ${prompt.resolvedNegativePrompt}`).toContain('不要装饰道具');
+    expect(prompt.resolvedPrompt).toContain(provider === 'fake' ? 'Preserve the exact product identity' : '不得');
+    if (provider !== 'fake') expect(Array.from(prompt.resolvedPrompt).length).toBeLessThanOrEqual(800);
+  });
+
   it('uses an independent real Wanx template with all scoped facts under 800 characters', async () => {
     const wanxAuthority = authority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', slots: [slot({
       id: 'slot-hero', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: 'sku_hero', ownershipLevel: 'sku', ownershipKey: 'sku-1',

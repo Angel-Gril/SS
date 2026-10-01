@@ -241,6 +241,20 @@ describe('strict source listing pricing', () => {
 });
 
 describe('whole source listing workflow readiness', () => {
+  it('accepts separately reviewed current title and description candidates', () => {
+    const current = draft();
+    const base = current.copy.candidates[0]!;
+    current.copy.candidates = [{ ...base, id: 'title-only', fields: ['title'], descriptionRu: null },
+      { ...base, id: 'description-only', fields: ['description'], titleRu: null }];
+    current.copy.applyAudit = [{ ...current.copy.applyAudit[0]!, candidateId: 'title-only' },
+      { ...current.copy.applyAudit[0]!, id: 'apply-description', operationKey: 'apply-description', candidateId: 'description-only' }];
+    expect(sourceListingWorkflowReadinessIssues(current)).toEqual([]);
+    current.copy.candidates[0]!.sourceCaptureSnapshotId = 'old-snapshot';
+    expect(sourceListingWorkflowReadinessIssues(current)).toContainEqual(expect.objectContaining({ code: 'OZON_LISTING_COPY_INVALID' }));
+    current.copy.candidates[0]!.sourceCaptureSnapshotId = current.sourceCaptureSnapshotId;
+    current.copy.candidates[1]!.sourceCaptureHash = 'f'.repeat(64);
+    expect(sourceListingWorkflowReadinessIssues(current)).toContainEqual(expect.objectContaining({ code: 'OZON_LISTING_COPY_INVALID' }));
+  });
   it('preserves the authoritative validation schema when every workflow surface is ready', () => {
     const original = attributeValidation();
     const result = mergeSourceListingWorkflowReadiness({ draft: draft(), validation: original });

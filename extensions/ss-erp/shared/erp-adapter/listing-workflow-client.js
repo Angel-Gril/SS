@@ -1252,12 +1252,194 @@
       && result.writesStoreDraft === false;
   }
 
+  function editorResult(response, binding) {
+    if (!response || response.state !== 'response') return response;
+    var body = record(response.body);
+    var data = body && body.code === 1 && record(body.data);
+    if (!data) throw new Error(body && body.msg || 'ERP 草稿编辑未完成');
+    var fields = ['contractVersion', 'binding', 'selectedSkuKeys', 'category', 'pricing'];
+    if (Object.prototype.hasOwnProperty.call(data, 'packaging')) fields.push('packaging');
+    if (Object.prototype.hasOwnProperty.call(data, 'fieldIssues')) fields.push('fieldIssues');
+    if (Object.prototype.hasOwnProperty.call(data, 'copy')) fields.push('copy');
+    var readinessFields = ['mediaAssignments', 'stage', 'validation', 'blockers', 'freshness'];
+    var hasReadiness = readinessFields.some(function (key) { return Object.prototype.hasOwnProperty.call(data, key); });
+    if (hasReadiness) fields = fields.concat(readinessFields);
+    if (!exactKeys(data, fields)
+      || data.contractVersion !== 'extension-listing-editor/v1' || !record(data.binding)
+      || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(function (key) { return data.binding[key] === binding[key]; })
+      || !Number.isSafeInteger(data.binding.draftRevision) || data.binding.draftRevision < binding.draftRevision
+      || !Number.isSafeInteger(data.binding.draftVersion) || data.binding.draftVersion < binding.draftVersion
+      || !Array.isArray(data.selectedSkuKeys) || !data.selectedSkuKeys.length || data.selectedSkuKeys.length > 100
+      || !data.selectedSkuKeys.every(function (key) { return text(key, 500); })) throw new Error('invalid editor response');
+    if (fields.includes('packaging') && (!Array.isArray(data.packaging) || data.packaging.length > data.selectedSkuKeys.length
+      || new Set(data.packaging.map(function (row) { return row && row.skuKey; })).size !== data.packaging.length
+      || !data.packaging.every(function (row) { return exactKeys(row, ['skuKey', 'weightG', 'lengthMm', 'widthMm', 'heightMm'])
+        && data.selectedSkuKeys.includes(row.skuKey) && ['weightG', 'lengthMm', 'widthMm', 'heightMm'].every(function (key) {
+          return typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] > 0;
+        }); }))) throw new Error('invalid editor response');
+    if (fields.includes('fieldIssues') && (!Array.isArray(data.fieldIssues) || data.fieldIssues.length > 2
+      || !data.fieldIssues.every(function (item) { return exactKeys(item, ['field', 'message'])
+        && ['PRICING', 'PACKAGING'].includes(item.field) && text(item.message, 2000); }))) throw new Error('invalid editor response');
+    if (fields.includes('copy')) {
+      var copy = data.copy;
+      var copyText = function (value, maximum) { return value === null || typeof value === 'string' && value.length <= maximum; };
+      if (!exactKeys(copy, ['titleRu', 'descriptionRu', 'pendingCandidates']) || !copyText(copy.titleRu, 500) || !copyText(copy.descriptionRu, 200000)
+        || !Array.isArray(copy.pendingCandidates) || copy.pendingCandidates.length > 20
+        || new Set(copy.pendingCandidates.map(function (item) { return item && item.id; })).size !== copy.pendingCandidates.length
+        || !copy.pendingCandidates.every(function (item) { return exactKeys(item, ['id', 'fields', 'titleRu', 'descriptionRu', 'sourceCurrent'])
+          && text(item.id, 200) && typeof item.sourceCurrent === 'boolean' && copyText(item.titleRu, 500) && copyText(item.descriptionRu, 200000)
+          && Array.isArray(item.fields) && item.fields.length > 0 && item.fields.length <= 2 && new Set(item.fields).size === item.fields.length
+          && item.fields.every(function (field) { return ['title', 'description'].includes(field); }); })) throw new Error('invalid editor response');
+    }
+    if (hasReadiness) {
+      var validMedia = Array.isArray(data.mediaAssignments) && data.mediaAssignments.length <= 500
+        && data.mediaAssignments.every(function (item) {
+          return exactKeys(item, ['scope', 'skuKey', 'slotKey', 'assetId']) && text(item.slotKey, 500) && text(item.assetId, 200)
+            && (item.scope === 'PRODUCT' ? item.skuKey === null : item.scope === 'SKU' && data.selectedSkuKeys.includes(item.skuKey));
+        });
+      if (!validMedia || !text(data.stage, 100) || !exactKeys(data.validation, ['status'])
+        || !['NOT_RUN', 'STALE', 'VALID', 'INVALID'].includes(data.validation.status)
+        || !exactKeys(data.freshness, ['category', 'attributes', 'content', 'media', 'pricing', 'validation'])
+        || !Object.values(data.freshness).every(function (state) { return ['CURRENT', 'STALE'].includes(state); })
+        || !Array.isArray(data.blockers) || data.blockers.length > 500
+        || !data.blockers.every(function (item) { return record(item) && text(item.code, 200) && text(item.message, 2000)
+          && Object.keys(item).every(function (key) { return ['code', 'message', 'fieldPath'].includes(key); })
+          && (item.fieldPath === undefined || text(item.fieldPath, 500)); })) throw new Error('invalid editor response');
+    }
+    if (body.candidateId !== undefined && !text(body.candidateId, 200)) throw new Error('invalid editor response');
+    return { state: 'ready', editor: data, replayed: body.replayed === true,
+      ...(body.candidateId === undefined ? {} : { candidateId: body.candidateId }) };
+  }
+
+  function validAttributeJson(value, depth, budget) {
+    if (depth > 8 || ++budget.nodes > 500000) return false;
+    if (value === null || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value === 'string') { budget.characters += value.length; return value.length <= 20000 && budget.characters <= 5000000; }
+    if (Array.isArray(value)) return value.length <= 100 && value.every(function (item) { return validAttributeJson(item, depth + 1, budget); });
+    var object = record(value);
+    return Boolean(object) && Object.keys(object).length <= 100 && Object.keys(object).every(function (key) {
+      return key.length <= 500 && validAttributeJson(object[key], depth + 1, budget);
+    });
+  }
+  function validAttributeWorkspace(data) {
+    if (!exactKeys(data, ['schemaRevision', 'fields', 'values']) || !/^[a-f0-9]{64}$/u.test(data.schemaRevision || '')
+      || !Array.isArray(data.fields) || data.fields.length > 500 || !Array.isArray(data.values) || data.values.length > 50000) return false;
+    var fields = new Map();
+    for (var field of data.fields) {
+      if (!exactKeys(field, ['attributeId', 'name', 'required', 'valueType', 'cardinality', 'ownership', 'editorMode', 'valuePolicy', 'dictionaryId', 'maxValues'])
+        || !Number.isSafeInteger(field.attributeId) || field.attributeId < 1 || fields.has(field.attributeId) || !text(field.name, 1000)
+        || typeof field.required !== 'boolean' || !['STRING', 'INTEGER', 'DECIMAL', 'BOOLEAN', 'DATE', 'DATETIME', 'JSON', 'UNKNOWN'].includes(field.valueType)
+        || !['SINGLE', 'MULTI'].includes(field.cardinality) || !['SYSTEM', 'SKU', 'MEDIA', 'COMPLIANCE', 'EDITOR'].includes(field.ownership)
+        || !['READ_ONLY', 'SKU_MATRIX', 'MEDIA_WORKBENCH', 'MANUAL_REQUIRED', 'EDITABLE'].includes(field.editorMode)
+        || !['STRICT_DICTIONARY', 'OPEN_DICTIONARY', 'FREE_TEXT'].includes(field.valuePolicy)
+        || !(field.dictionaryId === null || Number.isSafeInteger(field.dictionaryId) && field.dictionaryId > 0)
+        || !Number.isSafeInteger(field.maxValues) || field.maxValues < 1 || field.maxValues > 100
+        || field.cardinality === 'SINGLE' && field.maxValues !== 1) return false;
+      fields.set(field.attributeId, field);
+    }
+    var values = new Set();
+    var budget = { nodes: 0, characters: 0 };
+    return data.values.every(function (row) {
+      var field = row && fields.get(row.attributeId);
+      if (!field || !exactKeys(row, ['attributeId', 'skuKey', 'value', 'dictionaryValueIds', 'reviewed']) || typeof row.reviewed !== 'boolean'
+        || (field.ownership === 'SKU' ? !text(row.skuKey, 500) : row.skuKey !== null)
+        || !Array.isArray(row.dictionaryValueIds) || row.dictionaryValueIds.length > field.maxValues
+        || new Set(row.dictionaryValueIds).size !== row.dictionaryValueIds.length
+        || !row.dictionaryValueIds.every(function (id) { return Number.isSafeInteger(id) && id > 0; })
+        || !validAttributeJson(row.value, 0, budget)
+        || field.cardinality === 'MULTI' && row.value !== null && (!Array.isArray(row.value) || row.value.length > field.maxValues)) return false;
+      var key = JSON.stringify([row.attributeId, row.skuKey]);
+      if (values.has(key)) return false;
+      values.add(key);
+      return true;
+    });
+  }
   function createClient(options) {
     var transport = options && options.transport;
     if (!transport || typeof transport.get !== 'function') {
       throw new TypeError('source workflow transport is required');
     }
     return {
+      async readDraftEditor(input) {
+        var binding = normalizedSuiteBinding(input);
+        var response = await transport.post('/api/extension-device/source-workbench/editor/read', { binding: binding }, { requiredScope: 'listing:review' });
+        return editorResult(response, binding);
+      },
+      async readDraftCatalog(input) {
+        var binding = normalizedSuiteBinding(input.binding);
+        if (typeof input.query !== 'string' || input.query.length > 100) throw new TypeError('invalid editor query');
+        var response = await transport.post('/api/extension-device/source-workbench/editor/catalog', { binding: binding, query: input.query }, { requiredScope: 'listing:review' });
+        if (!response || response.state !== 'response') return response;
+        var body = record(response.body);
+        var data = body && body.code === 1 && record(body.data);
+        if (!data || !text(data.catalogRevision, 200) || !Array.isArray(data.entries) || data.entries.length > 50
+          || !data.entries.every(function (entry) { return record(entry) && Number.isSafeInteger(entry.categoryId) && entry.categoryId > 0
+            && Number.isSafeInteger(entry.typeId) && entry.typeId > 0 && text(entry.label, 1000); })) throw new Error('invalid catalog response');
+        return { state: 'ready', catalog: data };
+      },
+      async readDraftAttributes(input) {
+        var binding = normalizedSuiteBinding(input);
+        var response = await transport.post('/api/extension-device/source-workbench/editor/attributes', { binding: binding }, { requiredScope: 'listing:review' });
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var body = record(response.body);
+        var data = body && body.code === 1 && record(body.data);
+        if (!validAttributeWorkspace(data)) throw new Error('invalid attribute workspace response');
+        return { state: 'ready', workspace: data };
+      },
+      async readDraftDictionary(input) {
+        if (!exactKeys(input, ['binding', 'schemaRevision', 'attributeId', 'query', 'limit'])
+          || !/^[a-f0-9]{64}$/u.test(input.schemaRevision || '') || !Number.isSafeInteger(input.attributeId) || input.attributeId < 1
+          || typeof input.query !== 'string' || input.query.length > 200 || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) throw new TypeError('invalid attribute dictionary request');
+        var binding = normalizedSuiteBinding(input.binding);
+        var response = await transport.post('/api/extension-device/source-workbench/editor/dictionary', {
+          binding: binding, schemaRevision: input.schemaRevision, attributeId: input.attributeId, query: input.query, limit: input.limit,
+        }, { requiredScope: 'listing:review' });
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var body = record(response.body);
+        var data = body && body.code === 1 && record(body.data);
+        if (!exactKeys(data, ['schemaRevision', 'attributeId', 'values', 'complete', 'dictionaryComplete', 'resultExhaustive', 'hasMore', 'resultTruncated'])
+          || data.schemaRevision !== input.schemaRevision || data.attributeId !== input.attributeId
+          || !['complete', 'dictionaryComplete', 'resultExhaustive', 'hasMore', 'resultTruncated'].every(function (key) { return typeof data[key] === 'boolean'; })
+          || !Array.isArray(data.values) || data.values.length > input.limit || new Set(data.values.map(function (row) { return row && row.id; })).size !== data.values.length
+          || !data.values.every(function (row) { return exactKeys(row, ['id', 'value']) && Number.isSafeInteger(row.id) && row.id > 0 && text(row.value, 20000); })) throw new Error('invalid attribute dictionary response');
+        return { state: 'ready', dictionary: data };
+      },
+      async saveDraftEditor(input) {
+        var binding = normalizedSuiteBinding(input.binding);
+        if (!['PRICING', 'CATEGORY', 'PACKAGING', 'ATTRIBUTES', 'COPY_CANDIDATE', 'COPY_APPROVE', 'VALIDATE'].includes(input.action) || !text(input.operationKey, 128) || input.operationKey.length < 8) throw new TypeError('invalid editor command');
+        if (input.action === 'COPY_CANDIDATE') {
+          var value = record(input.value);
+          if (!value || !Object.keys(value).length || Object.keys(value).some(function (key) { return !['titleRu', 'descriptionRu'].includes(key); })
+            || Object.prototype.hasOwnProperty.call(value, 'titleRu') && (typeof value.titleRu !== 'string' || value.titleRu.length > 500)
+            || Object.prototype.hasOwnProperty.call(value, 'descriptionRu') && !(value.descriptionRu === null || typeof value.descriptionRu === 'string' && value.descriptionRu.length <= 10000)) throw new TypeError('invalid editor command');
+        }
+        if (input.action === 'COPY_APPROVE' && (!exactKeys(input.value, ['candidateId']) || !text(input.value.candidateId, 200))) throw new TypeError('invalid editor command');
+        if (input.action === 'VALIDATE' && (!exactKeys(input.value, ['schemaRevision']) || !/^[a-f0-9]{64}$/u.test(input.value.schemaRevision || ''))) throw new TypeError('invalid editor command');
+        var response;
+        try {
+          response = await transport.post('/api/extension-device/source-workbench/editor/save', {
+            binding: binding, action: input.action, operationKey: input.operationKey, value: input.value,
+          }, { requiredScope: 'listing:write' });
+        } catch (error) {
+          if (error && error.outcome === 'NOT_SUBMITTED') throw error;
+          throw mutationUnknown('保存响应丢失，请核对原操作');
+        }
+        if (mutationResponseProvesRejection(response)) {
+          var body = record(response && response.body);
+          var rejection = mutationNotSubmitted(body && text(body.msg, 2000) ? body.msg : 'ERP 已拒绝保存，请修正后再提交');
+          if (body && text(body.errorCode, 200)) {
+            rejection.serverCode = rejection.code = body.errorCode;
+            if (body.errorCode.toLowerCase() === 'ozon_attribute_schema_mismatch') rejection.message = '官方属性字段已更新，请重新读取后填写并保存';
+          }
+          throw rejection;
+        }
+        try {
+          var result = editorResult(response, binding);
+          if (result.state !== 'ready' || input.action === 'COPY_CANDIDATE' && !result.candidateId) throw new Error('invalid editor response');
+          return result;
+        } catch { throw mutationUnknown('保存回执不完整，请核对原操作'); }
+      },
       async createDraft(input) {
         var snapshotId = identifier(input && input.snapshotId, 'snapshotId');
         var supplyGoodsId = identifier(input && input.supplyGoodsId, 'supplyGoodsId');

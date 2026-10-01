@@ -97,6 +97,40 @@
     return value.slice();
   }
 
+  function normalizeCandidateMediaKeys(value, code) {
+    if (value === undefined) return undefined;
+    code = code || 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
+    if (!Array.isArray(value) || value.length < 1 || value.length > 25 || new Set(value).size !== value.length) fail(code);
+    return Object.freeze(value.map(function (key) {
+      var normalized = text(key, 500, code);
+      if (/(?:javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(normalized)) fail(code);
+      return normalized;
+    }));
+  }
+
+  function normalizeCreativeBrief(value, code) {
+    if (value === undefined) return undefined;
+    code = code || 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
+    var keys = ['prompt'];
+    if (record(value) && Object.prototype.hasOwnProperty.call(value, 'negativePrompt')) keys.push('negativePrompt');
+    if (!exactKeys(value, keys)) fail(code);
+    function creativeText(input, minimum, maximum) {
+      if (typeof input !== 'string'
+        || input.length > maximum * 2
+        || input !== input.trim()
+        || Array.from(input).length < minimum
+        || Array.from(input).length > maximum
+        || /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(input)
+        || /(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\./iu.test(input)
+        || /\b(?:api[_ -]?key|authorization|bearer)\b|\bsk-[A-Za-z0-9]/iu.test(input)
+        || /^(?:rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(input)) fail(code);
+      return input;
+    }
+    var result = { prompt: creativeText(value.prompt, 1, 300) };
+    if (keys.includes('negativePrompt')) result.negativePrompt = creativeText(value.negativePrompt, 0, 150);
+    return deepFreeze(result);
+  }
+
   function exactPriceKeys(value, keys) {
     var item = record(value);
     if (!item) return false;
@@ -208,8 +242,17 @@
       });
   }
 
-  function leakFree(value, ancestors) {
+  function leakFree(value, ancestors, path) {
     if (!ancestors) ancestors = new Set();
+    if (!path) path = [];
+    // Only the versioned user direction is public; raw Provider prompts remain forbidden.
+    if (path.length === 3 && path[0] === 'plan'
+      && ['currentVersion', 'approvedVersion'].includes(path[1]) && path[2] === 'creativeBrief') {
+      try {
+        normalizeCreativeBrief(value, 'SS_ERP_HOSTED_WORKBENCH_PLAN_RESPONSE_INVALID');
+        return value !== undefined;
+      } catch { return false; }
+    }
     if (typeof value === 'string') {
       return !/(?:https?|ftp|file|blob|data):/iu.test(value)
         && !/(?:bearer\s+|api[_-]?key\s*[:=]|authorization\s*[:=])/iu.test(value)
@@ -219,10 +262,10 @@
     if (ancestors.has(value)) return false;
     ancestors.add(value);
     var valid = Array.isArray(value)
-      ? value.every(function (item) { return leakFree(item, ancestors); })
+      ? value.every(function (item, index) { return leakFree(item, ancestors, path.concat(index)); })
       : Object.entries(value).every(function (entry) {
         return !FORBIDDEN_KEYS.includes(entry[0].toLowerCase())
-          && leakFree(entry[1], ancestors);
+          && leakFree(entry[1], ancestors, path.concat(entry[0]));
       });
     ancestors.delete(value);
     return valid;
@@ -309,10 +352,12 @@
 
   function validPlanVersion(value, context, code) {
     if (value === null) return null;
-    if (!exactKeys(value, [
+    var keys = [
       'id', 'version', 'sourceCaptureSnapshotId', 'sourceSchemaVersion',
       'planSchemaVersion', 'plannerVersion', 'mode', 'slots', 'createdAt',
-    ])
+    ];
+    if (record(value) && Object.prototype.hasOwnProperty.call(value, 'creativeBrief')) keys.push('creativeBrief');
+    if (!exactKeys(value, keys)
       || !['RULE_BASED', 'MODEL_ASSISTED'].includes(value.mode)
       || !Array.isArray(value.slots)
       || value.slots.length > 500) fail(code);
@@ -348,6 +393,7 @@
       mode: value.mode,
       slots: slots,
       createdAt: canonicalTimestamp(value.createdAt, false, code),
+      ...(keys.includes('creativeBrief') ? { creativeBrief: normalizeCreativeBrief(value.creativeBrief, code) } : {}),
     };
   }
 
@@ -827,8 +873,12 @@
         var code = 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID';
         var keys = ['binding', 'idempotencyKey'];
         if (record(value) && Object.prototype.hasOwnProperty.call(value, 'galleryGoals')) keys.push('galleryGoals');
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'creativeBrief')) keys.push('creativeBrief');
+        if (record(value) && Object.prototype.hasOwnProperty.call(value, 'candidateMediaKeys')) keys.push('candidateMediaKeys');
         if (!exactKeys(value, keys)) fail(code);
         var galleryGoals = normalizeGalleryGoals(value.galleryGoals, code);
+        var creativeBrief = normalizeCreativeBrief(value.creativeBrief, code);
+        var candidateMediaKeys = normalizeCandidateMediaKeys(value.candidateMediaKeys, code);
         var binding = pin(value.binding);
         var idempotencyKey = text(value.idempotencyKey, 128, code);
         if (idempotencyKey.length < 8) fail(code);
@@ -838,6 +888,8 @@
           context: clone(binding),
           idempotencyKey: idempotencyKey,
           ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
+          ...(creativeBrief === undefined ? {} : { creativeBrief: clone(creativeBrief) }),
+          ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys: candidateMediaKeys }),
         }, 'media:execute');
         return normalizePlanResponse(response, binding, { requirePlan: true });
       },
@@ -1197,6 +1249,8 @@
       review: PLAN_REVIEW_VERSION,
     }),
     ASSIGNMENT_VERSION: ASSIGNMENT_VERSION,
+    normalizeCreativeBrief: normalizeCreativeBrief,
+    normalizeCandidateMediaKeys: normalizeCandidateMediaKeys,
     createClient: createClient,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

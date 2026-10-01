@@ -77,6 +77,10 @@
     'ss-erp:collect-source-to-erp',
     'ss-erp:open-source-workflow-handoff',
     'ss-erp:source-listing-workbench-status',
+    'ss-erp:source-listing-workbench-editor-read',
+    'ss-erp:source-listing-workbench-editor-catalog',
+    'ss-erp:source-listing-workbench-editor-attributes',
+    'ss-erp:source-listing-workbench-editor-dictionary',
     'ss-erp:source-listing-workbench-media-history',
     'ss-erp:source-listing-workbench-media-command',
     'ss-erp:source-quote-save',
@@ -100,7 +104,10 @@
   ]);
 
   var SOURCE_PRODUCT_MUTATION_TYPES = setOf([
+    'ss-erp:precision-source-attestation',
     'ss-erp:source-listing-workbench-draft-create',
+    'ss-erp:source-listing-workbench-editor-save',
+    'ss-erp:source-listing-workbench-publish',
   ]);
 
   var SOURCE_AI_IMAGE_SUITE_RELAY_TYPES = setOf([
@@ -108,6 +115,7 @@
   ]);
 
   var SOURCE_AI_WORKBENCH_LAUNCH_TYPES = setOf([
+    'ss-erp:precision-media-open',
     'ss-erp:source-ai-workbench-open',
   ]);
 
@@ -396,6 +404,8 @@
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
     var kind = senderKind(sender, runtimeId);
+    if (['ss-erp:source-listing-workbench-editor-save', 'ss-erp:source-listing-workbench-publish', 'ss-erp:precision-source-attestation'].includes(messageType)
+      && (!sender || sender.frameId !== 0 || typeof sender.documentId !== 'string' || !sender.documentId)) return false;
     if (messageType === 'ss-erp:erp-source-image-open') return kind === 'erp';
     if (kind === 'media_editor') return SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'media_confirm') return SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType);

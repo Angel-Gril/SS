@@ -5,6 +5,8 @@
   var MAX_PROMPT = 8000;
   var MAX_NEGATIVE = 4000;
   var MAX_REFERENCES = 5;
+  var MAX_CREATIVE_PROMPT = 300;
+  var MAX_CREATIVE_NEGATIVE = 150;
 
   function record(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -62,6 +64,50 @@
     }[role] || '参考图';
   }
 
+  function creativeText(value, limit, label) {
+    if (typeof value !== 'string') throw new TypeError(label + '必须是文字');
+    if (/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(value)) {
+      throw new TypeError(label + '不能包含控制字符');
+    }
+    var result = value.trim();
+    if (Array.from(result).length > limit) throw new TypeError(label + '最多 ' + limit + ' 个字符，请缩短后再提交');
+    if (/(?:https?|blob|data|file|ftp|javascript|ws|wss):|www\.|\b[a-z][a-z0-9+.-]*:\/\//iu.test(result)) {
+      throw new TypeError(label + '不能包含链接');
+    }
+    if (/\b(?:api[_ -]?key|authorization|bearer)\b|\bsk-[A-Za-z0-9]/iu.test(result)
+      || /^(?:rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(result)) {
+      throw new TypeError(label + '不能包含密钥或认证信息');
+    }
+    return result;
+  }
+
+  function compileCreativeBrief(value) {
+    var input = record(value);
+    if (!input || Object.keys(input).some(function (key) { return !['prompt', 'negativePrompt'].includes(key); })) {
+      throw new TypeError('创作方向字段不符合要求');
+    }
+    var prompt = creativeText(input.prompt === undefined ? '' : input.prompt, MAX_CREATIVE_PROMPT, '创作方向');
+    var negative = input.negativePrompt === undefined ? undefined
+      : creativeText(input.negativePrompt, MAX_CREATIVE_NEGATIVE, '反向提示词');
+    if (!prompt) {
+      if (negative) throw new TypeError('填写反向提示词前，请先填写创作方向');
+      return undefined;
+    }
+    return Object.freeze({ prompt: prompt, ...(negative === undefined ? {} : { negativePrompt: negative }) });
+  }
+
+  function compileVisualCreativeBrief(value) {
+    var input = record(value);
+    if (!input) throw new TypeError('视觉描述 JSON 必须是对象');
+    var directions = [];
+    [['composition', '构图'], ['background', '背景'], ['lighting', '光线'], ['style', '风格']].forEach(function (entry) {
+      if (input[entry[0]] === undefined) return;
+      var direction = creativeText(input[entry[0]], MAX_CREATIVE_PROMPT, entry[1]);
+      if (direction) directions.push(entry[1] + '：' + direction);
+    });
+    return compileCreativeBrief({ prompt: directions.join('；') });
+  }
+
   function buildPromptDraft(projection, options) {
     var normalized = normalizedProjection(projection);
     var input = record(options) || {};
@@ -79,6 +125,11 @@
 
     var skuLabels = skuKeys.map(function (key) { return skuMap.get(key).label || key; });
     var roles = mediaKeys.map(function (key) { return roleLabel(mediaMap.get(key).role); });
+    var description = record(input.visualDescription) || {};
+    var directions = {};
+    ['composition', 'background', 'lighting', 'style'].forEach(function (key) {
+      directions[key] = typeof description[key] === 'string' ? text(description[key], 1000) : '';
+    });
     var prompt = [
       'Create one finished vertical 3:4 e-commerce product image for Ozon Russia.',
       normalized.source.title
@@ -88,6 +139,9 @@
       'Current SKU variant: ' + skuLabels.join('; ') + '.',
       'Use the selected reference images (' + roles.join(', ') + ') to preserve the exact product shape, color, material, structure, proportions, packaging and included parts.',
       'Keep the product as the primary subject with realistic lighting, coherent perspective, clean edges and a commercially finished composition.',
+      Object.keys(directions).filter(function (key) { return directions[key]; }).map(function (key) {
+        return 'Creative ' + key + ' direction: ' + directions[key] + '.';
+      }).join('\n'),
       'Visible text, if needed, must be concise Russian Cyrillic based only on verified facts. Do not copy source-language marketplace text from references.',
       'Do not invent dimensions, specifications, certifications, compatibility, accessories, quantities, claims or package contents.',
     ].filter(Boolean).join('\n');
@@ -109,6 +163,10 @@
         skuLabels: Object.freeze(skuLabels),
         referenceRoles: Object.freeze(roles),
         evidencePolicy: 'verified-source-only',
+        composition: directions.composition,
+        background: directions.background,
+        lighting: directions.lighting,
+        style: directions.style,
       }),
       prompt: prompt.slice(0, MAX_PROMPT),
       negativePrompt: negativePrompt.slice(0, MAX_NEGATIVE),
@@ -119,5 +177,7 @@
   root.SS_ERP_DONOR_PROMPT_ADAPTER = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     buildPromptDraft: buildPromptDraft,
+    compileCreativeBrief: compileCreativeBrief,
+    compileVisualCreativeBrief: compileVisualCreativeBrief,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

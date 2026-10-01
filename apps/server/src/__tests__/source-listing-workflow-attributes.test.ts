@@ -6,6 +6,7 @@ import type {
   SourceStandardAttributes,
 } from 'shared';
 import { buildSourceProductProfile } from '../services/source-product-profile.js';
+import { buildOzonAttributeSchema } from '../services/ozon-attribute-schema.js';
 import {
   createSourceListingWorkflowAttributeService,
   SourceListingWorkflowAttributeError,
@@ -184,6 +185,32 @@ function reviewedSkuColors(
 }
 
 describe('source listing workflow attribute integration', () => {
+  it.each([
+    { attributeId: 4180, name: 'Product name', ownership: 'SYSTEM' },
+    { attributeId: 11254, name: 'Rich content', ownership: 'MEDIA' },
+  ])('denies clearing or setting managed $ownership fields even when their type selects MANUAL_REQUIRED', async ({ attributeId, name, ownership }) => {
+    const managedSchema = buildOzonAttributeSchema({ cacheKey: {
+      shopId: 'shop-1', descriptionCategoryId: 10, typeId: 20, language: 'DEFAULT', catalogRevision: 'catalog-1',
+    }, definitionCache: { complete: true, definitionsHash: 'a'.repeat(64), source: 'ozon_api', definitions: [{
+      id: attributeId, name, description: '', type: 'Unsupported official type', isCollection: false,
+      isRequired: false, dictionaryId: null, valuePolicy: 'FREE_TEXT',
+    }] } });
+    expect(managedSchema.fields[0]).toMatchObject({ ownership, valueType: 'UNKNOWN', editorMode: 'MANUAL_REQUIRED' });
+    const { service, loadDictionary, searchDictionary } = build({}, managedSchema);
+    const current = draft({ attributes: { values: { [attributeId]: {
+      value: 'Managed value', source: 'SYSTEM', reviewed: true, evidence: ['workflow:managed'],
+    } } } });
+    for (const change of [
+      { attributeId, action: 'CLEAR' as const, evidence: ['owner'] },
+      { attributeId, value: 'Overwrite managed value', evidence: ['owner'] },
+    ]) {
+      await expect(service.prepareManualValues({ ownerUserId: 'owner-1', actorUserId: 'owner-1', draft: current,
+        changes: [change] })).rejects.toMatchObject({ code: 'OZON_ATTRIBUTE_FIELD_READ_ONLY', statusCode: 422 });
+    }
+    expect(current.attributes.values[String(attributeId)]!.value).toBe('Managed value');
+    expect(loadDictionary).not.toHaveBeenCalled();
+    expect(searchDictionary).not.toHaveBeenCalled();
+  });
   it('returns one authoritative schema/result pass while keeping validate compatibility', async () => {
     const current = draft({
       attributes: { values: {
@@ -1107,6 +1134,33 @@ describe('source listing workflow attribute integration', () => {
 
     await expect(service.validate({ ownerUserId: 'owner-1', draft: current }))
       .resolves.toMatchObject({ status: 'VALID', blockers: [] });
+  });
+
+  it('reports each reviewed SKU package without inventing a shared measurement', async () => {
+    const { service } = build({ operationalFacts: {
+      packageWeightG: 1, packageLengthMm: 1, packageWidthMm: 1, packageHeightMm: 1,
+      selectedStock: { known: 2, unknown: 0 }, shippingCny: 0, evidence: {},
+      requirements: { packageWeightForImport: true, packageDimensionsForImport: true,
+        importContract: { contractId: 'ss-erp/ozon-v3-product-import/package', contractRevision: '1', contractHash: 'c'.repeat(64) } },
+    } }, { ...schema, fields: [] });
+    const current = draft({ selectedSkuKeys: ['sku-1', 'sku-2'], attributes: { values: { packaging: {
+      value: null, source: 'MANUAL', reviewed: true, evidence: ['owner:measured'], skuValues: {
+        'sku-1': { value: { weightG: 100, lengthMm: 40, widthMm: 30, heightMm: 20 }, source: 'MANUAL', reviewed: true, evidence: ['owner:measured'] },
+        'sku-2': { value: { weightG: 900, lengthMm: 400, widthMm: 300, heightMm: 200 }, source: 'MANUAL', reviewed: true, evidence: ['owner:measured'] },
+      },
+    } } } });
+    const result = await service.validate({ ownerUserId: 'owner-1', draft: current });
+    expect(result.status).toBe('VALID');
+    expect(result.report.operationalFacts).toMatchObject({ packageWeightG: null,
+      packageDimensionsMm: { lengthMm: null, widthMm: null, heightMm: null },
+      skuPackaging: { contractVersion: 'source-listing-sku-packaging/v1', items: {
+        'sku-1': { weightG: 100, lengthMm: 40, widthMm: 30, heightMm: 20 },
+        'sku-2': { weightG: 900, lengthMm: 400, widthMm: 300, heightMm: 200 },
+      } } });
+    delete current.attributes.values.packaging!.skuValues!['sku-2'];
+    const incomplete = await service.validate({ ownerUserId: 'owner-1', draft: current });
+    expect(incomplete.status).toBe('INVALID');
+    expect(incomplete.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'OZON_PACKAGE_SKU_PACKAGING_INVALID' })]));
   });
 
   it('does not let booleans or numeric strings satisfy manual package measurements', async () => {

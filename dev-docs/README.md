@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-01 旧扩展直接适配的本地开发
+
+当前直接复用 `jp20260803` 的原界面和 1688 采集器，同窗口已接采集、草稿编辑、自定义托管方向、BYOK 单图、参考图/FULL_EDIT/INPAINT 控件与 owner flow、图片翻译入口、套图审核/应用及发布预览/确认/回执；每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session 和 BYOK 设置也已完成本地 owner 接线。参考图、全图修图和圈选重绘的独立浏览器 fixture 均已通过，覆盖 source catalog、Blob 预览、SOURCE/REFERENCE/MASK 句柄、候选预览和审核 handoff；编辑面板的输入刷新与候选预览状态也已修复。保存与生成/发布流程仍是本地 owner/browser fixture 验证，尚未生产验收；复制 SKU 行持久化、donor 淘宝/PDD collector、翻译质量和最终安装版验收仍有缺口。功能完整通过后按用户要求退出旧默认流程。任务、源码映射和证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。官网仍为 `3723f5dd / 1.0.395`；本轮未提交、部署或产生新费用。
+
 ## 2026-09-30 `3723f5dd` OOPIF canary 修复、双区发布与官网切换
 
 - `cbafe7a1` / `3723f5dd` 修复 donor live canary 对 extension OOPIF 的误判：runner 现在保存 `Target.attachedToTarget` 的 iframe session/target，在子 session 自己的 `Page.getFrameTree` 上核验 exact shell URL、父页面 frame、默认 extension execution context；不再从父页面 frame tree 查找 extension iframe。定向 canary 合同 `13/13` 通过。

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { aiImageCreativeBriefSchema } from '../services/ai-image-creative-brief.js';
 import { AI_MEDIA_GALLERY_GOALS } from '../services/ai-media-planning.js';
 import {
   ExtensionHostedAiImagePlanError,
@@ -13,6 +14,10 @@ export const EXTENSION_HOSTED_AI_IMAGE_PLAN_REVIEW_VERSION =
 
 const identifier = z.string().min(1).max(200).refine((value) => value === value.trim());
 const operationKey = z.string().min(8).max(128).refine((value) => value === value.trim());
+const mediaKey = z.string().min(1).max(500).refine((value) => value === value.normalize('NFKC').trim()
+  // eslint-disable-next-line no-control-regex
+  && !/[\u0000-\u001f\u007f]/u.test(value)
+  && !/(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\.|[?#]/iu.test(value));
 const binding = z.object({
   snapshotId: identifier,
   supplyGoodsId: identifier,
@@ -33,6 +38,8 @@ const createBody = z.object({
   contractVersion: z.literal(EXTENSION_HOSTED_AI_IMAGE_PLAN_CREATE_VERSION),
   context: binding,
   idempotencyKey: operationKey,
+  creativeBrief: aiImageCreativeBriefSchema.optional(),
+  candidateMediaKeys: z.array(mediaKey).min(1).max(25).refine((keys) => new Set(keys).size === keys.length).optional(),
   galleryGoals: z.array(z.enum(AI_MEDIA_GALLERY_GOALS)).min(1).max(AI_MEDIA_GALLERY_GOALS.length)
     .refine((goals) => new Set(goals).size === goals.length).optional(),
 }).strict();
@@ -181,6 +188,8 @@ export async function extensionHostedAiImagePlanRoutes(
       binding: parsed.data.context,
       idempotencyKey: parsed.data.idempotencyKey,
       ...(parsed.data.galleryGoals === undefined ? {} : { galleryGoals: parsed.data.galleryGoals }),
+      ...(parsed.data.creativeBrief === undefined ? {} : { creativeBrief: parsed.data.creativeBrief }),
+      ...(parsed.data.candidateMediaKeys === undefined ? {} : { candidateMediaKeys: parsed.data.candidateMediaKeys }),
     }), 202);
   });
 

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { aiImageCreativeBriefSchema, type AiImageCreativeBrief } from './ai-image-creative-brief.js';
 import type { SourceListingWorkflowStage } from 'shared';
 import {
   AI_MEDIA_GALLERY_GOALS,
@@ -173,6 +174,8 @@ interface BoundRequest {
 interface CreateRequest extends BoundRequest {
   idempotencyKey: string;
   galleryGoals?: AiMediaGalleryGoal[];
+  creativeBrief?: AiImageCreativeBrief;
+  candidateMediaKeys?: string[];
 }
 
 interface GetRequest extends BoundRequest {
@@ -225,6 +228,19 @@ function normalizeGalleryGoals(value: unknown): AiMediaGalleryGoal[] | undefined
     return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, 'galleryGoals is invalid');
   }
   return [...value] as AiMediaGalleryGoal[];
+}
+
+function selectedReferenceKeys(value: unknown, eligible: string[]): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 25
+    || value.some((key) => typeof key !== 'string' || key.length < 1 || key.length > 500
+      || key !== key.normalize('NFKC').trim()
+      // eslint-disable-next-line no-control-regex
+      || /[\u0000-\u001f\u007f]/u.test(key)
+      || /(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\.|[?#]/iu.test(key))
+    || new Set(value).size !== value.length || value.some((key) => !eligible.includes(key))) {
+    return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, '所选参考素材不在当前快照的可用范围');
+  }
+  return [...value].sort();
 }
 
 function normalizeIdentity(value: ExtensionHostedAiImagePlanIdentity) {
@@ -383,6 +399,8 @@ function inputSnapshotIdentity(version: AiMediaPlanVersionRecord) {
     contextId: context.id,
     skuKeys,
     candidateMediaKeys,
+    referenceSelection: record(snapshot.referenceSelection),
+    hasReferenceSelection: Object.prototype.hasOwnProperty.call(snapshot, 'referenceSelection'),
   };
 }
 
@@ -395,6 +413,11 @@ function assertPlanCurrent(
 ) {
   const version = plan.currentVersion;
   const frozen = version ? inputSnapshotIdentity(version) : null;
+  const sealedSelection = frozen?.referenceSelection
+    && Object.keys(frozen.referenceSelection).length === 1
+    && frozen.referenceSelection.authorityCandidateMediaHash === valuesHash(candidateMediaKeys)
+    && frozen.candidateMediaKeys.length > 0
+    && frozen.candidateMediaKeys.every((key) => candidateMediaKeys.includes(key));
   if (plan.ownerUserId !== authority.ownerUserId
     || plan.sourceSubjectId !== authority.sourceSubjectId
     || plan.contextType !== 'collect'
@@ -412,7 +435,7 @@ function assertPlanCurrent(
     || frozen.contextType !== 'collect'
     || frozen.contextId !== authority.supplyGoodsId
     || !sameStrings(frozen.skuKeys, selectedSkuKeys)
-    || !sameStrings(frozen.candidateMediaKeys, candidateMediaKeys)) {
+    || !(frozen.hasReferenceSelection ? sealedSelection : sameStrings(frozen.candidateMediaKeys, candidateMediaKeys))) {
     return error(
       'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
       409,
@@ -441,6 +464,8 @@ function safeOwnership(value: unknown) {
 function safeVersion(version: AiMediaPlanVersionRecord | null | undefined) {
   if (!version) return null;
   const payload = record(version.planPayload);
+  const creativeBrief = payload?.creativeBrief === undefined
+    ? undefined : aiImageCreativeBriefSchema.parse(payload.creativeBrief);
   const slots = Array.isArray(payload?.slots) ? payload.slots.flatMap((value) => {
     const item = record(value);
     const slotKey = safeText(item?.slotKey, 500);
@@ -466,6 +491,7 @@ function safeVersion(version: AiMediaPlanVersionRecord | null | undefined) {
     plannerVersion: version.plannerVersion,
     mode: version.mode,
     slots,
+    ...(creativeBrief === undefined ? {} : { creativeBrief }),
     createdAt: version.createdAt.toISOString(),
   };
 }
@@ -626,7 +652,12 @@ export function createExtensionHostedAiImagePlanService(
   return {
     async create(request: CreateRequest) {
       const galleryGoals = normalizeGalleryGoals(request.galleryGoals);
+      const parsedBrief = aiImageCreativeBriefSchema.optional().safeParse(request.creativeBrief);
+      if (!parsedBrief.success) return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, 'creativeBrief is invalid');
+      const creativeBrief = parsedBrief.data;
       const authorized = await authorize(request);
+      const candidateMediaKeys = request.candidateMediaKeys === undefined ? authorized.candidateMediaKeys
+        : selectedReferenceKeys(request.candidateMediaKeys, authorized.candidateMediaKeys);
       const clientKey = identifier(request.idempotencyKey, 'idempotencyKey', 128);
       if (clientKey.length < 8) {
         return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, 'idempotencyKey is invalid');
@@ -648,8 +679,12 @@ export function createExtensionHostedAiImagePlanService(
           }),
         }),
         selectedSkuKeys: authorized.selectedSkuKeys,
-        candidateMediaKeys: authorized.candidateMediaKeys,
+        candidateMediaKeys,
+        ...(request.candidateMediaKeys === undefined ? {} : {
+          referenceSelectionScopeHash: valuesHash(authorized.candidateMediaKeys),
+        }),
         ...(galleryGoals === undefined ? {} : { galleryGoals }),
+        ...(creativeBrief === undefined ? {} : { creativeBrief }),
       }).catch((cause: unknown) => {
         // Keep the authority-derived initial-plan key stable: changed goals must
         // conflict with its frozen request fingerprint, never create a new plan.

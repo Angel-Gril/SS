@@ -41,6 +41,28 @@ context.globalThis = context;
 vm.runInNewContext(fs.readFileSync(contractPath, 'utf8'), context, { filename: contractPath });
 const contract = context.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 assert.ok(contract);
+const publishCommand = { contractVersion: contract.CONTRACT_VERSION, type: 'PUBLISH', requestId: 'publish-request-1',
+  listingWorkflowId: 'draft-1', action: 'PREVIEW' };
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseFrameCommand(publishCommand))), publishCommand);
+assert.equal(contract.parseFrameCommand({ ...publishCommand, action: 'CONFIRM', previewHash: 'a'.repeat(64) }).action, 'CONFIRM');
+for (const extra of [{ action: 'CONFIRM' }, { selectedMedia: [] }, { executionMode: 'BYOK' }, { action: 'PREVIEW', previewHash: 'a'.repeat(64) }]) {
+  assert.throws(() => contract.parseFrameCommand({ ...publishCommand, ...extra }));
+}
+const briefCommand = { contractVersion: contract.CONTRACT_VERSION, type: 'EXECUTE_HOSTED_SUITE', requestId: 'request-brief-1',
+  listingWorkflowId: 'draft-1', action: 'CREATE_AND_REVIEW_PLAN', slotKey: null, decision: null, costConfirmed: false,
+  creativeBrief: { prompt: '浅灰背景，柔和侧光', negativePrompt: '不要道具' } };
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseFrameCommand(briefCommand))), briefCommand);
+for (const creativeBrief of [null, {}, { prompt: 'x'.repeat(301) }, { prompt: 'scene', provider: 'fake' },
+  { prompt: 'https://private.example' }, { prompt: 'Authorization: Bearer hidden' }]) {
+  assert.throws(() => contract.parseFrameCommand({ ...briefCommand, creativeBrief }));
+}
+assert.throws(() => contract.parseFrameCommand({ ...briefCommand, action: 'START', costConfirmed: true }));
+const referenceCommand = { ...briefCommand, candidateMediaKeys: ['media-1'] };
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseFrameCommand(referenceCommand))), referenceCommand);
+for (const candidateMediaKeys of [[], ['media-1', 'media-1'], ['https://private.example'], null]) {
+  assert.throws(() => contract.parseFrameCommand({ ...referenceCommand, candidateMediaKeys }));
+}
+assert.throws(() => contract.parseFrameCommand({ ...referenceCommand, action: 'START', costConfirmed: true }));
 assert.equal(contract.CONTRACT_VERSION, 'ss-erp-donor-workbench/v1');
 
 const projection = contract.createProjection({
@@ -197,6 +219,16 @@ assert.deepEqual(JSON.parse(JSON.stringify(projection.billing)), {
   },
 });
 assert.equal(JSON.stringify(projection.billing).includes('must-not-leak'), false);
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseProjection(projection).billing)), JSON.parse(JSON.stringify(projection.billing)),
+  'iframe readback must preserve the already-sanitized quote and settlement');
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseProjection(projection).history)), JSON.parse(JSON.stringify(projection.history)));
+const corruptQuote = JSON.parse(JSON.stringify(projection));
+corruptQuote.billing.quote.maximumCostMinor = -1;
+assert.equal(contract.parseProjection(corruptQuote).billing.state, 'error');
+const suiteReviewProjection = JSON.parse(JSON.stringify(projection));
+suiteReviewProjection.billing.suite.slots[0].media = { workflowId: 'media-task-1', reviewStatus: 'PENDING', outputAssetId: 'asset-1', canReview: true, canApply: false };
+assert.deepEqual(JSON.parse(JSON.stringify(contract.parseProjection(suiteReviewProjection).billing.suite.slots[0])).media,
+  suiteReviewProjection.billing.suite.slots[0].media);
 const promptAdapterSource = fs.readFileSync('extensions/ss-erp/shared/donor-workbench/prompt-adapter.js', 'utf8');
 assert.match(promptAdapterSource, /SS_ERP_DONOR_PROMPT_ADAPTER/u);
 const reparsed = contract.parseProjection({
@@ -356,6 +388,7 @@ assert.deepEqual(
     slotKey: null,
     decision: null,
     costConfirmed: true,
+    quoteWitness: { previewHash: 'a'.repeat(64), currency: 'CNY', itemCount: 2, maxCostMinor: 28 },
   }))),
   {
     contractVersion: contract.CONTRACT_VERSION,
@@ -366,6 +399,7 @@ assert.deepEqual(
     slotKey: null,
     decision: null,
     costConfirmed: true,
+    quoteWitness: { previewHash: 'a'.repeat(64), currency: 'CNY', itemCount: 2, maxCostMinor: 28 },
   },
 );
 assert.deepEqual(
@@ -446,7 +480,7 @@ assert.match(bridge, /promptDraft:\s*command\.promptDraft/);
 assert.match(bridge, /hostname\.includes\('tmall\.com'\)\) return 'tmall'/);
 assert.match(bridge, /if \(wasOpen\) document\.documentElement\.style\.overflow = pageOverflow/);
 assert.match(bridge, /about:blank/);
-assert.match(bridge, /需新标签页/);
+assert.match(bridge, /工作台（加载失败）/);
 assert.match(bridge, /ss-erp-source-costing-panel/);
 assert.match(bridge, /setLegacySurfaceHidden/);
 assert.match(bridge, /ss-erp-source-media-fab/);

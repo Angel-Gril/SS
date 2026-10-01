@@ -325,7 +325,7 @@ const steps = [
   {
     name: 'extension donor workbench shell contract',
     command: 'node',
-    args: ['scripts/extension-donor-workbench-shell.test.mjs'],
+    args: ['--test', 'scripts/extension-donor-workbench-shell.test.mjs', 'scripts/extension-precision-workflow.test.mjs', 'scripts/extension-precision-byok-flow.test.mjs', 'scripts/extension-precision-byok-edit-flow.test.mjs', 'scripts/extension-donor-1688-capture.test.mjs', 'scripts/extension-listing-editor-client.test.mjs'],
   },
   {
     name: 'extension donor workbench package verifier contract',
@@ -707,6 +707,11 @@ const steps = [
     name: 'extension unified workbench listing publish coordinator contract',
     command: 'node',
     args: ['scripts/extension-workbench-listing-publish-coordinator.test.mjs'],
+  },
+  {
+    name: 'extension source workbench publish controller and sender contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-source-workbench-publish-controller.test.mjs', 'scripts/extension-source-workbench-publish-worker.test.mjs'],
   },
   {
     name: 'extension AI image workbench publish controller contract',

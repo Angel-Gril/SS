@@ -4,8 +4,12 @@
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
   var COMMAND_TYPES = new Set([
     'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
+    'OPEN_EMBEDDED_MEDIA',
     'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK', 'LOAD_BILLING',
     'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE',
+    'EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE',
+    'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY',
+    'PUBLISH', 'CREATE_TRANSLATION',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -85,7 +89,7 @@
       ? capture.skus
       : Array.isArray(product && product.variants) && product.variants.length
         ? product.variants
-        : [];
+        : Array.isArray(product && product.skuItems) ? product.skuItems : [];
     var rows = [];
     var seen = new Set();
     source.some(function (value, index) {
@@ -102,10 +106,20 @@
       rows.push(Object.freeze({
         key: key,
         label: text(
-          item.name || item.specText || selectorLabel(item.selectors) || attributesLabel || key,
+          item.name || item.specText || selectorLabel(item.selectors || item.attributes) || attributesLabel || key,
           300,
         ),
-        imageUrl: httpsUrl(item.imageUrl || item.image || item.skuImageUrl),
+        imageUrl: httpsUrl(item.imageUrl || item.image || item.skuImageUrl
+          || (Array.isArray(item.images) && item.images[0])
+          || (Array.isArray(capture.media) && capture.media.find(function (media) {
+            return media.disposition === 'accepted' && media.role !== 'video'
+              && ((Array.isArray(item.mediaKeys) && item.mediaKeys.includes(media.key))
+                || (Array.isArray(media.skuKeys) && media.skuKeys.includes(key)));
+          }) || {}).url),
+        sourceSkuId: text(item.sourceSkuId || item.skuId || item.sku || item.id, 200),
+        priceCny: typeof item.priceCny === 'number' && Number.isFinite(item.priceCny) && item.priceCny > 0
+          ? item.priceCny : typeof item.price === 'number' && Number.isFinite(item.price) && item.price > 0 ? item.price : null,
+        stock: Number.isSafeInteger(item.stock) && item.stock >= 0 ? item.stock : null,
       }));
       return rows.length >= MAX_SKUS;
     });
@@ -114,7 +128,7 @@
         product && (product.sku || product.sourceProductId || product.productId || product.id),
         500,
       );
-      if (fallback) rows.push(Object.freeze({ key: fallback, label: '产品级', imageUrl: '' }));
+      if (fallback) rows.push(Object.freeze({ key: fallback, label: '产品级', imageUrl: '', sourceSkuId: '', priceCny: null, stock: null }));
     }
     return Object.freeze(rows);
   }
@@ -127,7 +141,7 @@
       : [];
     if (!accepted.length) {
       var legacy = [];
-      ['images', 'mainImages', 'detailImages'].forEach(function (key) {
+      ['images', 'mainImages', 'detailImages', 'sourceMainImages', 'sourceDetailImages'].forEach(function (key) {
         if (Array.isArray(product && product[key])) legacy = legacy.concat(product[key]);
       });
       accepted = legacy.map(function (url, index) {
@@ -390,11 +404,25 @@
     return Object.freeze({ kind: value.kind, actualCostMinor: actual, billedUnits: value.billedUnits });
   }
 
-  function billingSlotRows(values, currency) {
+  function billingSlotRows(values, currency, projected) {
     var rows = [];
     var invalid = false;
     (Array.isArray(values) ? values : []).slice(0, 500).forEach(function (value) {
       var item = record(value) || {};
+      var sourceMedia = projected ? record(item.media) : item;
+      var workflowId = sourceMedia && text(sourceMedia.workflowId, 200);
+      var reviewStatus = sourceMedia && ['NOT_READY', 'PENDING', 'APPROVED', 'REJECTED'].includes(sourceMedia.reviewStatus)
+        ? sourceMedia.reviewStatus : '';
+      var outputAssetId = sourceMedia && text(projected ? sourceMedia.outputAssetId : record(sourceMedia.output)?.id, 200);
+      var commands = record(item.commands) || {};
+      var actions = Array.isArray(item.allowedActions) ? item.allowedActions : [];
+      var canReview = projected ? sourceMedia?.canReview === true : Boolean(commands.REVIEW_SLOT) && actions.includes('REVIEW_SLOT');
+      var canApply = projected ? sourceMedia?.canApply === true : Boolean(commands.APPLY_SLOT) && actions.includes('APPLY_SLOT');
+      var media = workflowId && reviewStatus && outputAssetId ? Object.freeze({
+        workflowId: workflowId, reviewStatus: reviewStatus, outputAssetId: outputAssetId,
+        canReview: reviewStatus === 'PENDING' && canReview,
+        canApply: reviewStatus === 'APPROVED' && canApply,
+      }) : undefined;
       var billing = record(item.billing);
       var reservationStatuses = [
         'NOT_CREATED', 'RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED',
@@ -427,39 +455,46 @@
           reservationStatus: billing.reservationStatus,
           settlement: settlement,
         }),
+        ...(media === undefined ? {} : { media: media }),
       }));
     });
     return invalid ? null : Object.freeze(rows);
   }
 
-  function billingProjection(value, listings) {
+  function billingProjection(value, listings, projected) {
     var input = record(value) || {};
     var state = ['idle', 'loading', 'ready', 'error'].includes(input.state) ? input.state : 'idle';
     var listingWorkflowId = text(input.listingWorkflowId, 200);
     var error = text(input.error, 500);
     if (state !== 'ready') return emptyBilling(state, listingWorkflowId, error);
-    var raw = record(input.projection);
+    var raw = projected ? input : record(input.projection);
     var context = raw && record(raw.context);
     var listing = (Array.isArray(listings) ? listings : []).find(function (item) {
       return item.id === listingWorkflowId;
     });
-    if (!raw || raw.contractVersion !== 'extension-ai-image-suite-projection/v1'
-      || !context || !listing || context.listingWorkflowId !== listing.id
-      || context.shopId !== listing.shopId || context.draftRevision !== listing.revision
-      || context.draftVersion !== listing.draftVersion) {
+    var bindingValid = projected
+      ? exactKeys(input, ['state', 'listingWorkflowId', 'error', 'executionMode', 'quote', 'suite'])
+        && input.executionMode === 'ERP_HOSTED' && Boolean(listing)
+      : raw && raw.contractVersion === 'extension-ai-image-suite-projection/v1'
+        && context && listing && context.listingWorkflowId === listing.id
+        && context.shopId === listing.shopId && context.draftRevision === listing.revision
+        && context.draftVersion === listing.draftVersion;
+    if (!bindingValid) {
       return emptyBilling('error', listingWorkflowId, '计费状态与当前草稿不一致');
     }
-    if (raw.plan === null) return emptyBilling('ready', listingWorkflowId, '');
+    if (projected ? raw.quote === null && raw.suite === null : raw.plan === null) return emptyBilling('ready', listingWorkflowId, '');
     var plan = record(raw.plan);
-    var preview = plan && record(plan.preview);
+    var preview = projected ? record(raw.quote) : plan && record(plan.preview);
     var currency = preview && Object.prototype.hasOwnProperty.call(preview, 'currency')
       ? preview.currency : 'USD';
     var itemCount = preview && Number(preview.itemCount);
-    var estimated = preview && billingMinor(preview.estimatedCostCents);
-    var maximum = preview && billingMinor(preview.maximumCostCents);
+    var estimated = preview && billingMinor(projected ? preview.estimatedCostMinor : preview.estimatedCostCents);
+    var maximum = preview && billingMinor(projected ? preview.maximumCostMinor : preview.maximumCostCents);
+    var previewHash = preview && (projected ? preview.previewHash : preview.hash);
     if (!preview || !['CNY', 'USD'].includes(currency)
       || !Number.isSafeInteger(itemCount) || itemCount < 1 || itemCount > 500
-      || estimated === null || maximum === null || maximum < estimated) {
+      || estimated === null || maximum === null || maximum < estimated
+      || (previewHash !== undefined && (typeof previewHash !== 'string' || !/^[a-f0-9]{64}$/u.test(previewHash)))) {
       return emptyBilling('error', listingWorkflowId, '托管报价无效');
     }
     var quote = Object.freeze({
@@ -467,6 +502,7 @@
       itemCount: itemCount,
       estimatedCostMinor: estimated,
       maximumCostMinor: maximum,
+      ...(previewHash === undefined ? {} : { previewHash: previewHash }),
     });
     if (raw.suite === null) {
       return Object.freeze({
@@ -475,7 +511,7 @@
       });
     }
     var suite = record(raw.suite);
-    var slots = suite && billingSlotRows(suite.slots, currency);
+    var slots = suite && billingSlotRows(suite.slots, currency, projected);
     if (!suite || !text(suite.status, 100) || !slots) {
       return emptyBilling('error', listingWorkflowId, '托管结算状态无效');
     }
@@ -541,7 +577,7 @@
       throw new TypeError('invalid donor workbench projection');
     }
     var source = record(item.source) || {};
-    return createProjection({
+    var parsed = createProjection({
       platform: source.platform,
       product: {
         title: source.title,
@@ -559,7 +595,8 @@
           facts: { selectedSkuKey: source.preferredSkuKey },
           skus: (Array.isArray(item.skus) ? item.skus : []).map(function (sku) {
             var row = record(sku) || {};
-            return { key: row.key, name: row.label, imageUrl: row.imageUrl };
+            return { key: row.key, name: row.label, imageUrl: row.imageUrl,
+              sourceSkuId: row.sourceSkuId, priceCny: row.priceCny, stock: row.stock };
           }),
           media: (Array.isArray(item.media) ? item.media : []).map(function (media) {
             var row = record(media) || {};
@@ -581,6 +618,7 @@
       busy: item.busy,
       error: item.error,
     });
+    return Object.freeze({ ...parsed, billing: billingProjection(item.billing, parsed.workbench.status.listing.items, true) });
   }
 
   function commandBase(value, allowed) {
@@ -595,7 +633,101 @@
 
   function parseFrameCommand(value) {
     var item = record(value);
+    if (item && item.type === 'OPEN_EMBEDDED_MEDIA') {
+      var embeddedRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'preferredSkuKey']);
+      if (!text(item.listingWorkflowId, 200) || !text(item.preferredSkuKey, 500)) throw new TypeError('invalid embedded media launch');
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: embeddedRequestId,
+        listingWorkflowId: text(item.listingWorkflowId, 200), preferredSkuKey: text(item.preferredSkuKey, 500) });
+    }
+    if (item && item.type === 'PUBLISH') {
+      var publishFields = ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'action'];
+      if (item.action === 'CONFIRM') publishFields.push('previewHash');
+      var publishRequestId = commandBase(item, publishFields);
+      if (!['PREVIEW', 'CONFIRM', 'STATUS'].includes(item.action) || !text(item.listingWorkflowId, 200)
+        || (item.action === 'CONFIRM' && !/^[a-f0-9]{64}$/u.test(item.previewHash))) throw new TypeError('invalid donor publish command');
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: 'PUBLISH', requestId: publishRequestId,
+        listingWorkflowId: text(item.listingWorkflowId, 200), action: item.action,
+        ...(item.action === 'CONFIRM' ? { previewHash: item.previewHash } : {}) });
+    }
+    if (item && item.type === 'CREATE_TRANSLATION') {
+      var translationRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'sourceMediaKey']);
+      if (!text(item.listingWorkflowId, 200) || !text(item.sourceMediaKey, 500)) throw new TypeError('invalid translation command');
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: translationRequestId,
+        listingWorkflowId: text(item.listingWorkflowId, 200), sourceMediaKey: text(item.sourceMediaKey, 500) });
+    }
     if (!item) throw new TypeError('invalid donor workbench command');
+    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(item.type)) {
+      var fields = ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'binding'];
+      if (item.type === 'EDITOR_CATALOG') fields.push('query');
+      if (item.type === 'EDITOR_DICTIONARY') fields.push('schemaRevision', 'attributeId', 'query', 'limit');
+      if (item.type === 'EDITOR_SAVE') fields.push('action', 'operationKey', 'value');
+      var editorRequestId = commandBase(item, fields);
+      var binding = record(item.binding);
+      if (!exactKeys(binding, ['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId', 'draftRevision', 'draftVersion'])
+        || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(function (key) { return typeof binding[key] === 'string' && binding[key].length > 0 && binding[key].length <= 200; })
+        || binding.listingWorkflowId !== item.listingWorkflowId
+        || !Number.isSafeInteger(binding.draftRevision) || binding.draftRevision < 1
+        || !Number.isSafeInteger(binding.draftVersion) || binding.draftVersion < 1) throw new TypeError('invalid editor binding');
+      if (item.type === 'EDITOR_CATALOG' && (typeof item.query !== 'string' || item.query.length > 100)) throw new TypeError('invalid category query');
+      if (item.type === 'EDITOR_DICTIONARY' && (!/^[a-f0-9]{64}$/u.test(item.schemaRevision)
+        || !Number.isSafeInteger(item.attributeId) || item.attributeId < 1 || typeof item.query !== 'string' || item.query.length > 200
+        || !Number.isSafeInteger(item.limit) || item.limit < 1 || item.limit > 100)) throw new TypeError('invalid dictionary query');
+      if (item.type === 'EDITOR_SAVE') {
+        if (!['PRICING', 'CATEGORY', 'PACKAGING', 'ATTRIBUTES', 'COPY_CANDIDATE', 'COPY_APPROVE', 'VALIDATE'].includes(item.action) || typeof item.operationKey !== 'string'
+          || item.operationKey.length < 8 || item.operationKey.length > 128) throw new TypeError('invalid editor save');
+        if (item.action === 'CATEGORY' && (!exactKeys(item.value, ['categoryId', 'typeId', 'catalogRevision'])
+          || !Number.isSafeInteger(item.value.categoryId) || item.value.categoryId < 1
+          || !Number.isSafeInteger(item.value.typeId) || item.value.typeId < 1
+          || !text(item.value.catalogRevision, 200))) throw new TypeError('invalid editor category');
+        if (item.action === 'PRICING' && (!exactKeys(item.value, ['contractVersion', 'items'])
+          || item.value.contractVersion !== 'ozon-listing-pricing/v1' || !Array.isArray(item.value.items)
+          || !item.value.items.length || item.value.items.length > 100
+          || !item.value.items.every(function (row) {
+            return record(row) && Object.keys(row).every(function (key) { return ['skuKey', 'offerId', 'price', 'oldPrice', 'currencyCode', 'vat'].includes(key); })
+              && ['skuKey', 'price', 'oldPrice', 'currencyCode', 'vat'].every(function (key) { return typeof row[key] === 'string' && row[key].length > 0 && row[key].length <= 500; });
+          }))) throw new TypeError('invalid editor pricing');
+        if (item.action === 'PACKAGING') {
+          var packaging = record(item.value);
+          if (!exactKeys(packaging, ['items', 'evidence']) || !Array.isArray(packaging.items)
+            || packaging.items.length < 1 || packaging.items.length > MAX_SKUS
+            || new Set(packaging.items.map(function (row) { return row && row.skuKey; })).size !== packaging.items.length
+            || !packaging.items.every(function (row) { return exactKeys(row, ['skuKey', 'weightG', 'lengthMm', 'widthMm', 'heightMm'])
+              && text(row.skuKey, 500) && ['weightG', 'lengthMm', 'widthMm', 'heightMm'].every(function (key) {
+                return typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] > 0;
+              }); })
+            || !Array.isArray(packaging.evidence) || packaging.evidence.length < 1 || packaging.evidence.length > 20
+            || !packaging.evidence.every(function (entry) { return typeof entry === 'string' && entry === entry.trim() && text(entry, 500); })) {
+            throw new TypeError('invalid editor packaging');
+          }
+        }
+        if (item.action === 'ATTRIBUTES') {
+          var attributes = record(item.value);
+          if (!exactKeys(attributes, ['schemaRevision', 'changes']) || !/^[a-f0-9]{64}$/u.test(attributes.schemaRevision)
+            || !Array.isArray(attributes.changes) || attributes.changes.length < 1 || attributes.changes.length > 500
+            || !attributes.changes.every(function (change) { return record(change)
+              && Object.keys(change).every(function (key) { return ['attributeId', 'skuKey', 'action', 'value', 'dictionaryValueId', 'dictionaryValueIds', 'evidence'].includes(key); })
+              && Number.isSafeInteger(change.attributeId) && change.attributeId > 0
+              && (change.skuKey === undefined || text(change.skuKey, 500))
+              && (change.action === undefined || ['SET', 'CLEAR'].includes(change.action))
+              && Array.isArray(change.evidence) && change.evidence.length > 0 && change.evidence.length <= 20
+              && change.evidence.every(function (entry) { return text(entry, 500); }); })) throw new TypeError('invalid editor attributes');
+        }
+        if (item.action === 'COPY_CANDIDATE') {
+          var copy = record(item.value);
+          if (!copy || !Object.keys(copy).length || Object.keys(copy).some(function (key) { return !['titleRu', 'descriptionRu'].includes(key); })
+            || (copy.titleRu !== undefined && (typeof copy.titleRu !== 'string' || copy.titleRu.length > 500))
+            || (copy.descriptionRu !== undefined && copy.descriptionRu !== null
+              && (typeof copy.descriptionRu !== 'string' || copy.descriptionRu.length > 10000))) throw new TypeError('invalid manual copy candidate');
+        }
+        if (item.action === 'COPY_APPROVE' && (!exactKeys(item.value, ['candidateId']) || !text(item.value.candidateId, 200))) {
+          throw new TypeError('invalid manual copy approval');
+        }
+        if (item.action === 'VALIDATE' && (!exactKeys(item.value, ['schemaRevision']) || !/^[a-f0-9]{64}$/u.test(item.value.schemaRevision))) {
+          throw new TypeError('invalid listing validation request');
+        }
+      }
+      return Object.freeze(Object.assign({}, item, { requestId: editorRequestId }));
+    }
     if (item.type === 'CREATE_DRAFT') {
       var requestId = commandBase(item, [
         'contractVersion', 'type', 'requestId', 'shopId', 'selectedSkuKeys',
@@ -722,10 +854,57 @@
       });
     }
     if (item.type === 'EXECUTE_HOSTED_SUITE') {
-      var hostedRequestId = commandBase(item, [
+      var hostedFields = [
         'contractVersion', 'type', 'requestId', 'listingWorkflowId',
         'action', 'slotKey', 'decision', 'costConfirmed',
-      ]);
+      ];
+      var quoteWitness;
+      if (item.action === 'START') {
+        hostedFields.push('quoteWitness');
+        if (!exactKeys(item.quoteWitness, ['previewHash', 'currency', 'itemCount', 'maxCostMinor'])
+          || !/^[a-f0-9]{64}$/u.test(item.quoteWitness.previewHash)
+          || !['CNY', 'USD'].includes(item.quoteWitness.currency)
+          || !Number.isSafeInteger(item.quoteWitness.itemCount) || item.quoteWitness.itemCount < 1 || item.quoteWitness.itemCount > 500
+          || billingMinor(item.quoteWitness.maxCostMinor) === null) throw new TypeError('invalid donor quote confirmation');
+        quoteWitness = Object.freeze({ ...item.quoteWitness });
+      }
+      var candidateMediaKeys;
+      if (Object.prototype.hasOwnProperty.call(item, 'candidateMediaKeys')) {
+        hostedFields.push('candidateMediaKeys');
+        if (item.action !== 'CREATE_AND_REVIEW_PLAN' || !Array.isArray(item.candidateMediaKeys)
+          || item.candidateMediaKeys.length < 1 || item.candidateMediaKeys.length > 25
+          || new Set(item.candidateMediaKeys).size !== item.candidateMediaKeys.length
+          || !item.candidateMediaKeys.every(function (key) { return typeof key === 'string' && key.length > 0 && key.length <= 500
+            && key === key.normalize('NFKC').trim()
+            // eslint-disable-next-line no-control-regex
+            && !/[\u0000-\u001f\u007f]/u.test(key)
+            && !/(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\.|[?#]/iu.test(key); })) {
+          throw new TypeError('invalid donor reference selection');
+        }
+        candidateMediaKeys = Object.freeze(item.candidateMediaKeys.slice());
+      }
+      var creativeBrief;
+      if (Object.prototype.hasOwnProperty.call(item, 'creativeBrief')) {
+        hostedFields.push('creativeBrief');
+        var brief = record(item.creativeBrief);
+        var briefKeys = brief && Object.keys(brief);
+        var safeDirection = function (value, maximum) {
+          return typeof value === 'string' && value === value.trim() && Array.from(value).length <= maximum
+            // eslint-disable-next-line no-control-regex
+            && !/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(value)
+            && !/(?:https?|blob|data|file|ftp|javascript|ws|wss):|www\.|\b[a-z][a-z0-9+.-]*:\/\/|\b(?:api[_ -]?key|authorization|bearer)\b|\bsk-[A-Za-z0-9]/iu.test(value)
+            && !/^(?:rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)/u.test(value);
+        };
+        if (item.action !== 'CREATE_AND_REVIEW_PLAN' || !brief || !briefKeys.includes('prompt')
+          || briefKeys.some(function (key) { return !['prompt', 'negativePrompt'].includes(key); })
+          || !safeDirection(brief.prompt, 300) || !brief.prompt
+          || (briefKeys.includes('negativePrompt') && !safeDirection(brief.negativePrompt, 150))) {
+          throw new TypeError('invalid donor creative direction');
+        }
+        creativeBrief = Object.freeze({ prompt: brief.prompt,
+          ...(briefKeys.includes('negativePrompt') ? { negativePrompt: brief.negativePrompt } : {}) });
+      }
+      var hostedRequestId = commandBase(item, hostedFields);
       var hostedAction = [
         'CREATE_AND_REVIEW_PLAN', 'START', 'CONTINUE', 'CANCEL', 'REVIEW_SLOT', 'APPLY_SLOT',
       ].includes(item.action)
@@ -749,6 +928,9 @@
         requestId: hostedRequestId, listingWorkflowId: text(item.listingWorkflowId, 200),
         action: hostedAction, slotKey: hostedSlotKey, decision: hostedDecision,
         costConfirmed: item.costConfirmed === true,
+        ...(creativeBrief === undefined ? {} : { creativeBrief: creativeBrief }),
+        ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys: candidateMediaKeys }),
+        ...(quoteWitness === undefined ? {} : { quoteWitness: quoteWitness }),
       });
     }
     if (item.type === 'ASSIGN_HOSTED_SUITE') {

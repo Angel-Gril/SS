@@ -2,6 +2,8 @@
   'use strict';
 
   var CONTRACT_VERSION = 'extension-byok-workbench-launch-session/v1';
+  var EMBEDDED_CONTRACT_VERSION = 'extension-byok-workbench-launch-session/v2';
+  var EMBEDDED_STATE_KEY = 'ss-erp:byok:embedded-workbench-state:v1';
   var CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
   var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
   var STORAGE_KEY = 'ss-erp:byok:workbench-launch-sessions:v1';
@@ -529,8 +531,11 @@
   function normalizeSession(value, current, ttlMs) {
     try {
       var hasErpAuthority = isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'erpSourceAuthority');
-      if (!exactKeys(value, hasErpAuthority ? SESSION_KEYS.concat(['erpSourceAuthority']) : SESSION_KEYS)
-        || value.contractVersion !== CONTRACT_VERSION) return null;
+      var embedded = isRecord(value) && value.contractVersion === EMBEDDED_CONTRACT_VERSION;
+      var expectedKeys = hasErpAuthority ? SESSION_KEYS.concat(['erpSourceAuthority']) : SESSION_KEYS;
+      if (embedded) expectedKeys = expectedKeys.concat(['embeddedFrame', 'embeddedSource']);
+      if (!exactKeys(value, expectedKeys)
+        || (!embedded && value.contractVersion !== CONTRACT_VERSION)) return null;
       var erpAuthority = hasErpAuthority ? normalizeErpSourceAuthority(value.erpSourceAuthority) : undefined;
       var createdAt = Number(value.createdAt);
       var expiresAt = Number(value.expiresAt);
@@ -541,6 +546,11 @@
         ? null
         : exactText(value.workbenchDocumentId, 200, 'SS_ERP_BYOK_WORKBENCH_SESSION_INVALID');
       var context = normalizeContext(value.context);
+      var embeddedFrame = embedded ? normalizeEmbeddedFrame(value.embeddedFrame) : null;
+      var embeddedSource = embedded ? normalizeEmbeddedSource(value.embeddedSource) : null;
+      if (embedded && (value.workbenchTabId !== value.sourceTabId
+        || embeddedSource.tabId !== value.sourceTabId || embeddedSource.documentId !== value.sourceDocumentId
+        || embeddedSource.sourcePlatform !== context.sourcePlatform || embeddedSource.sourceProductId !== context.sourceProductId)) return null;
       var result = normalizeResult(value.result);
       var operation = normalizeOperation(value.operation, context);
       if (result && ['INGESTING', 'BOUND'].includes(result.deliveryState)) {
@@ -552,7 +562,7 @@
         || Boolean(result && ['INGESTING', 'BOUND'].includes(result.deliveryState));
       if (!protectedState && expiresAt <= current) return null;
       return Object.freeze({
-        contractVersion: CONTRACT_VERSION,
+        contractVersion: embedded ? EMBEDDED_CONTRACT_VERSION : CONTRACT_VERSION,
         context: context,
         sourceTabId: tabId(value.sourceTabId, 'SS_ERP_BYOK_WORKBENCH_SESSION_INVALID'),
         sourceDocumentId: exactText(
@@ -567,6 +577,7 @@
         createdAt: createdAt,
         expiresAt: expiresAt,
         ...(hasErpAuthority ? { erpSourceAuthority: erpAuthority } : {}),
+        ...(embedded ? { embeddedFrame: embeddedFrame, embeddedSource: embeddedSource } : {}),
       });
     } catch {
       return null;
@@ -612,17 +623,46 @@
   }
 
   function senderIdentity(value) {
-    if (!isRecord(value) || value.frameId !== 0) {
+    if (!isRecord(value) || !Number.isSafeInteger(value.frameId) || value.frameId < 0) {
       throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
     }
-    return {
+    var identity = {
       tabId: tabId(value.tabId, 'SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED'),
       documentId: exactText(
         value.documentId,
         200,
         'SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED',
       ),
+      frameId: value.frameId,
     };
+    if (value.frameId > 0) identity.embeddedFrame = normalizeEmbeddedFrame({ frameId: value.frameId, url: value.url, origin: value.origin });
+    return identity;
+  }
+
+  function normalizeEmbeddedFrame(value) {
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED';
+    if (!exactKeys(value, ['frameId', 'url', 'origin']) || !Number.isSafeInteger(value.frameId) || value.frameId < 1
+      || typeof value.origin !== 'string' || !/^chrome-extension:\/\/[a-z0-9-]+$/u.test(value.origin)
+      || value.url !== value.origin + '/pages/precision-workbench.html') throw sessionError(code);
+    return Object.freeze({ frameId: value.frameId, url: value.url, origin: value.origin });
+  }
+
+  function normalizeEmbeddedSource(value) {
+    var keys = ['tabId', 'documentId', 'sourcePlatform', 'sourceProductId', 'ownerUserId', 'deviceSessionId'];
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID';
+    if (!exactKeys(value, keys) || !Number.isSafeInteger(value.tabId) || value.tabId < 0
+      || !['1688', 'pdd', 'taobao', 'tmall'].includes(value.sourcePlatform)) throw sessionError(code);
+    var result = { tabId: value.tabId };
+    keys.filter(function (key) { return key !== 'tabId'; }).forEach(function (key) { result[key] = exactText(value[key], 200, code); });
+    return Object.freeze(result);
+  }
+
+  function sessionRecordKey(session) {
+    return (session.embeddedFrame ? 'embedded:' : '') + String(session.workbenchTabId);
+  }
+
+  function senderRecordKey(identity) {
+    return (identity.frameId > 0 ? 'embedded:' : '') + String(identity.tabId);
   }
 
   function createManager(options) {
@@ -684,18 +724,24 @@
 
     async function loadState(current) {
       var stored = await storage.get([
-        STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
+        STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY, EMBEDDED_STATE_KEY,
       ]);
+      var embeddedState = stored && stored[EMBEDDED_STATE_KEY];
+      if (embeddedState !== undefined && (!exactKeys(embeddedState, ['records', 'fences', 'recoveries', 'editReviews'])
+        || !['records', 'fences', 'recoveries', 'editReviews'].every(function (key) { return isRecord(embeddedState[key]); }))) {
+        throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_INVALID');
+      }
       var raw = stored && stored[STORAGE_KEY];
-      var records = isRecord(raw) ? raw : {};
-      var rawFences = stored && stored[DOCUMENT_FENCE_STORAGE_KEY];
-      var rawRecoveries = stored && stored[BATCH_RECOVERY_STORAGE_KEY];
-      var rawEditReviews = stored && stored[EDIT_REVIEW_STORAGE_KEY];
+      var records = Object.assign({}, isRecord(raw) ? raw : {}, embeddedState && embeddedState.records);
+      var rawFences = Object.assign({}, stored && stored[DOCUMENT_FENCE_STORAGE_KEY], embeddedState && embeddedState.fences);
+      var rawRecoveries = Object.assign({}, stored && stored[BATCH_RECOVERY_STORAGE_KEY], embeddedState && embeddedState.recoveries);
+      var rawEditReviews = Object.assign({}, stored && stored[EDIT_REVIEW_STORAGE_KEY], embeddedState && embeddedState.editReviews);
       var valid = {};
       var fences = {};
       Object.keys(records).forEach(function (key) {
         var session = normalizeSession(records[key], current, ttlMs);
-        if (session && String(session.workbenchTabId) === key) {
+        if (session && sessionRecordKey(session) === key
+          && (!session.embeddedFrame || session.embeddedFrame.url === runtime.getURL('pages/precision-workbench.html'))) {
           if (session.result && isRecord(rawEditReviews)
             && Object.prototype.hasOwnProperty.call(rawEditReviews, key)) {
             try {
@@ -747,7 +793,7 @@
     async function storeState(records, fences) {
       if (!Object.keys(records).length) {
         await storage.remove([
-          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY, EMBEDDED_STATE_KEY,
         ]);
         return;
       }
@@ -784,31 +830,57 @@
           };
         }
       });
-      await storage.set({
-        [STORAGE_KEY]: serializedRecords,
-        [DOCUMENT_FENCE_STORAGE_KEY]: fences,
-        [BATCH_RECOVERY_STORAGE_KEY]: recoveries,
-        [EDIT_REVIEW_STORAGE_KEY]: editReviews,
-      });
+      function entriesFor(value, embedded) {
+        return Object.fromEntries(Object.keys(value).filter(function (key) {
+          return key.startsWith('embedded:') === embedded;
+        }).map(function (key) { return [key, value[key]]; }));
+      }
+      var patch = {};
+      if (Object.keys(entriesFor(serializedRecords, false)).length) {
+        patch[STORAGE_KEY] = entriesFor(serializedRecords, false);
+        patch[DOCUMENT_FENCE_STORAGE_KEY] = entriesFor(fences, false);
+        patch[BATCH_RECOVERY_STORAGE_KEY] = entriesFor(recoveries, false);
+        patch[EDIT_REVIEW_STORAGE_KEY] = entriesFor(editReviews, false);
+      } else await storage.remove([STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY]);
+      if (Object.keys(entriesFor(serializedRecords, true)).length) {
+        patch[EMBEDDED_STATE_KEY] = {
+          records: entriesFor(serializedRecords, true), fences: entriesFor(fences, true),
+          recoveries: entriesFor(recoveries, true), editReviews: entriesFor(editReviews, true),
+        };
+      } else await storage.remove([EMBEDDED_STATE_KEY]);
+      await storage.set(patch);
     }
 
     async function mutateForSender(sender, operation, mutationOptions) {
       var identity = senderIdentity(sender);
+      var embeddedRegistration = null;
+      if (identity.frameId > 0) {
+        if (typeof options.resolveEmbeddedFrame !== 'function') throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+        embeddedRegistration = await options.resolveEmbeddedFrame(sender);
+        if (!embeddedRegistration || JSON.stringify(embeddedRegistration.frame) !== JSON.stringify({
+          tabId: identity.tabId, frameId: identity.frameId, documentId: identity.documentId,
+          url: identity.embeddedFrame.url, origin: identity.embeddedFrame.origin,
+        })) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+      }
       // Credential refresh can clear Provider state through this same manager.
       // Resolve live ERP authority before acquiring the serial storage queue.
       var observed = await loadState(currentMillis());
-      var observedAuthority = observed.records[String(identity.tabId)]?.erpSourceAuthority;
+      var observedAuthority = observed.records[senderRecordKey(identity)]?.erpSourceAuthority;
       await verifyErpAuthority(observedAuthority);
       return enqueue(async function () {
         var current = currentMillis();
         var state = await loadState(current);
         var records = state.records;
         var fences = state.fences;
-        var key = String(identity.tabId);
+        var key = senderRecordKey(identity);
         var session = records[key];
         if (!session) {
           await storeState(records, fences);
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_NOT_FOUND');
+        }
+        if (identity.frameId > 0 && (JSON.stringify(session.embeddedFrame) !== JSON.stringify(identity.embeddedFrame)
+          || JSON.stringify(session.embeddedSource) !== JSON.stringify(embeddedRegistration.source))) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_AUTHORITY_STALE');
         }
         if (JSON.stringify(session.erpSourceAuthority) !== JSON.stringify(observedAuthority)) {
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_AUTHORITY_STALE');
@@ -896,7 +968,7 @@
     }
 
     function exactLaunchMatch(session, context, sourceTabId, sourceDocumentId, erpAuthority) {
-      return session.sourceTabId === sourceTabId
+      return !session.embeddedFrame && session.sourceTabId === sourceTabId
         && session.sourceDocumentId === sourceDocumentId
         && sameErpSourceAuthority(session.erpSourceAuthority, erpAuthority)
         && sameContext(session.context, context);
@@ -977,8 +1049,8 @@
               throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CAPACITY_EXCEEDED');
             }
             var discarded = ordered.splice(discardIndex, 1)[0];
-            delete records[String(discarded.workbenchTabId)];
-            delete fences[String(discarded.workbenchTabId)];
+            delete records[sessionRecordKey(discarded)];
+            delete fences[sessionRecordKey(discarded)];
             discardedSessions.push(discarded);
           }
           var nextSession = matching
@@ -1009,6 +1081,71 @@
           }
           throw error;
         }
+      });
+    }
+
+    async function openEmbedded(value) {
+      var context = normalizeContext(value && value.context);
+      var identity = senderIdentity(value && value.frameSender);
+      if (identity.frameId < 1 || typeof options.resolveEmbeddedFrame !== 'function') {
+        throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+      }
+      var registration = await options.resolveEmbeddedFrame(value.frameSender);
+      var source = normalizeEmbeddedSource(registration && registration.source);
+      var expectedFrame = {
+        tabId: identity.tabId, frameId: identity.frameId, documentId: identity.documentId,
+        url: identity.embeddedFrame.url, origin: identity.embeddedFrame.origin,
+      };
+      if (!registration || JSON.stringify(registration.frame) !== JSON.stringify(expectedFrame)
+        || identity.embeddedFrame.url !== runtime.getURL('pages/precision-workbench.html')
+        || value.sourceTabId !== identity.tabId || value.sourceTabId !== source.tabId
+        || value.sourceDocumentId !== source.documentId
+        || context.sourcePlatform !== source.sourcePlatform || context.sourceProductId !== source.sourceProductId) {
+        throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_STALE');
+      }
+      return enqueue(async function () {
+        var current = currentMillis();
+        var state = await loadState(current);
+        var key = senderRecordKey(identity);
+        var previous = state.records[key];
+        if (previous && JSON.stringify(previous.embeddedSource) !== JSON.stringify(source)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_AUTHORITY_STALE');
+        }
+        if (previous && !sameContext(previous.context, context) && (previous.operation || previous.result)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_PENDING');
+        }
+        var fence = state.fences[key];
+        if (fence && fence.retiredDocumentIds.includes(identity.documentId)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+        }
+        if (!previous && Object.keys(state.records).length >= limit) {
+          var discardKey = Object.keys(state.records).find(function (candidate) {
+            var entry = state.records[candidate];
+            return !entry.operation && !(entry.result && ['INGESTING', 'BOUND'].includes(entry.result.deliveryState));
+          });
+          if (discardKey === undefined) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CAPACITY_EXCEEDED');
+          discardResult(state.records[discardKey]);
+          delete state.records[discardKey];
+          delete state.fences[discardKey];
+        }
+        if (fence && fence.currentDocumentId !== identity.documentId) {
+          if (fence.retiredDocumentIds.length >= MAX_RETIRED_DOCUMENTS) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+          fence = { currentDocumentId: identity.documentId, retiredDocumentIds: fence.retiredDocumentIds.concat([fence.currentDocumentId]) };
+        }
+        var session = previous && sameContext(previous.context, context) ? previous : {
+          contractVersion: EMBEDDED_CONTRACT_VERSION, context: context,
+          sourceTabId: source.tabId, sourceDocumentId: source.documentId, workbenchTabId: identity.tabId,
+          workbenchDocumentId: identity.documentId, operation: null, result: null,
+          createdAt: current, expiresAt: current + ttlMs,
+          embeddedFrame: identity.embeddedFrame, embeddedSource: source,
+        };
+        session = normalizeSession(renewLease({ ...session, workbenchDocumentId: identity.documentId,
+          embeddedFrame: identity.embeddedFrame, embeddedSource: source }, current), current, ttlMs);
+        if (!session) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_INVALID');
+        state.records[key] = session;
+        state.fences[key] = fence || { currentDocumentId: identity.documentId, retiredDocumentIds: [] };
+        await storeState(state.records, state.fences);
+        return Object.freeze({ state: 'workbench_embedded', tabId: identity.tabId, frameId: identity.frameId, documentId: identity.documentId });
       });
     }
 
@@ -1360,13 +1497,14 @@
       return enqueue(async function () {
         var state = await loadState(currentMillis());
         var records = state.records;
-        var session = records[String(id)] || null;
+        var key = records['embedded:' + id] ? 'embedded:' + id : String(id);
+        var session = records[key] || null;
         if (!session) {
           await storeState(records, state.fences);
           return null;
         }
-        delete records[String(id)];
-        delete state.fences[String(id)];
+        delete records[key];
+        delete state.fences[key];
         await storeState(records, state.fences);
         return session;
       });
@@ -1377,7 +1515,8 @@
       return enqueue(async function () {
         var state = await loadState(currentMillis());
         var records = state.records;
-        var session = records[String(id)] || null;
+        var key = records['embedded:' + id] ? 'embedded:' + id : String(id);
+        var session = records[key] || null;
         if (!session) {
           await storeState(records, state.fences);
           return null;
@@ -1388,8 +1527,8 @@
           await storeState(records, state.fences);
           return null;
         }
-        delete records[String(id)];
-        delete state.fences[String(id)];
+        delete records[key];
+        delete state.fences[key];
         await storeState(records, state.fences);
         return session;
       });
@@ -1404,11 +1543,13 @@
 
     function clear() {
       return enqueue(async function () {
-        var stored = await storage.get([STORAGE_KEY]);
+        var stored = await storage.get([STORAGE_KEY, EMBEDDED_STATE_KEY]);
         var raw = stored && stored[STORAGE_KEY];
         if (isRecord(raw)) Object.keys(raw).forEach(function (key) { discardResult(raw[key]); });
+        var embedded = stored && stored[EMBEDDED_STATE_KEY];
+        if (isRecord(embedded && embedded.records)) Object.keys(embedded.records).forEach(function (key) { discardResult(embedded.records[key]); });
         await storage.remove([
-          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY,
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY, EDIT_REVIEW_STORAGE_KEY, EMBEDDED_STATE_KEY,
         ]);
       });
     }
@@ -1437,6 +1578,7 @@
 
     return Object.freeze({
       open: open,
+      openEmbedded: openEmbedded,
       claim: claim,
       beginOperation: beginOperation,
       updateOperationRecovery: updateOperationRecovery,
@@ -1460,6 +1602,8 @@
 
   global.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
+    EMBEDDED_CONTRACT_VERSION: EMBEDDED_CONTRACT_VERSION,
+    EMBEDDED_STATE_KEY: EMBEDDED_STATE_KEY,
     CONTEXT_VERSION: CONTEXT_VERSION,
     REVIEW_CONTEXT_VERSION: REVIEW_CONTEXT_VERSION,
     BATCH_RECOVERY_VERSION: BATCH_RECOVERY_VERSION,

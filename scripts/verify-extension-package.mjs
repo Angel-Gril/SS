@@ -658,6 +658,8 @@ const requiredByokModules = [
   'shared/byok/workbench-workspace-state.js',
   'shared/byok/workbench-source-media-library.js',
   'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/precision-frame-registration.js',
+  'shared/byok/precision-source-admission.js',
   'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
   'shared/byok/workbench-batch-client.js',
@@ -686,6 +688,8 @@ const requiredByokBackgroundModules = [
   'shared/byok/workbench-edit-controller.js',
   'shared/byok/workbench-source-media-library.js',
   'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/precision-frame-registration.js',
+  'shared/byok/precision-source-admission.js',
   'shared/byok/listing-publish-coordinator.js',
   ...requiredByokBatchBackgroundModules,
 ];
@@ -707,6 +711,7 @@ const requiredHostedPageModules = [
 
 const requiredUnifiedPublishModules = [
   'shared/publish/workbench-listing-publish-coordinator.js',
+  'shared/publish/source-workbench-publish-controller.js',
   'pages/ai-image-workbench-publish.js',
 ];
 
@@ -719,6 +724,32 @@ const requiredDonorWorkbenchFiles = [
   'pages/source-workbench-shell.html',
   'pages/source-workbench-shell.css',
   'pages/source-workbench-shell.js',
+  'pages/precision-workbench.html',
+  'pages/precision-workbench.js',
+  'pages/precision-workbench.css',
+  'shared/donor-workbench/precision-workflow.js',
+  'shared/donor-workbench/precision-byok-flow.js',
+  'shared/donor-workbench/precision-byok-edit-flow.js',
+  'content/donor/adapter-1688.js',
+  'shared/collectors/donor-1688-capture.js',
+  'pages/donor/ui/panel.css',
+  'pages/donor/ui/modules/i18n.js',
+  'pages/donor/ui/modules/field-key-utils.js',
+  'pages/donor/ui/modules/ozon/field-semantics.js',
+  'pages/donor/ui/modules/product-editor.js',
+  'pages/donor/ui/modules/product-editor-display-rules.js',
+  'pages/donor/ui/modules/product-editor-field-model.js',
+  'pages/donor/ui/modules/product-editor-inline-controls.js',
+  'pages/donor/ui/modules/product-editor-table-behavior.js',
+  'pages/donor/ui/modules/product-editor-table-shell.js',
+  'pages/donor/ui/modules/sku-upload-selection.js',
+  'pages/donor/ui/presentation/controllers/ui-scale-controller.js',
+  'pages/donor/ui/presentation/views/preview-view.js',
+  'pages/donor/ui/presentation/views/sku-picker-view.js',
+  'pages/donor/byok-editor.js',
+  'pages/donor/copy-editor.js',
+  'pages/donor/official-attribute-editor.js',
+  'pages/donor/precision-private-runtime.js',
 ];
 
 const requiredByokPages = [
@@ -783,6 +814,11 @@ if (swText.includes('../shared/publish/workbench-listing-publish-coordinator.js'
 } else {
   fail('service worker does not import the unified workbench publish coordinator');
 }
+if (swText.includes('../shared/publish/source-workbench-publish-controller.js')) {
+  pass('service worker imports the source workbench publish adapter');
+} else {
+  fail('service worker does not import the source workbench publish adapter');
+}
 checkScriptLoadOrder(
   parseImportScripts(manifest.background?.service_worker || ''),
   requiredHostedBackgroundModules,
@@ -817,7 +853,7 @@ const donorResourceGroup = (manifest.web_accessible_resources || []).find((group
   Array.isArray(group.resources) && group.resources.includes('pages/source-workbench-shell.html')
 ));
 if (!donorResourceGroup
-  || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/source-workbench-shell.html'])
+  || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/source-workbench-shell.html', 'pages/precision-workbench.html'])
   || !containsExactUniqueSet(
     donorResourceGroup.matches,
     EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
@@ -849,6 +885,30 @@ if (/\bfetch\s*\(/u.test(donorPageText)
   fail('donor workbench contains a forbidden direct network or broad-permission path');
 } else {
   pass('donor workbench contains no direct Ozon/Provider network path');
+}
+
+const precisionPageText = readFileSync(relToAbs('pages/precision-workbench.js'), 'utf8');
+checkScriptLoadOrder(parseHtmlLocalRefs('pages/precision-workbench.html').filter((value) => value.endsWith('.js')), [
+  'shared/donor-workbench/workspace-contract.js',
+  'shared/donor-workbench/prompt-adapter.js',
+  'shared/donor-workbench/precision-workflow.js',
+  'shared/byok/profile-schema.js',
+  'shared/byok/permission-broker.js',
+  'shared/byok/permission-readiness-bridge.js',
+  'shared/byok/provider-settings-client.js',
+  'shared/byok/workbench-client.js',
+  'shared/donor-workbench/precision-byok-flow.js',
+  'pages/precision-workbench.js',
+], 'precision workbench page');
+const precisionModules = requiredDonorWorkbenchFiles.filter((file) => file.startsWith('pages/donor/') && file.endsWith('.js'));
+const precisionText = [precisionPageText,
+  readFileSync(relToAbs('shared/donor-workbench/precision-byok-flow.js'), 'utf8'),
+  readFileSync(relToAbs('shared/donor-workbench/precision-byok-edit-flow.js'), 'utf8'),
+  ...precisionModules.map((file) => readFileSync(relToAbs(file), 'utf8'))].join('\n');
+if (/\bfetch\s*\(|chrome\.runtime|api-seller\.ozon|chrome\.debugger|https:\/\/\*\/\*/iu.test(precisionText)) {
+  fail('precision workbench contains a forbidden direct network path');
+} else {
+  pass('precision workbench UI remains behind the source bridge');
 }
 
 const hostedPreviewWired = [

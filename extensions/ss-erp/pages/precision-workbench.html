@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SS ERP 精铺工作台</title>
+  <link rel="stylesheet" href="donor/ui/panel.css">
+  <link rel="stylesheet" href="precision-workbench.css">
+</head>
+<body>
+<div id="ui-scale-root">
+  <div class="overlay">
+<div class="panel">
+            <div class="toolbar">
+                <div class="toolbar-main"><input id="sku-prefix" type="hidden" value="SKU"> <select
+                        id="language-select" class="language-select" data-i18n-title="panel_languageSelectLabel"
+                        data-i18n-aria-label="panel_languageSelectLabel" aria-label="界面语言" title="界面语言">
+                        <option value="zh_CN" data-i18n="panel_languageChinese">中文</option>
+                        <option value="en" data-i18n="panel_languageEnglish">English</option>
+                        <option value="ru" data-i18n="panel_languageRussian">Русский</option>
+                    </select> <button id="store-switch-btn"
+                        class="ghost store-switch-btn" type="button" data-i18n="panel_actionSwitchStore">切换店铺</button> <button id="settings-btn" class="ghost" type="button" data-i18n="panel_actionBasicInfo">基础信息</button> <button
+                        id="category-select-btn" class="ghost" type="button" data-i18n="panel_actionSelectCategory">选择类目</button>
+                    <button id="start-btn" class="primary" type="button" data-i18n="panel_actionStart">开始执行</button></div>
+                <div class="toolbar-actions"> <button
+                        id="process-view-btn" class="ghost process-view-btn"
+                        type="button" data-i18n="panel_actionViewProcess">查看过程</button> <button id="ai-image-process-btn" class="ghost"
+                        type="button" data-i18n="panel_actionAiImageProcess">AI生图过程</button> <button id="ai-translation-process-btn" class="ghost"
+                        type="button" data-i18n="panel_actionAiTranslationProcess">AI翻译过程</button> <button id="confirm-export-btn" class="primary"
+                        type="button" disabled="disabled" data-i18n="panel_actionUploadOzon">上传 Ozon</button> <button id="close-btn"
+                        class="ghost" type="button" data-i18n="panel_actionClose">关闭</button></div>
+            </div>
+            <div class="content">
+                <div class="content-view editor-view is-active">
+                    <div id="product-editor" class="product-editor"></div>
+                    <div id="image-card" class="card image-card" hidden>
+                        <div id="image-translate-bar"><button id="image-translate-btn" class="image-tool-hidden-anchor"
+                                type="button" hidden><span id="image-translate-btn-text" data-i18n="panel_imageTranslate">翻译图片</span></button> <span
+                                id="image-translate-label" class="image-tool-hidden-anchor" hidden></span> <button
+                                id="ai-recover-images-btn" class="image-tool-hidden-anchor" type="button"
+                                hidden data-i18n="panel_syncAiResults">同步AI结果</button>
+                            <div id="image-batch-actions" class="image-batch-actions image-tool-hidden-anchor" hidden>
+                                <span id="image-batch-count" class="image-batch-count" data-i18n="panel_selectedZeroImages">已选 0 张</span> <button
+                                    id="image-batch-translate-btn" class="ghost" type="button" data-i18n="panel_batchTranslate">批量翻译</button> <button
+                                    id="image-batch-delete-btn" class="danger" type="button" data-i18n="panel_batchDelete">批量删除</button></div><button
+                                id="watermark-settings-btn" type="button"><svg width="13" height="13"
+                                    viewBox="0 0 16 16" fill="none">
+                                    <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor"
+                                        stroke-width="1.4" />
+                                    <path d="M5 10l2.5-5L10 10" stroke="currentColor" stroke-width="1.4"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                    <path d="M5.8 8.5h3" stroke="currentColor" stroke-width="1.2"
+                                        stroke-linecap="round" />
+                                </svg> <span data-i18n="panel_watermarkTitle">水印设置</span></button> <button id="ai-sku-main-image-btn" type="button" hidden><svg
+                                    width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 4.5h10v7H3z" stroke="currentColor" stroke-width="1.4"
+                                        stroke-linejoin="round" />
+                                    <path d="M5 9l1.6-1.8 1.5 1.5 1.4-1.9L12 10" stroke="currentColor"
+                                        stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                                    <path d="M6 6h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                </svg> <span data-i18n="panel_allAiMainImages">全部AI主图</span></button> <button id="global-image-upload-btn" type="button" hidden><svg
+                                    width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <path d="M8 3v7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                                    <path d="M5.5 5.5L8 3l2.5 2.5" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" stroke-linejoin="round" />
+                                    <path d="M3 11.5h10" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" />
+                                </svg> <span data-i18n="panel_uploadGlobalImage">上传通用图</span></button> <span class="image-workflow-label" data-i18n="panel_imageWorkflowLabel">图片处理流程：</span>
+                            <div id="image-workflow-mode" class="image-workflow-mode" role="radiogroup"
+                                aria-label="图片处理方式" data-i18n-aria-label="panel_imageWorkflowAriaLabel"><label><input type="radio" name="image-workflow-mode"
+                                        value="translate" checked="checked"><span data-i18n="panel_workflowTranslateOnly">仅翻译</span></label> <label><input
+                                        type="radio" name="image-workflow-mode"
+                                        value="ai-main-translate"><span data-i18n="panel_workflowAiMainTranslate">AI主图+翻译</span></label> <label><input
+                                        type="radio" name="image-workflow-mode"
+                                        value="ai-suite"><span data-i18n="panel_workflowAiSuite">AI套图</span></label></div><button
+                                id="image-workflow-start-btn" class="image-workflow-start-btn"
+                                type="button" data-i18n="panel_startImageWorkflow">点击开始处理图片</button>
+                            <div id="sku-main-image-bar" class="image-tool-hidden-anchor" hidden></div>
+                        </div><input id="image-upload-input" type="file" accept="image/*" multiple="multiple" hidden>
+                        <input id="image-shared-upload-input" type="file" accept="image/*" multiple="multiple" hidden>
+                        <div id="image-queue" class="image-queue"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="footer">
+                <div id="status-text" class="status-pill" data-i18n="panel_actionSelectCategory">请选择类目</div>
+                <div id="footer-center-hint" class="hint footer-center-hint" hidden></div>
+                <div class="footer-right"><span id="update-version-hint"
+                        style="display:none;font-size:14px;font-weight:700;color:#fff;background:#f97316;border-radius:12px;padding:11px 16px;cursor:pointer;white-space:nowrap;border:0;transition:opacity .18s"></span>
+                    <span id="plugin-version"></span> <button
+                        id="pricing-tool-btn" class="ghost" type="button" data-i18n="panel_actionPricingTool">定价工具</button> <button
+                        id="stock-manager-btn" class="ghost" type="button" data-i18n="panel_actionStockManager">库存管理</button> <span id="erp-connection-status" class="erp-connection-pill">ERP 连接</span> <button id="erp-refresh-btn" class="ghost"
+                        type="button" >重新读取</button></div>
+            </div>
+        </div>
+  </div>
+<div id="sku-picker" class="sku-picker-modal" hidden>
+        <div class="sku-picker-dialog">
+            <div class="sku-picker-header">
+                <div class="sku-picker-title">
+                    <span data-i18n="panel_skuPickerTitle">请确认本次需要采集的 SKU</span></div><button
+                    id="sku-picker-close-btn" class="ghost" type="button" data-i18n="panel_actionClose">关闭</button>
+            </div>
+            <div class="sku-picker-actions"><button id="sku-toggle-btn" class="ghost"
+                    type="button" data-i18n="panel_skuToggleNone">全取消</button> <button id="sku-apply-btn" class="primary"
+                    type="button" data-i18n="panel_skuConfirmContinue">确认SKU并继续</button>
+                <div id="sku-picked-count" class="sku-picker-count"></div>
+            </div>
+            <div id="sku-picker-list" class="sku-picker-list"></div>
+            <div class="sku-picker-tip" data-i18n="panel_skuPickerTip">默认全选；取消勾选的
+                SKU 不会参与后续生成和导出。
+            </div>
+        </div>
+    </div>
+<div id="process-modal" class="settings-modal" hidden>
+        <div class="settings-dialog process-dialog">
+            <div class="settings-head">
+                <div>
+                    <div class="settings-title" data-i18n="panel_processTitle">采集与 AI 过程</div>
+                    <div class="settings-tip" data-i18n="panel_processTip">
+                        运行中可随时打开查看，便于确认插件是否卡住或报错
+                    </div>
+                </div><button id="process-close-btn" class="ghost" type="button" data-i18n="panel_actionClose">关闭</button>
+            </div>
+            <div class="process-console">
+                <div id="process-card" class="process-console-hero">
+                    <div class="process-console-main">
+                        <div id="process-title" class="process-title" data-i18n="panel_processWaiting">等待开始</div>
+                        <div id="process-detail" class="process-detail" data-i18n="panel_processDetail">
+                            运行后，采集与 AI
+                            输出会在这里按阶段展示
+                        </div>
+                    </div>
+                    <div class="process-console-meta"><span id="process-status-badge"
+                            class="process-console-badge is-idle" data-i18n="panel_statusPending">待开始</span> <span
+                            id="process-follow-indicator"
+                            class="process-console-badge is-following" data-i18n="panel_followLatest">跟随最新</span></div>
+                </div>
+                <div class="process-console-grid">
+                    <section class="process-pane process-pane--ai">
+                        <div class="process-pane-head">
+                            <div>
+                                <h4 data-i18n="panel_aiStreamTitle">AI 生成流</h4>
+                                <p data-i18n="panel_aiStreamTip">按阶段和事件展示，查看时更容易定位
+                            </div>
+                        </div>
+                        <div id="ai-output" class="process-pane-body process-stream" aria-live="polite"></div>
+                    </section>
+                    <aside class="process-pane process-pane--source">
+                        <div class="process-pane-head">
+                            <div>
+                                <h4 data-i18n="panel_sourceContextTitle">采集上下文</h4>
+                                <p data-i18n="panel_sourceContextTip">先看摘要，再看原始数据
+                            </div>
+                        </div>
+                        <div class="process-pane-body">
+                            <div class="process-source-wrap">
+                                <div id="process-source-summary" class="process-summary-grid"></div>
+                                <div class="process-raw-shell">
+                                    <div class="process-raw-head" data-i18n="panel_rawJson">原始 JSON</div>
+                                    <pre id="source-output" class="process-source-output"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+            </div>
+        </div>
+    </div>
+<div id="preview-modal" class="preview-modal" hidden>
+        <div class="preview-dialog">
+            <div class="preview-header">
+                <div id="preview-title" class="preview-title" data-i18n="panel_previewTitle">图片预览</div>
+                <div id="preview-actions" class="preview-actions" hidden><button id="preview-refine-btn" class="ghost"
+                        type="button" data-i18n="panel_actionRefine">精修</button> <button id="preview-ai-edit-btn" class="ghost" type="button"
+                        hidden data-i18n="panel_actionAiEdit">AI修改</button> <button id="preview-retry-btn" class="ghost" type="button" data-i18n="panel_actionRetryTranslate">重翻</button>
+                    <button id="preview-delete-btn" class="danger" type="button" data-i18n="panel_actionDelete">删除</button></div>
+                <div class="preview-header-end"><button id="preview-close-btn" class="ghost"
+                        type="button" data-i18n="panel_actionClose">关闭</button></div>
+            </div>
+            <div class="preview-body"><button id="preview-prev-btn" class="preview-nav-btn" type="button"
+                    hidden>‹</button>
+                <div class="preview-stage"><img id="preview-image" alt="preview"><canvas
+                        id="preview-ai-edit-mask-canvas" class="preview-ai-edit-mask-canvas" hidden></canvas>
+                    <div id="preview-counter" class="preview-counter" hidden></div>
+                </div><button id="preview-next-btn" class="preview-nav-btn" type="button" hidden>›</button>
+            </div>
+            <div id="preview-ai-edit-panel" class="preview-ai-edit-panel" hidden><textarea id="preview-ai-edit-prompt"
+                    class="preview-ai-edit-input"
+                    placeholder="输入你想让 AI 怎么修改这张图，例如：把背景换成浅灰厨房台面，保留商品不变，去掉中文文字。" data-i18n-placeholder="panel_previewAiEditPlaceholder"></textarea>
+                <div class="preview-ai-edit-tools">
+                    <div class="preview-ai-edit-mode"><button id="preview-ai-edit-full-btn" class="ghost"
+                            type="button" data-i18n="panel_previewFullEdit">全图编辑</button> <button id="preview-ai-edit-mask-btn" class="ghost"
+                            type="button" data-i18n="panel_previewMaskEdit">只改圈选</button></div>
+                    <div class="preview-ai-edit-actions"><button id="preview-ai-edit-clear-mask-btn" class="ghost"
+                            type="button" data-i18n="panel_previewClearMask">清除圈选</button> <button id="preview-ai-edit-cancel-btn" class="ghost"
+                            type="button" data-i18n="panel_actionCancel">取消</button> <button id="preview-ai-edit-submit-btn"
+                            type="button" data-i18n="panel_actionStartEdit">开始修改</button></div>
+                    <div id="preview-ai-edit-status" class="preview-ai-edit-status"></div>
+                </div>
+            </div>
+            <div id="preview-desc" class="preview-footer"></div>
+        </div>
+    </div>
+  <div id="basic-modal" class="settings-modal" hidden>
+    <div class="settings-dialog">
+      <div class="settings-head"><div><div class="settings-title">基础信息</div><div class="settings-tip">当前商品与 ERP 草稿</div></div><button class="ghost" data-close-modal="basic-modal">关闭</button></div>
+      <div class="settings-body" id="basic-info"></div>
+    </div>
+  </div>
+  <div id="shop-modal" class="settings-modal" hidden>
+    <div class="settings-dialog">
+      <div class="settings-head"><div class="settings-title">选择店铺</div><button class="ghost" data-close-modal="shop-modal">关闭</button></div>
+      <div class="settings-body"><div class="field"><label for="erp-shop-select">已授权 Ozon 店铺</label><select id="erp-shop-select"></select></div></div>
+      <div class="settings-foot"><button id="shop-confirm-btn" class="primary">确认店铺</button></div>
+    </div>
+  </div>
+</div>
+<script src="../shared/donor-workbench/workspace-contract.js"></script>
+<script src="../shared/donor-workbench/prompt-adapter.js"></script>
+<script src="../shared/donor-workbench/precision-workflow.js"></script>
+<script src="../shared/byok/profile-schema.js"></script>
+<script src="../shared/byok/permission-broker.js"></script>
+<script src="../shared/byok/permission-readiness-bridge.js"></script>
+<script src="../shared/byok/provider-settings-client.js"></script>
+<script src="../shared/byok/workbench-client.js"></script>
+<script src="../shared/donor-workbench/precision-byok-flow.js"></script>
+<script src="../shared/donor-workbench/precision-byok-edit-flow.js"></script>
+<script type="module" src="precision-workbench.js"></script>
+</body>
+</html>

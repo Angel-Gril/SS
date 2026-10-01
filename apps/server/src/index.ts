@@ -131,6 +131,10 @@ import { extensionByokExecutionBatchRoutes } from './routes/extension-byok-execu
 import { extensionByokMediaBatchRoutes } from './routes/extension-byok-media-batch.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
+import { extensionListingEditorRoutes } from './routes/extension-listing-editor.js';
+import { createExtensionListingEditorService } from './services/extension-listing-editor.js';
+import { createSourceListingAttributeEditorService } from './services/source-listing-attribute-editor.js';
+import { createSourceListingCopyEditorService } from './services/source-listing-copy-editor.js';
 import {
   EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
   extensionMediaLaunchRoutes,
@@ -2848,6 +2852,33 @@ if (isExtensionDeviceAuthEnabled()) {
         return [config.localBaseUrl, config.oss?.cdnDomain]
           .filter((value): value is string => Boolean(value));
       },
+    }),
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+  await app.register(extensionListingEditorRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    service: createExtensionListingEditorService({
+      workflow: sourceListingWorkflowService,
+      ownership: sourceListingWorkflowContext,
+      attributesEditor: createSourceListingAttributeEditorService({ workflow: sourceListingWorkflowService,
+        attributes: sourceListingWorkflowAttributeService }),
+      copyEditor: createSourceListingCopyEditorService({ workflow: sourceListingWorkflowService,
+        validateAttributes: createSourceListingAttributeEditorService({ workflow: sourceListingWorkflowService,
+          attributes: sourceListingWorkflowAttributeService }).validateAttributes }),
+      loadCatalog: async ({ ownerUserId, shopId }) => {
+        const catalog = await loadAuthoritativeOzonCategoryCatalog({
+          shopId,
+          fetchTree: async (language) => (await loadOwnedSourceListingOzonClient(ownerUserId, shopId))
+            .getDescriptionCategoryTree({ language }),
+        });
+        return { revision: catalog.catalogRevision, entries: catalog.entries };
+      },
+      retainCompatibleReviewedValues: (input) => sourceListingWorkflowAttributeService.retainCompatibleReviewedValues(input),
     }),
     featureFlags: sourceWorkflowFeatureFlags,
     authenticateDevice: authenticateExtensionDevice({

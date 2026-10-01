@@ -309,8 +309,7 @@ function stripLocalAndBroad(values) {
 
 function webResourceMatches(group, fallback) {
   return Array.isArray(group.resources)
-    && group.resources.length === 1
-    && group.resources[0] === 'pages/source-workbench-shell.html'
+    && group.resources.includes('pages/source-workbench-shell.html')
     ? EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES
     : fallback;
 }

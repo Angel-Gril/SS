@@ -56,6 +56,22 @@ export const OZON_LISTING_SUPPORTED_VAT_RATES = [
 ] as const;
 export type OzonListingVatRate = typeof OZON_LISTING_SUPPORTED_VAT_RATES[number];
 export const OZON_LISTING_OFFER_ID_MAX_LENGTH = 50;
+export const OZON_LISTING_ATTRIBUTE_MAX_VALUES = 100;
+export const SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION = 'source-listing-sku-packaging/v1' as const;
+
+export interface OzonListingSkuPackagingMeasurements {
+  weightG: number;
+  lengthMm: number;
+  widthMm: number;
+  heightMm: number;
+}
+export interface OzonListingSkuPackagingItem extends OzonListingSkuPackagingMeasurements {
+  skuKey: string;
+}
+export interface OzonListingSkuPackagingFacts {
+  contractVersion: typeof SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION;
+  items: Record<string, OzonListingSkuPackagingMeasurements>;
+}
 
 export function isOzonListingOldPriceAtLeastPrice(price: string, oldPrice: string): boolean {
   const pattern = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;

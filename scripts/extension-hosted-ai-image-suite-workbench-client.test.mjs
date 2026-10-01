@@ -347,16 +347,16 @@ function harness(options = {}) {
         return options.modeLock || modeLockResponse(binding());
       }
       if (path.startsWith(PLAN_PATH + '/current?')) {
-        return planResponse(binding());
+        return planResponse(binding(), options.plan || planView());
       }
       if (path.startsWith(PLAN_PATH + '/plan-1?')) {
-        return planResponse(binding());
+        return planResponse(binding(), options.plan || planView());
       }
       throw new Error('unexpected GET path');
     },
     async post(path, body, requestOptions) {
       calls.post.push({ path, body: plain(body), options: plain(requestOptions) });
-      if (path === PLAN_PATH) return planResponse(body.context, planView(), true);
+      if (path === PLAN_PATH) return planResponse(body.context, options.plan || planView(), true);
       if (path === PLAN_PATH + '/plan-1/review') {
         const version = planVersion();
         return planResponse(body.context, planView({
@@ -648,6 +648,67 @@ const created = await test.client.createPlan({
   binding: sourceBinding,
   idempotencyKey: 'plan-create-0001',
 });
+{
+  const creativeBrief = { prompt: '浅灰背景\n侧面柔光，保留商品主体', negativePrompt: '' };
+  const version = { ...planVersion(), creativeBrief: plain(creativeBrief) };
+  const selected = harness({ plan: planView({
+    currentVersion: version,
+    approvedVersionId: version.id,
+    approvedVersion: plain(version),
+  }) });
+  const result = await selected.client.createPlan({
+    binding: binding(), idempotencyKey: 'brief-plan-1', creativeBrief, galleryGoals: ['scene'],
+  });
+  assert.deepEqual(selected.calls.post[0].body.creativeBrief, creativeBrief);
+  assert.equal(selected.calls.post[0].body.idempotencyKey, 'brief-plan-1');
+  creativeBrief.prompt = 'changed';
+  assert.equal(selected.calls.post[0].body.creativeBrief.prompt, '浅灰背景\n侧面柔光，保留商品主体');
+  assert.deepEqual(plain(result.plan.currentVersion.creativeBrief), version.creativeBrief);
+  assert.deepEqual(plain(result.plan.approvedVersion.creativeBrief), version.creativeBrief);
+  assert.equal(Object.isFrozen(result.plan.currentVersion.creativeBrief), true);
+  await selected.client.getCurrentPlan(binding());
+  await selected.client.getPlan({ binding: binding(), planId: 'plan-1' });
+  assert.equal(api.normalizeCreativeBrief({ prompt: '😀'.repeat(300), negativePrompt: '😀'.repeat(150) }).prompt.length, 600);
+  for (const invalid of [
+    null, [], 'scene', {}, { prompt: '' }, { prompt: ' padded ' }, { prompt: '😀'.repeat(301) },
+    { prompt: 'light', negativePrompt: '😀'.repeat(151) }, { prompt: 'light', negativePrompt: null },
+    { prompt: 'light', provider: 'test' }, { prompt: 'light\tbackground' }, { prompt: 'light\u0085background' },
+    ...['https://invalid.test', 'custom://invalid', 'www.invalid.test', 'data:image/png',
+      'Authorization: Bearer secret', 'API key=secret', '方向 sk-secret123'].map((prompt) => ({ prompt })),
+  ]) {
+    await rejectsCode(selected.client.createPlan({
+      binding: binding(), idempotencyKey: 'brief-plan-1', creativeBrief: invalid,
+    }), 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
+  }
+  assert.equal(selected.calls.post.length, 1, 'invalid briefs must fail before transport');
+  for (const extra of [
+    { creativeBrief: { prompt: 'light', provider: 'test' } },
+    { creativeBrief: { prompt: 'API key=secret' } },
+    { creativeBrief: { prompt: 'light' }, prompt: 'provider raw prompt' },
+  ]) {
+    const bad = harness({ plan: planView({ currentVersion: { ...planVersion(), ...extra } }) });
+    await rejectsCode(bad.client.getCurrentPlan(binding()), 'SS_ERP_HOSTED_WORKBENCH_PLAN_RESPONSE_INVALID');
+  }
+}
+{
+  const selected = harness();
+  const candidateMediaKeys = ['reference-1', 'reference-2'];
+  assert.equal(Object.isFrozen(api.normalizeCandidateMediaKeys(candidateMediaKeys)), true, 'Worker shares the closed reference identifier validator');
+  await selected.client.createPlan({ binding: binding(), idempotencyKey: 'refs-plan-1', candidateMediaKeys });
+  assert.deepEqual(selected.calls.post[0].body.candidateMediaKeys, ['reference-1', 'reference-2']);
+  candidateMediaKeys.push('mutated');
+  assert.deepEqual(selected.calls.post[0].body.candidateMediaKeys, ['reference-1', 'reference-2']);
+  for (const invalid of [null, [], 'reference-1', ['reference-1', 'reference-1'], [''], [' padded '],
+    ['x'.repeat(501)], Array.from({ length: 26 }, (_, index) => 'reference-' + index),
+    ['ＡＢＣ'], ['reference\n1'], ['reference\u007f1'], ['https://invalid.test'],
+    ['custom://invalid'], ['data:image/png'], ['javascript:alert'], ['ws:socket'], ['www.invalid.test'], ['ref?query'], ['ref#hash']]) {
+    await rejectsCode(selected.client.createPlan({ binding: binding(), idempotencyKey: 'refs-plan-1', candidateMediaKeys: invalid }), 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
+  }
+  assert.equal(selected.calls.post.length, 1, 'invalid reference choices fail before transport');
+  const maximum = harness();
+  await maximum.client.createPlan({ binding: binding(), idempotencyKey: 'refs-bound-1', candidateMediaKeys: Array.from({ length: 25 }, (_, index) => String(index) + '-'.repeat(496)) });
+  assert.equal(maximum.calls.post[0].body.candidateMediaKeys.length, 25);
+}
 {
   const selected = harness();
   const galleryGoals = ['scene'];

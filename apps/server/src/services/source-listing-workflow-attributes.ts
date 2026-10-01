@@ -25,6 +25,8 @@ import {
 } from './ozon-attribute-validation.js';
 import type { SourceProductProfile } from './source-product-profile.js';
 import { buildOzonAttributeSuggestionProvenance } from './ozon-attribute-suggestion-provenance.js';
+import { SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION, type OzonListingSkuPackagingFacts } from 'shared';
+import { hasSourceListingSkuPackaging, projectSourceListingSkuPackaging } from './source-listing-sku-packaging.js';
 
 const CATEGORY_INDEPENDENT_MANUAL_FACT_KEYS = new Set([
   'packaging',
@@ -539,24 +541,36 @@ function withOperationalReadiness(
   const importIssues = next.report.operationReadiness.ozonImport.issues;
   const inventoryIssues = next.report.operationReadiness.inventoryActivation.issues;
   const costingIssues = next.report.operationReadiness.costingAutoPricing.issues;
+  const usesSkuPackaging = hasSourceListingSkuPackaging(draft);
+  let skuPackaging: OzonListingSkuPackagingFacts | null = null;
+  if (usesSkuPackaging) {
+    try {
+      const items = projectSourceListingSkuPackaging(draft)!;
+      skuPackaging = { contractVersion: SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION,
+        items: Object.fromEntries(items.map(({ skuKey, ...value }) => [skuKey, value])) };
+    } catch {
+      importIssues.push({ code: 'OZON_PACKAGE_SKU_PACKAGING_INVALID',
+        message: 'Every selected SKU requires a complete reviewed manual package', fieldPath: 'attributes.packaging.skuValues' });
+    }
+  }
   const manualWeight = confirmedManualNumber(draft, 'packageWeightG');
   const manualLength = confirmedManualNumber(draft, 'packageLengthMm');
   const manualWidth = confirmedManualNumber(draft, 'packageWidthMm');
   const manualHeight = confirmedManualNumber(draft, 'packageHeightMm');
-  const weight = manualWeight?.value ?? facts.packageWeightG;
+  const weight = usesSkuPackaging ? null : manualWeight?.value ?? facts.packageWeightG;
   const dimensions = {
-    lengthMm: manualLength?.value ?? facts.packageLengthMm,
-    widthMm: manualWidth?.value ?? facts.packageWidthMm,
-    heightMm: manualHeight?.value ?? facts.packageHeightMm,
+    lengthMm: usesSkuPackaging ? null : manualLength?.value ?? facts.packageLengthMm,
+    widthMm: usesSkuPackaging ? null : manualWidth?.value ?? facts.packageWidthMm,
+    heightMm: usesSkuPackaging ? null : manualHeight?.value ?? facts.packageHeightMm,
   };
-  if (facts.requirements.packageWeightForImport && weight == null) {
+  if (!usesSkuPackaging && facts.requirements.packageWeightForImport && weight == null) {
     importIssues.push({
       code: 'OZON_PACKAGE_WEIGHT_REQUIRED',
       message: 'Ozon product import requires a confirmed package weight',
       fieldPath: 'operational.packageWeightG',
     });
   }
-  if (facts.requirements.packageDimensionsForImport
+  if (!usesSkuPackaging && facts.requirements.packageDimensionsForImport
     && Object.values(dimensions).some((value) => value == null)) {
     importIssues.push({
       code: 'OZON_PACKAGE_DIMENSIONS_REQUIRED',
@@ -603,14 +617,15 @@ function withOperationalReadiness(
       ...(manualHeight ? { packageHeightMm: manualHeight.evidence.join(', ') } : {}),
     },
     sources: {
-      packageWeightG: manualWeight ? 'MANUAL' : 'SOURCE',
-      packageLengthMm: manualLength ? 'MANUAL' : 'SOURCE',
-      packageWidthMm: manualWidth ? 'MANUAL' : 'SOURCE',
-      packageHeightMm: manualHeight ? 'MANUAL' : 'SOURCE',
+      packageWeightG: usesSkuPackaging || manualWeight ? 'MANUAL' : 'SOURCE',
+      packageLengthMm: usesSkuPackaging || manualLength ? 'MANUAL' : 'SOURCE',
+      packageWidthMm: usesSkuPackaging || manualWidth ? 'MANUAL' : 'SOURCE',
+      packageHeightMm: usesSkuPackaging || manualHeight ? 'MANUAL' : 'SOURCE',
       selectedStock: 'SOURCE',
       shippingCny: 'SOURCE',
     },
     importContract: structuredClone(facts.requirements.importContract),
+    ...(skuPackaging ? { skuPackaging } : {}),
   };
   return next;
 }
@@ -1340,9 +1355,14 @@ export function createSourceListingWorkflowAttributeService(
       actorUserId: string;
       draft: OzonListingDraft;
       changes: SourceListingAttributeManualChange[];
+      expectedSchemaRevision?: string;
     }): Promise<Record<string, OzonListingDraftAttributeValue>> {
       const dictionaryMemo: DictionaryMemo = new Map();
       const schema = await loadSchema(input);
+      if (input.expectedSchemaRevision !== undefined && input.expectedSchemaRevision !== schemaRevision(schema)) {
+        throw new SourceListingWorkflowAttributeError('OZON_ATTRIBUTE_SCHEMA_MISMATCH', 409,
+          'Official attribute schema changed before preparing manual values');
+      }
       const sourceContext = await options.loadSourceContext(input);
       const values = structuredClone(input.draft.attributes.values);
       const selectedKeys = selectedSkuKeys(input.draft);
@@ -1353,7 +1373,8 @@ export function createSourceListingWorkflowAttributeService(
         if (!field) throw new SourceListingWorkflowAttributeError(
           'OZON_ATTRIBUTE_FIELD_UNKNOWN', 422, `Unknown Ozon attribute ${change.attributeId}`,
         );
-        if (field.editorMode === 'READ_ONLY' || field.editorMode === 'MEDIA_WORKBENCH') {
+        if (field.ownership === 'SYSTEM' || field.ownership === 'MEDIA'
+          || field.editorMode === 'READ_ONLY' || field.editorMode === 'MEDIA_WORKBENCH') {
           throw new SourceListingWorkflowAttributeError(
             'OZON_ATTRIBUTE_FIELD_READ_ONLY', 422, `${field.name} is managed by the system`,
           );

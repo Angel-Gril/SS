@@ -56,6 +56,118 @@ function extensionSender(path, overrides = {}) {
   };
 }
 
+function precisionFrameSender(overrides = {}) {
+  return extensionSender('/pages/precision-workbench.html', {
+    frameId: 7, documentId: 'precision-document-1',
+    tab: { id: 12, url: 'https://detail.1688.com/offer/990499606077.html' }, ...overrides,
+  });
+}
+
+test('precision registration is a closed iframe-only command and grants no workbench or legacy authority', async () => {
+  const { api } = loadApi();
+  const type = api.MESSAGE_TYPES.PRECISION_FRAME?.PUBLIC_UI_REGISTER;
+  assert.equal(type, 'ss-erp:precision-frame-ui-register');
+  const registered = await api.authorizeRuntimeMessage({ runtimeId: extensionId,
+    sender: precisionFrameSender(), message: { type, payload: {} } });
+  assert.equal(registered.allowed, true);
+  for (const sender of [precisionFrameSender({ frameId: 0 }), precisionFrameSender({ documentId: '' }),
+    precisionFrameSender({ url: `chrome-extension://${extensionId}/pages/precision-workbench.html?fake=1` }),
+    precisionFrameSender({ id: 'foreign' }), extensionSender('/pages/settings.html')]) {
+    assert.equal((await api.authorizeRuntimeMessage({ runtimeId: extensionId, sender, message: { type, payload: {} } })).allowed, false);
+  }
+  for (const payload of [{ authenticated: true }, { frameId: 0 }, { apiKey: 'opaque-secret' }]) {
+    assert.equal((await api.authorizeRuntimeMessage({ runtimeId: extensionId,
+      sender: precisionFrameSender(), message: { type, payload } })).allowed, false);
+  }
+  assert.equal(api.isAllowedRuntimeMessageSender('spb-self-hosted:get-config', precisionFrameSender(), extensionId), false);
+  assert.equal(api.isAllowedRuntimeMessageSender('ss-erp:source-listing-workbench-draft-create', precisionFrameSender(), extensionId), false);
+});
+
+test('precision settings require registered frame authority and media actions require MEDIA_READY', async () => {
+  const { api } = loadApi();
+  const frame = precisionFrameSender();
+  const settings = { type: api.MESSAGE_TYPES.PROVIDER_SETTINGS.LIST_PROFILES, payload: {} };
+  const missing = await api.authorizeRuntimeMessage({ runtimeId: extensionId, sender: frame, message: settings });
+  assert.equal(missing.allowed, false);
+  assert.equal(missing.code, 'SS_ERP_PRECISION_FRAME_AUTHORIZATION_UNAVAILABLE');
+  assert.equal((await api.authorizeRuntimeMessage({ runtimeId: extensionId, sender: frame, message: settings,
+    authorizeEmbeddedFrame: async () => 'UI_REGISTERED' })).allowed, true);
+  const media = { type: api.MESSAGE_TYPES.WORKBENCH.EDIT_STATE, payload: {} };
+  assert.equal((await api.authorizeRuntimeMessage({ runtimeId: extensionId, sender: frame, message: media,
+    authorizeEmbeddedFrame: async () => 'UI_REGISTERED' })).allowed, false);
+  assert.equal((await api.authorizeRuntimeMessage({ runtimeId: extensionId, sender: frame, message: media,
+    authorizeEmbeddedFrame: async () => 'MEDIA_READY' })).allowed, true);
+});
+
+test('precision Provider requests retain exact server readiness and never accept page media assertions', async () => {
+  const { api } = loadApi();
+  const binding = readinessBinding(api);
+  const message = { type: api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
+    payload: { profileId: 'profile-1', prompt: 'a neutral scene' }, readinessHandle: 'opaque-readiness', readinessBinding: binding };
+  let calls = 0;
+  const common = { runtimeId: extensionId, sender: precisionFrameSender(), message,
+    now: () => new Date('2026-07-25T12:00:00Z'), authorizeEmbeddedFrame: async () => 'MEDIA_READY' };
+  assert.equal((await api.authorizeRuntimeMessage(common)).allowed, false);
+  assert.equal((await api.authorizeRuntimeMessage({ ...common, verifyReadinessHandle: async ({ expectedBinding }) => {
+    calls += 1; return verifiedReadiness(api, expectedBinding);
+  } })).allowed, true);
+  assert.equal(calls, 1);
+  assert.equal((await api.authorizeRuntimeMessage({ ...common, authorizeEmbeddedFrame: async () => ({ authenticated: true, state: 'MEDIA_READY' }),
+    verifyReadinessHandle: async () => { throw new Error('must not consume readiness'); } })).allowed, false);
+});
+
+test('precision session key uses the direct private runtime boundary once and suppresses leaked responses', async () => {
+  const { api } = loadApi();
+  const secret = 'opaque-precision-secret-sentinel';
+  const type = api.MESSAGE_TYPES.PROVIDER_SETTINGS.SET_SESSION_KEY;
+  const sent = [];
+  let invoked = 0;
+  await api.dispatchAuthorizedRuntimeMessage({ runtimeId: extensionId, sender: precisionFrameSender(),
+    message: { type, payload: { profileId: 'profile-1', apiKey: secret } },
+    authorizeEmbeddedFrame: async () => 'UI_REGISTERED',
+    handlers: { [type]: async ({ sender, readSecretPayload, payload }) => {
+      invoked += 1;
+      assert.equal(sender.frameId, 7);
+      assert.equal(sender.url, `chrome-extension://${extensionId}/pages/precision-workbench.html`);
+      assert.equal(payload, undefined);
+      const key = readSecretPayload();
+      assert.equal(key.apiKey, secret);
+      assert.throws(() => readSecretPayload(), /SECRET_ALREADY_READ/u);
+      return { ok: true, data: { apiKey: key.apiKey } };
+    } }, sendResponse: (response) => sent.push(response) });
+  assert.equal(invoked, 1);
+  assert.equal(sent[0].errorCode, 'SS_ERP_RUNTIME_RESPONSE_SECRET');
+  assert.equal(JSON.stringify(sent).includes(secret), false);
+});
+
+test('keeps precision editor mutations on the source page while denying extension and foreign page senders', () => {
+  const { policy } = loadApi();
+  const url = 'https://detail.1688.com/offer/845581683597.html';
+  const source = { id: extensionId, url, documentUrl: url, origin: new URL(url).origin,
+    frameId: 0, tab: { id: 12, url }, documentId: 'source-document-1' };
+  const type = 'ss-erp:source-listing-workbench-editor-save';
+  assert.equal(policy.isAllowedRuntimeMessageSender(type, source, extensionId), true);
+  for (const sender of [extensionSender('/pages/precision-workbench.html'), extensionSender('/pages/settings.html'),
+    { ...source, url: 'https://other.invalid/', origin: 'https://other.invalid' }, { ...source, frameId: 1 }]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false);
+  }
+});
+
+test('limits precision publish actions to the exact source-product main frame', () => {
+  const { policy } = loadApi();
+  const url = 'https://detail.1688.com/offer/845581683597.html';
+  const source = { id: extensionId, url, documentUrl: url, origin: new URL(url).origin,
+    frameId: 0, tab: { id: 12, url }, documentId: 'source-document-1' };
+  const type = 'ss-erp:source-listing-workbench-publish';
+  assert.equal(policy.isKnownRuntimeMessageType(type), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(type, source, extensionId), true);
+  for (const sender of [extensionSender('/pages/precision-workbench.html'), extensionSender('/pages/ai-image-workbench.html'),
+    { ...source, frameId: 1 }, { ...source, url: 'https://s.1688.com/selloffer/offer_search.htm' },
+    { ...source, id: 'foreign' }, { ...source, documentId: '' }]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false);
+  }
+});
+
 test('limits selected-edit review handoff to the exact workbench page', () => {
   const { api, policy } = loadApi();
   const type = 'ss-erp:ai-image-workbench-edit-review';

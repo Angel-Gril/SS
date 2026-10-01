@@ -3366,7 +3366,8 @@
     walkObject: walkObject,
     hasAnyKey: hasAnyKey,
     pickFirstValue: pickFirstValue,
-    extract1688ProductFromSources: extract1688ProductFromSources
+    extract1688ProductFromSources: extract1688ProductFromSources,
+    build1688SourceProductCaptureV2: build1688SourceProductCaptureV2
   };
 
   if (typeof module !== 'undefined' && module.exports) {

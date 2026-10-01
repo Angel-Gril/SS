@@ -34,6 +34,9 @@ try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch 
 try { importScripts('../shared/byok/generated-asset-batch-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch ingest client load error:', e); }
 try { importScripts('../shared/byok/listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] BYOK publish coordinator load error:', e); }
 try { importScripts('../shared/publish/workbench-listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] workbench publish coordinator load error:', e); }
+try { importScripts('../shared/publish/source-workbench-publish-controller.js'); } catch (e) { console.warn('[SS ERP] source publish controller load error:', e); }
+try { importScripts('../shared/byok/precision-source-admission.js'); } catch (e) { console.warn('[SS ERP] precision source admission load error:', e); }
+try { importScripts('../shared/byok/precision-frame-registration.js'); } catch (e) { console.warn('[SS ERP] precision frame registry load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
@@ -41,6 +44,8 @@ try { importScripts('../shared/donor-workbench/prompt-handoff.js'); } catch (e) 
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
 try { importScripts('../shared/byok/workbench-source-media-library.js'); } catch (e) { console.warn('[SS ERP] BYOK source media library load error:', e); }
 try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
+let precisionSourceAdmission = null;
+let precisionFrameRegistry = null;
 try { importScripts('../shared/byok/workbench-batch-registry.js'); } catch (e) { console.warn('[SS ERP] BYOK batch registry load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK batch runtime handler load error:', e); }
 try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
@@ -498,6 +503,8 @@ async function clearCachedByokGeneratedResults() {
           if (!failure) failure = error;
         }
       }
+      if (precisionFrameRegistry) await precisionFrameRegistry.clear();
+      if (precisionSourceAdmission) precisionSourceAdmission.clear();
       if (failure) throw failure;
     };
     if (byokWorkbenchBatchRegistry) {
@@ -2099,6 +2106,7 @@ function getByokWorkbenchSessionManager() {
       await assertErpSourceDeviceAuthority(authority);
       return true;
     },
+    resolveEmbeddedFrame: (sender) => getPrecisionFrameRegistry().claimFrame(sender, { mediaRequired: false }),
     onDiscardedResult: (resultId) => {
       try { byokGeneratedResultVault?.release(resultId); } catch (_error) {}
       try { byokGeneratedAssetIngestClient?.discardResult(resultId); } catch (_error) {}
@@ -2327,6 +2335,7 @@ function getByokWorkbenchRuntimeDispatcher() {
   byokWorkbenchRuntimeDispatcher = api.createDispatcher({
     messageTypes: authorization.MESSAGE_TYPES.WORKBENCH,
     sessionManager: getByokWorkbenchSessionManager(),
+    precisionFrameRegistry: getPrecisionFrameRegistry(),
     launchClient: getByokWorkbenchLaunchClient(),
     assertSourceCurrent: assertSourceAiWorkbenchPageCurrent,
     profileStore: getByokProfileStore(),
@@ -2364,6 +2373,9 @@ function installByokReadinessRuntime() {
     ...workbenchDispatcher.handlers,
     ...batchWorkbenchDispatcher.handlers,
     ...hostedWorkbenchDispatcher.handlers,
+    [authorization.MESSAGE_TYPES.PRECISION_FRAME.PUBLIC_UI_REGISTER]: async (context) => ({
+      ok: true, data: await getPrecisionFrameRegistry().registerFrame(context.sender),
+    }),
   });
   globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
     getByokReadinessHandleCache().consume(input)
@@ -2771,6 +2783,78 @@ function sourceAiWorkbenchSenderIdentity(sender, platform, sourceProductId) {
   };
 }
 
+function precisionSourceProductUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== 'https:' || url.hash) return null;
+  const match = url.pathname.match(/^\/offer\/([^/]+)\.html$/u);
+  let productId;
+  try { productId = match ? decodeURIComponent(match[1]) : url.searchParams.get('goods_id') || url.searchParams.get('id'); } catch { return null; }
+  if (!productId) return null;
+  for (const platform of ['1688', 'pdd', 'taobao', 'tmall']) {
+    if (sourcePageUrlMatches(platform, productId, value)) return { sourcePlatform: platform, sourceProductId: productId };
+  }
+  return null;
+}
+function getPrecisionSourceAdmission() {
+  if (precisionSourceAdmission) return precisionSourceAdmission;
+  const factory = globalThis.SS_ERP_PRECISION_SOURCE_ADMISSION;
+  if (!factory) throw new Error('精铺来源会话模块未加载');
+  precisionSourceAdmission = factory.create({
+    runtimeId: chrome.runtime.id,
+    getTab: (tabId) => chrome.tabs.get(tabId),
+    sendToSourcePage: (tabId, message, options) => chrome.tabs.sendMessage(tabId, message, options),
+    readDevice: async () => {
+      const device = await readExtensionDeviceStatus(true);
+      if (device.endpoint !== packagedErpDeviceBaseUrl()) throw new Error('设备 ERP origin 不匹配');
+      return device;
+    },
+    resolveProductUrl: precisionSourceProductUrl,
+    isPreviewAllowed: async ({ sourcePlatform, sourceProductId }) => {
+      const settings = await chrome.storage.local.get(['ss-erp:donor-workbench-preview-enabled',
+        'ss-erp:precision-workbench-preview-enabled', 'ss-erp:donor-workbench-preview-allowlist:v1']);
+      const list = settings['ss-erp:donor-workbench-preview-allowlist:v1'];
+      return settings['ss-erp:donor-workbench-preview-enabled'] === true
+        && settings['ss-erp:precision-workbench-preview-enabled'] === true && Array.isArray(list) && list.length <= 20
+        && list.includes(`${sourcePlatform}:${sourceProductId}`);
+    },
+    randomNonce: () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join(''),
+    now: () => Date.now(),
+  });
+  return precisionSourceAdmission;
+}
+async function validatePrecisionMediaContext({ frame, source, context }) {
+  const currentSource = await getPrecisionSourceAdmission().resolveSource(frame);
+  if (JSON.stringify(currentSource) !== JSON.stringify(source)) throw new Error('来源或设备会话已变化');
+  const handoff = await readPersistedSourceWorkflowHandoff(source.sourcePlatform, source.sourceProductId);
+  if (!handoff || handoff.snapshotId !== context.sourceCaptureSnapshotId || handoff.supplyGoodsId !== context.supplyGoodsId) {
+    throw new Error('来源快照已变化，请重新读取');
+  }
+  const status = await getSourceListingWorkflowClient().getStatus({ snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId });
+  const listing = currentSourceListingContext(status, context.workflowId);
+  if (status?.status?.snapshot?.current !== true || !listing || listing.shopId !== context.shopId
+    || listing.revision !== context.draftRevision || listing.draftVersion !== context.draftVersion) throw new Error('草稿媒体上下文已变化');
+  const decision = await getByokWorkbenchLaunchClient().resolve({
+    sourcePlatform: source.sourcePlatform, sourceProductId: source.sourceProductId,
+    sourceCaptureSnapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId,
+    shopId: listing.shopId, workflowId: listing.listingWorkflowId, draftRevision: listing.revision, draftVersion: listing.draftVersion,
+    preferredSkuKey: context.skuKey, selectionKind: 'EXPLICIT',
+  });
+  if (!decision || !['READY', 'REVIEW_PUBLISH_ONLY'].includes(decision.state) || !decision.context) throw new Error('服务器未批准图片上下文');
+  return decision.context;
+}
+function getPrecisionFrameRegistry() {
+  if (precisionFrameRegistry) return precisionFrameRegistry;
+  const factory = globalThis.SS_ERP_PRECISION_FRAME_REGISTRATION;
+  const sessionApi = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION;
+  if (!factory || !sessionApi) throw new Error('精铺扩展会话模块未加载');
+  precisionFrameRegistry = factory.createRegistry({ runtimeId: chrome.runtime.id, sessionStorage: chrome.storage.session,
+    resolveSource: (frame) => getPrecisionSourceAdmission().resolveSource(frame),
+    validateMediaContext: validatePrecisionMediaContext, normalizeMediaContext: sessionApi.normalizeContext,
+    now: () => Date.now() });
+  return precisionFrameRegistry;
+}
+
 async function assertSourceAiWorkbenchPageCurrent(value) {
   const sourceSender = value && value.sourceSender;
   const request = value && value.request;
@@ -2838,7 +2922,7 @@ function sourceAiWorkbenchChoiceBinding(value) {
     ? binding : null;
 }
 
-async function openAuthoritativeSourceAiWorkbench(message, sender) {
+async function openAuthoritativeSourceAiWorkbench(message, sender, embedded = false) {
   const allowedMessageKeys = new Set([
     'type', 'platform', 'sourceProductId', 'listingWorkflowId', 'preferredSkuKey',
     'choiceBinding', 'sourceSelectionKey', 'promptDraft',
@@ -2910,7 +2994,8 @@ async function openAuthoritativeSourceAiWorkbench(message, sender) {
     if (choiceBinding && SOURCE_AI_WORKBENCH_BINDING_KEYS.some(
       (key) => choiceBinding[key] !== currentBinding[key],
     )) return { state: 'stale' };
-    const result = await getByokWorkbenchRuntimeDispatcher().openFromSource({
+    const dispatcher = getByokWorkbenchRuntimeDispatcher();
+    const result = await dispatcher[embedded ? 'openEmbeddedFromSource' : 'openFromSource']({
       request: {
         ...currentBinding,
         preferredSkuKey,
@@ -3065,6 +3150,10 @@ async function sourceAiImageSuiteOperationKey(prefix, value) {
 }
 
 async function executeAuthoritativeSourceAiImageSuitePlan(message) {
+  const creativeBrief = message.creativeBrief === undefined ? undefined
+    : globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT.normalizeCreativeBrief(message.creativeBrief);
+  const candidateMediaKeys = message.candidateMediaKeys === undefined ? undefined
+    : globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT.normalizeCandidateMediaKeys(message.candidateMediaKeys);
   const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
   if (authority.result.projection.plan !== null) {
     throw new Error('ERP AI 主图/套图计划已存在，请刷新后继续');
@@ -3079,6 +3168,8 @@ async function executeAuthoritativeSourceAiImageSuitePlan(message) {
     binding,
     idempotencyKey: createIdempotencyKey,
     galleryGoals: ['scene'],
+    ...(creativeBrief === undefined ? {} : { creativeBrief }),
+    ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys }),
   });
   if (!created || !created.plan
     || !['PENDING', 'APPROVED'].includes(created.plan.reviewStatus)) {
@@ -3115,16 +3206,68 @@ async function executeAuthoritativeSourceAiImageSuitePlan(message) {
   };
 }
 
+const sourceWorkbenchPublishControllers = new Map();
+async function executeSourceWorkbenchPublish(message, sender) {
+  const fields = ['type', 'platform', 'sourceProductId', 'listingWorkflowId', 'action'];
+  if (message?.action === 'CONFIRM') fields.push('previewHash');
+  if (!message || Object.keys(message).length !== fields.length || Object.keys(message).some((key) => !fields.includes(key))) {
+    throw new Error('上传请求字段无效');
+  }
+  const platform = sourceWorkflowPlatform(message.platform);
+  const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+  const identity = sourceAiWorkbenchSenderIdentity(sender, platform, sourceProductId);
+  if (!identity) throw new Error('请从当前来源商品页上传');
+  const controllerKey = JSON.stringify([platform, sourceProductId, identity.tabId, identity.documentId]);
+  let controller = sourceWorkbenchPublishControllers.get(controllerKey);
+  if (!controller) {
+    if (sourceWorkbenchPublishControllers.size >= 8) throw new Error('已有较多上传上下文，请先完成原任务的状态核对');
+    const factory = globalThis.SS_ERP_SOURCE_WORKBENCH_PUBLISH_CONTROLLER;
+    if (!factory) throw new Error('上传适配尚未加载');
+    controller = factory.create({
+      coordinator: getWorkbenchListingPublishCoordinator(),
+      loadBasis: async (listingWorkflowId) => {
+        const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+        if (!handoff || handoff.platform !== platform || handoff.sourceProductId !== sourceProductId) throw new Error('请先采集当前商品');
+        const client = getSourceListingWorkflowClient();
+        const status = await client.getStatus({ snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId });
+        if (status?.state !== 'ready' || status.status?.snapshot?.current !== true) throw new Error('来源快照已变化，请重新采集');
+        const listing = currentSourceListingContext(status, listingWorkflowId);
+        if (!listing) throw new Error('所选店铺草稿已变化');
+        const read = await client.readDraftEditor({ snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId,
+          shopId: listing.shopId, listingWorkflowId: listing.listingWorkflowId,
+          draftRevision: listing.revision, draftVersion: listing.draftVersion });
+        if (read?.state !== 'ready' || !read.editor) throw new Error('无法读取上传草稿');
+        const editor = read.editor;
+        return { binding: { shopId: editor.binding.shopId, workflowId: editor.binding.listingWorkflowId,
+          draftRevision: editor.binding.draftRevision, draftVersion: editor.binding.draftVersion },
+          selectedSkuKeys: editor.selectedSkuKeys, mediaAssignments: editor.mediaAssignments,
+          stage: editor.stage, validation: editor.validation };
+      },
+    });
+    sourceWorkbenchPublishControllers.set(controllerKey, controller);
+  }
+  return controller.execute({ listingWorkflowId: message.listingWorkflowId, action: message.action,
+    ...(message.action === 'CONFIRM' ? { previewHash: message.previewHash } : {}) });
+}
+
 async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   const allowedKeys = new Set([
     'type', 'sourceProductId', 'platform', 'listingWorkflowId',
     'action', 'slotId', 'slotKey', 'decision', 'costConfirmed', 'intentWitness',
+    'creativeBrief',
+    'candidateMediaKeys',
+    'quoteWitness',
   ]);
   if (!message || typeof message !== 'object' || Array.isArray(message)
     || Object.keys(message).some((key) => !allowedKeys.has(key))) {
     throw new Error('ERP AI 主图/套图请求字段无效');
   }
   const action = typeof message.action === 'string' ? message.action : '';
+  if (message.quoteWitness !== undefined && action !== 'START') throw new Error('ERP AI 主图/套图请求字段无效');
+  if ((Object.prototype.hasOwnProperty.call(message, 'creativeBrief') || Object.prototype.hasOwnProperty.call(message, 'candidateMediaKeys'))
+    && action !== 'CREATE_AND_REVIEW_PLAN') {
+    throw new Error('ERP AI 主图/套图请求字段无效');
+  }
   if (!['CREATE_AND_REVIEW_PLAN', 'START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT']
     .includes(action)) {
     throw new Error('ERP AI 主图/套图操作无效');
@@ -3169,6 +3312,15 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
   }
 
   const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
+  if (message.quoteWitness !== undefined) {
+    const quote = message.quoteWitness;
+    const preview = authority.result.projection?.plan?.preview;
+    if (!quote || typeof quote !== 'object' || Array.isArray(quote)
+      || Object.keys(quote).length !== 4 || Object.keys(quote).some((key) => !['previewHash', 'currency', 'itemCount', 'maxCostMinor'].includes(key))
+      || !preview || !/^[a-f0-9]{64}$/u.test(quote.previewHash) || quote.previewHash !== preview.hash
+      || quote.currency !== (preview.currency || 'USD') || quote.itemCount !== preview.itemCount
+      || quote.maxCostMinor !== preview.maximumCostCents) throw new Error('套图报价或计划已变化，请重新读取后确认');
+  }
   const intentContract = globalThis.SS_ERP_LISTING_WORKFLOW_CLIENT;
   if (!intentContract
     || typeof intentContract.createAiImageSuiteIntentWitness !== 'function'
@@ -6340,6 +6492,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handlers: globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {},
       verifyReadinessHandle: globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER,
       forbiddenResponseValues: globalThis.SS_ERP_BYOK_RESPONSE_SECRET_VALUES,
+      authorizeEmbeddedFrame: (input) => getPrecisionFrameRegistry().authorizeEmbeddedFrame(input),
     })).catch(() => {
       try {
         sendResponse({
@@ -6388,8 +6541,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
-  if (message.type === SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE) {
-    Promise.resolve(openAuthoritativeSourceAiWorkbench(message, sender)).then((result) => {
+  if (message.type === SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE || message.type === 'ss-erp:precision-media-open') {
+    Promise.resolve(openAuthoritativeSourceAiWorkbench(message, sender, message.type === 'ss-erp:precision-media-open')).then((result) => {
       sendResponse({ ok: true, result });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -6434,6 +6587,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
+    return true;
+  }
+
+  if (['ss-erp:source-listing-workbench-editor-read', 'ss-erp:source-listing-workbench-editor-catalog', 'ss-erp:source-listing-workbench-editor-save',
+    'ss-erp:source-listing-workbench-editor-attributes', 'ss-erp:source-listing-workbench-editor-dictionary'].includes(message.type)) {
+    let mutationAttempted = false;
+    Promise.resolve().then(async () => {
+      const platform = sourceWorkflowPlatform(message.platform);
+      const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+      const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      if (!handoff) throw new Error('请先采集当前来源商品');
+      const client = getSourceListingWorkflowClient();
+      const status = await client.getStatus({ snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId });
+      const listing = currentSourceListingContext(status, message.listingWorkflowId);
+      const requested = message.binding;
+      if (!listing || !requested || requested.snapshotId !== handoff.snapshotId || requested.supplyGoodsId !== handoff.supplyGoodsId
+        || requested.shopId !== listing.shopId || requested.listingWorkflowId !== listing.listingWorkflowId) throw new Error('草稿编辑上下文已变化');
+      const binding = {
+        snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId, shopId: listing.shopId,
+        listingWorkflowId: listing.listingWorkflowId, draftRevision: requested.draftRevision, draftVersion: requested.draftVersion,
+      };
+      if (message.type.endsWith('-save')) mutationAttempted = true;
+      const result = message.type.endsWith('-save')
+        ? await client.saveDraftEditor({ binding, action: message.action, operationKey: message.operationKey, value: message.value })
+        : message.type.endsWith('-catalog') ? await client.readDraftCatalog({ binding, query: message.query })
+        : message.type.endsWith('-attributes') ? await client.readDraftAttributes(binding)
+        : message.type.endsWith('-dictionary') ? await client.readDraftDictionary({ binding, schemaRevision: message.schemaRevision,
+          attributeId: message.attributeId, query: message.query, limit: message.limit }) : await client.readDraftEditor(binding);
+      if (!result || result.state !== 'ready') throw new Error('草稿编辑读取或保存未完成');
+      return result;
+    }).then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message || String(error),
+      outcome: error.outcome || (mutationAttempted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'), code: error.code || null }));
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-listing-workbench-publish') {
+    executeSourceWorkbenchPublish(message, sender).then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error), outcome: error.outcome || 'NOT_SUBMITTED' }));
+    return true;
+  }
+
+  if (message.type === 'ss-erp:precision-source-attestation') {
+    getPrecisionSourceAdmission().acceptAttestation(message, sender).then((accepted) => sendResponse({ ok: accepted }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
 
@@ -8234,6 +8431,17 @@ if (chrome.tabs?.onRemoved?.addListener) {
       Promise.resolve().then(() => getByokWorkbenchBatchRegistry().removeTab(tabId)),
       Promise.resolve().then(() => getHostedAiImageSuiteClientRegistry().removeTab(tabId)),
       Promise.resolve().then(() => getDonorPromptHandoffStore().clearTab(tabId)),
+      Promise.resolve().then(() => precisionFrameRegistry && precisionFrameRegistry.invalidateTab(tabId)),
+      Promise.resolve().then(() => precisionSourceAdmission && precisionSourceAdmission.invalidateTab(tabId)),
+    ]).catch(() => {});
+  });
+}
+if (chrome.tabs?.onUpdated?.addListener) {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status !== 'loading' && !changeInfo.url) return;
+    Promise.allSettled([
+      Promise.resolve().then(() => precisionFrameRegistry && precisionFrameRegistry.invalidateTab(tabId)),
+      Promise.resolve().then(() => precisionSourceAdmission && precisionSourceAdmission.invalidateTab(tabId)),
     ]).catch(() => {});
   });
 }

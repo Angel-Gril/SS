@@ -16,6 +16,7 @@ import type {
   OzonListingDraftMediaAssignment,
   OzonListingPublishIntent,
   OzonListingWorkflowIssue,
+  OzonListingSkuPackagingItem,
   SourceListingWorkflowRunState,
 } from 'shared';
 import {
@@ -26,7 +27,22 @@ import {
   mergeSourceListingWorkflowReadiness,
   sourceListingWorkflowReadinessIssues,
   validateSourceListingPricing,
+  type SourceListingAttributeValidationInput,
 } from './source-listing-workflow-readiness.js';
+import {
+  assertSourceListingSkuPackagingCoverage,
+  normalizeSourceListingSkuPackagingItems,
+} from './source-listing-sku-packaging.js';
+import {
+  SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_BYTES,
+  SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_NODES,
+  SOURCE_LISTING_JSON_VALUE_MAX_DEPTH,
+  inspectSourceListingJsonValue,
+  sourceListingJsonLimitMessage,
+} from './source-listing-json-limits.js';
+import { normalizeSourceListingManualAttributeChanges } from './source-listing-manual-attribute-changes.js';
+import type { SourceListingAttributeManualChange } from './source-listing-workflow-attributes.js';
+import { SOURCE_LISTING_MANUAL_COPY_PROMPT_VERSION, normalizeSourceListingManualCopy } from './source-listing-manual-copy.js';
 
 type IdFactory = (prefix: string) => string;
 
@@ -387,6 +403,7 @@ export function createSourceListingWorkflowService(options: {
 }) {
   const now = options.now || (() => new Date());
   const idFactory = options.idFactory || ((prefix: string) => `${prefix}-${randomUUID()}`);
+  const editorMutations = new Map<string, { requestHash: string; operation: Promise<OzonListingDraft> }>();
 
   function timestamp(): string {
     return now().toISOString();
@@ -433,7 +450,7 @@ export function createSourceListingWorkflowService(options: {
     ownerUserId: string;
     actorUserId: string;
     expectedRevision: number;
-  }, update: (draft: OzonListingDraft) => OzonListingDraft): Promise<OzonListingDraft> {
+  }, update: (draft: OzonListingDraft) => OzonListingDraft | Promise<OzonListingDraft>): Promise<OzonListingDraft> {
     const draft = await getDraft(input);
     if (draft.revision !== input.expectedRevision) {
       throw new SourceListingWorkflowError(
@@ -449,7 +466,7 @@ export function createSourceListingWorkflowService(options: {
     }
     const working = structuredClone(draft);
     working.grantRevocation = { required: false, reason: null, previousShopId: null };
-    const next = update(working);
+    const next = await update(working);
     next.revision = draft.revision + 1;
     next.updatedAt = timestamp();
     try {
@@ -457,6 +474,125 @@ export function createSourceListingWorkflowService(options: {
     } catch (error) {
       return mapRepositoryError(error);
     }
+  }
+
+  async function idempotentEditorMutation(
+    input: { draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number; expectedDraftVersion?: number; operationKey?: string },
+    kind: 'CATEGORY_CHANGED' | 'PRICING_CHANGED' | 'MANUAL_FACT_CONFIRMED' | 'ATTRIBUTE_VALUES_CHANGED' | 'AI_COPY_CANDIDATE_CREATED' | 'VALIDATION_RECORDED',
+    value: unknown,
+    update: (draft: OzonListingDraft) => OzonListingDraft | Promise<OzonListingDraft>,
+  ): Promise<OzonListingDraft> {
+    if (input.operationKey === undefined) return mutate(input, update);
+    const operationKey = boundedText(input.operationKey, 'editor operation key', 128);
+    if (operationKey.length < 8 || operationKey !== input.operationKey) {
+      throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Invalid editor operation key', 400);
+    }
+    const requestHash = createHash('sha256').update(canonicalJson({
+      kind, draftId: input.draftId, ownerUserId: input.ownerUserId,
+      actorUserId: input.actorUserId, expectedRevision: input.expectedRevision, expectedDraftVersion: input.expectedDraftVersion, value,
+    })).digest('hex');
+    async function replay() {
+      const current = await getDraft(input);
+      const receipt = current.auditEvents.find((entry) => entry.details?.editorOperationKey === operationKey);
+      if (!receipt) return null;
+      if (receipt.type !== kind || receipt.details?.editorRequestHash !== requestHash) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Editor operation key conflicts with another request', 409);
+      }
+      return getDraftVersion({ ...input, draftVersion: receipt.draftVersion });
+    }
+    const flightKey = canonicalJson({ draftId: input.draftId, ownerUserId: input.ownerUserId, actorUserId: input.actorUserId, operationKey });
+    const running = editorMutations.get(flightKey);
+    if (running) {
+      if (running.requestHash !== requestHash) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Editor operation key conflicts with an active request', 409);
+      }
+      return running.operation;
+    }
+    const operation = (async () => {
+      const previous = await replay();
+      if (previous) return previous;
+      if (input.expectedDraftVersion !== undefined) {
+        const current = await getDraft(input);
+        if (current.draftVersion !== input.expectedDraftVersion) {
+          throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Editor draft version changed', 409);
+        }
+      }
+      try {
+        return await mutate(input, async (draft) => {
+          const next = await update(draft);
+          const receipt = next.auditEvents.at(-1);
+          if (!receipt || receipt.type !== kind) {
+            throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Editor receipt was not recorded', 400);
+          }
+          receipt.details = { ...receipt.details, editorOperationKey: operationKey, editorRequestHash: requestHash };
+          return next;
+        });
+      } catch (error) {
+        if (error instanceof SourceListingWorkflowError && error.code === 'OZON_LISTING_DRAFT_VERSION_CONFLICT') {
+          const completed = await replay();
+          if (completed) return completed;
+        }
+        throw error;
+      }
+    })();
+    editorMutations.set(flightKey, { requestHash, operation });
+    try { return await operation; }
+    finally { editorMutations.delete(flightKey); }
+  }
+
+  function changedAttributeValues(draft: OzonListingDraft, values: Record<string, OzonListingDraftAttributeValue>,
+    actorUserId: string, operation: 'MANUAL_EDIT' | 'SUGGESTION_APPLIED' | 'SYSTEM_SYNC',
+    changeAudit?: ReturnType<typeof normalizedAttributeChangeAudit>): OzonListingDraft {
+    const next = structuredClone(draft);
+    next.draftVersion += 1;
+    next.attributes.values = structuredClone(values);
+    next.freshness.attributes = currentFreshness();
+    next.freshness.content = stale('ATTRIBUTE_VALUES_CHANGED');
+    next.freshness.validation = stale('ATTRIBUTE_VALUES_CHANGED');
+    next.validation.status = 'STALE';
+    next.grantRevocation = { required: true, reason: 'ATTRIBUTE_VALUES_CHANGED', previousShopId: null };
+    next.auditEvents.push(event(next.draftVersion, 'ATTRIBUTE_VALUES_CHANGED', actorUserId, {
+      operation, attributeKeys: Object.keys(values).sort(), ...(changeAudit ? { changes: changeAudit } : {}),
+    }));
+    return next;
+  }
+
+  function assertAttributeValuesBudget(values: Record<string, OzonListingDraftAttributeValue>): void {
+    const complexity = inspectSourceListingJsonValue(values, {
+      maxBytes: SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_BYTES, maxNodes: SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_NODES,
+      maxDepth: SOURCE_LISTING_JSON_VALUE_MAX_DEPTH,
+    });
+    if (!complexity.valid) {
+      throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID',
+        sourceListingJsonLimitMessage(complexity, 'Stored attribute values'), 400);
+    }
+  }
+
+  function normalizedValidation(input: SourceListingAttributeValidationInput): SourceListingAttributeValidationInput {
+    if (!input.report || typeof input.report !== 'object' || Array.isArray(input.report)) {
+      throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'validation report must be an object', 400);
+    }
+    const blockers = normalizedIssues(input.blockers, 'blockers');
+    const warnings = normalizedIssues(input.warnings, 'warnings');
+    if (input.status === 'VALID' && blockers.length) {
+      throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'a valid result cannot contain blockers', 400);
+    }
+    return { status: input.status, report: input.report, blockers, warnings };
+  }
+
+  function recordedValidation(draft: OzonListingDraft, input: SourceListingAttributeValidationInput, actorUserId: string): OzonListingDraft {
+    const validation = mergeSourceListingWorkflowReadiness({ draft, validation: input });
+    const next = structuredClone(draft);
+    next.validation = { status: validation.status, report: validation.report };
+    next.blockers = validation.blockers;
+    next.warnings = validation.warnings;
+    next.freshness.attributes = currentFreshness();
+    next.freshness.validation = currentFreshness();
+    next.stage = validation.status === 'VALID' ? 'READY_TO_PUBLISH' : 'VALIDATION';
+    next.auditEvents.push(event(next.draftVersion, 'VALIDATION_RECORDED', actorUserId, {
+      status: validation.status, blockerCount: validation.blockers.length, warningCount: validation.warnings.length,
+    }));
+    return next;
   }
 
   return {
@@ -530,10 +666,12 @@ export function createSourceListingWorkflowService(options: {
 
     setCategory(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      operationKey?: string;
+      expectedDraftVersion?: number;
       category: OzonListingDraftCategory;
       retainedAttributeValues?: Record<string, OzonListingDraftAttributeValue>;
     }) {
-      return mutate(input, (draft) => {
+      return idempotentEditorMutation(input, 'CATEGORY_CHANGED', input.category, (draft) => {
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.category = structuredClone(input.category);
@@ -567,29 +705,70 @@ export function createSourceListingWorkflowService(options: {
       }>;
     }) {
       const changeAudit = normalizedAttributeChangeAudit(input.changeAudit);
-      return mutate(input, (draft) => {
+      return mutate(input, (draft) => changedAttributeValues(draft, input.values, input.actorUserId,
+        input.operation || 'SYSTEM_SYNC', changeAudit));
+    },
+
+    async setManualAttributeChanges(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; schemaRevision: string; changes: SourceListingAttributeManualChange[];
+    }, prepareValues: (draft: OzonListingDraft, changes: SourceListingAttributeManualChange[]) => Promise<Record<string, OzonListingDraftAttributeValue>>) {
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string' || typeof input.schemaRevision !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(input.schemaRevision) || typeof prepareValues !== 'function') {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Attribute edits require a current schema, operation key and draft version', 400);
+      }
+      const changes = normalizeSourceListingManualAttributeChanges(input.changes);
+      const changeAudit = normalizedAttributeChangeAudit(changes.map((change) => ({
+        attributeId: change.attributeId, ...(change.skuKey ? { skuKey: change.skuKey } : {}),
+        action: change.action || 'SET', evidence: change.evidence,
+      })));
+      return idempotentEditorMutation(input, 'ATTRIBUTE_VALUES_CHANGED', { schemaRevision: input.schemaRevision, changes }, async (draft) => {
+        const values = await prepareValues(draft, structuredClone(changes));
+        assertAttributeValuesBudget(values);
+        return changedAttributeValues(draft, values, input.actorUserId, 'MANUAL_EDIT', changeAudit);
+      });
+    },
+
+    async setSkuPackaging(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; items: OzonListingSkuPackagingItem[]; evidence: string[];
+    }): Promise<OzonListingDraft> {
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string') {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'SKU packaging requires an operation key and draft version', 400);
+      }
+      const items = normalizeSourceListingSkuPackagingItems(input.items);
+      const evidence = normalizedEvidence(input.evidence);
+      return idempotentEditorMutation(input, 'MANUAL_FACT_CONFIRMED', { action: 'PACKAGING', items, evidence }, (draft) => {
+        assertSourceListingSkuPackagingCoverage(items, draft.selectedSkuKeys);
         const next = structuredClone(draft);
         next.draftVersion += 1;
-        next.attributes.values = structuredClone(input.values);
-        next.freshness.attributes = currentFreshness();
-        next.freshness.content = stale('ATTRIBUTE_VALUES_CHANGED');
-        next.freshness.validation = stale('ATTRIBUTE_VALUES_CHANGED');
-        next.validation.status = 'STALE';
-        next.grantRevocation = {
-          required: true,
-          reason: 'ATTRIBUTE_VALUES_CHANGED',
-          previousShopId: null,
+        next.attributes.values.packaging = {
+          value: null, source: 'MANUAL', reviewed: true, evidence, manualReview: 'CONFIRMED',
+          skuValues: Object.fromEntries(items.map(({ skuKey, ...value }) => [skuKey, {
+            value, source: 'MANUAL', reviewed: true, evidence: [...evidence], confidence: 1,
+            dictionaryMatch: { status: 'NOT_APPLICABLE', dictionaryValueId: null }, manualReview: 'CONFIRMED',
+          } satisfies OzonListingDraftAttributeValue])),
         };
-        next.auditEvents.push(event(
-          next.draftVersion,
-          'ATTRIBUTE_VALUES_CHANGED',
-          input.actorUserId,
-          {
-            operation: input.operation || 'SYSTEM_SYNC',
-            attributeKeys: Object.keys(input.values).sort(),
-            ...(changeAudit ? { changes: changeAudit } : {}),
-          },
-        ));
+        for (const key of ['packageWeightG', 'packageLengthMm', 'packageWidthMm', 'packageHeightMm']) delete next.attributes.values[key];
+        const complexity = inspectSourceListingJsonValue(next.attributes.values, {
+          maxBytes: SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_BYTES,
+          maxNodes: SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_NODES,
+          maxDepth: SOURCE_LISTING_JSON_VALUE_MAX_DEPTH,
+        });
+        if (!complexity.valid) {
+          throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID',
+            sourceListingJsonLimitMessage(complexity, 'SKU packaging attribute values'), 400);
+        }
+        next.freshness.attributes = currentFreshness();
+        next.freshness.content = stale('MANUAL_FACT_CONFIRMED');
+        next.freshness.validation = stale('MANUAL_FACT_CONFIRMED');
+        next.validation.status = 'STALE';
+        next.grantRevocation = { required: true, reason: 'MANUAL_FACT_CONFIRMED', previousShopId: null };
+        next.auditEvents.push(event(next.draftVersion, 'MANUAL_FACT_CONFIRMED', input.actorUserId, {
+          attributeKey: 'packaging', action: 'PACKAGING', skuKeys: draft.selectedSkuKeys, evidence,
+        }));
         return next;
       });
     },
@@ -661,9 +840,11 @@ export function createSourceListingWorkflowService(options: {
 
     async setPricing(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      operationKey?: string;
+      expectedDraftVersion?: number;
       value: Record<string, unknown> | null;
     }) {
-      return mutate(input, (draft) => {
+      return idempotentEditorMutation(input, 'PRICING_CHANGED', input.value, (draft) => {
         const value = validateSourceListingPricing(input.value, draft.selectedSkuKeys);
         const next = structuredClone(draft);
         next.draftVersion += 1;
@@ -782,6 +963,8 @@ export function createSourceListingWorkflowService(options: {
       titleRu?: string | null; descriptionRu?: string | null; sourcePromptVersion: string;
       kind?: 'MANUAL' | 'AI_GENERATED';
       generation?: OzonListingAiCopyGenerationProvenance;
+      operationKey?: string;
+      expectedDraftVersion?: number;
     }): Promise<{ draft: OzonListingDraft; candidate: OzonListingAiCopyCandidate }> {
       if ((input.kind === 'AI_GENERATED') !== Boolean(input.generation)) {
         throw new SourceListingWorkflowError(
@@ -790,7 +973,16 @@ export function createSourceListingWorkflowService(options: {
           400,
         );
       }
-      const fields = input.generation?.fields || [
+      const manualReceipt = input.operationKey !== undefined;
+      if (manualReceipt && (input.generation || input.kind === 'AI_GENERATED'
+        || !Number.isSafeInteger(input.expectedDraftVersion) || Number(input.expectedDraftVersion) < 1)) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Manual copy receipts require a manual candidate and exact draft version', 400);
+      }
+      const manual = manualReceipt ? normalizeSourceListingManualCopy({
+        ...(Object.prototype.hasOwnProperty.call(input, 'titleRu') ? { titleRu: input.titleRu } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, 'descriptionRu') ? { descriptionRu: input.descriptionRu } : {}),
+      }) : null;
+      const fields = manual?.fields || input.generation?.fields || [
         ...(Object.prototype.hasOwnProperty.call(input, 'titleRu') ? ['title' as const] : []),
         ...(Object.prototype.hasOwnProperty.call(input, 'descriptionRu') ? ['description' as const] : []),
       ];
@@ -816,8 +1008,16 @@ export function createSourceListingWorkflowService(options: {
         }
       }
       const candidateId = idFactory('copy-candidate');
-      const persist = () => mutate(input, (draft) => {
+      const source = manualReceipt ? await getDraft(input) : null;
+      const request = manualReceipt ? {
+        titleRu: Object.prototype.hasOwnProperty.call(input, 'titleRu') ? input.titleRu : undefined,
+        descriptionRu: Object.prototype.hasOwnProperty.call(input, 'descriptionRu') ? input.descriptionRu : undefined,
+        fields, sourceCaptureSnapshotId: source!.sourceCaptureSnapshotId, sourceCaptureHash: source!.sourceCaptureHash,
+        shopId: source!.shopId, supplyGoodsId: source!.supplyGoodsId, selectedSkuKeys: source!.selectedSkuKeys,
+      } : null;
+      const update = (draft: OzonListingDraft) => {
         const next = structuredClone(draft);
+        if (manualReceipt) next.draftVersion += 1;
         if (next.copy.candidates.length >= SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_ITEMS) {
           throw new SourceListingWorkflowError(
             'OZON_LISTING_DRAFT_INPUT_INVALID',
@@ -827,11 +1027,11 @@ export function createSourceListingWorkflowService(options: {
         }
         const candidate: OzonListingAiCopyCandidate = {
           id: candidateId,
-          kind: input.kind || (input.generation ? 'AI_GENERATED' : 'MANUAL'),
+          kind: manualReceipt ? 'MANUAL' : input.kind || (input.generation ? 'AI_GENERATED' : 'MANUAL'),
           fields: [...fields],
-          titleRu: input.titleRu ?? null,
-          descriptionRu: input.descriptionRu ?? null,
-          sourcePromptVersion: required(input.sourcePromptVersion, 'sourcePromptVersion'),
+          titleRu: manual ? manual.titleRu ?? null : input.titleRu ?? null,
+          descriptionRu: manual ? manual.descriptionRu ?? null : input.descriptionRu ?? null,
+          sourcePromptVersion: manualReceipt ? SOURCE_LISTING_MANUAL_COPY_PROMPT_VERSION : required(input.sourcePromptVersion, 'sourcePromptVersion'),
           sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
           sourceCaptureHash: draft.sourceCaptureHash,
           ...(input.generation ? { generation: structuredClone(input.generation) } : {}),
@@ -858,7 +1058,10 @@ export function createSourceListingWorkflowService(options: {
           candidateId,
         }));
         return next;
-      });
+      };
+      const persist = () => manualReceipt
+        ? idempotentEditorMutation(input, 'AI_COPY_CANDIDATE_CREATED', request, update)
+        : mutate(input, update);
       let updated: OzonListingDraft;
       try {
         updated = await persist();
@@ -874,12 +1077,16 @@ export function createSourceListingWorkflowService(options: {
           || existing.generation?.clientRequestHash !== input.generation.clientRequestHash) throw error;
         return { draft: latest, candidate: existing };
       }
-      return { draft: updated, candidate: updated.copy.candidates.find((value) => value.id === candidateId)! };
+      const acceptedId = manualReceipt ? updated.auditEvents.find((entry) => entry.details.editorOperationKey === input.operationKey)?.details.candidateId : candidateId;
+      const candidate = updated.copy.candidates.find((value) => value.id === acceptedId);
+      if (!candidate) throw new SourceListingWorkflowError('OZON_LISTING_AI_CANDIDATE_NOT_FOUND', 'Accepted manual copy candidate was not found', 404);
+      return { draft: updated, candidate };
     },
 
     async applyAiCopyCandidate(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
       candidateId: string; operationKey: string;
+      expectedDraftVersion?: number;
     }) {
       const operationKey = required(input.operationKey, 'operationKey');
       const resolveReplay = (draft: OzonListingDraft): OzonListingDraft | null => {
@@ -897,6 +1104,9 @@ export function createSourceListingWorkflowService(options: {
       const current = await getDraft(input);
       const replay = resolveReplay(current);
       if (replay) return replay;
+      if (input.expectedDraftVersion !== undefined && current.draftVersion !== input.expectedDraftVersion) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Copy approval draft version changed', 409);
+      }
       try {
         return await mutate(input, (draft) => {
           const candidate = draft.copy.candidates.find((value) => value.id === input.candidateId);
@@ -997,41 +1207,29 @@ export function createSourceListingWorkflowService(options: {
       status: 'VALID' | 'INVALID'; report: Record<string, unknown>;
       blockers: OzonListingWorkflowIssue[]; warnings: OzonListingWorkflowIssue[];
     }) {
-      if (!input.report || typeof input.report !== 'object' || Array.isArray(input.report)) {
-        throw new SourceListingWorkflowError(
-          'OZON_LISTING_DRAFT_INPUT_INVALID', 'validation report must be an object', 400,
-        );
+      const validation = normalizedValidation(input);
+      return mutate(input, (draft) => recordedValidation(draft, validation, input.actorUserId));
+    },
+
+    async validateForEditor(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; schemaRevision: string;
+    }, prepareValidation: (draft: OzonListingDraft) => Promise<SourceListingAttributeValidationInput>): Promise<OzonListingDraft> {
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string' || typeof input.schemaRevision !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(input.schemaRevision) || typeof prepareValidation !== 'function') {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Editor validation requires a schema, operation key and exact draft version', 400);
       }
-      const blockers = normalizedIssues(input.blockers, 'blockers');
-      const warnings = normalizedIssues(input.warnings, 'warnings');
-      if (input.status === 'VALID' && blockers.length) {
-        throw new SourceListingWorkflowError(
-          'OZON_LISTING_DRAFT_INPUT_INVALID', 'a valid result cannot contain blockers', 400,
-        );
-      }
-      return mutate(input, (draft) => {
-        const validation = mergeSourceListingWorkflowReadiness({
-          draft,
-          validation: {
-            status: input.status,
-            report: input.report,
-            blockers,
-            warnings,
-          },
-        });
-        const next = structuredClone(draft);
-        next.validation = { status: validation.status, report: validation.report };
-        next.blockers = validation.blockers;
-        next.warnings = validation.warnings;
-        next.freshness.attributes = currentFreshness();
-        next.freshness.validation = currentFreshness();
-        next.stage = validation.status === 'VALID' ? 'READY_TO_PUBLISH' : 'VALIDATION';
-        next.auditEvents.push(event(next.draftVersion, 'VALIDATION_RECORDED', input.actorUserId, {
-          status: validation.status,
-          blockerCount: validation.blockers.length,
-          warningCount: validation.warnings.length,
-        }));
-        return next;
+      const source = await getDraft(input);
+      const request = { schemaRevision: input.schemaRevision, sourceCaptureSnapshotId: source.sourceCaptureSnapshotId,
+        sourceCaptureHash: source.sourceCaptureHash, shopId: source.shopId, supplyGoodsId: source.supplyGoodsId,
+        selectedSkuKeys: source.selectedSkuKeys };
+      return idempotentEditorMutation(input, 'VALIDATION_RECORDED', request, async (draft) => {
+        const validation = normalizedValidation(await prepareValidation(draft));
+        if (validation.report.schemaRevision !== input.schemaRevision) {
+          throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Prepared validation uses another official schema', 409);
+        }
+        return recordedValidation(draft, validation, input.actorUserId);
       });
     },
 

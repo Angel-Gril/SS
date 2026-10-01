@@ -9,12 +9,15 @@ import {
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   OZON_LISTING_SUPPORTED_VAT_RATES,
   OZON_LISTING_VAT_MAX_LENGTH,
+  OZON_LISTING_ATTRIBUTE_MAX_VALUES,
+  SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION,
   canonicalStringify,
   isOzonListingOldPriceAtLeastPrice,
   sourceProductCaptureCanonicalStringify,
   sourceProductCapturePayloadBytes,
   validateSourceProductCaptureV2Submission,
   type OzonListingDraft,
+  type OzonListingSkuPackagingItem,
   type OzonListingSkuPricingV1,
   type OzonListingVatRate,
   type SourceCaptureEvidence,
@@ -28,6 +31,7 @@ import {
   capturedSourceSkuAliases,
 } from './source-listing-sku-identity.js';
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from './ozon-v3-import-package-contract.js';
+import { hasSourceListingSkuPackaging, projectSourceListingSkuPackaging } from './source-listing-sku-packaging.js';
 
 export const OZON_LISTING_PAYLOAD_COMPILER_VERSION = 'ozon-listing-payload-compiler/v1' as const;
 export const OZON_LISTING_RESOLVED_IMAGES_CONTRACT_VERSION = 'ozon-listing-resolved-images/v1' as const;
@@ -38,7 +42,7 @@ const MAX_TITLE_LENGTH = 500;
 const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
 const SUPPORTED_VAT_RATES = new Set<string>(OZON_LISTING_SUPPORTED_VAT_RATES);
 const MAX_DESCRIPTION_LENGTH = 200_000;
-const MAX_ATTRIBUTE_VALUES = 100;
+const MAX_ATTRIBUTE_VALUES = OZON_LISTING_ATTRIBUTE_MAX_VALUES;
 
 export type OzonListingPayloadCompileErrorCode =
   | 'OZON_LISTING_COMPILE_STAGE_INVALID'
@@ -165,10 +169,17 @@ const validationReportSchema = z.object({
     costingAutoPricing: operationReadinessSchema,
   }).strict(),
   operationalFacts: z.object({
-    packageWeightG: z.number(),
+    packageWeightG: z.number().nullable(),
     packageDimensionsMm: z.object({
-      lengthMm: z.number(), widthMm: z.number(), heightMm: z.number(),
+      lengthMm: z.number().nullable(), widthMm: z.number().nullable(), heightMm: z.number().nullable(),
     }).strict(),
+    skuPackaging: z.object({
+      contractVersion: z.literal(SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION),
+      items: z.record(z.string(), z.object({
+        weightG: z.number().finite().positive(), lengthMm: z.number().finite().positive(),
+        widthMm: z.number().finite().positive(), heightMm: z.number().finite().positive(),
+      }).strict()),
+    }).strict().optional(),
     selectedStock: z.object({
       known: z.number().int().nonnegative(), unknown: z.number().int().nonnegative(),
     }).strict(),
@@ -510,6 +521,7 @@ function packageFacts(
   draft: OzonListingDraft,
   capture: SourceProductCaptureV2,
   report: ParsedValidationReport,
+  skuKey: string,
 ): {
   weight: number;
   depth: number;
@@ -523,6 +535,26 @@ function packageFacts(
     || operational.importContract.contractHash !== OZON_V3_IMPORT_PACKAGE_CONTRACT.contractHash) {
     fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', 'Package facts use a stale or unsupported import contract');
   }
+  if (hasSourceListingSkuPackaging(draft) || operational.skuPackaging !== undefined) {
+    if (!hasSourceListingSkuPackaging(draft) || !operational.skuPackaging
+      || operational.packageWeightG !== null || Object.values(operational.packageDimensionsMm).some((value) => value !== null)) {
+      fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', 'SKU packaging requires an exact reviewed map without shared measurements');
+    }
+    let items: OzonListingSkuPackagingItem[];
+    try { items = projectSourceListingSkuPackaging(draft)!; }
+    catch { fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', 'SKU packaging is not bound to reviewed manual evidence'); }
+    const reported = operational.skuPackaging.items;
+    if (Object.keys(reported).length !== items.length
+      || items.some(({ skuKey: key, ...value }) => !Object.prototype.hasOwnProperty.call(reported, key)
+        || canonicalStringify(reported[key]) !== canonicalStringify(value))) {
+      fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', 'SKU package report differs from reviewed manual values');
+    }
+    const item = items.find((value) => value.skuKey === skuKey);
+    if (!item) fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', 'Selected SKU has no reviewed package');
+    return { weight: item.weightG, depth: item.lengthMm, width: item.widthMm, height: item.heightMm,
+      contract: { id: operational.importContract.contractId, revision: operational.importContract.contractRevision,
+        hash: operational.importContract.contractHash } };
+  }
   const facts = {
     packageWeightG: operational.packageWeightG,
     packageLengthMm: operational.packageDimensionsMm.lengthMm,
@@ -530,7 +562,7 @@ function packageFacts(
     packageHeightMm: operational.packageDimensionsMm.heightMm,
   } as const;
   for (const [key, value] of Object.entries(facts) as Array<[keyof typeof facts, number]>) {
-    if (!Number.isFinite(value) || value <= 0) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
       fail('OZON_LISTING_COMPILE_PACKAGE_INVALID', `${key} must be an actual positive number`);
     }
     const source = operational.sources[key];
@@ -543,10 +575,10 @@ function packageFacts(
     }
   }
   return {
-    weight: facts.packageWeightG,
-    depth: facts.packageLengthMm,
-    width: facts.packageWidthMm,
-    height: facts.packageHeightMm,
+    weight: facts.packageWeightG!,
+    depth: facts.packageLengthMm!,
+    width: facts.packageWidthMm!,
+    height: facts.packageHeightMm!,
     contract: {
       id: operational.importContract.contractId,
       revision: operational.importContract.contractRevision,
@@ -775,7 +807,8 @@ export function compileOzonListingPayload(input: CompileOzonListingPayloadInput)
   const report = parseValidationReport(draft, input.validationReport);
   const copy = reviewedRussianCopy(draft);
   const pricing = parsePricing(draft, skuKeys);
-  const packageAuthority = packageFacts(draft, capture, report);
+  const packages = new Map(skuKeys.map((skuKey) => [skuKey, packageFacts(draft, capture, report, skuKey)]));
+  const packageContract = packages.get(skuKeys[0]!)!.contract;
   const attributes = attributesBySku(report, skuKeys);
   const images = imagesBySku(draft, skuKeys, input.resolvedImages);
 
@@ -783,6 +816,7 @@ export function compileOzonListingPayload(input: CompileOzonListingPayloadInput)
   const offerTrace: OzonListingOfferTrace[] = [];
   const items = skuKeys.map((skuKey, ordinal): OzonImportItem => {
     const itemPricing = pricing.get(skuKey)!;
+    const packageAuthority = packages.get(skuKey)!;
     const offerId = itemPricing.offerId || deterministicOfferId(draft, skuKey);
     if (seenOfferIds.has(offerId)) {
       fail('OZON_LISTING_COMPILE_OFFER_ID_INVALID', 'Offer IDs must be unique across the import payload');
@@ -830,7 +864,7 @@ export function compileOzonListingPayload(input: CompileOzonListingPayloadInput)
         resolverVersion: input.resolvedImages.authority.resolverVersion,
         resolvedAt: input.resolvedImages.authority.resolvedAt,
       },
-      packageContract: packageAuthority.contract,
+      packageContract,
     },
   };
 }
