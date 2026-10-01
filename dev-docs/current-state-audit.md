@@ -1,5 +1,9 @@
 # SS ERP 当前状态审计
 
+## 2026-10-02 1.0.398 真实套图与当前发布边界
+
+两区应用运行 `58cc814e8af12fec478f267812068e2f833bddaa / 1.0.398`，区域候选原件与签名已复核；官网仍公开 `3723f5dd / 1.0.395`。独立 MV3 本次两图 `SUCCEEDED`、审核、两条 DOTH store-draft assignment 和 exact replay 通过，总结算 CNY `0.28`；不得重复消费本次授权。全 owner 的历史待处理计数仍为 `costs=2/recovery=4`，正式 QA04 与后续发布动作尚未执行。最小 admin cost NULL 投影修复已在隔离 worktree 完成真实 PostgreSQL RED→GREEN，尚未整合部署；历史终止恢复需要明确的新状态合同。完整证据、浏览器验收限制和下一步只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-10398-安装与真实套图历史恢复阻塞)。
+
 ## 2026-10-01 `94fc7460 / 1.0.396` 签名与双区部署完成
 
 代码已推送到 `origin/feat/ai-media-prompt-registry`，两区 current 和 API/Worker/Web 已运行 `94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a`；区域候选均为 `1.0.396`，各自 origin、四件套和 detached signature 已复验。COM 继续 DOTH 受限 hosted pilot，CN 继续 direct/RDS 全暗态；两区完整 verifier 均 `0 failure / 1 warning`。目标绑定的真实备份/恢复、150 migrations、suite DB guard 和健康检查通过，没有新增 Provider/Ozon 写入或费用。官网仍公开 `3723f5dd / 1.0.395`，本次未进行 website approval、REL-04 publication canary、distribution probe 或 CAS；详细证据只在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-01-签名与双区部署)维护。

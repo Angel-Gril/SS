@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-02 1.0.398 实际套图通过；官网分发仍有历史恢复阻塞
+
+两区已运行已推送的 `58cc814e / 1.0.398`，专用 MV3 两图托管生成、审核、DOTH 草稿 assignment 和原幂等键 replay 均真实通过；本轮唯一费用授权 CNY `0.28` 已使用完。官网仍为 `3723f5dd / 1.0.395`。正式 QA04 仍被同 owner 四个历史恢复项、两笔未决费用阻塞；最小费用投影修复只在隔离 worktree 通过，新增明确“放弃恢复”状态合同等待用户确认。双区 synthetic 安装验收的三次 attach 超时保留失败事实，不再盲重试。原件、已验证范围及后续只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-10398-安装与真实套图历史恢复阻塞)。
+
 ## 2026-10-01 donor 适配版签名与双区部署
 
 `94fc7460ca8dc29b7fe0cbfccce06ddb03ddbf4a` 已推送并使用区域独立的 `1.0.396` Cloud/Local 候选完成 Ed25519 签名、COM pilot 与 CN direct/RDS 部署。两区完整 VPS verifier 均 `0 failure / 1 warning`，唯一 warning 为远端备份未配置；150 migrations、suite DB guard、三服务、本机/公网 `/ready` 均通过。COM 保持 DOTH 既有受限 pilot，CN 保持 AI/BYOK/Ozon dark，donor precision 仍为默认关闭的预览入口。官网 pointer 仍为 `3723f5dd / 1.0.395`；本次没有 website approval、REL-04 publication canary、distribution probe、CAS 或 Provider/Ozon 写入。签名、备份与验收摘要只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-01-签名与双区部署)。
@@ -282,6 +286,7 @@
 
 ## 当前真源索引
 
+- [人工更新日志](../CHANGELOG.md)：面向用户的显著版本变更，遵循 Keep a Changelog 1.1.0。
 - [当前状态审计](current-state-audit.md)
 - [技术选型与基础决定](technical-selection.md)
 - [架构与 Owner Map](architecture.md)
@@ -300,6 +305,7 @@
 
 ## 更新规则
 
+- 下次起每个显著变更的提交/推送同时维护根目录 `CHANGELOG.md`：人工整理，使用 `Unreleased` 和实际适用的 `Added/Changed/Deprecated/Removed/Fixed/Security`；版本倒序、日期 `YYYY-MM-DD`、每版有链接并明确 SemVer 状态。官网公开成功才移动到发布日期版本；签名、部署或测试不等于公开。空分类省略，不能用 git log 堆砌日志或补造历史发布日期。
 - 先更新唯一 owner，再更新引用它的消费者；禁止复制第二份状态表。
 - 当前代码和新鲜命令证据高于旧计划与历史发布记录。
 - `docs/plans/` 和 `docs/archive/` 是历史/专题证据，不自动代表当前实施状态。

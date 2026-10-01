@@ -1,10 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：本地接线与双区签名部署完成；官网分发与真实运行验收待完成
+## 当前结果：双区 1.0.398 与真实托管套图通过；官网仍为 1.0.395
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `94fc7460 / 1.0.396`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `58cc814e / 1.0.398`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
 
 ## 唯一 owner 与数据路径
 
@@ -43,6 +43,31 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 ```
 
 ## 验证与限制
+
+### 2026-10-02 1.0.398 安装与真实套图；历史恢复阻塞
+
+- `a81d8860` 首先保留实际结构化来源媒体键；真实安装版发现 MV3 客户端同时要求 URL-free 引用，最终修复 `58cc814e8af12fec478f267812068e2f833bddaa` 将公开候选 ID 投影为稳定的 `media-key-sha256:<hash>`，执行仍使用原冻结引用。最小 owner 回归先 RED 后 GREEN，含实际 shipped MV3 parser，`49/49`、server typecheck/lint 与客户端/runtime 定向验证通过。两个实现提交均已推送。
+- 该提交完整原生 offline PASS：server `6418 passed / 325 skipped`、AI PostgreSQL `197`、`150` migrations/upgrade，以及 Web/server build 和 source/cloud/local verifier 通过。执行 checkout 是 clean LF detached Git worktree；私有原件为 `release-58cc814e-website/qa04-offline.json` 和 `.log`。不因后续仅文档提交重建候选或重复生图。
+- COM/CN 已使用独立区域 `1.0.398` 候选完成签名与标准部署；current、三服务 cwd、数据库/Redis `/ready` 均匹配该提交。COM 保持 DOTH、`IMAGE_TO_IMAGE/SUITE` 和原受限 policy；CN 保持 direct/RDS、AI/BYOK/Ozon dark。两区完整 VPS verifier 各 `0 failure / 1 warning`，warning 仍为远端备份未配置。COM r2 验证后同设备通过合法 reauthorization 更换 session，已另取绑定当前 `cac55bf3…/d6f4d05d…` 集合的 r3 完整 VPS PASS 原件；r2 未改写。
+
+| 不可变产物 SHA-256 | COM | CN |
+| --- | --- | --- |
+| Cloud ZIP | `babe2436f15b7614495ccfdcc4040670e21867904afbca572ef738c820d554db` | `50f554a20c07b4223ac5de7ec676bc8a8ad9f7ee6be64ed7fafcf696031f19b9` |
+| Local ZIP | `c5721f4d57d45eea6aa55aa1bfb300b3c0dd5c7514ce38837106a520c8a80145` | `6de6557e2ff5b756a9f21ed5ec07eb6c2fc15c9755ca8e7e440c254f2c3f2b22` |
+| Release evidence | `086a1c5c877c4588d53cac8087df5fd08fa1bb7b7e5a1031368b5cb177ca0fec` | `1e9b3c0a678e42311e380913626891f95c02f0ad2924bcb1a3c72f64834d1191` |
+| Detached signature | `1251c37804c7e6276c72c85296f1914a4149b36276684ec61019ce6afd5e9d0a` | `0f1798b79af5cb00ee2735721425ef990c5ea5f4cc69d926c74b92379e0fc74b` |
+| Full VPS（COM r3 / CN 原件） | `fe3e1224477c70ce78ef10da79257baf0da99233069588e1cc1e700e7da7d069` | `9fe116397b3237006da84abfaa81a1e0d78e13c36bc02382209b15a7031a1db1` |
+
+- 专用 `9444` profile 在固定目录加载签名候选原字节 `1.0.398`；active Worker 和 Unicode smoke 均通过，原 `9222` 用户浏览器未关闭或重载。COM 真实 1688 source-page canary PASS，SHA-256 `2e37b53af6e743ab8aef2b85ab335ba53f138b7b58074dd042f8189b253aeafe`；原 runner 记录滑块遮挡及物理输入未触发后的受控 DOM fallback，不能称无遮挡或物理点击验收通过。另 COM/CN synthetic installed-package runner 连续三次在 Worker/target/runtime attach 超时，保留全部失败原件并停止盲重试，不能宣称双区该项通过。
+- 用户本轮单独授权的一次两图 hosted SUITE 已完成：`cmupv1g9k00015o9sfs2sxoxk` 两槽均 `SUCCEEDED/attempt=1/900×1200 PNG`；原始 START/CONTINUE、审核前 `PENDING` UI 与同期数据库、两份预览及 APPROVE 回执均保留。两笔唯一 `SETTLED/CHARGE` 各 CNY `0.14`，合计 `0.28`，该费用授权已用完，不得再发新的 Provider POST。预览保留收纳盒主体且无可见水印，但两图均接近原背景，未证明明显创作差异或中性棚拍方向达成。
+- store-draft assignment 成功：隔离 DOTH 草稿 `r1/v1 → r2/v2`，增加 SKU hero 和 PRODUCT gallery 两条；shipped Worker credential lifecycle owner 使用原请求和原幂等键的 replay 返回 `200/replayed=true`、同一 batch 和两条 assignment。旧失效 session 的 replay 失败原件另行保留。最新 `2026-10-01T19:29:22Z` 只读数据库仍为两条 assignment、两版草稿、两槽 APPROVED、Ozon publish attempts `0`。
+- 当前正式 QA04 阻塞与本次成功 suite 无关：全 owner 待处理计数为 `{jobs:0,costs:2,recovery:4,workflows:0,suites:0}`，来自 9 月 29 日旧失败任务。两笔费用释放曾被真实 suite graph 约束拒绝并完整回滚；原因是 admin cost owner 把零计量 suite child 的 `actualCostCents` 写为 `0`，现合同要求 `NULL`。隔离 worktree 已准备最小修复及真实 PostgreSQL RED→GREEN `19/19`，typecheck/lint 通过；尚未整合、提交或部署。原 job/ledger/历史费用未改写。
+- 主 Agent 已复读 patch 和 RED/GREEN 原件，并在本机独立 schema 再次重放 150 migrations、复跑同一 19 项最终 GREEN，随后清理该测试 schema。修复位于 ignored `build/cost-release-owner-58cc814e.patch`，SHA-256 `3b902315f3ea80e7eebfbd5611b09917161b71f72757000469ad3b0cf821cba2`；主 Agent 复跑日志 SHA-256 `23b1dff49ac54efa399fc00a55f6a4dc6c719b4654c0889d93ed44fd0176461a`。它只修费用投影，不会关闭四项 recovery；整合成新 backend 提交还会被现有 source bridge 拒绝沿用 `58cc814e` normal evidence，不能假设文档例外同样适用。
+- 四个旧任务曾有真实 `880×880` Provider 输出，不能因 ERP 未持久化合格图片而标为 NO_OUTPUT。通用 recovery 与 suite nested runtime 格式不符，且原 dispatch/acceptance 已超过 24 小时；suite 专用 recovery 只支持 RUNNING 有效 claim。现 owner/SQL 没有明确“放弃恢复”终态。仅这四项的受审计终止恢复及另两笔未交付 ERP 预留释放已提交用户确认；未得到答复前不扩展状态合同、不手工 SQL、不删除原件、不缩小 pending 门禁。
+- 本地原件交叉核验报告 SHA-256 `28e22578e3c19b9fc40c4b10fc574ad43bfc24f2948eaa59855a2c1f90a511f3`，同时核对两区 ZIP/evidence/signature 字节、审核时间序列、唯一结算和 replay；它是独立私有审计，**不是正式 QA04**。原 launch binding 的 sourceAssetId 为 null，已另建引用真实 normalized reference/审核前数据库的独立 binding（SHA-256 `6aab0f1675b01d611b48b9445976c77382a56b4886f7e257748b136050b23081`），原件未覆盖。
+- `19:41:17Z` 目标关闭观察（SHA-256 `2ca42be2eeb299d7245900f213e091c5d3c59d40f18df1fe387276b103aa705d`）通过 OS 核验专用 profile：原 workbench target 已不存在，明确记录 `ALREADY_ABSENT_OBSERVED/closeDispatched=false`；原 Web target 仍在，重新只读核对登录 owner 后实发 exact close，再读两目标均不存在。`9222` 原浏览器身份前后相同，不伪称本轮重新关闭已不存在的页。
+- 依据该 v2 原件索引组装正式输入，SHA-256 `9bd5506bd81eda89959cf4142587e72adcc1f86bf8edefcbf9814ba33e1c658f`；选择实际 media execute 的原始 `start-request-2/continue-request-2`，另保留第 1 份 command-grant 原请求。clean `58cc814e` 上实际调用未改写的 native QA04 producer，审核前、Provider/队列/账本、审核与 assignment 的检查已走过，准确在 `qa04-final-suite-evidence.mjs:324` 的 controller 条件拒绝为 `QA04_SUITE_INVALID`（实际历史 pending 非零）。保留拒绝原件，未生成正式 PASS。后续不得为关闭历史项改写本次输入、controller pending 或计费证据。
+- 两区匿名 latest 于本轮仍返回 `3723f5dd / 1.0.395`。正式 QA04、REL-04 publication canary、website approval、distribution probe、CAS 尚未执行。donor precision 仍为默认关闭的受控预览；本次旧工作台 hosted suite 通过不等于 donor 全部功能验收、BYOK/Ozon 真实验收或默认入口切换完成。
 
 ### 2026-10-01 签名与双区部署
 
