@@ -1,6 +1,6 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：原采集器、草稿编辑及自定义托管套图审核已接线；最终包门禁已覆盖新增 precision/BYOK 模块
+## 当前结果：donor 工作台本地功能收口完成；最终包门禁已覆盖 precision/BYOK 模块
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
@@ -73,7 +73,13 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 - `extension-donor-workbench-mv3-acceptance.mjs --precision`：真实源码 MV3 扩展加载与 iframe 商品投影通过，非 allowlist 商品拒绝。页面是拦截的测试商品页，**不是实时 1688 商品验收**。证据：`C:\Users\550W\AppData\Local\Temp\ss-erp-donor-mv3-evidence-vFGh8u\summary.json`；该次源码树摘要 `1d25fd741931b90dc6264236f73ab471905653b38119d2ea847ee90a843e2de1`，之后有 UI/验证器收口变化，不复用为正式 release receipt。
 - 当前已接既有托管套图命令、报价/历史读取、显式最高费用确认和有上限的只读轮询；本轮未真实执行这些收费/写入动作。自定义 JSON/提示词尚未接入 hosted createPlan（现有合同只接受 binding/galleryGoals），界面明确标明本地草稿，不能宣称自定义提示词已影响托管输出。
 - 仍未关闭：复制 SKU 行的服务端持久化、donor 淘宝/PDD collector、翻译质量、自带 API 最终安装版验收，以及真实 Provider/Ozon 全链路。参考图、全图修图和圈选重绘已经完成独立浏览器 fixture：`--byok-edit-quick`、`--byok-edit-full`、`--byok-edit-inpaint` 均通过 source catalog、Blob 预览、句柄上传、候选预览和审核 handoff；本轮没有 Provider/Ozon 请求、生产写入或费用。
-- 本轮无 Provider/Ozon 请求、生产 mutation 或新增费用；未 commit、push、签名或部署本适配版。
+- 当前 HEAD 为 `1f9d8eba`，本轮已提交但未 push、未签名、未部署；没有 Provider/Ozon 请求、生产 mutation 或新增费用。
+
+### 2026-10-01 当前 HEAD 最终本地 fixture
+
+- 默认 donor fixture：`C:\Users\550W\AppData\Local\Temp\ss-erp-precision-ui-evidence-A7hVLe\summary.json`，覆盖 16 SKU 选择、`COLLECT → CREATE_DRAFT`、价格/货号、包装、官方类目/属性、俄文文案候选/审核/VALIDATE、托管套图 `START → REVIEW_SLOT → ASSIGN`、publish preview/confirm/status；`pageErrors=0`、Provider/Ozon/production mutations=0。
+- BYOK 与翻译 fixture：`C:\Users\550W\AppData\Local\Temp\ss-erp-precision-ui-evidence-nMABkC\summary.json`，覆盖单图未知结果只读恢复、PNG Blob 预览、显式审核、ingest/readback 和 `CREATE_TRANSLATION`。
+- 参考图、全图修图、圈选重绘 fixture 分别通过 `--byok-edit-quick`、`--byok-edit-full`、`--byok-edit-inpaint`；Cloud 包验证 `568 pass`、Local 包验证 `564 pass`，均 `0 failure / 0 warning`。完整 `pnpm preflight` 已通过（server `6417 passed / 325 skipped`）。
 
 ## 本地预览与回退
 

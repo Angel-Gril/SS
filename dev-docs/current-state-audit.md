@@ -2,7 +2,7 @@
 
 ## 2026-10-01 旧扩展直接适配：同窗口图片与发布接线
 
-当前以实际 `jp20260803` 程序为基础适配接口；A1.1/A1.2、A2.2 和 A2.4 已完成本地接线。新增自定义托管方向、BYOK 单图生成→预览→审核→ingest/readback、每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session、BYOK 设置及原窗口套图审核/assignment、发布预览/确认/回执已通过明确 fixture。参考图/修图/翻译、复制 SKU 行持久化、donor 淘宝/PDD collector、真实 Provider/Ozon 和最终安装版验收仍未完成；不能把 local owner/browser fixture 或实时只读 collector 结果表述成生产全链验收。本轮未提交、付费生图、真实 Ozon 写入、签名、部署或官网发布。
+当前以实际 `jp20260803` 程序为基础适配接口；当前 HEAD `1f9d8eba` 已完成 A1.1/A1.2、A2.2、A2.3 和 A2.4 的本地接线。默认 donor fixture 覆盖采集、草稿字段、托管套图审核/assignment、publish preview/confirm/status；BYOK/翻译 fixture 覆盖单图未知结果恢复、Blob 预览、审核、ingest/readback 和 `CREATE_TRANSLATION`；独立 fixture 覆盖 IMAGE_TO_IMAGE、FULL_EDIT、INPAINT。不能把 local owner/browser fixture 或实时只读 collector 结果表述成生产 Provider/Ozon 全链验收；复制 SKU 行持久化、donor 淘宝/PDD collector、翻译质量和最终安装版验收仍属于后续范围。本轮已提交但未 push、未签名、未部署、未产生费用或真实第三方写入。
 
 ## 2026-09-30 `3723f5dd` 正式 QA04、双区发布与官网公开完成
 

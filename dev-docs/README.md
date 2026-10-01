@@ -2,7 +2,7 @@
 
 ## 2026-10-01 旧扩展直接适配的本地开发
 
-当前直接复用 `jp20260803` 的原界面和 1688 采集器，同窗口已接采集、草稿编辑、自定义托管方向、BYOK 单图、参考图/FULL_EDIT/INPAINT 控件与 owner flow、图片翻译入口、套图审核/应用及发布预览/确认/回执；每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session 和 BYOK 设置也已完成本地 owner 接线。参考图、全图修图和圈选重绘的独立浏览器 fixture 均已通过，覆盖 source catalog、Blob 预览、SOURCE/REFERENCE/MASK 句柄、候选预览和审核 handoff；编辑面板的输入刷新与候选预览状态也已修复。保存与生成/发布流程仍是本地 owner/browser fixture 验证，尚未生产验收；复制 SKU 行持久化、donor 淘宝/PDD collector、翻译质量和最终安装版验收仍有缺口。功能完整通过后按用户要求退出旧默认流程。任务、源码映射和证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。官网仍为 `3723f5dd / 1.0.395`；本轮未提交、部署或产生新费用。
+当前直接复用 `jp20260803` 的原界面和 1688 采集器，同窗口已接采集、草稿编辑、自定义托管方向、BYOK 单图、参考图/FULL_EDIT/INPAINT 控件与 owner flow、图片翻译入口、套图审核/应用及发布预览/确认/回执；每 SKU 包装、官方属性、手工俄文文案/VALIDATE、precision frame/session 和 BYOK 设置也已完成本地 owner 接线。当前 HEAD `1f9d8eba` 的默认 donor fixture 已覆盖采集、全部草稿字段、托管套图审核/assignment、publish preview/receipt；`--byok-flow --translation` 额外覆盖 BYOK 单图未知结果恢复、Blob 预览、审核、ingest/readback 和翻译 owner。参考图、全图修图和圈选重绘的独立浏览器 fixture 也均已通过。保存与生成/发布流程仍是本地 owner/browser fixture 验证，尚未生产验收；复制 SKU 行持久化、donor 淘宝/PDD collector、翻译质量和最终安装版验收仍有缺口。功能完整通过后按用户要求退出旧默认流程。任务、源码映射和证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。官网仍为 `3723f5dd / 1.0.395`；本轮已提交但未 push、未部署，未产生 Provider/Ozon 费用。
 
 ## 2026-09-30 `3723f5dd` OOPIF canary 修复、双区发布与官网切换
 
