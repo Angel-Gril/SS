@@ -62,6 +62,38 @@ const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
     executionObjectId: null,
     targetObjectId: '5e0714e2df914ede226b03890fd39067bf3ba46b',
   },
+  'apps/server/src/services/ai-provider-reconciliation-admin.ts': {
+    executionObjectId: 'e7f50604d4488a05e321464c3756b7d8ab9c3839',
+    targetObjectId: '87afeeb58268514d57eae8239c40c54279b23544',
+  },
+  'apps/server/src/services/ai-cost-reconciliation-admin.ts': {
+    executionObjectId: 'f4921f5659a6432ca58ddfb4c4e99dc6bde19cb9',
+    targetObjectId: '35d687b689c43a836a3d48d1bcea12d24a67d31c',
+  },
+  'apps/server/src/routes/admin-ai-provider-reconciliations.ts': {
+    executionObjectId: 'e68aed908c8c1f092c50cbd1a5cdc146d4879545',
+    targetObjectId: '0678b7097df91e975ed756203c34829879a9c34c',
+  },
+  'apps/server/src/__tests__/ai-provider-reconciliation-admin.test.ts': {
+    executionObjectId: '3b5d7e1fb8008d3356ba21e4b771f6ad01237b6d',
+    targetObjectId: 'f51606f15976e686e2a20c99387b5715cd95bd7b',
+  },
+  'apps/server/src/__tests__/admin-ai-provider-reconciliations.test.ts': {
+    executionObjectId: 'ce383c9168cb205883e7006030db7be811c28b00',
+    targetObjectId: 'ed134f13a1bd53404944d663a228a7dfd37e6565',
+  },
+  'apps/server/src/__tests__/ai-provider-reconciliation-migration.test.ts': {
+    executionObjectId: '5712b0b7ad253c4c7c3612122ac01b8bf6056cb5',
+    targetObjectId: 'c08576d4f7e47e5dfb279bdf0225650681aa6e3c',
+  },
+  'apps/server/src/__tests__/ai-cost-reconciliation-admin.test.ts': {
+    executionObjectId: '96a48f24bda900f07e66d693933cd405e4bb2941',
+    targetObjectId: '25a9cfc47d33d1967b5731a9c2f9f7aef28c84ae',
+  },
+  'apps/server/prisma/migrations/20261002120000_allow_historical_suite_reconciliation_abandonment/migration.sql': {
+    executionObjectId: null,
+    targetObjectId: 'd0743a463817290a52a07d41ca73e8304154662c',
+  },
 });
 const QA04_SCRIPT_REGISTRATIONS = {
   'qa:04:final': 'node scripts/qa04-final-acceptance.mjs',
