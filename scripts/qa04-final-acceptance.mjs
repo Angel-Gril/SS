@@ -64,7 +64,7 @@ const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
   },
   'apps/server/src/services/ai-provider-reconciliation-admin.ts': {
     executionObjectId: 'e7f50604d4488a05e321464c3756b7d8ab9c3839',
-    targetObjectId: '87afeeb58268514d57eae8239c40c54279b23544',
+    targetObjectId: '14b135670ca7073320b3dfdb0b8480dd2394560e',
   },
   'apps/server/src/services/ai-cost-reconciliation-admin.ts': {
     executionObjectId: 'f4921f5659a6432ca58ddfb4c4e99dc6bde19cb9',
@@ -76,7 +76,7 @@ const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
   },
   'apps/server/src/__tests__/ai-provider-reconciliation-admin.test.ts': {
     executionObjectId: '3b5d7e1fb8008d3356ba21e4b771f6ad01237b6d',
-    targetObjectId: 'f51606f15976e686e2a20c99387b5715cd95bd7b',
+    targetObjectId: '14920a3bfe4af614560a1d314044d637f38d5e8b',
   },
   'apps/server/src/__tests__/admin-ai-provider-reconciliations.test.ts': {
     executionObjectId: 'ce383c9168cb205883e7006030db7be811c28b00',
@@ -93,6 +93,10 @@ const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
   'apps/server/prisma/migrations/20261002120000_allow_historical_suite_reconciliation_abandonment/migration.sql': {
     executionObjectId: null,
     targetObjectId: '0a60df482e8faedf6f04088aec806f366817108d',
+  },
+  'apps/server/src/__tests__/ai-image-suite.postgres.integration.test.ts': {
+    executionObjectId: '68dad10c01802febae50e4d482674c264e1999e5',
+    targetObjectId: 'f8e0789799a3da38ccd18ac5386df98808089799',
   },
 });
 const QA04_SCRIPT_REGISTRATIONS = {

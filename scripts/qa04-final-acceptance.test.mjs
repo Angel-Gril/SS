@@ -1103,6 +1103,50 @@ test('suite v2 rejects queue retention ambiguity, restricted pilot drift, and ma
   }
 });
 
+test('suite separates later target-runtime cleanup from immutable original execution evidence', t => {
+  const f = historicalRestrictedSuiteFixture(t);
+  const previous = f.get(f.input.normalErp.controllerStatus);
+  const currentDatabase = { ...f.get(f.input.normalErp.restored),
+    gitCommit: f.targetGitCommit, readbackRuntimeCommit: f.targetGitCommit,
+    observedAt: '2026-09-16T11:30:02.000Z' };
+  const pendingReadback = f.put('current-pending.json', {
+    kind: 'REAL_HOSTED_SUITE_PENDING_READBACK', caseId: 'suite', phase: 'pending',
+    gitCommit: f.targetGitCommit, readbackRuntimeCommit: f.targetGitCommit,
+    databaseId: 'production-com-primary', ownerSha256: previous.ownerSha256,
+    observedAt: '2026-09-16T11:30:01.000Z', readOnly: true, pending: previous.pending,
+  });
+  const finalReadback = f.put('current-suite-db.json', currentDatabase);
+  const controller = { ...previous, schemaVersion: 2, gitCommit: f.targetGitCommit,
+    executionGitCommit: f.executionGitCommit, pendingReadback, finalReadback,
+    after: { ...previous.after, gitCommit: f.targetGitCommit, observedAt: '2026-09-16T11:30:00.000Z' } };
+  f.input.normalErp.controllerStatus = f.put('current-cleanup-controller.json', controller);
+  assert.equal(f.verify().report.provenance.normalErp.executionCommit, f.executionGitCommit);
+  for (const mutate of [value => { value.pending.recovery = 1; },
+    value => { value.gitCommit = f.executionGitCommit; },
+    value => { value.readOnly = false; },
+    value => { value.ownerSha256 = hash('another-owner'); }]) {
+    f.change(pendingReadback, mutate);
+    f.change(f.input.normalErp.controllerStatus, value => { value.pendingReadback = pendingReadback; });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(pendingReadback, f.put('current-pending.json', {
+      kind: 'REAL_HOSTED_SUITE_PENDING_READBACK', caseId: 'suite', phase: 'pending',
+      gitCommit: f.targetGitCommit, readbackRuntimeCommit: f.targetGitCommit,
+      databaseId: 'production-com-primary', ownerSha256: previous.ownerSha256,
+      observedAt: '2026-09-16T11:30:01.000Z', readOnly: true, pending: previous.pending,
+    }));
+    f.change(f.input.normalErp.controllerStatus, value => { value.pendingReadback = pendingReadback; });
+  }
+  f.change(finalReadback, value => { value.rows[0].job.billedUnits = 0; });
+  f.change(f.input.normalErp.controllerStatus, value => { value.finalReadback = finalReadback; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  Object.assign(finalReadback, f.put('current-suite-db.json', currentDatabase));
+  f.change(f.input.normalErp.controllerStatus, value => { value.finalReadback = finalReadback; });
+  writeFileSync(path.join(f.repositoryRoot, 'apps/server/src/rule.ts'), 'unreviewed generation behavior\n');
+  f.git('add', '--', 'apps/server/src/rule.ts'); f.git('commit', '-qm', 'change generation owner');
+  assert.throws(() => subject.verifyErpSource(f.repositoryRoot, f.executionGitCommit, f.git('rev-parse', 'HEAD')),
+    error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
 test('suite rejects missing images, price changes, reused jobs and historical records relabeled as current', t => {
   const f = suiteFlowFixture(fixture(t), png);
   const ref = f.input.normalErp.generated, original = readFileSync(ref.path);

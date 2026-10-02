@@ -311,8 +311,10 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   }
   if (explicitExecution && controller?.kind === 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL') {
     const expectedPending = { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 };
-    const pilot = value => {
-      check(value?.kind === 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE' && value.gitCommit === commit
+    const targetCleanup = controller.schemaVersion === 2;
+    const cleanupCommit = targetCleanup ? input.targetGitCommit : commit;
+    const pilot = (value, runtimeCommit) => {
+      check(value?.kind === 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE' && value.gitCommit === runtimeCommit
         && /^\d+\.\d+\.\d+$/u.test(value.version) && value.region === 'COM'
         && value.providerRequests === 0 && value.ozonWrites === 0 && value.result?.expectation === 'hosted-pilot'
         && value.result.ownerSha256 === owner && equal(value.result.shopIds, [binding.shopId])
@@ -320,14 +322,35 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
         && positive(value.result.rolloutRevision) && text(value.result.sourcePolicyRevision));
       return value;
     };
-    const beforePilot = pilot(controller.before), afterPilot = pilot(controller.after);
-    check(controller.schemaVersion === 1 && controller.gitCommit === commit && controller.version === afterPilot.version
+    const beforePilot = pilot(controller.before, commit), afterPilot = pilot(controller.after, cleanupCommit);
+    check((controller.schemaVersion === 1 || targetCleanup) && controller.gitCommit === cleanupCommit && controller.version === afterPilot.version
       && controller.region === 'COM' && controller.ownerSha256 === owner && controller.currency === 'CNY'
       && controller.maximumTaskCostCents === 28 && controller.configurationChanged === false
       && equal(controller.pending, expectedPending)
       && equal(beforePilot.result, afterPilot.result)
       && time(beforePilot.observedAt) <= time(binding.launchedAt)
-      && time(afterPilot.observedAt) >= time(applied.at) && time(afterPilot.observedAt) <= time(restored.observedAt));
+      && time(afterPilot.observedAt) >= time(applied.at));
+    if (targetCleanup) {
+      check(controller.executionGitCommit === commit);
+      // Later maintenance is evidence about the current runtime, never a
+      // relabeling of the original suite, review, settlement or browser action.
+      verifySource(commit, cleanupCommit);
+      const pending = read(controller.pendingReadback), final = read(controller.finalReadback);
+      check(pending.kind === 'REAL_HOSTED_SUITE_PENDING_READBACK' && pending.caseId === 'suite'
+        && pending.phase === 'pending' && pending.gitCommit === cleanupCommit
+        && pending.readbackRuntimeCommit === cleanupCommit && pending.readOnly === true
+        && pending.ownerSha256 === owner && pending.databaseId === 'production-com-primary'
+        && equal(pending.pending, expectedPending)
+        && time(afterPilot.observedAt) <= time(pending.observedAt) && time(pending.observedAt) <= time(now));
+      check(final.kind === 'REAL_ERP_JOB_DATABASE_READBACK' && final.caseId === 'suite'
+        && final.gitCommit === cleanupCommit && final.readbackRuntimeCommit === cleanupCommit && final.readOnly === true
+        && time(pending.observedAt) <= time(final.observedAt) && time(final.observedAt) <= time(now));
+      const originalState = value => Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !['gitCommit', 'readbackRuntimeCommit', 'observedAt'].includes(key)));
+      check(equal(originalState(final), originalState(restored)));
+    } else {
+      check(time(afterPilot.observedAt) <= time(restored.observedAt));
+    }
   } else {
     check(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
       && controller.action === 'restore' && controller.phase === 'restored' && controller.caseId === 'suite'

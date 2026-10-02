@@ -1,5 +1,9 @@
 # SS ERP 当前状态审计
 
+## 2026-10-02 历史恢复修复与最终发布接续
+
+两区现运行 `537f9e73 / 1.0.400`，健康与三服务已恢复；官网仍为 `3723f5dd / 1.0.395`。用户明确授权四个历史失败测试任务终止恢复、保留两笔已结算费用及所有证据、释放另外两笔未交付 ERP 预留；最终服务端修复已完成真实 PostgreSQL RED→GREEN 并由主 Agent 串行复验。四项生产 mutation 仍未执行，正式 QA04 与官网发布仍待最终新提交的完整 offline/候选/签名部署。原正常 suite 无需重新生成；当前准入、迁移失败恢复和证据唯一见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-已确认历史恢复收口与部署修复)。
+
 ## 2026-10-02 1.0.398 真实套图与当前发布边界
 
 两区应用运行 `58cc814e8af12fec478f267812068e2f833bddaa / 1.0.398`，区域候选原件与签名已复核；官网仍公开 `3723f5dd / 1.0.395`。独立 MV3 本次两图 `SUCCEEDED`、审核、两条 DOTH store-draft assignment 和 exact replay 通过，总结算 CNY `0.28`；不得重复消费本次授权。全 owner 的历史待处理计数仍为 `costs=2/recovery=4`，正式 QA04 与后续发布动作尚未执行。最小 admin cost NULL 投影修复已在隔离 worktree 完成真实 PostgreSQL RED→GREEN，尚未整合部署；历史终止恢复需要明确的新状态合同。完整证据、浏览器验收限制和下一步只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-10398-安装与真实套图历史恢复阻塞)。
