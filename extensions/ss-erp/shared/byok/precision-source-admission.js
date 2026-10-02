@@ -10,7 +10,7 @@
   var SAFE_ERROR_CODES = new Set([
     'SS_ERP_PRECISION_SOURCE_FRAME_INVALID', 'SS_ERP_PRECISION_SOURCE_DEPENDENCY_UNAVAILABLE',
     'SS_ERP_PRECISION_SOURCE_CLOCK_INVALID', 'SS_ERP_PRECISION_SOURCE_DEVICE_UNAVAILABLE',
-    'SS_ERP_PRECISION_SOURCE_CHANGED', 'SS_ERP_PRECISION_SOURCE_PREVIEW_DENIED',
+    'SS_ERP_PRECISION_SOURCE_CHANGED',
     'SS_ERP_PRECISION_SOURCE_NONCE_INVALID', 'SS_ERP_PRECISION_SOURCE_ATTESTATION_EXPIRED',
     'SS_ERP_PRECISION_SOURCE_ATTESTATION_TRANSPORT_FAILED', 'SS_ERP_PRECISION_SOURCE_CAPACITY_EXHAUSTED',
     'SS_ERP_PRECISION_SOURCE_DEVICE_CHANGED', 'SS_ERP_PRECISION_SOURCE_INVALIDATED',
@@ -63,7 +63,7 @@
 
   function create(options) {
     var config = options || {};
-    var methods = ['getTab', 'sendToSourcePage', 'readDevice', 'isPreviewAllowed', 'randomNonce', 'now', 'resolveProductUrl'];
+    var methods = ['getTab', 'sendToSourcePage', 'readDevice', 'randomNonce', 'now', 'resolveProductUrl'];
     if (methods.some(function (name) { return typeof config[name] !== 'function'; })) {
       throw admissionError('SS_ERP_PRECISION_SOURCE_DEPENDENCY_UNAVAILABLE');
     }
@@ -118,17 +118,10 @@
       }
       return { url: url, source: source };
     }
-    async function previewAllowed(operation, source) {
-      var allowed = await config.isPreviewAllowed(Object.freeze({ tabId: operation.frame.tabId,
-        sourcePlatform: source.sourcePlatform, sourceProductId: source.sourceProductId }));
-      if (!active(operation)) return false;
-      if (allowed !== true) throw admissionError('SS_ERP_PRECISION_SOURCE_PREVIEW_DENIED');
-      return true;
-    }
     async function prepare(operation) {
       try {
         var current = await currentTab(operation);
-        if (!current || !await previewAllowed(operation, current.source)) return;
+        if (!current) return;
         var authority = device(await config.readDevice());
         if (!active(operation)) return;
         var latest = await currentTab(operation);
@@ -186,7 +179,7 @@
       operation.accepting = true;
       try {
         var current = await currentTab(operation);
-        if (!current || !await previewAllowed(operation, current.source)) return false;
+        if (!current) return false;
         var authority = device(await config.readDevice());
         if (!active(operation)) return false;
         if (authority.ownerUserId !== operation.authority.ownerUserId || authority.deviceSessionId !== operation.authority.deviceSessionId) {

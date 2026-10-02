@@ -195,7 +195,7 @@ test('cloud extension packaging rejects mixed SS ERP roots without blocking cust
   const customErpBridge = customManifest.content_scripts.find((entry) =>
     entry.js.includes('content/erp-collect-bridge.js'));
   const customDonorResources = customManifest.web_accessible_resources.find((group) =>
-    group.resources.includes('pages/source-workbench-shell.html'));
+    group.resources.includes('pages/precision-workbench.html'));
   assert.ok(customErpBridge);
   assert.deepEqual(
     customDonorResources?.matches,
@@ -229,7 +229,7 @@ test('cloud extension packaging rejects mixed SS ERP roots without blocking cust
   assert.equal(local.status, 0, `${local.stdout}\n${local.stderr}`);
   const localManifest = JSON.parse(read(path.join(outRoot, 'ss-erp-local/manifest.json')));
   const localDonorResources = localManifest.web_accessible_resources.find((group) =>
-    group.resources.includes('pages/source-workbench-shell.html'));
+    group.resources.includes('pages/precision-workbench.html'));
   assert.deepEqual(
     localDonorResources?.matches,
     [...EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES],

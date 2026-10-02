@@ -318,9 +318,9 @@ const steps = [
     args: ['scripts/extension-source-network-capture.test.mjs'],
   },
   {
-    name: 'extension source listing workbench contract',
+    name: 'extension precision default entry and retired surface contract',
     command: 'node',
-    args: ['scripts/extension-source-listing-workbench.test.mjs'],
+    args: ['--test', 'scripts/extension-precision-default-entry.test.mjs', 'scripts/extension-legacy-media-surface-retirement.test.mjs', 'scripts/extension-source-costing-panel.test.mjs'],
   },
   {
     name: 'extension donor workbench shell contract',
@@ -739,19 +739,9 @@ const steps = [
     args: ['scripts/extension-runtime-message-authorization.test.mjs'],
   },
   {
-    name: 'extension standalone media workflow contract',
-    command: 'node',
-    args: ['scripts/extension-source-media-standalone.test.mjs'],
-  },
-  {
     name: 'AI image settings UI contract',
     command: 'node',
     args: ['scripts/ai-image-settings-ui.test.mjs'],
-  },
-  {
-    name: 'extension media mask editor contract',
-    command: 'node',
-    args: ['scripts/extension-media-mask-editor.test.mjs'],
   },
   {
     name: 'extension media editor runtime behavior',

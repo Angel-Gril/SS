@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import {
   EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
   EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
+  EXTENSION_RETIRED_WORKBENCH_UI_FILES,
   parseExpectedReleaseOrigins,
   parseExtensionDeploymentDefaults,
 } from './extension-release-contract.mjs';
@@ -586,6 +587,21 @@ for (let index = 0; index < importQueue.length; index += 1) {
 
 for (const file of [...referenced].sort()) fileExists(file);
 
+if (EXTENSION_RETIRED_WORKBENCH_UI_FILES.some((file) => referenced.has(file))) {
+  fail('retired workbench UI is still loaded by the manifest');
+} else {
+  pass('manifest loads only the precision workbench UI');
+}
+if (packageTarget === 'cloud' || packageTarget === 'local') {
+  for (const file of EXTENSION_RETIRED_WORKBENCH_UI_FILES) {
+    if (existsSync(relToAbs(file))) {
+      fail(`retired workbench UI is included in the installable package: ${file}`);
+    } else {
+      pass(`retired workbench UI is excluded from the installable package: ${file}`);
+    }
+  }
+}
+
 const allFiles = await listFiles(extensionDir);
 for (const file of allFiles) {
   if (path.extname(file).toLowerCase() === '.wasm') {
@@ -721,9 +737,6 @@ const requiredDonorWorkbenchFiles = [
   'shared/donor-workbench/prompt-handoff.js',
   'content/donor-workbench-bridge.js',
   'content/donor-workbench-bridge.css',
-  'pages/source-workbench-shell.html',
-  'pages/source-workbench-shell.css',
-  'pages/source-workbench-shell.js',
   'pages/precision-workbench.html',
   'pages/precision-workbench.js',
   'pages/precision-workbench.css',
@@ -838,9 +851,9 @@ if (!donorContentEntry) {
 } else {
   checkScriptLoadOrder(donorContentEntry.js || [], [
     'shared/donor-workbench/workspace-contract.js',
+    'content/donor/adapter-1688.js',
+    'shared/collectors/donor-1688-capture.js',
     'content/donor-workbench-bridge.js',
-    'content/source-listing-workbench.js',
-    'content/source-costing-panel.js',
   ], 'donor workbench content-script');
   if ((donorContentEntry.css || []).includes('content/donor-workbench-bridge.css')) {
     pass('donor workbench content style is packaged');
@@ -850,10 +863,10 @@ if (!donorContentEntry) {
 }
 
 const donorResourceGroup = (manifest.web_accessible_resources || []).find((group) => (
-  Array.isArray(group.resources) && group.resources.includes('pages/source-workbench-shell.html')
+  Array.isArray(group.resources) && group.resources.includes('pages/precision-workbench.html')
 ));
 if (!donorResourceGroup
-  || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/source-workbench-shell.html', 'pages/precision-workbench.html'])
+  || !containsExactUniqueSet(donorResourceGroup.resources, ['pages/precision-workbench.html'])
   || !containsExactUniqueSet(
     donorResourceGroup.matches,
     EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
@@ -864,24 +877,16 @@ if (!donorResourceGroup
 }
 
 const donorBridgeText = readFileSync(relToAbs('content/donor-workbench-bridge.js'), 'utf8');
-const donorPageText = readFileSync(relToAbs('pages/source-workbench-shell.js'), 'utf8');
-const donorHtmlScripts = parseHtmlLocalRefs('pages/source-workbench-shell.html')
-  .filter((value) => value.endsWith('.js'));
-checkScriptLoadOrder(donorHtmlScripts, [
-  'shared/donor-workbench/workspace-contract.js',
-  'shared/donor-workbench/prompt-adapter.js',
-  'pages/source-workbench-shell.js',
-], 'donor workbench page');
-if (donorBridgeText.includes("ss-erp:donor-workbench-preview-enabled")
-  && donorBridgeText.includes('ss-erp:donor-workbench-preview-allowlist:v1')
-  && donorBridgeText.includes('enabled !== true')
-  && donorBridgeText.includes('normalizedAllowlist(allowlist).has(currentSourceAllowlistKey())')) {
-  pass('donor workbench entrypoint remains default-off and allowlisted');
+if (donorBridgeText.includes('var precisionEnabled = true')
+  && donorBridgeText.includes("pages/precision-workbench.html")
+  && !donorBridgeText.includes('ss-erp:donor-workbench-preview-enabled')
+  && !donorBridgeText.includes('normalizedAllowlist(allowlist)')) {
+  pass('donor workbench entrypoint is the default precision workbench');
 } else {
-  fail('donor workbench entrypoint is not default-off and allowlisted');
+  fail('donor workbench entrypoint is not the default precision workbench');
 }
-if (/\bfetch\s*\(/u.test(donorPageText)
-  || /api\.ozon\.ru|chrome\.debugger|https:\/\/\*\/\*/iu.test(donorPageText + donorBridgeText)) {
+if (/\bfetch\s*\(/u.test(donorBridgeText)
+  || /api\.ozon\.ru|chrome\.debugger|https:\/\/\*\/\*/iu.test(donorBridgeText)) {
   fail('donor workbench contains a forbidden direct network or broad-permission path');
 } else {
   pass('donor workbench contains no direct Ozon/Provider network path');

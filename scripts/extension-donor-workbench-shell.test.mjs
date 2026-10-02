@@ -16,11 +16,17 @@ for (const path of [contractPath, bridgePath, bridgeCssPath, pagePath, pageCssPa
 }
 
 const sourceEntry = manifest.content_scripts.find((entry) => (
-  Array.isArray(entry.js) && entry.js.includes('content/source-listing-workbench.js')
+  Array.isArray(entry.js) && entry.js.includes('content/donor-workbench-bridge.js')
 ));
 assert.ok(sourceEntry, 'source product content-script entry must exist');
 assert.ok(sourceEntry.js.includes('shared/donor-workbench/workspace-contract.js'));
 assert.ok(sourceEntry.js.includes('content/donor-workbench-bridge.js'));
+assert.ok(sourceEntry.js.includes('content/donor/adapter-1688.js'));
+assert.ok(sourceEntry.js.includes('shared/collectors/donor-1688-capture.js'));
+assert.equal(sourceEntry.js.includes('content/source-listing-workbench.js'), false,
+  'legacy source listing workbench must not be mounted on source pages');
+assert.equal(sourceEntry.js.includes('content/source-costing-panel.js'), false,
+  'legacy costing/media panel must not be mounted on source pages');
 assert.ok(sourceEntry.css.includes('content/donor-workbench-bridge.css'));
 assert.ok(
   sourceEntry.js.indexOf('shared/donor-workbench/workspace-contract.js')
@@ -29,9 +35,9 @@ assert.ok(
 );
 
 const shellResources = manifest.web_accessible_resources.find((entry) => (
-  Array.isArray(entry.resources) && entry.resources.includes('pages/source-workbench-shell.html')
+  Array.isArray(entry.resources) && entry.resources.includes('pages/precision-workbench.html')
 ));
-assert.ok(shellResources, 'the iframe shell must be web-accessible only on source origins');
+assert.ok(shellResources, 'the precision workbench must be web-accessible only on source origins');
 for (const forbidden of ['<all_urls>', 'https://*/*', 'http://*/*']) {
   assert.equal(shellResources.matches.includes(forbidden), false);
 }
@@ -450,11 +456,11 @@ for (const invalid of [
 }
 
 const bridge = fs.readFileSync(bridgePath, 'utf8');
-assert.match(bridge, /ss-erp:donor-workbench-preview-enabled/);
-assert.match(bridge, /ss-erp:donor-workbench-preview-allowlist:v1/);
-assert.match(bridge, /enabled\s*!==\s*true/);
-assert.match(bridge, /normalizedAllowlist\(allowlist\)\.has\(currentSourceAllowlistKey\(\)\)/);
-assert.match(bridge, /ALLOWLIST_LIMIT\s*=\s*20/);
+assert.match(bridge, /var precisionEnabled = true/u);
+assert.doesNotMatch(bridge, /ss-erp:donor-workbench-preview-enabled/u);
+assert.doesNotMatch(bridge, /ss-erp:precision-workbench-preview-enabled/u);
+assert.doesNotMatch(bridge, /normalizedAllowlist\(allowlist\)/u);
+assert.doesNotMatch(bridge, /unifiedMediaFab\.click\(\)/u);
 assert.match(bridge, /event\.source\s*!==\s*frame\.contentWindow/);
 assert.match(bridge, /event\.origin\s*!==\s*extensionOrigin/);
 assert.match(bridge, /allowedShopIds\.has\(command\.shopId\)/);
@@ -481,10 +487,9 @@ assert.match(bridge, /hostname\.includes\('tmall\.com'\)\) return 'tmall'/);
 assert.match(bridge, /if \(wasOpen\) document\.documentElement\.style\.overflow = pageOverflow/);
 assert.match(bridge, /about:blank/);
 assert.match(bridge, /工作台（加载失败）/);
-assert.match(bridge, /ss-erp-source-costing-panel/);
+assert.match(bridge, /precision-workbench\.html/);
 assert.match(bridge, /setLegacySurfaceHidden/);
 assert.match(bridge, /ss-erp-source-media-fab/);
-assert.match(bridge, /unifiedMediaFab\.click\(\)/);
 
 const page = fs.readFileSync(pagePath, 'utf8');
 const pageScript = fs.readFileSync(pageScriptPath, 'utf8');

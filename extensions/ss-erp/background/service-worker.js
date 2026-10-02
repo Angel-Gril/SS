@@ -2810,14 +2810,6 @@ function getPrecisionSourceAdmission() {
       return device;
     },
     resolveProductUrl: precisionSourceProductUrl,
-    isPreviewAllowed: async ({ sourcePlatform, sourceProductId }) => {
-      const settings = await chrome.storage.local.get(['ss-erp:donor-workbench-preview-enabled',
-        'ss-erp:precision-workbench-preview-enabled', 'ss-erp:donor-workbench-preview-allowlist:v1']);
-      const list = settings['ss-erp:donor-workbench-preview-allowlist:v1'];
-      return settings['ss-erp:donor-workbench-preview-enabled'] === true
-        && settings['ss-erp:precision-workbench-preview-enabled'] === true && Array.isArray(list) && list.length <= 20
-        && list.includes(`${sourcePlatform}:${sourceProductId}`);
-    },
     randomNonce: () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join(''),
     now: () => Date.now(),
   });

@@ -17,6 +17,15 @@ const PROVENANCE_KEYS = Object.freeze([
 ]);
 const PUBLIC_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 export const EXTENSION_RELEASE_LOCAL_ORIGIN = 'http://127.0.0.1:3001';
+// Retain archived source for comparison, while installable packages expose only
+// the precision workbench. Shared execution contracts and calculator stay intact.
+export const EXTENSION_RETIRED_WORKBENCH_UI_FILES = Object.freeze([
+  'pages/source-workbench-shell.html',
+  'pages/source-workbench-shell.css',
+  'pages/source-workbench-shell.js',
+  'content/source-listing-workbench.js',
+  'content/source-listing-workbench.css',
+]);
 export const EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES = Object.freeze([
   'https://detail.1688.com/*',
   'https://*.pinduoduo.com/*',

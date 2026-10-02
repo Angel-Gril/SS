@@ -21,44 +21,6 @@
   box-shadow: 0 14px 32px rgba(15, 118, 110, 0.32);
 }
 
-#ss-erp-source-media-fab {
-  position: fixed;
-  right: 16px;
-  top: calc(50% + 62px);
-  z-index: 2147482990;
-  width: 50px;
-  height: 50px;
-  border: 0;
-  border-radius: 999px;
-  background: #2563eb;
-  color: #fff;
-  box-shadow: 0 12px 30px rgba(15, 118, 110, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.35) inset;
-  cursor: pointer;
-  font: 850 13px/1 "Aptos", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
-}
-
-#ss-erp-source-media-fab:hover {
-  transform: scale(1.04);
-  box-shadow: 0 16px 42px rgba(15, 118, 110, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
-}
-
-#ss-erp-source-workbench-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 2147482991;
-  background: rgba(15, 23, 42, 0.42);
-  backdrop-filter: blur(2px);
-}
-
-#ss-erp-source-workbench-backdrop[hidden] {
-  display: none;
-}
-
-html.ss-erp-source-media-modal-open {
-  overflow: hidden !important;
-}
-
 #ss-erp-source-costing-panel {
   position: fixed;
   right: 16px;
@@ -92,121 +54,14 @@ html.ss-erp-source-media-modal-open {
   animation: ss-erp-source-panel-in 0.18s ease-out;
 }
 
-#ss-erp-source-costing-panel:focus-visible,
-#ss-erp-source-costing-panel [data-role="source-listing-workbench"]:focus-visible {
+#ss-erp-source-costing-panel:focus-visible {
   outline: 2px solid #0f766e;
   outline-offset: 2px;
-}
-
-#ss-erp-source-costing-panel.media-focus {
-  inset: auto;
-  left: 50%;
-  top: 50%;
-  right: auto;
-  bottom: auto;
-  width: min(1440px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
-  height: min(960px, calc(100vh - 48px));
-  max-height: calc(100vh - 48px);
-  transform: translate(-50%, -50%);
-  border-color: rgba(15, 118, 110, 0.24);
-  background: #f8fafa;
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.3);
-}
-
-#ss-erp-source-costing-panel.media-focus.open {
-  animation: ss-erp-source-panel-in-centered 0.18s ease-out;
-}
-
-#ss-erp-source-costing-panel.media-focus [data-role="source-listing-workbench"] {
-  order: -1;
-  min-height: 100%;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-}
-
-#ss-erp-source-costing-panel.media-focus [data-role="ozon-card"],
-#ss-erp-source-costing-panel.media-focus [data-role="source-card"],
-#ss-erp-source-costing-panel.media-focus [data-role="cost"],
-#ss-erp-source-costing-panel.media-focus [data-role="input-card"],
-#ss-erp-source-costing-panel.media-focus [data-role="result-card"],
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-cost,
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-actions {
-  display: none;
-}
-
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-head {
-  cursor: default;
-}
-
-#ss-erp-source-costing-panel .ss-erp-source-precision-toolbar {
-  display: none;
-}
-
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-precision-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 46px;
-  padding: 6px 14px;
-  border-bottom: 1px solid #bce8d7;
-  background: linear-gradient(90deg, #ecfff7, #f3f8ff);
-  overflow-x: auto;
-}
-
-.ss-erp-source-precision-toolbar button {
-  min-height: 34px;
-  border: 1px solid #d7e1ee;
-  border-radius: 9px;
-  background: #fff;
-  color: #24324a;
-  padding: 0 12px;
-  font: 700 12px/1 "Segoe UI", "PingFang SC", sans-serif;
-  white-space: nowrap;
-}
-
-.ss-erp-source-precision-toolbar button:hover {
-  border-color: #3b82f6;
-  color: #1d4ed8;
-  background: #f7fbff;
-}
-
-.ss-erp-source-precision-toolbar button.is-primary {
-  border-color: #2f80ed;
-  background: #2f80ed;
-  color: #fff;
-}
-
-.ss-erp-source-precision-spacer {
-  flex: 1 1 auto;
-}
-
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-body {
-  display: block;
-  padding: 16px 18px 12px;
-}
-
-#ss-erp-source-costing-panel.media-focus .ss-erp-source-status {
-  position: sticky;
-  bottom: -12px;
-  z-index: 4;
-  min-height: 34px;
-  margin: 16px -18px -12px;
-  border-top: 1px solid #d7e0e1;
-  background: #f8fafa;
-  padding: 9px 18px;
 }
 
 @keyframes ss-erp-source-panel-in {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@keyframes ss-erp-source-panel-in-centered {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.985); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 .ss-erp-source-head {
@@ -382,7 +237,7 @@ html.ss-erp-source-media-modal-open {
 
 .ss-erp-source-actions {
   display: grid;
-  grid-template-columns: 1.1fr 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 10px;
   border: 1px solid #cce5e2;
@@ -530,8 +385,7 @@ html.ss-erp-source-media-modal-open {
 }
 
 @media (max-width: 480px) {
-  #ss-erp-source-costing-fab,
-  #ss-erp-source-media-fab {
+  #ss-erp-source-costing-fab {
     right: 10px;
   }
 
@@ -543,30 +397,13 @@ html.ss-erp-source-media-modal-open {
     max-height: calc(100vh - 16px);
   }
 
-
-  #ss-erp-source-costing-panel.media-focus {
-    inset: auto;
-    left: 50%;
-    top: 50%;
-    right: auto;
-    bottom: auto;
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100vh - 16px);
-    max-height: calc(100vh - 16px);
-    transform: translate(-50%, -50%);
-    border: 0;
-    border-radius: 14px;
-  }
-
   .ss-erp-source-actions {
     grid-template-columns: 1fr;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #ss-erp-source-costing-fab,
-  #ss-erp-source-media-fab {
+  #ss-erp-source-costing-fab {
     transition: none;
   }
 

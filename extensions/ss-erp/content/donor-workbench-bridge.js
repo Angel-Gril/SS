@@ -1,10 +1,6 @@
 (function () {
   'use strict';
 
-  var FEATURE_KEY = 'ss-erp:donor-workbench-preview-enabled';
-  var ALLOWLIST_KEY = 'ss-erp:donor-workbench-preview-allowlist:v1';
-  var PRECISION_KEY = 'ss-erp:precision-workbench-preview-enabled';
-  var ALLOWLIST_LIMIT = 20;
   var HOST_ID = 'ss-erp-donor-workbench-host';
   var TRIGGER_ID = 'ss-erp-donor-workbench-trigger';
   var FRAME_ID = 'ss-erp-donor-workbench-frame';
@@ -20,7 +16,7 @@
   var pageOverflow = '';
   var open = false;
   var frameLoadTimer = 0;
-  var precisionEnabled = false;
+  var precisionEnabled = true;
   var frameReady = false;
   var legacySurfaceStyles = new Map();
   var busy = false;
@@ -80,24 +76,6 @@
     } catch (_error) {
       return '';
     }
-  }
-
-  function currentSourceAllowlistKey() {
-    var platform = sourcePlatform();
-    var productId = sourceProductIdFromUrl(location.href, platform);
-    return platform && productId ? platform + ':' + encodeURIComponent(productId) : '';
-  }
-
-  function normalizedAllowlist(value) {
-    if (!Array.isArray(value) || value.length > ALLOWLIST_LIMIT) return new Set();
-    var entries = new Set();
-    value.forEach(function (entry) {
-      if (typeof entry !== 'string' || entry !== entry.normalize('NFKC').trim()
-        || entry.length < 3 || entry.length > 700
-        || !/^(?:1688|pdd|taobao|tmall):[A-Za-z0-9.!~_%'-]+$/u.test(entry)) return;
-      entries.add(entry);
-    });
-    return entries.size === value.length ? entries : new Set();
   }
 
   function sendRuntimeMessage(message) {
@@ -710,18 +688,6 @@
 
   function showFrame() {
     if (!frame || !trigger) return;
-    var unifiedMediaFab = document.getElementById('ss-erp-source-media-fab');
-    if (!precisionEnabled && unifiedMediaFab && typeof unifiedMediaFab.click === 'function') {
-      // On real marketplace pages the page CSP can reject extension iframes.
-      // The existing media-focus card already owns the same server contracts,
-      // so use it as the unified donor entry instead of creating a second
-      // global overlay.
-      document.dispatchEvent(new CustomEvent('ss-erp:source-media-focus-request', {
-        detail: { source: 'donor-workbench' },
-      }));
-      unifiedMediaFab.click();
-      return;
-    }
     open = true;
     frame.hidden = false;
     trigger.hidden = true;
@@ -795,13 +761,13 @@
     trigger.id = TRIGGER_ID;
     trigger.type = 'button';
     trigger.textContent = '工作台';
-    trigger.title = '打开 SS ERP 商品工作台预览';
-    trigger.setAttribute('aria-label', '打开 SS ERP 商品工作台预览');
+    trigger.title = '打开 SS ERP 精铺工作台';
+    trigger.setAttribute('aria-label', '打开 SS ERP 精铺工作台');
     trigger.addEventListener('click', showFrame);
 
     frame = document.createElement('iframe');
     frame.id = FRAME_ID;
-    frame.src = chrome.runtime.getURL(precisionEnabled ? 'pages/precision-workbench.html' : 'pages/source-workbench-shell.html');
+    frame.src = chrome.runtime.getURL('pages/precision-workbench.html');
     frameReady = false;
     frame.title = 'SS ERP 商品工作台';
     frame.hidden = true;
@@ -821,28 +787,6 @@
     host = null;
     trigger = null;
     frame = null;
-  }
-
-  function setEnabled(enabled, allowlist, precision) {
-    if (enabled !== true || !normalizedAllowlist(allowlist).has(currentSourceAllowlistKey())) {
-      unmount();
-      return;
-    }
-    if (precisionEnabled !== (precision === true)) {
-      unmount();
-      precisionEnabled = precision === true;
-    }
-    mount();
-  }
-
-  function refreshRolloutState() {
-    chrome.storage.local.get([FEATURE_KEY, ALLOWLIST_KEY, PRECISION_KEY], function (result) {
-      setEnabled(
-        Boolean(result && result[FEATURE_KEY] === true),
-        result && result[ALLOWLIST_KEY],
-        result && result[PRECISION_KEY],
-      );
-    });
   }
 
   globalThis.addEventListener('message', function (event) {
@@ -929,20 +873,14 @@
   });
   globalThis.addEventListener('pageshow', function (event) {
     if (!event.persisted) return;
-    refreshRolloutState();
+    mount();
   });
-  chrome.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName === 'local' && (changes[FEATURE_KEY] || changes[ALLOWLIST_KEY] || changes[PRECISION_KEY])) {
-      refreshRolloutState();
-    }
-  });
-
   document.addEventListener('click', function (event) {
-    if (!precisionEnabled || !host || !event.target || typeof event.target.closest !== 'function'
+    if (!host || !event.target || typeof event.target.closest !== 'function'
       || !event.target.closest('#ss-erp-source-media-fab')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     showFrame();
   }, true);
-  refreshRolloutState();
+  mount();
 }());

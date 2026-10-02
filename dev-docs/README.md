@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-10-02 精铺扩展默认入口改造进行中
+
+来源商品页现在默认挂载直接改造的 `precision-workbench.html`，不再依赖 donor preview 开关或商品 allowlist；旧 source-listing/source-costing 的采集、生图、审核、草稿和上架入口已从来源页装配中移除。利润/物流等其他扩展功能保留，来源核价面板仅保留成本与利润计算及找货源，不再提供独立采集或生图上架按钮。Cloud/Local 构建会排除旧工作台文件；默认 MV3 真实验收已证明普通安装可打开精铺 UI、16 SKU 投影和来源图渲染，Provider/Ozon/ERP mutations=0。当前仍需完成最终代码提交后的签名双区部署与官网更新，不能沿用 `1.0.401` 发布证据。
+
+## 2026-10-02 用户可见精铺工作台交付仍未完成
+
+官网 `1.0.401` 分发已更新，但用户三张截图、签名包入口代码和真实 bridge 的零网络诊断均确认默认仍走旧 SS ERP 面板，缺少草稿时跳转 Web ERP。直接复用 `jp20260803` 的新页面仍被本地 precision preview/商品 allowlist 隔离；本次 live canary 实际验证旧 `media-focus` 并要求新 iframe 隐藏。不能把官网发布完成等同于 donor 功能完成或默认切换。当前主线、证据和剩余验收只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-用户截图复核官网更新没有切换精铺默认入口)。
+
 ## 2026-10-02 `8bab3486 / 1.0.401` 双区官网公开发布完成
 
 COM/CN 均已部署并公开服务 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`。正式 QA04、COM hosted-pilot canary、CN 无店铺 dark canary、双区 website approval、CAS、匿名 cloud/local distribution probe 和最终 publication verifier 均通过。COM/CN 官网 approval SHA-256 分别为 `1da5ae08b6c44535bfb795d80e9485e6d5a9c04f108f457ea28df929042541d4`、`95adda74783d37894e61161d8f5294e58bea7fd79efdb09e3882c81e30f25bd3`；Provider/Ozon/ERP 写入均为 0。本轮严格使用 Keep a Changelog 1.1.0，公开版本记录在根目录 `CHANGELOG.md`。

@@ -29,12 +29,11 @@ function harness(overrides = {}) {
   const state = { tab: { id: 8, url: productUrl, status: 'complete' }, device: {
     state: 'paired', ownerUserId: 'real-owner', sessionId: 'real-device-session', scopes: ['listing:review'],
     expiresAt: new Date(60_000).toISOString(), deviceToken: 'secret-sentinel-never-forward',
-  }, previewAllowed: true };
+  } };
   const admission = api.create({
     getTab: async () => state.tab,
     sendToSourcePage: async (...args) => { sent.push(args); return { ok: true }; },
     readDevice: async () => state.device,
-    isPreviewAllowed: async (source) => state.previewAllowed && source.sourceProductId !== 'forbidden',
     resolveProductUrl: (url) => platformUrls.get(url) || null,
     randomNonce: () => (++nonceIndex).toString(16).padStart(64, '0'), now: () => currentTime,
     setTimeout: (callback, delay) => { const id = ++timerIndex; timers.set(id, { callback, deadline: currentTime + delay }); return id; },
@@ -89,7 +88,6 @@ for (const mutate of [
   (state) => { state.tab.url = 'https://detail.1688.com.evil.test/offer/845581683597.html'; },
   (state) => { state.tab.url = productUrl + '#fragment'; },
   (state) => { state.tab.id = 9; },
-  (state) => { state.previewAllowed = false; },
   (state) => { state.device.state = 'unpaired'; },
   (state) => { state.device.scopes = ['media:execute']; },
   (state) => { state.device.ownerUserId = ''; },
@@ -126,7 +124,6 @@ for (const mutate of [
 }
 for (const mutate of [
   (state) => { state.tab.url = 'https://item.taobao.com/item.htm?id=123'; },
-  (state) => { state.previewAllowed = false; },
   (state) => { state.device.sessionId = 'rotated-session'; },
   (state) => { state.device.ownerUserId = 'another-owner'; },
   (state) => { state.device.scopes = []; },

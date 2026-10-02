@@ -87,21 +87,6 @@
     return Number.isFinite(number) ? number : (fallbackValue == null ? 0 : fallbackValue);
   }
 
-  function formatErpCollectTargetLabel(connection) {
-    connection = connection && typeof connection === 'object' ? connection : {};
-    var user = connection.user && typeof connection.user === 'object' ? connection.user : {};
-    var account = user.accountCode || user.phone || user.nickname || (user.id ? ('ID ' + String(user.id).slice(0, 8)) : '');
-    var baseUrl = String(connection.baseUrl || '').trim().replace(/\/api\/.*$/, '').replace(/\/+$/, '');
-    var host = '';
-    try {
-      host = baseUrl ? new URL(baseUrl).host : '';
-    } catch (_error) {
-      host = baseUrl.replace(/^https?:\/\//, '');
-    }
-    var parts = [account, host].filter(Boolean);
-    return parts.length ? '（' + parts.join(' · ') + '）' : '';
-  }
-
   function uniqueTexts(values) {
     var seen = new Set();
     return (values || []).filter(function (value) {
@@ -986,7 +971,7 @@
     inputCard.className = 'ozon-calc-card ozon-calc-input-card';
     body.appendChild(inputCard);
 
-    var computeCard = createCard('操作', '<div class="ozon-calc-actions ozon-calc-compute-bar"><button type="button" data-action="compute">重新计算</button><button type="button" class="secondary" data-action="search-sources">核价找货源</button><button type="button" class="secondary" data-action="collect-product">采集此商品</button></div>');
+    var computeCard = createCard('操作', '<div class="ozon-calc-actions ozon-calc-compute-bar"><button type="button" data-action="compute">重新计算</button><button type="button" class="secondary" data-action="search-sources">核价找货源</button></div>');
     computeCard.className = 'ozon-calc-card ozon-calc-action-card';
     body.appendChild(computeCard);
 
@@ -1400,7 +1385,6 @@
       compute();
     });
 
-    var collectButton = computeCard.querySelector('[data-action="collect-product"]');
     var searchSourcesButton = computeCard.querySelector('[data-action="search-sources"]');
     if (searchSourcesButton) {
       searchSourcesButton.addEventListener('click', function () {
@@ -1425,41 +1409,6 @@
         });
       });
     }
-    if (collectButton) {
-      collectButton.addEventListener('click', function () {
-        if (product.pageType !== 'detail') {
-          state.actionMessage = '请在商品详情页使用采集功能。';
-          compute();
-          return;
-        }
-        collectButton.disabled = true;
-        collectButton.textContent = '采集中...';
-
-        var pid = product.productId || parseProductIdFromUrl(window.location.href);
-        sendRuntimeMessage({
-          type: 'spb-self-hosted:fetch-ozon-product-to-erp',
-          productIds: [String(pid)],
-          productUrls: [window.location.href],
-          collectMode: 'complete',
-        }).then(function (response) {
-          collectButton.disabled = false;
-          collectButton.textContent = '采集此商品';
-          if (response && response.ok) {
-            var targetLabel = formatErpCollectTargetLabel(response.data && response.data.connection);
-            state.actionMessage = '采集成功，已发送到 ERP（含完整属性）' + targetLabel + '。';
-          } else {
-            state.actionMessage = '采集失败：' + (response && response.error ? response.error : '未知错误');
-          }
-          compute();
-        }).catch(function (error) {
-          collectButton.disabled = false;
-          collectButton.textContent = '采集此商品';
-          state.actionMessage = '采集失败：' + (error && error.message ? error.message : String(error));
-          compute();
-        });
-      });
-    }
-
     bindSharedSpecsRefresh();
     scheduleProductSnapshotRefreshes();
 

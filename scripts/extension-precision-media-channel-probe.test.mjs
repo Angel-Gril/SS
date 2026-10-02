@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectAcceptanceMode, selectMediaProbeWorkerContext, validateMediaChannelDelivery } from './extension-donor-workbench-mv3-acceptance.mjs';
+import { assertPrecisionFrameObservation, selectAcceptanceMode, selectMediaProbeWorkerContext, validateMediaChannelDelivery } from './extension-donor-workbench-mv3-acceptance.mjs';
 
 const expected = {
   probeId: 'probe-123', direction: 'IFRAME_TO_WORKER', from: 'IFRAME', to: 'WORKER',
@@ -31,18 +31,38 @@ test('a packet received in the opposite context cannot count toward both directi
   }), false);
 });
 
-test('requires an explicit hidden transport mode and preserves the original precision UI mode', () => {
+test('default installation acceptance uses precision without enabling preview flags', () => {
+  assert.deepEqual(selectAcceptanceMode([]), {
+    precisionDefault: true, mediaChannelProbe: false, mediaChannelOnly: false,
+  });
   assert.deepEqual(selectAcceptanceMode(['--precision']), {
-    precisionPreview: true, mediaChannelProbe: false, mediaChannelOnly: false,
+    precisionDefault: true, mediaChannelProbe: false, mediaChannelOnly: false,
   });
   assert.deepEqual(selectAcceptanceMode(['--precision', '--probe-media-channel']), {
-    precisionPreview: true, mediaChannelProbe: true, mediaChannelOnly: false,
+    precisionDefault: true, mediaChannelProbe: true, mediaChannelOnly: false,
   });
   assert.deepEqual(selectAcceptanceMode(['--precision', '--probe-media-channel-only']), {
-    precisionPreview: true, mediaChannelProbe: true, mediaChannelOnly: true,
+    precisionDefault: true, mediaChannelProbe: true, mediaChannelOnly: true,
   });
-  assert.throws(() => selectAcceptanceMode(['--probe-media-channel-only']), /requires --precision/u);
-  assert.throws(() => selectAcceptanceMode(['--probe-media-channel']), /requires --precision/u);
+  assert.deepEqual(selectAcceptanceMode(['--probe-media-channel-only']), {
+    precisionDefault: true, mediaChannelProbe: true, mediaChannelOnly: true,
+  });
+  assert.deepEqual(selectAcceptanceMode(['--probe-media-channel']), {
+    precisionDefault: true, mediaChannelProbe: true, mediaChannelOnly: false,
+  });
+});
+
+test('visible default precision readback rejects legacy shells, hidden frames and source navigation', () => {
+  const expectedFrame = { extensionId: 'extension-id', sourceUrl: 'https://detail.1688.com/offer/123.html' };
+  const observed = { src: 'chrome-extension://extension-id/pages/precision-workbench.html',
+    hidden: false, visible: true, sourceUrl: expectedFrame.sourceUrl };
+  assert.doesNotThrow(() => assertPrecisionFrameObservation(observed, expectedFrame));
+  for (const invalid of [
+    null, { ...observed, src: 'chrome-extension://extension-id/pages/source-workbench-shell.html' },
+    { ...observed, src: 'chrome-extension://another-id/pages/precision-workbench.html' },
+    { ...observed, hidden: true }, { ...observed, visible: false },
+    { ...observed, sourceUrl: 'https://ss-erp.com/collect/source' },
+  ]) assert.throws(() => assertPrecisionFrameObservation(invalid, expectedFrame));
 });
 
 test('accepts Chrome worker context origin as either the exact extension origin or exact script URL', () => {

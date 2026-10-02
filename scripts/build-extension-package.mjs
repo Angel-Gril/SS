@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES,
   EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
+  EXTENSION_RETIRED_WORKBENCH_UI_FILES,
 } from './extension-release-contract.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -185,7 +186,13 @@ function resolveBuildVersion(sourceManifestPath) {
 const buildVersion = resolveBuildVersion(path.join(sourceDir, 'manifest.json'));
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(path.dirname(outDir), { recursive: true });
-cpSync(sourceDir, outDir, { recursive: true });
+const retiredWorkbenchUiFiles = new Set(EXTENSION_RETIRED_WORKBENCH_UI_FILES);
+cpSync(sourceDir, outDir, {
+  recursive: true,
+  filter: (sourcePath) => !retiredWorkbenchUiFiles.has(
+    path.relative(sourceDir, sourcePath).replaceAll(path.sep, '/'),
+  ),
+});
 
 const logisticsDistributionEnabled =
   process.env.LOGISTICS_DISTRIBUTION_ENABLED === 'true'
@@ -309,7 +316,7 @@ function stripLocalAndBroad(values) {
 
 function webResourceMatches(group, fallback) {
   return Array.isArray(group.resources)
-    && group.resources.includes('pages/source-workbench-shell.html')
+    && group.resources.includes('pages/precision-workbench.html')
     ? EXTENSION_DONOR_WORKBENCH_WEB_RESOURCE_MATCHES
     : fallback;
 }

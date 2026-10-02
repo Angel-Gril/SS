@@ -1,10 +1,16 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：双区 1.0.401；官网公开发布已完成
+## 当前结果：精铺默认入口已在源码切换，等待新候选发布
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。当前两区应用与官网均绑定 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`；COM hosted pilot 与 CN no-shop dark canary、官网 approval/CAS、distribution probe 和 final verifier 均通过。precision 入口仍按既有 rollout 策略受控开放，未把本次发布误写成全生产 Provider/Ozon 写入验收。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。当前源码已把来源页默认入口切换为 `precision-workbench.html`，移除 preview/allowlist 门槛，并从来源页清理旧 source-listing/source-costing 的采集、生图、审核、草稿和上架面板；利润/物流扩展功能仍保留，核价面板只保留成本/利润和找货源。此改动尚未生成新的签名候选或部署，官网仍服务旧 `8bab3486 / 1.0.401` 产物，不能把旧发布证据套用于本改动。
+
+### 2026-10-02 精铺默认入口和旧模块清理
+
+- `content/donor-workbench-bridge.js` 默认挂载并打开 `pages/precision-workbench.html`，不读取旧 preview/allowlist storage；精铺 source admission 保留精确商品 URL、配对设备、来源身份和服务端草稿/媒体权限校验。伪造来源、登录页和非商品路径仍不挂载。
+- 来源页 manifest 只加载 donor collector/bridge 和独立利润核价面板；`content/source-listing-workbench.js`、旧 source costing media toolbar、旧精铺 iframe shell 不再被安装包加载。旧源文件在仓库中保留作历史对照，构建的 Cloud/Local 包排除五个旧 UI 文件。
+- 真实隔离 MV3 默认验收：不写入三个旧 preview/allowlist storage key；两个 1688 商品均在原来源页打开精铺界面，16 SKU 和来源图投影通过；伪造来源/非商品 URL 拒绝；Blob 双向 transport 通过；Provider/Ozon/production mutations=0。证据：`C:\Users\550W\AppData\Local\Temp\ss-erp-donor-mv3-evidence-enE7Oq\summary.json`。该证据属于本地源码候选，尚未绑定新的签名部署。
 
 ## 唯一 owner 与数据路径
 
@@ -43,6 +49,14 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 ```
 
 ## 验证与限制
+
+### 2026-10-02 用户截图复核：官网更新没有切换精铺默认入口
+
+- 用户三张 `22:28:55 / 22:30:36 / 22:30:45` 截图分别显示旧 `source-costing-panel`、旧 `source-listing-workbench` 的“打开 ERP 创建草稿”，以及跳转后的 Web `/collect/source`；它们没有显示直接复用 donor UI 的 `precision-workbench.html`。截图本身不能证明用户实际安装版本，但签名 COM `1.0.401` ZIP 的入口代码明确保留相同路径，因此不能把该问题归结为用户没有更新或缓存。
+- 入口 owner `content/donor-workbench-bridge.js` 初始 `precisionEnabled=false`，且只有 donor enabled、精确来源 allowlist 和 precision enabled 三项同时满足才挂载新界面；空 local storage 不挂载 donor trigger，仅开启旧 preview 时 `showFrame()` 调用旧 media FAB，iframe 保持隐藏。本地执行真实 bridge 的 VM 诊断三组配置重现上述区别，`DEFAULT_DONOR_DELIVERY=FAIL`；它只证明入口分流，不冒充真实浏览器完整验收，网络请求为 0。
+- `source-costing-panel.js` 的八个 toolbar 按钮仍是旧流程适配；无草稿时 `source-listing-workbench.js` 显示“打开 ERP 创建草稿”，经 `onOpenWorkflowForMedia → openSourceWorkflow` 跳转。原 donor 的表格/SKU/图片 UI 与同窗 `COLLECT → CREATE_DRAFT` 已存在于新页面和 `precision-workflow.js`，但该页面不是公开安装包的默认入口。
+- `1.0.401` live canary 原件记录 `unifiedMediaOpened=true / iframeSuppressed=true`；runner 只设置 donor preview 与 allowlist，未设置 precision preview，并断言旧 `media-focus` 面板和八按钮。该 PASS 证明旧统一入口及回退，不证明新精铺界面交付或无 Web 跳转。此前官网 pointer/签名/服务部署完成的事实保持，但不得将其表述为 donor 默认切换、功能完成或真实 donor 全流程通过。
+- 当前产品主线仍未关闭：真实安装包打开 donor UI、在原窗完成采集/SKU/所选店铺草稿/编辑与图片流程，再完成默认入口切换。仅开启隐藏 preview 不等于完成该目标；不得通过放宽服务端权限、另发收费 suite 或重复旧 canary 代替。截图中的 `policy_revision_mismatch` 是发布能力策略版本不一致，属于另一条服务端阻塞，不是界面复用所必需的 Web 跳转。
 
 ### 2026-10-02 已确认历史恢复收口与部署修复
 

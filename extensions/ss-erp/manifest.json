@@ -188,23 +188,36 @@
         "https://2.taobao.com/*"
       ],
       "js": [
+        "shared/donor-workbench/workspace-contract.js",
+        "content/donor/adapter-1688.js",
+        "shared/collectors/donor-1688-capture.js",
+        "content/donor-workbench-bridge.js"
+      ],
+      "css": [
+        "content/donor-workbench-bridge.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://detail.1688.com/*",
+        "https://*.pinduoduo.com/*",
+        "https://*.yangkeduo.com/*",
+        "https://item.taobao.com/*",
+        "https://detail.tmall.com/*",
+        "https://www.goofish.com/*",
+        "https://goofish.com/*",
+        "https://2.taobao.com/*"
+      ],
+      "js": [
         "shared/calculator-core/profit-engine.js",
         "shared/calculator-core/rule-engine.js",
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
         "shared/source-costing/panel-core.js",
-        "shared/source-costing/ai-image-suite-controller.js",
-        "shared/source-costing/ai-workbench-launch-context.js",
-        "shared/donor-workbench/workspace-contract.js",
-        "content/donor/adapter-1688.js",
-        "shared/collectors/donor-1688-capture.js",
-        "content/donor-workbench-bridge.js",
-        "content/source-listing-workbench.js",
         "content/source-costing-panel.js"
       ],
       "css": [
-        "content/donor-workbench-bridge.css",
-        "content/source-listing-workbench.css",
         "content/source-costing-panel.css"
       ],
       "run_at": "document_idle"
@@ -287,7 +300,6 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "pages/source-workbench-shell.html",
         "pages/precision-workbench.html"
       ],
       "matches": [
