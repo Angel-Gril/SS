@@ -47,6 +47,9 @@ BEGIN
   IF definition IS NULL THEN
     RAISE EXCEPTION 'AI provider reconciliation transition owner is missing';
   END IF;
+  -- pg_get_functiondef preserves the platform line ending used when the
+  -- function was installed. Normalize it before matching the audited clause.
+  definition := REPLACE(definition, CHR(13), '');
   IF POSITION(old_transition IN definition) = 0 THEN
     RAISE EXCEPTION 'AI provider reconciliation transition owner drifted';
   END IF;
