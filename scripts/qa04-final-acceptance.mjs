@@ -92,7 +92,7 @@ const ERP_EXACT_EXECUTION_NEUTRAL_SERVER_TRANSITIONS = Object.freeze({
   },
   'apps/server/prisma/migrations/20261002120000_allow_historical_suite_reconciliation_abandonment/migration.sql': {
     executionObjectId: null,
-    targetObjectId: 'd0743a463817290a52a07d41ca73e8304154662c',
+    targetObjectId: '0a60df482e8faedf6f04088aec806f366817108d',
   },
 });
 const QA04_SCRIPT_REGISTRATIONS = {
