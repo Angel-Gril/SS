@@ -12,6 +12,7 @@ import {
 const UNRESOLVED_STATUSES = ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] as const;
 const LIST_STATUSES = ['ALL', ...UNRESOLVED_STATUSES] as const;
 const MAX_RECONCILIATION_AGE_MS = 24 * 60 * 60 * 1000;
+const HISTORICAL_ABANDONMENT_AGE_MS = MAX_RECONCILIATION_AGE_MS;
 
 export type AiProviderReconciliationListStatus = typeof LIST_STATUSES[number];
 
@@ -133,7 +134,7 @@ function evidenceHash(job: any) {
   })).digest('hex');
 }
 
-function publicRecord(job: any) {
+function publicRecord(job: any, now = new Date()) {
   return {
     id: job.id,
     ownerUserId: job.ownerUserId,
@@ -163,7 +164,7 @@ function publicRecord(job: any) {
       skuKey: job.workflow.contextSkuKey || null,
       slotKey: job.workflow.contextSlotKey || null,
     } : null,
-    allowedActions: allowedActions(job),
+    allowedActions: allowedActions(job, now),
     evidenceHash: evidenceHash(job),
   };
 }
@@ -179,8 +180,16 @@ function include() {
         contextId: true,
         contextSkuKey: true,
         contextSlotKey: true,
+        suiteSlot: {
+          select: {
+            id: true,
+            suiteId: true,
+            suite: { select: { id: true, status: true } },
+          },
+        },
       },
     },
+    assets: { select: { id: true, kind: true } },
     costReservation: {
       include: { settlements: { orderBy: { createdAt: 'desc' }, take: 10 } },
     },
@@ -193,7 +202,25 @@ function isCurrentAttempt(job: any) {
     && Number(job.workflow.currentAttempt) === Number(job.workflowAttempt));
 }
 
-function allowedActions(job: any): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME'> {
+function historicalAbandonmentEligible(job: any, now: Date): boolean {
+  const providerId = String(job.providerJobId || '').trim();
+  const costProviderId = String(job.costReservation?.providerRequestId || '').trim();
+  const dispatchedAt = job.providerDispatchedAt instanceof Date ? job.providerDispatchedAt : null;
+  return job.status === 'FAILED'
+    && job.operation === 'IMAGE_TO_IMAGE'
+    && job.provider === 'dashscope-wanx'
+    && job.model === 'wanx2.1-imageedit'
+    && job.errorCode === 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'
+    && Boolean(job.workflow?.suiteSlot?.id)
+    && job.workflow?.suiteSlot?.suite?.status === 'FAILED'
+    && Array.isArray(job.assets) && job.assets.length === 0
+    && Boolean(providerId) && providerId === costProviderId
+    && job.costReservation?.status === 'RECONCILIATION_REQUIRED'
+    && dispatchedAt !== null
+    && now.getTime() - dispatchedAt.getTime() >= HISTORICAL_ABANDONMENT_AGE_MS;
+}
+
+function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> {
   if (job.providerReconciliationStatus !== 'MANUAL_REVIEW') return [];
   const jobProviderId = String(job.providerJobId || '').trim();
   const costProviderId = String(job.costReservation?.providerRequestId || '').trim();
@@ -201,11 +228,13 @@ function allowedActions(job: any): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME
     jobProviderId && costProviderId && jobProviderId !== costProviderId,
   );
   const resumeAllowed = (!job.workflowId || isCurrentAttempt(job)) && !identitiesConflict;
-  if (jobProviderId) return resumeAllowed ? ['RESUME', 'NO_OUTPUT'] : ['NO_OUTPUT'];
-  if (costProviderId || job.costReservation?.providerAcceptedAt) {
-    return resumeAllowed && costProviderId ? ['RESUME'] : [];
-  }
-  return resumeAllowed ? ['RESUME', 'NOT_SUBMITTED'] : ['NOT_SUBMITTED'];
+  const base: Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> = jobProviderId
+    ? (resumeAllowed ? ['RESUME', 'NO_OUTPUT'] : ['NO_OUTPUT'])
+    : (costProviderId || job.costReservation?.providerAcceptedAt
+      ? (resumeAllowed && costProviderId ? ['RESUME'] : [])
+      : (resumeAllowed ? ['RESUME', 'NOT_SUBMITTED'] : ['NOT_SUBMITTED']));
+  if (historicalAbandonmentEligible(job, now)) base.push('ABANDON');
+  return base;
 }
 
 function assertCurrentAttempt(job: any) {
@@ -225,7 +254,7 @@ export interface ResolveAiProviderReconciliationInput {
   expectedStatus: 'MANUAL_REVIEW';
   expectedRevision: number;
   expectedEvidenceHash: string;
-  action: 'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME';
+  action: 'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON';
   providerJobId?: string;
   providerAcceptedAt?: Date | string;
   reason: string;
@@ -259,7 +288,7 @@ export function createAiProviderReconciliationAdminService(input: {
       const pageRows = rows.slice(0, limit);
       const last = pageRows.at(-1);
       return {
-        items: pageRows.map(publicRecord),
+        items: pageRows.map((job: any) => publicRecord(job, now())),
         limit,
         status,
         nextCursor: rows.length > limit && last ? encodeListCursor(status, last.id) : null,
@@ -274,7 +303,7 @@ export function createAiProviderReconciliationAdminService(input: {
       if (raw.expectedStatus !== 'MANUAL_REVIEW'
         || !Number.isSafeInteger(raw.expectedRevision)
         || raw.expectedRevision < 0
-        || !['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME'].includes(raw.action)) {
+        || !['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME', 'ABANDON'].includes(raw.action)) {
         throw new AiProviderReconciliationAdminError('INVALID_REQUEST', 'resolution state is invalid', 400);
       }
       const reason = required(raw.reason, 'reason').replace(/\s+/gu, ' ');
@@ -311,7 +340,9 @@ export function createAiProviderReconciliationAdminService(input: {
             providerAcceptedAt: acceptedAt?.toISOString() || null,
           };
           const nextRevision = Number(job.providerReconciliationRevision) + 1;
-          const nextStatus = raw.action === 'RESUME' ? 'PENDING' : raw.action;
+          const nextStatus = raw.action === 'RESUME'
+            ? 'PENDING'
+            : raw.action === 'ABANDON' ? 'CANCELLED_OUTPUT_RETAINED' : raw.action;
           const reconciliationEvent = aiProviderReconciliationEventData({
             jobId: job.id,
             ownerUserId: job.ownerUserId,
@@ -336,7 +367,7 @@ export function createAiProviderReconciliationAdminService(input: {
                 409,
               );
             }
-            return publicRecord(job);
+            return publicRecord(job, now());
           }
           if (job.providerReconciliationStatus !== raw.expectedStatus
             || Number(job.providerReconciliationRevision) !== raw.expectedRevision
@@ -347,7 +378,7 @@ export function createAiProviderReconciliationAdminService(input: {
               409,
             );
           }
-          if (!allowedActions(job).includes(raw.action)) {
+          if (!allowedActions(job, now()).includes(raw.action)) {
             throw new AiProviderReconciliationAdminError(
               'RECONCILIATION_CHANGED',
               'Provider reconciliation action is no longer allowed',
@@ -355,6 +386,13 @@ export function createAiProviderReconciliationAdminService(input: {
             );
           }
           if (raw.action === 'RESUME') assertCurrentAttempt(job);
+          if (raw.action === 'ABANDON' && !historicalAbandonmentEligible(job, now())) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'Only an expired failed suite child with no ERP output may be abandoned',
+              400,
+            );
+          }
           if (raw.action === 'NOT_SUBMITTED' && (
             job.providerJobId
             || job.costReservation?.providerRequestId
@@ -416,11 +454,13 @@ export function createAiProviderReconciliationAdminService(input: {
             providerReconciliationLastErrorMessage: null,
             providerReconciledAt: null,
           } : {
-            providerReconciliationStatus: raw.action,
+            providerReconciliationStatus: raw.action === 'ABANDON'
+              ? 'CANCELLED_OUTPUT_RETAINED' : raw.action,
             providerReconciliationRevision: nextRevision,
             providerReconciliationNextAt: null,
             providerReconciliationDeadlineAt: null,
-            providerReconciliationLastErrorCode: `OPERATOR_${raw.action}`,
+            providerReconciliationLastErrorCode: raw.action === 'ABANDON'
+              ? 'OPERATOR_ABANDONED_NO_RECOVERY' : `OPERATOR_${raw.action}`,
             providerReconciliationLastErrorMessage: reason,
             providerReconciledAt: timestamp,
           };
@@ -443,7 +483,7 @@ export function createAiProviderReconciliationAdminService(input: {
           }
 
           const reservation = job.costReservation;
-          if (raw.action === 'NOT_SUBMITTED' && reservation
+          if ((raw.action === 'NOT_SUBMITTED' || raw.action === 'ABANDON') && reservation
             && !['SETTLED', 'RELEASED'].includes(reservation.status)) {
             await appendAiCostSettlementInTransaction(tx, {
               reservationId: reservation.id,
@@ -486,7 +526,7 @@ export function createAiProviderReconciliationAdminService(input: {
             } });
           }
           const updated = await tx.aiImageJob.findUnique({ where: { id: job.id }, include: include() });
-          return publicRecord(updated);
+          return publicRecord(updated, now());
         });
       } catch (error) {
         if (error instanceof AiProviderReconciliationAdminError) throw error;

@@ -107,4 +107,15 @@ describe('AI provider reconciliation persistence migrations', () => {
     expect(deadlineMigration).toMatch(/PROVIDER_RECONCILIATION_DEADLINE_EXTENDED/u);
     expect(deadlineMigration).toMatch(/INSERT INTO "ai_provider_reconciliation_events"/u);
   });
+
+  it('adds an explicit, narrow terminal transition for approved historical suite abandonment', async () => {
+    const migration = await readMigration('20261002120000_allow_historical_suite_reconciliation_abandonment');
+    expect(migration).toMatch(/REPLACE\(definition, old_transition, new_transition\)/u);
+    expect(migration).toMatch(/OLD\."provider_reconciliation_status" = 'MANUAL_REVIEW'/u);
+    expect(migration).toMatch(/NEW\."provider_reconciliation_status"[^\n]*'CANCELLED_OUTPUT_RETAINED'/u);
+    expect(migration).toMatch(/PROVIDER_OUTPUT_DIMENSIONS_MISMATCH/u);
+    expect(migration).toMatch(/workflow.*suite_slot|suite_slot.*workflow/iu);
+    expect(migration).toMatch(/24 hours|INTERVAL '24 hours'/u);
+    expect(migration).not.toMatch(/DROP (?:TABLE|COLUMN|TYPE|INDEX)/u);
+  });
 });

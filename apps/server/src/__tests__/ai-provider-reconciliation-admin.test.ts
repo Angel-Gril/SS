@@ -319,4 +319,56 @@ describe('AI Provider reconciliation admin service', () => {
       action: 'NO_OUTPUT', reason: 'Provider dashboard confirms the task has no recoverable output',
     })).rejects.toMatchObject({ code: 'RECONCILIATION_CHANGED', statusCode: 409 });
   });
+
+  it('abandons an expired failed suite child only with an explicit audited no-recovery decision', async () => {
+    const db = database({ providerJobId: 'provider-dimension-mismatch' });
+    db.job.operation = 'IMAGE_TO_IMAGE';
+    db.job.provider = 'dashscope-wanx';
+    db.job.model = 'wanx2.1-imageedit';
+    db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';
+    db.job.providerDispatchedAt = new Date('2026-07-18T07:55:00.000Z');
+    db.job.workflow.suiteSlot = { id: 'suite-slot-1', suite: { id: 'suite-1', status: 'FAILED' } };
+    db.job.assets = [];
+    db.reservation.status = 'RECONCILIATION_REQUIRED';
+    db.reservation.providerRequestId = 'provider-dimension-mismatch';
+    db.reservation.providerAcceptedAt = new Date('2026-07-18T07:55:30.000Z');
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const listed = await service.listReconciliations();
+    expect(listed.items[0].allowedActions).toContain('ABANDON');
+    const decision = {
+      jobId: 'job-1', actorUserId: 'super-admin-1',
+      requestId: '0f96dfc8-e0e0-4bb6-8b12-43fc3c145fa9',
+      expectedStatus: 'MANUAL_REVIEW' as const, expectedRevision: 1,
+      expectedEvidenceHash: listed.items[0].evidenceHash,
+      action: 'ABANDON' as const,
+      reason: 'Approved historical suite termination after expired recovery window; retain Provider output fact',
+    };
+    const abandoned = await service.resolveReconciliation(decision);
+    expect(abandoned).toMatchObject({
+      status: 'CANCELLED_OUTPUT_RETAINED', revision: 2,
+      allowedActions: [], costStatus: 'RELEASED',
+    });
+    expect(db.job.providerReconciliationLastErrorCode).toBe('OPERATOR_ABANDONED_NO_RECOVERY');
+    expect(db.reservation).toMatchObject({ status: 'RELEASED' });
+    expect(db.reservation.settlements).toHaveLength(1);
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({
+      status: 'CANCELLED_OUTPUT_RETAINED', revision: 2,
+    });
+    await expect(service.resolveReconciliation({ ...decision, reason: 'Changed abandonment decision must conflict' }))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT', statusCode: 409 });
+  });
+
+  it('does not offer abandonment for a fresh or asset-backed task', async () => {
+    const db = database({ providerJobId: 'provider-task-1' });
+    db.job.operation = 'IMAGE_TO_IMAGE';
+    db.job.provider = 'dashscope-wanx';
+    db.job.model = 'wanx2.1-imageedit';
+    db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';
+    db.job.workflow.suiteSlot = { id: 'suite-slot-1', suite: { id: 'suite-1', status: 'FAILED' } };
+    db.job.assets = [{ id: 'asset-1' }];
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    await expect(service.listReconciliations()).resolves.toMatchObject({
+      items: [{ allowedActions: ['RESUME', 'NO_OUTPUT'] }],
+    });
+  });
 });

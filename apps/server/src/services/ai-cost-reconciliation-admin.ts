@@ -99,6 +99,7 @@ function reservationInclude() {
         providerDispatchedAt: true,
         createdAt: true,
         updatedAt: true,
+        workflow: { select: { suiteSlot: { select: { id: true } } } },
       },
     },
     settlements: {
@@ -224,13 +225,17 @@ export function createAiCostReconciliationAdminService(input: {
             throw new AiCostReconciliationAdminError('RESERVATION_CHANGED', 'AI image job changed', 409);
           }
 
+          // Suite execution graphs use null for zero billed units. The ledger
+          // still records an explicit zero release; ordinary image jobs use 0.
+          const jobActualCostCents = outcome === 'RELEASED' && reservation.job?.workflow?.suiteSlot
+            ? null : actualCostMinor;
           const projected = await transaction.aiImageJob.updateMany({
             where: {
               id: reservation.jobId,
               ownerUserId: reservation.ownerUserId,
               updatedAt: reservation.job.updatedAt,
             },
-            data: { actualCostCents: actualCostMinor, billedUnits },
+            data: { actualCostCents: jobActualCostCents, billedUnits },
           });
           if (projected.count !== 1) {
             throw new AiCostReconciliationAdminError('RESERVATION_CHANGED', 'AI image job changed', 409);

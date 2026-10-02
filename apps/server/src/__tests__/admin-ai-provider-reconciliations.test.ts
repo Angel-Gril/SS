@@ -135,4 +135,25 @@ describe('admin AI Provider reconciliation routes', () => {
       method: 'POST', url: '/job-1/resolve', payload: { ...base, action: 'RESUME' },
     })).statusCode).toBe(400);
   });
+
+  it('accepts the explicit historical suite abandonment action', async () => {
+    const { app, service: reconciliationService } = await appFor();
+    const response = await app.inject({
+      method: 'POST', url: '/job-1/resolve', payload: {
+        requestId: '0f96dfc8-e0e0-4bb6-8b12-43fc3c145fa9',
+        expectedStatus: 'MANUAL_REVIEW', expectedRevision: 1, expectedEvidenceHash: HASH,
+        action: 'ABANDON',
+        reason: 'Approved historical suite termination after expired recovery window',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(reconciliationService.resolveReconciliation).toHaveBeenCalledWith({
+      jobId: 'job-1', actorUserId: 'admin-1',
+      requestId: '0f96dfc8-e0e0-4bb6-8b12-43fc3c145fa9',
+      expectedStatus: 'MANUAL_REVIEW', expectedRevision: 1, expectedEvidenceHash: HASH,
+      action: 'ABANDON',
+      reason: 'Approved historical suite termination after expired recovery window',
+    });
+  });
 });

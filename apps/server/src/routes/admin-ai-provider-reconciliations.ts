@@ -18,7 +18,7 @@ const resolveBodySchema = z.object({
   expectedStatus: z.literal('MANUAL_REVIEW'),
   expectedRevision: z.number().int().nonnegative(),
   expectedEvidenceHash: z.string().regex(/^[a-f0-9]{64}$/u),
-  action: z.enum(['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME']),
+  action: z.enum(['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME', 'ABANDON']),
   providerJobId: z.string().trim().min(1).max(500).optional(),
   providerAcceptedAt: z.string().datetime({ offset: true }).optional(),
   reason: z.string().trim().min(10).max(500).regex(/^[^\r\n]+$/u),
@@ -54,7 +54,7 @@ export interface AdminAiProviderReconciliationService {
     expectedStatus: 'MANUAL_REVIEW';
     expectedRevision: number;
     expectedEvidenceHash: string;
-    action: 'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME';
+    action: 'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON';
     providerJobId?: string;
     providerAcceptedAt?: string;
     reason: string;
@@ -98,7 +98,7 @@ function mapItemDto(value: unknown) {
     context: source.context ? allowedFields(source.context, ['type', 'id', 'skuKey', 'slotKey']) : null,
     allowedActions: Array.isArray(source.allowedActions)
       ? source.allowedActions.filter((action) => (
-        action === 'NOT_SUBMITTED' || action === 'NO_OUTPUT' || action === 'RESUME'
+        action === 'NOT_SUBMITTED' || action === 'NO_OUTPUT' || action === 'RESUME' || action === 'ABANDON'
       ))
       : [],
   };

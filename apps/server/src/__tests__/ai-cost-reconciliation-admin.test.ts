@@ -117,4 +117,30 @@ describe('AI cost reconciliation admin service', () => {
     })).rejects.toMatchObject({ code: 'RESERVATION_CHANGED', statusCode: 409 });
     expect(db.reservation.settlements).toHaveLength(0);
   });
+
+  it('keeps a suite child zero-unit release at null actual cost while ordinary jobs remain zero', async () => {
+    const suiteDb = database();
+    suiteDb.reservation.job.workflow = { suiteSlot: { id: 'suite-slot-1' } };
+    const suiteService = createAiCostReconciliationAdminService({ database: suiteDb });
+    const suiteListed = await suiteService.listReconciliations();
+    await suiteService.reconcileReservation({
+      reservationId: 'reservation-1', actorUserId: 'super-admin-1', requestId: 'suite-release-1',
+      expectedStatus: 'SUBMISSION_UNCERTAIN', expectedEvidenceHash: suiteListed.items[0].evidenceHash,
+      outcome: 'RELEASED', billedUnits: 0,
+      reason: 'ERP accepted no valid suite output; release zero successful image units',
+    });
+    expect(suiteDb.reservation.job).toMatchObject({ actualCostCents: null, billedUnits: 0 });
+    expect(suiteDb.reservation.settlements).toHaveLength(1);
+
+    const ordinaryDb = database();
+    const ordinaryService = createAiCostReconciliationAdminService({ database: ordinaryDb });
+    const ordinaryListed = await ordinaryService.listReconciliations();
+    await ordinaryService.reconcileReservation({
+      reservationId: 'reservation-1', actorUserId: 'super-admin-1', requestId: 'ordinary-release-1',
+      expectedStatus: 'SUBMISSION_UNCERTAIN', expectedEvidenceHash: ordinaryListed.items[0].evidenceHash,
+      outcome: 'RELEASED', billedUnits: 0,
+      reason: 'Ordinary image request produced no billable output and is released',
+    });
+    expect(ordinaryDb.reservation.job).toMatchObject({ actualCostCents: 0, billedUnits: 0 });
+  });
 });
