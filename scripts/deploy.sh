@@ -631,6 +631,11 @@ if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
 fi
 mkdir "$RELEASE_DIR"
 tar -xzf "$TARBALL" -C "$RELEASE_DIR" --strip-components=1 --no-same-owner
+# Normalize archive permissions before any trust gate executes. Developer/CI
+# umask must not make the freshly extracted release tree group/world writable.
+chown -R root:root "$RELEASE_DIR"
+find -P "$RELEASE_DIR" -xdev -type d -exec chmod go-w -- {} +
+find -P "$RELEASE_DIR" -xdev -type f -exec chmod go-w -- {} +
 rm -f -- "$TARBALL"
 rmdir -- "$UPLOAD_DIR"
 install_target_backup_gate "$RELEASE_DIR"
