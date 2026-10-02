@@ -66,7 +66,7 @@ for (const requestId of requestIds) {
 assert.match(route, /requireSuperAdmin/u);
 assert.match(route, /account_session/u);
 assert.match(route, /isSubAccount/u);
-assert.match(route, /action:\s*z\.enum\(\['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME'\]\)/u);
+assert.match(route, /action:\s*z\.enum\(\['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME', 'ABANDON'\]\)/u);
 assert.match(route, /value\.action === 'RESUME'[\s\S]*!value\.providerJobId \|\| !value\.providerAcceptedAt/u);
 assert.match(route, /\.strict\(\)\.superRefine/u);
 
