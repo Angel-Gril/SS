@@ -1,8 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-10-02 `8bab3486 / 1.0.401` 双区官网公开发布完成
+
+COM/CN 均已部署并公开服务 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`。正式 QA04、COM hosted-pilot canary、CN 无店铺 dark canary、双区 website approval、CAS、匿名 cloud/local distribution probe 和最终 publication verifier 均通过。COM/CN 官网 approval SHA-256 分别为 `1da5ae08b6c44535bfb795d80e9485e6d5a9c04f108f457ea28df929042541d4`、`95adda74783d37894e61161d8f5294e58bea7fd79efdb09e3882c81e30f25bd3`；Provider/Ozon/ERP 写入均为 0。本轮严格使用 Keep a Changelog 1.1.0，公开版本记录在根目录 `CHANGELOG.md`。
+
 ## 2026-10-02 历史任务终止恢复已授权，最终修复完成本地验证
 
-用户已确认仅四个历史失败测试任务终止恢复并保留原件及已结算费用，另两笔未交付 ERP 预留各释放 CNY `0.14`。当前两区运行 `537f9e73 / 1.0.400`，三服务 active；官网仍公开 `3723f5dd / 1.0.395`。修复已通过真实 PostgreSQL RED→GREEN 与主 Agent 串行复核（6 个新增场景、40 个关联检查），当前尚未执行四项生产收口；最终提交须重新取得完整 offline 和区域签名部署后继续。原付费两图 suite 的生成/审核/assignment/replay 证据保留，不重收费。正式 QA04 后验读回已显式区分 execution/target runtime，仍要求五项 pending=0；详细 owner 见[历史恢复收口](donor-workbench/direct-adaptation.md#2026-10-02-已确认历史恢复收口与部署修复)。
+用户已确认仅四个历史失败测试任务终止恢复并保留原件及已结算费用，另两笔未交付 ERP 预留各释放 CNY `0.14`。修复已通过真实 PostgreSQL RED→GREEN 与主 Agent 串行复核；随后完成正式 QA04、区域候选签名部署及官网发布门禁。原付费两图 suite 的生成/审核/assignment/replay 证据保留，不重收费。详细 owner 见[历史恢复收口](donor-workbench/direct-adaptation.md#2026-10-02-已确认历史恢复收口与部署修复)。
 
 ## 2026-10-02 1.0.398 实际套图通过；官网分发仍有历史恢复阻塞
 

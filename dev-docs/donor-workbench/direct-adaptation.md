@@ -1,10 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：双区 1.0.400；历史收口修复已验证，官网仍为 1.0.395
+## 当前结果：双区 1.0.401；官网公开发布已完成
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `537f9e73 / 1.0.400`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。当前两区应用与官网均绑定 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`；COM hosted pilot 与 CN no-shop dark canary、官网 approval/CAS、distribution probe 和 final verifier 均通过。precision 入口仍按既有 rollout 策略受控开放，未把本次发布误写成全生产 Provider/Ozon 写入验收。
 
 ## 唯一 owner 与数据路径
 

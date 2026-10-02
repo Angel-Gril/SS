@@ -1,8 +1,12 @@
 # SS ERP 当前状态审计
 
+## 2026-10-02 `8bab3486 / 1.0.401` 双区官网公开发布完成
+
+COM/CN current、官网 latest 和 cloud/local 下载均绑定 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`。正式 QA04、COM hosted-pilot 与 CN no-shop dark REL-04 canary、双区 website approval、CAS、匿名 distribution probe 和 final verifier 均通过；无 Provider POST、Ozon 写入或新增费用。CN 首轮 origin 误用 COM 扩展 ID 的失败回执保留为失败证据，随后使用 CN 签名包的 `bfpadpmmgokbblmlmobpndbaaeknfncd` origin 重跑通过。
+
 ## 2026-10-02 历史恢复修复与最终发布接续
 
-两区现运行 `537f9e73 / 1.0.400`，健康与三服务已恢复；官网仍为 `3723f5dd / 1.0.395`。用户明确授权四个历史失败测试任务终止恢复、保留两笔已结算费用及所有证据、释放另外两笔未交付 ERP 预留；最终服务端修复已完成真实 PostgreSQL RED→GREEN 并由主 Agent 串行复验。四项生产 mutation 仍未执行，正式 QA04 与官网发布仍待最终新提交的完整 offline/候选/签名部署。原正常 suite 无需重新生成；当前准入、迁移失败恢复和证据唯一见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-已确认历史恢复收口与部署修复)。
+两区已运行 `8bab3486 / 1.0.401`，健康与三服务正常；官网公开 pointer 已切换。用户明确授权四个历史失败测试任务终止恢复、保留两笔已结算费用及所有证据、释放另外两笔未交付 ERP 预留；服务端修复完成真实 PostgreSQL RED→GREEN 并由主 Agent 串行复验。当前发布闭环已由正式 QA04 和双区 publication verifier 关闭，详细准入、迁移失败恢复和证据见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-02-已确认历史恢复收口与部署修复)。
 
 ## 2026-10-02 1.0.398 真实套图与当前发布边界
 

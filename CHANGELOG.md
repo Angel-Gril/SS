@@ -23,6 +23,23 @@
 - 增加受审计的历史套图终止恢复动作：仅允许已过恢复窗口、失败且没有 ERP 输出的套图子任务，保留 Provider 输出事实与已结算费用，只释放未交付的 ERP 预留。
 - 修复套图零计量释放在费用 owner 中错误写入 `0` 的问题，改为保持数据库图约束要求的 `NULL`。
 
+## [1.0.401] - 2026-10-02
+
+### Added
+
+- 发布 donor 工作台适配版，覆盖 1688 采集、草稿编辑、托管套图审核与发布预览入口。
+- 为历史失败套图增加受审计的终止恢复和费用对账收口，保留已结算费用并释放未交付预留。
+
+### Changed
+
+- 双区 COM/CN 均绑定 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4`，扩展版本为 `1.0.401`。
+- 官网分发通过双区 REL-04 canary、website approval、CAS 和匿名 cloud/local 下载探针。
+
+### Fixed
+
+- 正式 QA04 读回区分 execution 与 target runtime，避免历史恢复状态污染发布证据。
+- CN dark canary 使用无店铺账号验证，保持 AI、BYOK 与 Ozon 默认关闭。
+
 ## [1.0.395] - 2026-09-30
 
 ### Added
@@ -43,3 +60,4 @@
 
 [Unreleased]: https://github.com/Angel-Gril/SS/compare/3723f5dd1a175537a183bd750f8c168a2f742baf...HEAD
 [1.0.395]: https://github.com/Angel-Gril/SS/commit/3723f5dd1a175537a183bd750f8c168a2f742baf
+[1.0.401]: https://github.com/Angel-Gril/SS/commit/8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4
