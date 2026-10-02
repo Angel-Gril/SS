@@ -24,6 +24,7 @@ function database(input: {
     providerReconciliationDeadlineAt: null, providerReconciliationLastProviderStatus: null,
     providerReconciliationLastErrorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
     providerReconciliationLastErrorMessage: 'submission timed out', providerReconciledAt: null,
+    actualCostCents: null, billedUnits: 0,
     updatedAt: new Date('2026-07-21T07:56:00.000Z'),
     workflow: workflowId ? {
       id: workflowId, ownerUserId: 'owner-1', currentAttempt: input.workflowCurrentAttempt ?? 1,
@@ -351,6 +352,7 @@ describe('AI Provider reconciliation admin service', () => {
     expect(db.job.providerReconciliationLastErrorCode).toBe('OPERATOR_ABANDONED_NO_RECOVERY');
     expect(db.reservation).toMatchObject({ status: 'RELEASED' });
     expect(db.reservation.settlements).toHaveLength(1);
+    expect(db.reservation.settlements[0]).toMatchObject({ kind: 'RECONCILED_RELEASE', actualCostMinor: 0, billedUnits: 0 });
     await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({
       status: 'CANCELLED_OUTPUT_RETAINED', revision: 2,
     });
@@ -371,4 +373,61 @@ describe('AI Provider reconciliation admin service', () => {
       items: [{ allowedActions: ['RESUME', 'NO_OUTPUT'] }],
     });
   });
+
+  it('abandons an expired failed suite with settled cost while preserving its charge and task facts', async () => {
+    const db = database({ providerJobId: 'old-provider-result', costProviderJobId: 'old-provider-result' });
+    Object.assign(db.job, { operation: 'IMAGE_TO_IMAGE', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', providerDispatchedAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000),
+      assets: [], actualCostCents: 14, billedUnits: 1 });
+    db.job.workflow.suiteSlot = { id: 'old-slot', suite: { id: 'old-suite', status: 'FAILED' } };
+    Object.assign(db.reservation, { status: 'SETTLED', maximumCostMinor: 14,
+      settlements: [{ id: 'old-charge', kind: 'CHARGE', actualCostMinor: 14, billedUnits: 1 }] });
+    const charge = structuredClone(db.reservation.settlements);
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const listed = await service.listReconciliations();
+    expect(listed.items[0].allowedActions).toContain('ABANDON');
+    const decision = { jobId: db.job.id, actorUserId: 'super-admin-1', requestId: 'old-settled-abandon',
+      expectedStatus: 'MANUAL_REVIEW' as const, expectedRevision: 1, expectedEvidenceHash: listed.items[0].evidenceHash,
+      action: 'ABANDON' as const, reason: 'Stop recovery of the historical rejected result; preserve the existing settled charge' };
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
+    expect(db.reservation.settlements).toEqual(charge);
+    expect(db.job).toMatchObject({ actualCostCents: 14, billedUnits: 1, status: 'FAILED', providerJobId: 'old-provider-result',
+      errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH' });
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', revision: 2 });
+    expect(db.reservation.settlements).toEqual(charge);
+    expect(db.providerEvents.size).toBe(1);
+    expect(db.workflowEvents.size).toBe(1);
+  });
+
+  it.each(['fresh', 'non-suite', 'asset-backed', 'identity-conflict', 'old-attempt', 'unknown-outcome', 'unresolved-price', 'missing-charge', 'charge-mismatch'])(
+    'rejects abandonment of %s evidence without a terminal or cost mutation', async shape => {
+      const db = database({ providerJobId: 'old-provider-result', costProviderJobId: 'old-provider-result' });
+      Object.assign(db.job, { operation: 'IMAGE_TO_IMAGE', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+        errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', providerDispatchedAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000), assets: [] });
+      db.job.workflow.suiteSlot = { id: 'old-slot', suite: { id: 'old-suite', status: 'FAILED' } };
+      db.reservation.status = 'RECONCILIATION_REQUIRED';
+      if (shape === 'fresh') db.job.providerDispatchedAt = NOW;
+      if (shape === 'non-suite') db.job.workflow.suiteSlot = null;
+      if (shape === 'asset-backed') db.job.assets = [{ id: 'old-provider-asset', kind: 'AI_PROVIDER_OUTPUT' }];
+      if (shape === 'identity-conflict') db.reservation.providerRequestId = 'another-provider-task';
+      if (shape === 'old-attempt') db.job.workflow.currentAttempt = 2;
+      if (shape === 'unknown-outcome') db.job.errorCode = 'PROVIDER_SUBMISSION_UNCERTAIN';
+      if (shape === 'unresolved-price') Object.assign(db.job, { actualCostCents: 14, billedUnits: 1 });
+      if (shape === 'missing-charge' || shape === 'charge-mismatch') {
+        Object.assign(db.job, { actualCostCents: 14, billedUnits: 1 });
+        db.reservation.status = 'SETTLED';
+        db.reservation.settlements = shape === 'missing-charge' ? [] : [{ kind: 'CHARGE', actualCostMinor: 13, billedUnits: 1 }];
+      }
+      const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+      const listed = await service.listReconciliations();
+      expect(listed.items[0].allowedActions).not.toContain('ABANDON');
+      await expect(service.resolveReconciliation({ jobId: db.job.id, actorUserId: 'super-admin-1', requestId: `invalid-abandon-${shape}`,
+        expectedStatus: 'MANUAL_REVIEW', expectedRevision: 1, expectedEvidenceHash: listed.items[0].evidenceHash,
+        action: 'ABANDON', reason: 'Untrusted caller cannot request abandonment without the required historical evidence',
+      })).rejects.toMatchObject({ code: 'RECONCILIATION_CHANGED' });
+      expect(db.job.providerReconciliationStatus).toBe('MANUAL_REVIEW');
+      expect(db.providerEvents.size).toBe(0);
+      expect(db.workflowEvents.size).toBe(0);
+    },
+  );
 });

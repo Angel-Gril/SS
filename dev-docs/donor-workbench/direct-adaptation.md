@@ -1,10 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：双区 1.0.398 与真实托管套图通过；官网仍为 1.0.395
+## 当前结果：双区 1.0.400；历史收口修复已验证，官网仍为 1.0.395
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `58cc814e / 1.0.398`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。旧入口在 `donor-workbench-bridge.js/showFrame` 只有 precision flag 关闭时才回退到现有 media-focus 卡片；这是受控回退，不是默认切换完成。当前两区应用部署为 `537f9e73 / 1.0.400`，官网仍为 `3723f5dd / 1.0.395`；官网切换与默认入口退出旧流程属于后续验收范围。
 
 ## 唯一 owner 与数据路径
 
@@ -43,6 +43,16 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 ```
 
 ## 验证与限制
+
+### 2026-10-02 已确认历史恢复收口与部署修复
+
+- 用户确认仅终止四个 9 月 29 日尺寸拒绝后的历史测试任务恢复，保留其 Provider 输出事实、失败状态和两笔已结算 CNY `0.14`；另两笔未交付 ERP 预留各 CNY `0.14` 释放。没有新 Provider/Ozon 请求或费用授权。
+- `1061650a` 增加超级管理员 `ABANDON`，使用已有 `CANCELLED_OUTPUT_RETAINED` 恢复终态，记录 `OPERATOR_ABANDONED_NO_RECOVERY` 和不可变 Provider/workflow 审计；它不声称无 Provider 输出、不生成或应用图片、不把 FAILED 改成成功。迁移只允许超过 24 小时、Wanx IMAGE_TO_IMAGE、尺寸拒绝、真实 FAILED suite child 的对应终态转换；原终态不可修改。`8a72b25e` 修复生产旧函数 CRLF 与迁移匹配 LF 的差异；旧失败 migration 实际事务回滚，经标准 `prisma migrate resolve --rolled-back` 再重放，没有 `--applied` 或手工 SQL 数据改写。
+- 两区已按标准入口部署 `537f9e73 / 1.0.400`，current/marker 与三服务 active 已读回；COM DOTH 受限 pilot、CN direct/RDS dark 保持。此前 `1.0.399` 候选和失败构建留作原件；失败 release 在 current 仍指向旧提交时移入 recoverable `failed-releases`，未删除旧资料。目标绑定 backup/restore 验证 COM `144`、CN `143` 表并清理临时库。
+- `537f9e73` offline 完整 PASS：server `6423/325 skipped`、AI PostgreSQL `197`、151 migrations/upgrade、构建及 Cloud/Local verifier。receipt/log SHA-256 `e5d69f4285e193399bcc5a5b74312d7212faa56555cd8150e7cc1ea055cf156e` / `5ab05ef747272ba355aa4e765f535100091d34bfc6886bb4763e3c1cc6a66163`，原件在私有 `release-537f9e73-website`。不能把该回执或 `1.0.400` 签名重标给后续实现提交。
+- 生产只读再次确认四项：两笔 SETTLED 均为唯一 `RECONCILED_CHARGE/14/1`，两笔 RECONCILIATION_REQUIRED 均 `NULL/0`，Provider task identity 全部与账本一致，asset 数均 0，job/workflow/suite FAILED，recovery MANUAL_REVIEW。当前实现漏掉 SETTLED 的终止恢复，最终修复现在同时核验唯一终态 settlement 和 job 金额/张数，保留已结算费用；未结算释放与两类审计、恢复终态在同一 Serializable transaction 完成。没有执行四项生产 mutation。
+- T2 使用真实 planning/materialization/coordinator/repository 和全部启用的图触发器复现 SETTLED 缺口，RED SHA-256 `4ae0fed164dcd1e7a0b7f843bbe1533f8b63cb5475b3e6e47aafcbaa9b22526a`。最终 6 个新增 PostgreSQL 场景、40 个关联回归通过，覆盖两种费用、replay、终态不可改、unknown/fresh/non-suite/asset/错误身份拒绝及审计写失败完整回滚。主 Agent 串行独立 schema 复跑通过并清理，日志 SHA-256 `d8bea82247f26476a9b2155d646110944b8e86972a3bd2143c3b2504aa6ac5f2`；同时启动 migration 曾引发本机 advisory lock deadlock，失败原件另保留，不作为行为失败或通过。
+- QA04 新 controller v2 将后续维护读回准确绑定 target runtime：原 suite/审核/费用/浏览器与原 execution commit 不改；before 为原 pilot，after 为当前 pilot，五项 pending 仍要求全 owner 为 0，current final suite graph 与原 restored 状态完全一致。source bridge 仍逐 Git object 限定已审阅的执行中立变更；不接受调用者放宽源码或把当前维护证据改成旧 commit。定向 RED→GREEN 与最终 producer `53/53`、ESLint 通过。正式 QA04 尚未生成，最终新 commit 仍需完整 offline、候选/签名、部署后才能执行四项收口及公开分发。
 
 ### 2026-10-02 1.0.398 安装与真实套图；历史恢复阻塞
 

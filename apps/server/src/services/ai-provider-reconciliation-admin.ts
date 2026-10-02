@@ -206,16 +206,30 @@ function historicalAbandonmentEligible(job: any, now: Date): boolean {
   const providerId = String(job.providerJobId || '').trim();
   const costProviderId = String(job.costReservation?.providerRequestId || '').trim();
   const dispatchedAt = job.providerDispatchedAt instanceof Date ? job.providerDispatchedAt : null;
+  const reservation = job.costReservation;
+  const terminalSettlements = Array.isArray(reservation?.settlements)
+    ? reservation.settlements.filter((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind))
+    : [];
+  const zeroUnits = job.actualCostCents === null && job.billedUnits === 0;
+  const unresolvedCost = reservation?.status === 'RECONCILIATION_REQUIRED' && zeroUnits && terminalSettlements.length === 0;
+  const releasedCost = reservation?.status === 'RELEASED' && zeroUnits && terminalSettlements.length === 1
+    && ['RELEASE', 'RECONCILED_RELEASE'].includes(terminalSettlements[0].kind)
+    && terminalSettlements[0].actualCostMinor === 0 && terminalSettlements[0].billedUnits === 0;
+  const settledCost = reservation?.status === 'SETTLED' && terminalSettlements.length === 1
+    && ['CHARGE', 'RECONCILED_CHARGE'].includes(terminalSettlements[0].kind)
+    && job.billedUnits === 1 && Number.isSafeInteger(job.actualCostCents) && job.actualCostCents > 0
+    && terminalSettlements[0].actualCostMinor === job.actualCostCents && terminalSettlements[0].billedUnits === 1;
   return job.status === 'FAILED'
     && job.operation === 'IMAGE_TO_IMAGE'
     && job.provider === 'dashscope-wanx'
     && job.model === 'wanx2.1-imageedit'
     && job.errorCode === 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'
+    && isCurrentAttempt(job)
     && Boolean(job.workflow?.suiteSlot?.id)
     && job.workflow?.suiteSlot?.suite?.status === 'FAILED'
     && Array.isArray(job.assets) && job.assets.length === 0
     && Boolean(providerId) && providerId === costProviderId
-    && job.costReservation?.status === 'RECONCILIATION_REQUIRED'
+    && (unresolvedCost || releasedCost || settledCost)
     && dispatchedAt !== null
     && now.getTime() - dispatchedAt.getTime() >= HISTORICAL_ABANDONMENT_AGE_MS;
 }
@@ -463,6 +477,10 @@ export function createAiProviderReconciliationAdminService(input: {
               ? 'OPERATOR_ABANDONED_NO_RECOVERY' : `OPERATOR_${raw.action}`,
             providerReconciliationLastErrorMessage: reason,
             providerReconciledAt: timestamp,
+            // Unpaid failed suite children retain the graph's null/zero cost
+            // projection. An existing settled charge is never rewritten.
+            ...(raw.action === 'ABANDON' && job.costReservation?.status === 'RECONCILIATION_REQUIRED'
+              ? { actualCostCents: null, billedUnits: 0 } : {}),
           };
           const changed = await tx.aiImageJob.updateMany({
             where: {
