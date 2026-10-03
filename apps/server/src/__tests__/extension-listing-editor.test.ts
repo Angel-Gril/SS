@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-draft.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 import { createExtensionListingEditorService } from '../services/extension-listing-editor.js';
@@ -8,10 +8,30 @@ import { createSourceListingAttributeEditorService } from '../services/source-li
 import { createSourceListingWorkflowAttributeService } from '../services/source-listing-workflow-attributes.js';
 import { buildSourceProductProfile } from '../services/source-product-profile.js';
 import { createSourceListingCopyEditorService } from '../services/source-listing-copy-editor.js';
+import { buildOzonCategoryCatalog, type OzonCategoryCatalogEntry } from '../services/ozon-category-catalog.js';
 
-async function setup(scopes = ['listing:review', 'listing:write'], allowedShopIds = ['shop'], selectedSkuKeys = ['sku']) {
+const officialCatalog = () => buildOzonCategoryCatalog([
+  { description_category_id: 1, category_name: 'Одежда', children: [
+    { description_category_id: 10, category_name: 'Женская одежда', children: [
+      { type_id: 20, type_name: 'Футболка' },
+      { type_id: 21, type_name: 'Брюки' },
+    ] },
+  ] },
+  { description_category_id: 2, category_name: 'Игрушки', children: [
+    { description_category_id: 11, category_name: 'Куклы', children: [{ type_id: 22, type_name: '玩具的鞋子和衣服' }] },
+  ] },
+  { description_category_id: 3, category_name: '衣架', children: [
+    { description_category_id: 12, category_name: '衣架', children: [{ type_id: 23, type_name: '衣服整理架' }] },
+  ] },
+]);
+async function setup(scopes = ['listing:review', 'listing:write'], allowedShopIds = ['shop'], selectedSkuKeys = ['sku'],
+  catalogEntries: OzonCategoryCatalogEntry[] = officialCatalog()) {
   const workflow = createSourceListingWorkflowService({ repository: new InMemoryOzonListingDraftRepository() });
   const draft = await workflow.createDraft({ ownerUserId: 'owner', actorUserId: 'owner', shopId: 'shop', supplyGoodsId: 'goods', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64), selectedSkuKeys });
+  const loadSourceContext = vi.fn(async () => ({ sourceProfile: buildSourceProductProfile({ id: 'goods', title: '商品', sourcePlatform: '1688', sourceProductId: 'source-product' }) }));
+  const loadDictionary = vi.fn(async () => ({ complete: true, source: 'ozon_api' as const, values: [{ id: 201, value: 'Красный' }, { id: 202, value: 'Синий' }] }));
+  const loadSourceProfile = vi.fn(async () => buildSourceProductProfile({ id: 'goods', title: '2024秋冬长袖T恤女款', sourcePlatform: '1688',
+    metadata: { categoryName: '女式T恤', categoryPath: ['女装', 'T恤'] } }));
   const attributes = createSourceListingWorkflowAttributeService({
     loadSchema: async () => ({ schemaVersion: 'ozon-attribute-schema/v1', shopId: 'shop', descriptionCategoryId: 10, typeId: 20,
       language: 'DEFAULT', catalogRevision: 'catalog-1', definitionsHash: 'b'.repeat(64), fields: [
@@ -20,15 +40,16 @@ async function setup(scopes = ['listing:review', 'listing:write'], allowedShopId
         { attributeId: 20, name: 'Цвет', description: '', sourceType: 'String', valueType: 'STRING', cardinality: 'MULTI',
           required: false, dictionaryId: 200, valuePolicy: 'STRICT_DICTIONARY', ownership: 'SKU', editorMode: 'SKU_MATRIX', aiSuggestionAllowed: false },
       ] }),
-    loadSourceContext: async () => ({ sourceProfile: buildSourceProductProfile({ id: 'goods', title: '商品', sourcePlatform: '1688', sourceProductId: 'source-product' }) }),
-    loadDictionary: async () => ({ complete: true, source: 'ozon_api', values: [{ id: 201, value: 'Красный' }, { id: 202, value: 'Синий' }] }),
+    loadSourceContext,
+    loadDictionary,
   });
   const service = createExtensionListingEditorService({ workflow,
     attributesEditor: createSourceListingAttributeEditorService({ workflow, attributes }),
     copyEditor: createSourceListingCopyEditorService({ workflow,
       validateAttributes: createSourceListingAttributeEditorService({ workflow, attributes }).validateAttributes }),
     ownership: { assertOwnedTarget: async () => ({ shopId: 'shop', supplyGoodsId: 'goods', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64), selectedSkuKeys: ['sku'] }) },
-    loadCatalog: async () => ({ revision: 'catalog-1', entries: [{ descriptionCategoryId: 10, typeId: 20, categoryNameRu: 'Одежда', typeNameRu: 'Футболка', categoryNameZh: '服装', typeNameZh: '上衣', selectable: true }] }),
+    loadCatalog: async () => ({ revision: 'catalog-1', entries: catalogEntries }),
+    loadSourceProfile,
   });
   const app = Fastify();
   await app.register(extensionListingEditorRoutes, { prefix: '/api/extension-device/source-workbench', service,
@@ -36,12 +57,121 @@ async function setup(scopes = ['listing:review', 'listing:write'], allowedShopId
     authenticateDevice: async (request) => { (request as any).device = { ownerUserId: 'owner', actorUserId: 'owner', sessionId: 'device', scopes, allowedShopIds }; },
   });
   const binding = { snapshotId: 'snapshot', supplyGoodsId: 'goods', shopId: 'shop', listingWorkflowId: draft.id, draftRevision: 1, draftVersion: 1 };
-  return { app, workflow, draft, binding };
+  return { app, workflow, draft, binding, loadSourceContext, loadDictionary, loadSourceProfile };
 }
 function pricing() {
   return { contractVersion: 'ozon-listing-pricing/v1', items: [{ skuKey: 'sku', price: '100', oldPrice: '120', offerId: 'SS-1', currencyCode: 'CNY', vat: '0' }] };
 }
 describe('extension listing editor owner', () => {
+  it('searches the complete official catalog using clothing synonyms, type IDs and indexed paths', async () => {
+    const fixture = await setup();
+    try {
+      const clothing = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '衣服' } });
+      expect(clothing.statusCode).toBe(200);
+      expect(clothing.json().data.entries[0]).toMatchObject({ categoryId: 10 });
+      expect(clothing.json().data.entries.map((entry: { typeId: number }) => entry.typeId)).toContain(20);
+      expect(clothing.json().data.entries.map((entry: { typeId: number }) => entry.typeId)).toContain(21);
+      const byId = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '20' } });
+      expect(byId.json().data.entries[0]).toMatchObject({ typeId: 20 });
+      const byPath = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '女装 T恤' } });
+      expect(byPath.json().data.entries[0]).toMatchObject({ typeId: 20 });
+    } finally { await fixture.app.close(); }
+  });
+  it('returns official tree and source-bound recommendations without selecting or scoring a category in the UI', async () => {
+    const fixture = await setup();
+    try {
+      const response = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '' } });
+      const data = response.json().data;
+      expect(response.statusCode).toBe(200);
+      expect(data.tree[0]).toMatchObject({ categoryId: 1, label: '服装', children: [
+        { categoryId: 10, types: [expect.objectContaining({ categoryId: 10, typeId: 20 }), expect.objectContaining({ typeId: 21 })] },
+      ] });
+      expect(data.recommendations[0]).toMatchObject({ categoryId: 10, typeId: 20, pathTitles: ['服装', '女装'] });
+      expect(data.treeTruncated).toBe(false);
+      expect(JSON.stringify(data.recommendations)).not.toMatch(/score|selected|ownerUserId|sourceTitle|sourceProfile|confirmationCount/);
+      expect(fixture.loadSourceProfile).toHaveBeenCalledWith({ ownerUserId: 'owner', draft: fixture.draft });
+      expect((await fixture.workflow.getDraft({ ownerUserId: 'owner', draftId: fixture.draft.id })).revision).toBe(1);
+    } finally { await fixture.app.close(); }
+  });
+  it('searches outside the first fifty leaves and reports truncation without rereading source recommendations', async () => {
+    const fixture = await setup(undefined, undefined, undefined, buildOzonCategoryCatalog([
+      { description_category_id: 1, category_name: 'Одежда', children: [
+        { description_category_id: 10, category_name: 'Женская одежда', children: [
+          ...Array.from({ length: 60 }, (_, index) => ({ type_id: index + 1, type_name: `类型${index + 1}` })),
+          { type_id: 999, type_name: 'Футболка' },
+        ] },
+      ] },
+    ]));
+    try {
+      const broad = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '衣服' } });
+      expect(broad.json().data).toMatchObject({ truncated: true, total: 61 });
+      expect(broad.json().data.entries).toHaveLength(50);
+      const narrow = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog',
+        payload: { binding: fixture.binding, query: '999' } });
+      expect(narrow.json().data).toMatchObject({ truncated: false, total: 1, entries: [expect.objectContaining({ typeId: 999 })] });
+      expect(fixture.loadSourceProfile).not.toHaveBeenCalled();
+      expect(narrow.json().data.tree).toBeUndefined();
+    } finally { await fixture.app.close(); }
+  });
+  it('previews the official attribute schema before saving without dictionary/source loading or draft mutation', async () => {
+    const fixture = await setup();
+    try {
+      const response = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog', payload: {
+        binding: fixture.binding, query: '', preview: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' },
+      } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.attributePreview).toMatchObject({ categoryId: 10, typeId: 20, catalogRevision: 'catalog-1',
+        schemaRevision: expect.stringMatching(/^[a-f0-9]{64}$/u), fields: [
+          expect.objectContaining({ attributeId: 10, name: 'Материал', dictionaryId: null }),
+          expect.objectContaining({ attributeId: 20, dictionaryId: 200 }),
+        ] });
+      expect(fixture.loadDictionary).not.toHaveBeenCalled();
+      expect(fixture.loadSourceContext).not.toHaveBeenCalled();
+      expect(fixture.loadSourceProfile).not.toHaveBeenCalled();
+      const unchanged = await fixture.workflow.getDraft({ ownerUserId: 'owner', draftId: fixture.draft.id });
+      expect(unchanged.revision).toBe(1);
+      expect(unchanged.category).toBeNull();
+      expect(JSON.stringify(response.json().data.attributePreview)).not.toMatch(/values|suggestions|sourceProfile|ownerUserId|apiKey/);
+    } finally { await fixture.app.close(); }
+  });
+  it('rejects stale or disabled attribute preview targets, foreign drafts and caller-supplied schema', async () => {
+    const fixture = await setup();
+    try {
+      for (const [payload, expectedCode] of [
+        [{ binding: fixture.binding, query: '', preview: { categoryId: 10, typeId: 20, catalogRevision: 'stale' } }, 409],
+        [{ binding: fixture.binding, query: '', preview: { categoryId: 10, typeId: 999, catalogRevision: 'catalog-1' } }, 422],
+        [{ binding: { ...fixture.binding, snapshotId: 'foreign' }, query: '', preview: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' } }, 409],
+        [{ binding: fixture.binding, query: '', preview: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1', fields: [] } }, 400],
+      ] as const) {
+        const response = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog', payload });
+        expect(response.statusCode).toBe(expectedCode);
+      }
+      expect(fixture.loadDictionary).not.toHaveBeenCalled();
+      expect((await fixture.workflow.getDraft({ ownerUserId: 'owner', draftId: fixture.draft.id })).revision).toBe(1);
+    } finally { await fixture.app.close(); }
+  });
+  it.each([
+    [['listing:write'], ['shop'], 401],
+    [['listing:review'], ['another'], 403],
+  ])('does not read category recommendations or preview schema outside device shop review authority', async (scopes, shops, code) => {
+    const fixture = await setup(scopes as string[], shops as string[]);
+    try {
+      for (const preview of [undefined, { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' }]) {
+        const response = await fixture.app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog', payload: {
+          binding: fixture.binding, query: '', ...(preview ? { preview } : {}),
+        } });
+        expect(response.statusCode).toBe(code);
+      }
+      expect(fixture.loadSourceProfile).not.toHaveBeenCalled();
+      expect(fixture.loadSourceContext).not.toHaveBeenCalled();
+      expect(fixture.loadDictionary).not.toHaveBeenCalled();
+    } finally { await fixture.app.close(); }
+  });
   it('records real readiness blockers and refuses caller-supplied VALID reports', async () => {
     const fixture = await setup();
     const category = await fixture.workflow.setCategory({ ownerUserId: 'owner', actorUserId: 'owner', draftId: fixture.draft.id,
@@ -216,7 +346,7 @@ describe('extension listing editor owner', () => {
   });
   it('uses official catalog IDs/names and advances the normal category state', async () => {
     const { app, binding } = await setup();
-    const catalog = await app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog', payload: { binding, query: '上衣' } });
+    const catalog = await app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/catalog', payload: { binding, query: 'T恤' } });
     expect(catalog.statusCode).toBe(200);
     expect(catalog.json().data.entries[0].typeId).toBe(20);
     const saved = await app.inject({ method: 'POST', url: '/api/extension-device/source-workbench/editor/save', payload: { binding, operationKey: 'category-test-1', action: 'CATEGORY', value: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' } } });

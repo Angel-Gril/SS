@@ -8,10 +8,10 @@ const identifier = z.string().trim().min(1).max(200);
 const binding = z.object({ snapshotId: identifier, supplyGoodsId: identifier, shopId: identifier,
   listingWorkflowId: identifier, draftRevision: z.number().int().positive(), draftVersion: z.number().int().positive() }).strict();
 const readBody = z.object({ binding }).strict();
-const catalogBody = z.object({ binding, query: z.string().trim().max(100) }).strict();
 const dictionaryBody = z.object({ binding, schemaRevision: z.string().regex(/^[a-f0-9]{64}$/u),
   attributeId: z.number().int().positive(), query: z.string().trim().max(200), limit: z.number().int().min(1).max(100) }).strict();
 const category = z.object({ categoryId: z.number().int().positive(), typeId: z.number().int().positive(), catalogRevision: identifier }).strict();
+const catalogBody = z.object({ binding, query: z.string().trim().max(100), preview: category.optional() }).strict();
 const saveBody = z.discriminatedUnion('action', [
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('PRICING'), value: z.record(z.unknown()) }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('CATEGORY'), value: category }).strict(),
@@ -67,7 +67,7 @@ export async function extensionListingEditorRoutes(app: FastifyInstance, options
         }
         if (action === 'catalog') {
           const parsed = catalogBody.parse(request.body);
-          return { code: 1, data: await options.service.catalog(await authorize(request, parsed.binding.shopId, false), parsed.binding, parsed.query) };
+          return { code: 1, data: await options.service.catalog(await authorize(request, parsed.binding.shopId, false), parsed.binding, parsed.query, parsed.preview) };
         }
         if (action === 'attributes') {
           const parsed = readBody.parse(request.body);

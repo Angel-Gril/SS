@@ -9,6 +9,27 @@ vm.runInNewContext(readFileSync('extensions/ss-erp/shared/donor-workbench/worksp
 const binding = { snapshotId: 'snapshot', supplyGoodsId: 'goods', shopId: 'shop', listingWorkflowId: 'draft', draftRevision: 1, draftVersion: 1 };
 const editor = { contractVersion: 'extension-listing-editor/v1', binding, selectedSkuKeys: ['sku'], category: null, pricing: null };
 
+test('category catalog transports an exact readonly preview and retains the official tree and recommendations', async()=>{
+  const preview={categoryId:10,typeId:20,catalogRevision:'catalog-1'};
+  const leaf={categoryId:10,typeId:20,label:'服装 / T恤',typeLabel:'T恤',pathTitles:['服装']};
+  const field={attributeId:201,name:'材质',required:true,valueType:'STRING',cardinality:'SINGLE',dictionaryId:null,
+    ownership:'EDITOR',editorMode:'EDITABLE',valuePolicy:'FREE_TEXT',maxValues:1};
+  let sent;
+  const data={catalogRevision:'catalog-1',entries:[leaf],total:1,truncated:false,
+    tree:[{categoryId:10,label:'服装',children:[],types:[leaf]}],treeTruncated:false,
+    recommendations:[{...leaf,match:'recommended',reasons:['来源类目：女式T恤']}],
+    attributePreview:{...preview,schemaRevision:'a'.repeat(64),fields:[field]}};
+  const client=context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({transport:{get:async()=>{},post:async(path,body,options)=>{
+    sent={path,body,options};return{state:'response',body:{code:1,data}};}}});
+  const result=await client.readDraftCatalog({binding,query:'',preview});
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.body)),{binding,query:'',preview});
+  assert.equal(sent.options.requiredScope,'listing:review');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.catalog)),data);
+  for(const extra of [{apiKey:'secret'},{ownerUserId:'other'},{selected:true}])await assert.rejects(client.readDraftCatalog({binding,query:'',preview:{...preview,...extra}}));
+  const command={contractVersion:context.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION,type:'EDITOR_CATALOG',requestId:'cat-1',listingWorkflowId:'draft',binding,query:'',preview};
+  assert.deepEqual(JSON.parse(JSON.stringify(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand(command))),command);
+});
+
 test('editor preserves only server-bound ordered publish media and bounded readiness fields', async () => {
   const readiness = { ...editor, stage: 'MEDIA_REVIEW', validation: { status: 'STALE' }, blockers: [],
     freshness: { category: 'CURRENT', attributes: 'CURRENT', content: 'CURRENT', media: 'CURRENT', pricing: 'CURRENT', validation: 'STALE' },

@@ -1,4 +1,4 @@
-import { OZON_LISTING_ATTRIBUTE_MAX_VALUES, type OzonListingDraft } from 'shared';
+import { OZON_LISTING_ATTRIBUTE_MAX_VALUES, type OzonListingDraft, type OzonListingDraftCategory, type OzonNormalizedAttributeSchema } from 'shared';
 import type { SourceListingWorkflowService } from './source-listing-workflow.js';
 import { SourceListingWorkflowError } from './source-listing-workflow.js';
 import {
@@ -20,12 +20,15 @@ function assertSchemaRevision(expected: string, current: string): void {
     throw new SourceListingWorkflowAttributeError('OZON_ATTRIBUTE_SCHEMA_MISMATCH', 409, 'Official attribute schema changed; reload before saving');
   }
 }
-function projectWorkspace(workspace: SourceListingAttributeWorkspace, draft: OzonListingDraft) {
-  return { schemaRevision: workspace.schemaRevision,
-    fields: workspace.schema.fields.map((field) => ({ attributeId: field.attributeId, name: field.name,
+function projectSchemaFields(schema: OzonNormalizedAttributeSchema) {
+  return schema.fields.map((field) => ({ attributeId: field.attributeId, name: field.name,
       required: field.required, valueType: field.valueType, cardinality: field.cardinality, ownership: field.ownership,
       editorMode: field.editorMode, valuePolicy: field.valuePolicy, dictionaryId: field.dictionaryId,
-      maxValues: field.cardinality === 'SINGLE' ? 1 : OZON_LISTING_ATTRIBUTE_MAX_VALUES })),
+      maxValues: field.cardinality === 'SINGLE' ? 1 : OZON_LISTING_ATTRIBUTE_MAX_VALUES }));
+}
+function projectWorkspace(workspace: SourceListingAttributeWorkspace, draft: OzonListingDraft) {
+  return { schemaRevision: workspace.schemaRevision,
+    fields: projectSchemaFields(workspace.schema),
     values: workspace.schema.fields.flatMap((field) => {
       const root = workspace.values[String(field.attributeId)];
       return (field.ownership === 'SKU' ? draft.selectedSkuKeys : [null]).map((skuKey) => {
@@ -41,7 +44,7 @@ function projectWorkspace(workspace: SourceListingAttributeWorkspace, draft: Ozo
 }
 export function createSourceListingAttributeEditorService(options: {
   workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setManualAttributeChanges'>;
-  attributes: Pick<SourceListingWorkflowAttributeService, 'getWorkspace' | 'searchDictionary' | 'prepareManualValues' | 'validateAuthoritative'>;
+  attributes: Pick<SourceListingWorkflowAttributeService, 'getWorkspace' | 'searchDictionary' | 'prepareManualValues' | 'validateAuthoritative' | 'previewSchema'>;
 }) {
   async function bound(input: SourceListingAttributeEditorContext) {
     const draft = await options.workflow.getDraft({ draftId: input.draftId, ownerUserId: input.ownerUserId });
@@ -55,6 +58,13 @@ export function createSourceListingAttributeEditorService(options: {
     return { draft, workspace: await options.attributes.getWorkspace({ ownerUserId: input.ownerUserId, draft }) };
   }
   return {
+    async previewCategory(input: SourceListingAttributeEditorContext & { category: OzonListingDraftCategory }) {
+      const draft = await bound(input);
+      const preview = await options.attributes.previewSchema({ ownerUserId: input.ownerUserId, draft, category: input.category });
+      return { categoryId: input.category.categoryId, typeId: input.category.typeId,
+        catalogRevision: input.category.catalogRevision, schemaRevision: preview.schemaRevision,
+        fields: projectSchemaFields(preview.schema) };
+    },
     async readWorkspace(input: SourceListingAttributeEditorContext) {
       const current = await workspace(input);
       return projectWorkspace(current.workspace, current.draft);

@@ -2878,6 +2878,7 @@ if (isExtensionDeviceAuthEnabled()) {
         });
         return { revision: catalog.catalogRevision, entries: catalog.entries };
       },
+      loadSourceProfile: async ({ ownerUserId, draft }) => (await loadSourceListingAttributeSourceContext({ ownerUserId, draft })).sourceProfile,
       retainCompatibleReviewedValues: (input) => sourceListingWorkflowAttributeService.retainCompatibleReviewedValues(input),
     }),
     featureFlags: sourceWorkflowFeatureFlags,

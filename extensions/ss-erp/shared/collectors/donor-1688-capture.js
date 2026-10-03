@@ -93,7 +93,13 @@
       skuItems: skuItems, attributes: attributes, attributeEvidenceByKey: attributeEvidence,
       mainImages: mainImages, detailImages: detailImages, sourceVideos: [], mediaEvidenceByUrl: mediaEvidence,
       factEvidence: { title: evidence('dom', '/donor/product_name', observedAt), description: evidence('dom', '/donor/description', observedAt) },
-      packagingRows: packageRows, sources: [], domFallback: {},
+      packagingRows: packageRows, sources: [], domFallback: {
+        categories: [{ id: null,
+          name: text(data.category_hint || meta.source_category || meta.source_category_path, 500).split(/\s*(?:>|\/|›|»|→)\s*/).at(-1),
+          path: text(meta.source_category_path || meta.source_category || data.category_hint, 4000),
+          evidence: evidence('dom', '/donor/meta_info/source_category_path', observedAt),
+        }],
+      },
       packageDimensionsMm: packageRows.length ? { lengthMm: packageRows[0].lengthMm, widthMm: packageRows[0].widthMm, heightMm: packageRows[0].heightMm } : {},
       packageWeightG: packageRows.length ? packageRows[0].weightG : null, rejectedAssets: [],
     });

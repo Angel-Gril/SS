@@ -952,6 +952,7 @@ export function searchOzonCategoryCatalog(
     raw,
     ...raw.split(/[\s,/|;:，。；：、]+/u),
     ...buildKeywords([raw]),
+    ...(/^(衣服|服装|服饰|clothing|apparel)$/iu.test(raw) ? ['服装', 'одежда'] : []),
   ]).map(normalizeToken);
   const queryExcludeTerms = getOzonCategoryLocalExcludeExpansions([raw]).map(normalizeToken);
 
@@ -963,6 +964,10 @@ export function searchOzonCategoryCatalog(
         if (entry.searchText.includes(term)) score += term.length > 2 ? 12 : 4;
         if (String(entry.descriptionCategoryId) === term || String(entry.typeId) === term) score += 80;
       }
+      // A root/category name that equals a broad query should precede incidental
+      // substrings such as doll clothes or a clothes organiser.
+      if (entry.categoryLevels.some((level) => terms.includes(normalizeToken(level.nameRu))
+        || terms.includes(normalizeToken(level.nameZh)))) score += 24;
       const targetExcludes = getOzonCategoryLocalSearchTermsForTarget(entry.descriptionCategoryId, entry.typeId)
         .excludes
         .map(normalizeToken);

@@ -1,0 +1,33 @@
+/* Donor category-dialog layout; preserve the original cards/tree/preview split. */
+.precision-category-dialog {
+  width: min(960px, 96vw);
+  min-width: 0;
+  height: min(760px, 88vh);
+  min-height: 0;
+  max-height: 88vh;
+}
+.precision-category-dialog .settings-head { flex: 0 0 auto; }
+.precision-category-search-row { display: flex; align-items: center; gap: 10px; }
+.precision-category-search-row input { min-width: 0; flex: 1; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: #fff; color: var(--text); }
+.precision-category-dialog .category-dialog__search { flex: 0 0 auto; }
+.precision-category-dialog .category-auto-card { width: 100%; }
+.precision-category-dialog .category-auto-card__confidence { white-space: nowrap; }
+.precision-category-branch { margin: 0; }
+.precision-category-branch > summary { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.precision-category-branch > summary:hover { background: rgba(0,104,255,.04); }
+.precision-category-children { padding-left: 14px; }
+.precision-category-leaf { display: block; width: 100%; border: 0; border-radius: 0; background: transparent; padding: 9px 14px; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.precision-category-leaf:hover, .precision-category-leaf.is-selected { background: rgba(0,104,255,.07); color: var(--brand); }
+.precision-category-leaf:focus-visible, .precision-category-branch > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.precision-category-tree-message { padding: 12px 14px; }
+.precision-category-attribute-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.precision-category-attribute { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.6; }
+.precision-category-required, .precision-category-error { color: var(--err) !important; }
+.precision-category-footer { flex: 0 0 auto; justify-content: space-between; }
+.precision-category-footer > .settings-tip { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 620px) {
+  .precision-category-dialog .category-auto-list { grid-template-columns: 1fr; max-height: 150px; overflow-y: auto; }
+  .precision-category-dialog .category-auto-card { min-height: 0; }
+  .precision-category-dialog .category-dialog__body { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+  .precision-category-dialog .category-dialog__pane--attrs { padding: 10px; }
+}

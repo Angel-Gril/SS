@@ -71,6 +71,22 @@ test('a collector does not wait for the old page-state bridge or invoke ERP/Prov
   assert.equal(result.extractionDiagnostics.collector, 'DONOR_1688');
 });
 
+test('source category and breadcrumbs from the donor survive the canonical snapshot adaptation', async () => {
+  const context = environment();
+  const original = context.SS_ERP_DONOR_STRATEGIES.adapter1688.scrape;
+  context.SS_ERP_DONOR_STRATEGIES.adapter1688.scrape = async () => {
+    const raw = await original();
+    raw.meta_info.source_category_path = '服装 > 女装 > 女式T恤';
+    raw.global_data.category_hint = '女式T恤';
+    return raw;
+  };
+  vm.runInNewContext(readFileSync('extensions/ss-erp/shared/collectors/donor-1688-capture.js', 'utf8'), context);
+  const result = await context.SS_ERP_DONOR_1688_CAPTURE.collect({ url, extensionVersion: 'fixture' });
+  assert.equal(result.captureV2.sourceCategory.name, '女式T恤');
+  assert.deepEqual(Array.from(result.captureV2.sourceCategory.path, item=>item.name), ['服装','女装','女式T恤']);
+  assert.equal(result.captureV2.sourceCategory.id, null, 'no Ozon or source category ID is invented');
+});
+
 test('navigation during collection and foreign source URLs are rejected', async () => {
   const context = environment();
   vm.runInNewContext(readFileSync('extensions/ss-erp/shared/collectors/donor-1688-capture.js', 'utf8'), context);

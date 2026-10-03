@@ -1369,13 +1369,30 @@
       async readDraftCatalog(input) {
         var binding = normalizedSuiteBinding(input.binding);
         if (typeof input.query !== 'string' || input.query.length > 100) throw new TypeError('invalid editor query');
-        var response = await transport.post('/api/extension-device/source-workbench/editor/catalog', { binding: binding, query: input.query }, { requiredScope: 'listing:review' });
+        var preview=input.preview;
+        if(preview!==undefined&&(!exactKeys(preview,['categoryId','typeId','catalogRevision'])||!Number.isSafeInteger(preview.categoryId)||preview.categoryId<1
+          ||!Number.isSafeInteger(preview.typeId)||preview.typeId<1||!text(preview.catalogRevision,200)))throw new TypeError('invalid category preview');
+        var response = await transport.post('/api/extension-device/source-workbench/editor/catalog', { binding: binding, query: input.query,
+          ...(preview===undefined?{}:{preview:preview}) }, { requiredScope: 'listing:review' });
         if (!response || response.state !== 'response') return response;
         var body = record(response.body);
         var data = body && body.code === 1 && record(body.data);
         if (!data || !text(data.catalogRevision, 200) || !Array.isArray(data.entries) || data.entries.length > 50
           || !data.entries.every(function (entry) { return record(entry) && Number.isSafeInteger(entry.categoryId) && entry.categoryId > 0
             && Number.isSafeInteger(entry.typeId) && entry.typeId > 0 && text(entry.label, 1000); })) throw new Error('invalid catalog response');
+        if(typeof data.truncated!=='boolean')throw new Error('invalid catalog response');
+        if(data.tree!==undefined){
+          var treeNodes=0,treeTypes=0;
+          var validTree=function(nodes,depth){return Array.isArray(nodes)&&depth<=32&&nodes.every(function(node){
+            if(++treeNodes>5000||!exactKeys(node,['categoryId','label','children','types'])||!Number.isSafeInteger(node.categoryId)||node.categoryId<1||!text(node.label,1000)||!Array.isArray(node.types))return false;
+            return node.types.every(function(leaf){return ++treeTypes<=10000&&record(leaf)&&Number.isSafeInteger(leaf.categoryId)&&leaf.categoryId>0&&Number.isSafeInteger(leaf.typeId)&&leaf.typeId>0&&text(leaf.label,1000);})&&validTree(node.children,depth+1);
+          });};
+          if(!validTree(data.tree,0)||typeof data.treeTruncated!=='boolean')throw new Error('invalid catalog tree');
+        }
+        if(data.recommendations!==undefined&&(!Array.isArray(data.recommendations)||data.recommendations.length>3
+          ||!data.recommendations.every(function(leaf){return record(leaf)&&Number.isSafeInteger(leaf.categoryId)&&leaf.categoryId>0&&Number.isSafeInteger(leaf.typeId)&&leaf.typeId>0&&text(leaf.label,1000)&&['recommended','optional','risky'].includes(leaf.match)&&Array.isArray(leaf.reasons)&&leaf.reasons.length<=10&&leaf.reasons.every(function(reason){return text(reason,1000);});})))throw new Error('invalid category recommendations');
+        if(data.attributePreview!==undefined){var workspace={schemaRevision:data.attributePreview.schemaRevision,fields:data.attributePreview.fields,values:[]};
+          if(!preview||data.attributePreview.categoryId!==preview.categoryId||data.attributePreview.typeId!==preview.typeId||data.attributePreview.catalogRevision!==preview.catalogRevision||!validAttributeWorkspace(workspace))throw new Error('invalid category attribute preview');}
         return { state: 'ready', catalog: data };
       },
       async readDraftAttributes(input) {

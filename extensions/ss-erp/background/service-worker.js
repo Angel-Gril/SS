@@ -6603,7 +6603,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type.endsWith('-save')) mutationAttempted = true;
       const result = message.type.endsWith('-save')
         ? await client.saveDraftEditor({ binding, action: message.action, operationKey: message.operationKey, value: message.value })
-        : message.type.endsWith('-catalog') ? await client.readDraftCatalog({ binding, query: message.query })
+        : message.type.endsWith('-catalog') ? await client.readDraftCatalog({ binding, query: message.query,...(message.preview===undefined?{}:{preview:message.preview}) })
         : message.type.endsWith('-attributes') ? await client.readDraftAttributes(binding)
         : message.type.endsWith('-dictionary') ? await client.readDraftDictionary({ binding, schemaRevision: message.schemaRevision,
           attributeId: message.attributeId, query: message.query, limit: message.limit }) : await client.readDraftEditor(binding);

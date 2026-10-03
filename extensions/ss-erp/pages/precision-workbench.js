@@ -6,8 +6,9 @@ import { createOfficialAttributeEditor } from './donor/official-attribute-editor
 import { createCopyEditor } from './donor/copy-editor.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
 import { createByokEditor } from './donor/byok-editor.js';
-import { createCategoryPicker } from './donor/category-picker.js';
+import { createCategoryDialog } from './donor/category-dialog.js';
 import { createTranslationFlow } from './donor/translation-flow.js';
+import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -259,10 +260,12 @@ function renderImageMode() {
   translationPanel.hidden = imageMode !== 'translate';
   translateImage.hidden = imageMode !== 'translate';
   const button = element('image-workflow-start-btn');
+  const suiteAction = resolveSuitePrimaryAction({draftId:listing()?.id,busy:projection.busy||mediaMutationBusy||planSubmissionBusy,
+    billing:projection.billing,lock:promptLockState()});
   button.textContent = imageMode === 'translate' ? (translation.state().busy ? '提交翻译中…' : '开始翻译所选图片')
-    : imageMode === 'byok' ? '连接自带 API' : '开始处理套图';
+    : imageMode === 'byok' ? '连接自带 API' : suiteAction.label;
   button.disabled = !listing() || projection.busy || mediaMutationBusy || translation.state().busy || translation.state().unknown
-    || (imageMode === 'translate' && !translationAvailability.available);
+    || (imageMode === 'translate' && !translationAvailability.available) || (imageMode === 'ai-suite' && suiteAction.disabled);
   translateImage.disabled = button.disabled;
   translationRefresh.disabled = translationAvailability.state === 'loading' || translation.state().busy;
   if (imageMode === 'translate') {
@@ -314,43 +317,21 @@ const replaySave = make('button', 'ghost', '核对上次保存'); replaySave.id 
 localNotice.append(editorState, currency, save, packagingSave, replaySave);
 element('product-editor').after(localNotice);
 const categoryModal = make('div', 'settings-modal'); categoryModal.id = 'editor-category-modal'; categoryModal.hidden = true;
-const categoryDialog = make('div', 'settings-dialog');
-const categoryHead = make('div', 'settings-head'); categoryHead.append(make('div', 'settings-title', '选择 Ozon 类目'));
-const categoryClose = make('button', 'ghost', '关闭'); categoryClose.id = 'editor-category-close';
-categoryClose.addEventListener('click', () => { categoryPicker.close(); categoryModal.hidden = true; element('category-select-btn').focus(); }); categoryHead.append(categoryClose);
-const categoryBody = make('div', 'settings-body');
-const search = make('input'); search.id = 'editor-category-query'; search.placeholder = '搜索 Ozon 类目，例如：T恤、收纳盒'; search.setAttribute('aria-label', '搜索 Ozon 类目');
-const searchButton = make('button', 'ghost', '搜索'); searchButton.id = 'editor-category-search';
-const categorySelect = make('select'); categorySelect.id = 'editor-category-select'; categorySelect.setAttribute('aria-label', 'Ozon 官方类目');
-const categorySave = make('button', 'primary', '确认类目'); categorySave.id = 'editor-category-save';
-categorySave.disabled = true;
-const categorySearchRow = make('div', 'precision-category-search'); categorySearchRow.append(search, searchButton);
-const categoryNotice = make('p', 'precision-category-state'); categoryNotice.id = 'editor-category-status'; categoryNotice.setAttribute('role', 'status');
-const categoryLabel = make('label', 'field', 'Ozon 官方商品类目'); categoryLabel.append(categorySelect);
-categoryBody.append(categorySearchRow, categoryNotice, categoryLabel, categorySave); categoryDialog.append(categoryHead, categoryBody); categoryModal.append(categoryDialog); element('ui-scale-root').append(categoryModal);
-let categoryOptionsSignature = '';
-const categoryPicker = createCategoryPicker({ getBinding: currentEditorBinding,
+element('ui-scale-root').append(categoryModal);
+const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:currentEditorBinding,getProduct:()=>projection.source,
   loadCatalog: async (binding, query) => {
     const response = await command('EDITOR_CATALOG', { binding, listingWorkflowId: binding.listingWorkflowId, query });
     return response.data?.catalog;
-  }, onState: view => {
-    categoryNotice.textContent = view.message;
-    searchButton.disabled = view.status === 'loading'; searchButton.textContent = view.status === 'loading' ? '读取中…' : '搜索';
-    categorySelect.disabled = view.status !== 'ready'; categorySave.disabled = !view.canSave || saveBusy;
-    const signature = JSON.stringify([view.entries, view.catalogRevision]);
-    if (signature !== categoryOptionsSignature) {
-      categoryOptionsSignature = signature;
-      const placeholder = make('option', '', view.status === 'loading' ? '正在读取…' : '请选择与商品匹配的类目'); placeholder.value = '';
-      categorySelect.replaceChildren(placeholder, ...view.entries.map((entry, index) => { const option = make('option', '', entry.label); option.value = String(index); return option; }));
-    }
-    categorySelect.value = view.selected ? String(view.entries.findIndex(entry => entry.categoryId === view.selected.categoryId && entry.typeId === view.selected.typeId)) : '';
   },
+  loadAttributePreview:async(binding,preview)=>{
+    const response=await command('EDITOR_CATALOG',{binding,listingWorkflowId:binding.listingWorkflowId,query:'',preview});
+    return response.data?.catalog?.attributePreview;
+  },
+  saveSelection:async(binding,selection)=>{
+    if(JSON.stringify(binding)!==JSON.stringify(currentEditorBinding()))throw new Error('店铺或草稿已变化，请重新选择类目');
+    return saveEditor('CATEGORY',selection);
+  },onError:report,
 });
-categorySelect.addEventListener('change', () => {
-  const view = categoryPicker.state();
-  categoryPicker.select(categorySelect.value === '' ? null : view.entries[Number(categorySelect.value)]);
-});
-search.addEventListener('keydown', event => { if (event.isTrusted && event.key === 'Enter' && !searchButton.disabled) { event.preventDefault(); void searchCategories().catch(report); } });
 const attributes = createOfficialAttributeEditor({
   root: element('ui-scale-root'), send: command, getEditor: currentEditorForPublish, getBinding: currentEditorBinding,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), onSave: (value) => saveEditor('ATTRIBUTES', value),
@@ -670,17 +651,6 @@ trusted('editor-packaging-save-btn', () => {
   return saveEditor('PACKAGING', { items, evidence: ['用户在扩展工作台确认各 SKU 实测包装，重量克、尺寸毫米'] });
 });
 trusted('editor-replay-btn', () => lastSave ? saveEditor(lastSave.action, lastSave.value, true) : undefined);
-async function searchCategories() {
-  await categoryPicker.search(search.value);
-}
-trusted('editor-category-search', searchCategories);
-trusted('editor-category-save', async () => {
-  const selected = categoryPicker.selection();
-  if (!selected) throw new Error('请选择官方 Ozon 类目');
-  await saveEditor('CATEGORY', selected);
-  categoryPicker.close();
-  categoryModal.hidden = true;
-});
 
 function compilePrompt() {
   if (!userPromptEdited && !visualJson.value) {
@@ -1086,11 +1056,7 @@ trusted('settings-btn', () => {
 trusted('category-select-btn', async () => {
   if (!listing()) throw new Error('请先开始执行并创建草稿');
   if (!editor) await loadEditor();
-  categorySave.disabled = true;
-  categoryPicker.open();
-  if (!search.value.trim()) search.value = projection.source.categoryName.slice(0, 100);
-  openModal('editor-category-modal');
-  await searchCategories();
+  await categoryPicker.open();
 });
 for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () => openModal('process-modal'));
 element('ai-translation-process-btn').textContent = '俄文文案';
@@ -1154,8 +1120,13 @@ trusted('precision-assign', () => runMediaMutation(async () => {
 trusted('image-workflow-start-btn', async () => {
   if (imageMode === 'translate') { await startTranslation(); return; }
   if (byokRadio.checked) { await byok.readMediaState(); return; }
-  if (!projection.billing.quote) return suiteCommand('CREATE_AND_REVIEW_PLAN');
-  if (projection.billing.suite) { status('已有套图任务，请查看过程或审核结果'); return; }
+  const next=resolveSuitePrimaryAction({draftId:listing()?.id,busy:projection.busy||mediaMutationBusy||planSubmissionBusy,
+    billing:projection.billing,lock:promptLockState()});
+  if(next.disabled)return;
+  if(next.action==='READ'){await refreshMediaState();status('已读取当前草稿图片任务，请继续当前步骤');return;}
+  if(next.action==='PREPARE')return suiteCommand('CREATE_AND_REVIEW_PLAN');
+  if(next.action==='CONTINUE')return suiteCommand('CONTINUE');
+  if(next.action==='REVIEW'){candidates.scrollIntoView({block:'center'});status('预览并审核当前草稿的图片结果');return;}
   currentQuoteWitness();
   const quote = projection.billing.quote;
   if (confirm(`生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。确认开始？`)) await suiteCommand('START', true);

@@ -1265,6 +1265,10 @@ export function createSourceListingWorkflowAttributeService(
 
   return {
     getWorkspace: workspace,
+    async previewSchema(input: { ownerUserId: string; draft: OzonListingDraft; category: OzonListingDraftCategory }) {
+      const schema = await loadSchema(input);
+      return { schema, schemaRevision: schemaRevision(schema) };
+    },
     validateAuthoritative,
     validateForPublish,
 

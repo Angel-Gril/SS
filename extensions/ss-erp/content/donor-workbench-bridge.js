@@ -488,9 +488,10 @@
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || 'ERP 托管套图操作失败');
       }
-      commandResult(command.requestId, true, '');
       await loadProjection({ force: true });
       await loadBilling({ listingWorkflowId: listing.id });
+      setBusy(false, '');
+      commandResult(command.requestId, true, '');
     } catch (error) {
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
     } finally {
@@ -679,7 +680,7 @@
         sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
         listingWorkflowId: listing.id, binding: command.binding,
         ...(command.type === 'EDITOR_SAVE' ? { action: command.action, operationKey: command.operationKey, value: command.value } : {}),
-        ...(command.type === 'EDITOR_CATALOG' ? { query: command.query } : {}),
+        ...(command.type === 'EDITOR_CATALOG' ? { query: command.query,...(command.preview===undefined?{}:{preview:command.preview}) } : {}),
         ...(command.type === 'EDITOR_DICTIONARY' ? { schemaRevision: command.schemaRevision, attributeId: command.attributeId,
           query: command.query, limit: command.limit } : {}),
       });

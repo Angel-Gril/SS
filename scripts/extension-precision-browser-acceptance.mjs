@@ -218,7 +218,13 @@ function parentHtml() {
       const draft=workbench.status.listing.items[0];
       result={state:'ready',replayed,...(candidateId?{candidateId}:{}),editor:{contractVersion:'extension-listing-editor/v1',binding:{snapshotId:'snapshot-fixture',supplyGoodsId:'goods-fixture',shopId:draft.shopId,listingWorkflowId:draft.id,draftRevision:draft.revision,draftVersion:draft.draftVersion},selectedSkuKeys,category,pricing,packaging,copy,stage:readyForPublish?'READY_TO_PUBLISH':'CATEGORY_REVIEW',validation:{status:validationStatus},blockers:validationBlockers,freshness:Object.fromEntries(['category','attributes','content','media','pricing','validation'].map(key=>[key,readyForPublish?'CURRENT':'STALE'])),mediaAssignments:assignedMedia?[{scope:'PRODUCT',skuKey:null,slotKey:'product-main',assetId:'suite-output-1'},{scope:'SKU',skuKey:'sku-1',slotKey:'sku-main',assetId:'source-output-1'}]:[]}};
     }
-    if(command.type==='EDITOR_CATALOG')result={state:'ready',catalog:{catalogRevision:'catalog-fixture',entries:[{categoryId:10,typeId:20,label:'服装 / 上衣'}],truncated:false}};
+    if(command.type==='EDITOR_CATALOG'){
+      const leaf={categoryId:10,typeId:20,label:'服装 / 上衣',typeLabel:'上衣',pathTitles:['服装']};
+      result={state:'ready',catalog:{catalogRevision:'catalog-fixture',entries:[leaf],truncated:false,total:1,
+        tree:[{categoryId:10,label:'服装',children:[],types:[leaf]}],treeTruncated:false,
+        recommendations:[{...leaf,match:'recommended',reasons:['来源类目：女式T恤']}],
+        ...(command.preview?{attributePreview:{...command.preview,schemaRevision:'c'.repeat(64),fields:[{attributeId:201,name:'商品特点',required:true,valueType:'STRING',cardinality:'SINGLE',dictionaryId:null,ownership:'EDITOR',editorMode:'EDITABLE',valuePolicy:'FREE_TEXT',maxValues:1}]}}:{})}};
+    }
     if(command.type==='EDITOR_ATTRIBUTES')result={state:'ready',workspace:{schemaRevision:attributeSchema,fields:attributeFields,values:attributeFields.flatMap(field=>(field.ownership==='SKU'?selectedSkuKeys:[null]).map(skuKey=>attributeValues.get(JSON.stringify([field.attributeId,skuKey]))||{attributeId:field.attributeId,skuKey,value:field.attributeId===204?'ERP自动关联':null,dictionaryValueIds:[],reviewed:false}))}};
     if(command.type==='EDITOR_DICTIONARY')result={state:'ready',dictionary:{schemaRevision:attributeSchema,attributeId:command.attributeId,values:command.attributeId===202?[{id:7,value:'Синий'},{id:8,value:'Зеленый'}]:[101,102,103,104].map(id=>({id,value:'选项'+id})),complete:true,dictionaryComplete:true,resultExhaustive:true,hasMore:false,resultTruncated:false}};
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='CREATE_AND_REVIEW_PLAN'){
@@ -552,10 +558,10 @@ async function run() {
       assert.equal(await workspace('document.getElementById("basic-info").textContent.includes("长袖上衣")'), true);
       await click('[data-close-modal="basic-modal"]');
       await click('#category-select-btn');
-      await until(() => workspace('document.getElementById("editor-category-select").options.length>1'), 'category choices and explicit placeholder');
-      assert.equal(await workspace('document.getElementById("editor-category-save").disabled'), true, 'an arbitrary first official category is never approved automatically');
+      await until(() => workspace('document.querySelectorAll("#editor-category-modal .category-auto-card").length>0'), 'category recommendation cards');
+      assert.equal(await workspace('document.querySelector("[data-category-confirm]").disabled'), true, 'an arbitrary first official category is never approved automatically');
       await screenshot('usability-category');
-      await click('#editor-category-close');
+      await click('#editor-category-modal .settings-head button');
       await click('input[name="image-workflow-mode"][value="translate"] + span');
       await until(() => workspace('document.getElementById("precision-translation-panel").hidden===false'), 'translation mode panel');
       assert.equal(await workspace('document.getElementById("precision-prompt-text").closest(".precision-prompt").hidden'), true, 'translation must hide hosted generation prompts');
@@ -718,11 +724,11 @@ async function run() {
     await click('#editor-save-btn');
     await until(() => workspace('document.querySelector(".precision-local-fields").textContent.includes("ERP 已保存价格")'), 'unsaved pricing can be committed separately');
     await click('#category-select-btn');
-    await until(() => workspace('document.getElementById("editor-category-select").options.length>1'), 'official category options');
-    assert.equal(await workspace('document.getElementById("editor-category-save").disabled'), true, 'an explicit selection is required even for a single match');
-    await workspace('(()=>{const e=document.getElementById("editor-category-select");e.value="0";e.dispatchEvent(new Event("change",{bubbles:true}));})()');
-    await until(() => workspace('document.getElementById("editor-category-save").disabled===false'), 'explicit official category choice');
-    await click('#editor-category-save');
+    await until(() => workspace('document.querySelectorAll("#editor-category-modal .category-auto-card").length>0'), 'official category recommendation');
+    assert.equal(await workspace('document.querySelector("[data-category-confirm]").disabled'), true, 'an explicit selection is required even for a single match');
+    await click('#editor-category-modal .category-auto-card');
+    await until(() => workspace('document.querySelector("[data-category-confirm]").disabled===false'), 'explicit official category choice and attribute preview');
+    await click('[data-category-confirm]');
     await until(() => workspace('document.getElementById("editor-category-modal").hidden===true'), 'category saved without leaving the workbench');
     const categorySave = await evaluate('window.__precisionCommands.find(command=>command.type==="EDITOR_SAVE"&&command.action==="CATEGORY")');
     assert.equal(categorySave.value.categoryId, 10);

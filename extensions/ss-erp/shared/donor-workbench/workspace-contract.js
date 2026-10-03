@@ -57,7 +57,7 @@
         || hostname === 'metadata.google.internal';
       return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.hash
         && !local && !privateIpv4 && !hostname.includes(':') ? parsed.href : '';
-    } catch (_error) {
+    } catch {
       return '';
     }
   }
@@ -664,7 +664,7 @@
     if (!item) throw new TypeError('invalid donor workbench command');
     if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(item.type)) {
       var fields = ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'binding'];
-      if (item.type === 'EDITOR_CATALOG') fields.push('query');
+      if (item.type === 'EDITOR_CATALOG') { fields.push('query'); if(item.preview!==undefined)fields.push('preview'); }
       if (item.type === 'EDITOR_DICTIONARY') fields.push('schemaRevision', 'attributeId', 'query', 'limit');
       if (item.type === 'EDITOR_SAVE') fields.push('action', 'operationKey', 'value');
       var editorRequestId = commandBase(item, fields);
@@ -675,6 +675,9 @@
         || !Number.isSafeInteger(binding.draftRevision) || binding.draftRevision < 1
         || !Number.isSafeInteger(binding.draftVersion) || binding.draftVersion < 1) throw new TypeError('invalid editor binding');
       if (item.type === 'EDITOR_CATALOG' && (typeof item.query !== 'string' || item.query.length > 100)) throw new TypeError('invalid category query');
+      if(item.type==='EDITOR_CATALOG'&&item.preview!==undefined&&(!exactKeys(item.preview,['categoryId','typeId','catalogRevision'])
+        || !Number.isSafeInteger(item.preview.categoryId)||item.preview.categoryId<1
+        || !Number.isSafeInteger(item.preview.typeId)||item.preview.typeId<1||!text(item.preview.catalogRevision,200)))throw new TypeError('invalid category preview');
       if (item.type === 'EDITOR_DICTIONARY' && (!/^[a-f0-9]{64}$/u.test(item.schemaRevision)
         || !Number.isSafeInteger(item.attributeId) || item.attributeId < 1 || typeof item.query !== 'string' || item.query.length > 200
         || !Number.isSafeInteger(item.limit) || item.limit < 1 || item.limit > 100)) throw new TypeError('invalid dictionary query');
@@ -948,11 +951,11 @@
         requestId: assignmentRequestId, listingWorkflowId: text(item.listingWorkflowId, 200),
       });
     }
-    var requestId = commandBase(item, ['contractVersion', 'type', 'requestId']);
+    var genericRequestId = commandBase(item, ['contractVersion', 'type', 'requestId']);
     return Object.freeze({
       contractVersion: CONTRACT_VERSION,
       type: item.type,
-      requestId: requestId,
+      requestId: genericRequestId,
     });
   }
 

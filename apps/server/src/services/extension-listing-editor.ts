@@ -1,12 +1,15 @@
 import type { OzonListingDraft, OzonListingDraftAttributeValue, OzonListingDraftCategory } from 'shared';
 import type { SourceListingWorkflowService } from './source-listing-workflow.js';
 import type { SourceListingWorkflowContextResolver } from './source-listing-workflow-context.js';
-import type { OzonCategoryCatalogEntry } from './ozon-category-catalog.js';
+import { searchOzonCategoryCatalog, type OzonCategoryCatalogEntry } from './ozon-category-catalog.js';
 import { createSourceListingWorkflowCategoryValidator } from './source-listing-workflow-category.js';
 import { SourceListingWorkflowReadinessError, validateSourceListingPricing } from './source-listing-workflow-readiness.js';
 import { normalizeSourceListingSkuPackagingItems, projectSourceListingSkuPackaging, SourceListingSkuPackagingError } from './source-listing-sku-packaging.js';
 import type { SourceListingAttributeEditorService } from './source-listing-attribute-editor.js';
 import { projectSourceListingCopyEditor, type SourceListingCopyEditorService } from './source-listing-copy-editor.js';
+import type { SourceProductProfile } from './source-product-profile.js';
+import { rankSourceOzonCategoryCatalog } from './source-ozon-category-recommendation.js';
+import { EXTENSION_CATEGORY_RESPONSE_MAX_BYTES, projectExtensionCategory, projectExtensionCategoryTree } from './extension-listing-category-catalog.js';
 
 export interface ExtensionListingEditorBinding {
   snapshotId: string;
@@ -21,14 +24,17 @@ export interface ExtensionListingEditorIdentity {
   actorUserId: string;
   allowedShopIds: string[];
 }
-type CategoryEntry = Pick<OzonCategoryCatalogEntry,
-  'descriptionCategoryId' | 'typeId' | 'categoryNameRu' | 'typeNameRu' | 'categoryNameZh' | 'typeNameZh' | 'selectable' | 'disabled'>;
-
 export class ExtensionListingEditorError extends Error {
   constructor(public readonly code: string, public readonly statusCode: number, message: string) {
     super(message);
     this.name = 'ExtensionListingEditorError';
   }
+}
+function boundedCatalogProjection<T>(value: T): T {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > EXTENSION_CATEGORY_RESPONSE_MAX_BYTES) {
+    throw new ExtensionListingEditorError('editor_catalog_response_too_large', 503, '官方类目目录过大，请输入更具体的类目关键词');
+  }
+  return value;
 }
 function projection(draft: OzonListingDraft) {
   const fieldIssues: Array<{ field: 'PRICING' | 'PACKAGING'; message: string }> = [];
@@ -69,7 +75,8 @@ function projection(draft: OzonListingDraft) {
 export function createExtensionListingEditorService(options: {
   workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setCategory' | 'setPricing' | 'setSkuPackaging'>;
   ownership: Pick<SourceListingWorkflowContextResolver, 'assertOwnedTarget'>;
-  loadCatalog(input: { ownerUserId: string; shopId: string }): Promise<{ revision: string; entries: CategoryEntry[] }>;
+  loadCatalog(input: { ownerUserId: string; shopId: string }): Promise<{ revision: string; entries: OzonCategoryCatalogEntry[] }>;
+  loadSourceProfile?(input: { ownerUserId: string; draft: OzonListingDraft }): Promise<SourceProductProfile>;
   retainCompatibleReviewedValues?(input: { ownerUserId: string; draft: OzonListingDraft; category: OzonListingDraftCategory }): Promise<Record<string, OzonListingDraftAttributeValue>>;
   attributesEditor?: SourceListingAttributeEditorService;
   copyEditor?: SourceListingCopyEditorService;
@@ -95,23 +102,33 @@ export function createExtensionListingEditorService(options: {
   const categoryValidator = createSourceListingWorkflowCategoryValidator({
     loadCatalog: async (input) => {
       const catalog = await options.loadCatalog(input);
-      return { revision: catalog.revision, entries: catalog.entries as OzonCategoryCatalogEntry[] };
+      return { revision: catalog.revision, entries: catalog.entries };
     },
   });
   return {
     async read(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding) {
       return projection((await bound(identity, binding)).draft);
     },
-    async catalog(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding, query: string) {
-      await bound(identity, binding);
+    async catalog(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding, query: string,
+      preview?: OzonListingDraftCategory) {
+      const { draft } = await bound(identity, binding);
       const catalog = await options.loadCatalog({ ownerUserId: identity.ownerUserId, shopId: binding.shopId });
-      const keywords = query.normalize('NFKC').trim().toLowerCase();
-      const matching = catalog.entries.filter((entry) => entry.disabled !== true && entry.selectable !== false
-        && [entry.categoryNameRu, entry.categoryNameZh, entry.typeNameRu, entry.typeNameZh].join(' ').toLowerCase().includes(keywords));
-      return { catalogRevision: catalog.revision, entries: matching.slice(0, 50).map((entry) => ({
-        categoryId: entry.descriptionCategoryId, typeId: entry.typeId,
-        label: [entry.categoryNameZh || entry.categoryNameRu, entry.typeNameZh || entry.typeNameRu].join(' / '),
-      })), truncated: matching.length > 50 };
+      if (preview) {
+        const category = await categoryValidator.validate({ ownerUserId: identity.ownerUserId, shopId: binding.shopId, category: preview });
+        if (!options.attributesEditor) throw new ExtensionListingEditorError('editor_attributes_unavailable', 503, '官方属性预览尚未配置');
+        const attributePreview = await options.attributesEditor.previewCategory({ category, draftId: draft.id,
+          ownerUserId: identity.ownerUserId, actorUserId: identity.actorUserId,
+          expectedRevision: binding.draftRevision, expectedDraftVersion: binding.draftVersion });
+        return boundedCatalogProjection({ catalogRevision: catalog.revision, entries: [], truncated: false, total: 0, attributePreview });
+      }
+      const matching = searchOzonCategoryCatalog(catalog.entries, query, catalog.entries.length);
+      const base = { catalogRevision: catalog.revision, entries: matching.slice(0, 50).map(projectExtensionCategory),
+        truncated: matching.length > 50, total: matching.length };
+      if (query.normalize('NFKC').trim()) return boundedCatalogProjection(base);
+      const profile = options.loadSourceProfile ? await options.loadSourceProfile({ ownerUserId: identity.ownerUserId, draft }) : null;
+      const recommendations = profile ? rankSourceOzonCategoryCatalog(profile, catalog.entries)
+        .map(({ entry, match, reasons }) => ({ ...projectExtensionCategory(entry), match, reasons })) : [];
+      return boundedCatalogProjection({ ...base, ...projectExtensionCategoryTree(catalog.entries), recommendations });
     },
     async attributes(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding) {
       await bound(identity, binding);
