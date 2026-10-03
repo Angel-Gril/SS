@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-03 `fdee8103 / 1.0.403` 精铺默认入口双区公开发布完成
+
+COM/CN 应用、官网 latest 和四个 Cloud/Local ZIP 均已绑定 `fdee810303d1216d2f587d4c09c9a9f59766abed / 1.0.403`。正式 QA04、新的双区 canonical VPS evidence、REL-04 canary、website approval、CAS、匿名完整下载和最终 publication verifier 已通过；来源页默认打开直接复用的精铺工作台，旧采集/生图/上架安装包入口已清理，利润/物流等独立功能保留。当前证据、CF 登录边界与未覆盖功能只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-03-精铺默认入口签名部署与官网发布)。本轮没有新增 Provider/Ozon 请求或费用；新授权的最高 CNY 0.28 未使用。
+
 ## 2026-10-02 精铺扩展默认入口改造进行中
 
 来源商品页现在默认挂载直接改造的 `precision-workbench.html`，不再依赖 donor preview 开关或商品 allowlist；旧 source-listing/source-costing 的采集、生图、审核、草稿和上架入口已从来源页装配中移除。利润/物流等其他扩展功能保留，来源核价面板仅保留成本与利润计算及找货源，不再提供独立采集或生图上架按钮。Cloud/Local 构建会排除旧工作台文件；默认 MV3 真实验收已证明普通安装可打开精铺 UI、16 SKU 投影和来源图渲染，Provider/Ozon/ERP mutations=0。当前仍需完成最终代码提交后的签名双区部署与官网更新，不能沿用 `1.0.401` 发布证据。

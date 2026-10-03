@@ -1,10 +1,23 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：精铺默认入口已在源码切换，等待新候选发布
+## 当前结果：精铺默认入口已在双区官网公开发布
 
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
-之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。当前源码已把来源页默认入口切换为 `precision-workbench.html`，移除 preview/allowlist 门槛，并从来源页清理旧 source-listing/source-costing 的采集、生图、审核、草稿和上架面板；利润/物流扩展功能仍保留，核价面板只保留成本/利润和找货源。此改动尚未生成新的签名候选或部署，官网仍服务旧 `8bab3486 / 1.0.401` 产物，不能把旧发布证据套用于本改动。
+之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。COM/CN 应用和官网公开下载现均为 `fdee810303d1216d2f587d4c09c9a9f59766abed / 1.0.403`，来源页默认使用 `precision-workbench.html`，移除 preview/allowlist 门槛；安装包与来源页装配清理了旧采集、生图、审核、草稿和上架 UI，利润/物流扩展功能保留，核价面板只负责成本/利润和找货源。本次使用新区域签名候选、正式回执和 canary，未复用旧官网批准或旧面板 canary。
+
+### 2026-10-03 精铺默认入口签名部署与官网发布
+
+- `66161400` 默认入口/旧 UI 清理及 `fdee8103` release 权限修复均已推送；最终区域候选版本 `1.0.403` 已签名并部署两区。已完成的当前源码 preflight、默认 MV3、SKU/图片/Blob 与伪造来源拒绝证据保持其原范围，本轮未重复全仓测试。
+- 接续输入 `qa04-final-input-fdee8103.json` 末尾有字面量 `\\n`，并引用旧运行的 controller；本地 `vps-COM.json`/`vps-CN.json` 同样不是有效 canonical JSON，均未被作为正式发布回执使用。761e 的套图确实被 `QA04_ERP_SOURCE_CHANGED` 拒绝；直接复核 58cc 则由当前 `verifyErpSource` 正式通过精确执行中立源码合同。原套图、START/CONTINUE、审核前 PENDING/preview、审核、assignment、费用和 replay 原件未修改。
+- 当前 COM pilot/全 owner pending/最终 suite 图使用生产只读事务重新取得，绑定完整 fdee commit；pending 五项为 0，原 suite 两条 assignment 和 Ozon 零写入保持。此前创建的本轮临时配对 session 已经正常 owner 撤销，保留用户现有两台 DOTH 设备；当前策略仍只允许原 owner、DOTH 与 `IMAGE_TO_IMAGE/SUITE`。新 controller 只替换当前运行的收尾引用，不重标执行原件。正式 `QA04_FINAL_ACCEPTANCE` SHA-256：`1fcec8e30b074f2a6e11efcb6e604de4ec912fdaa9be6b0ea0b198e542eb383d`。
+- 部署备份回执超过原 120 分钟期限，首次完整 VPS 检查正确失败；未放宽期限。两区标准备份/恢复刷新通过 COM 144、CN 143 张表，临时恢复库均已清理，runtime/deployment 目录保持分离。官方 verifier 随后写出有效 canonical VPS JSON：COM `90b879d263320df2daaf9ab7d0bea63ea134a723d9818dcdf7b6ca7efa75143d`、CN `692761b8c23e2d384992a0b040a3dd88ef150e4d8ea9b7957f23fd7a982e7f7c`，均 `0 failure / 1 warning`；warning 仍为远端备份未配置。
+- 新 REL-04 canary：COM `c48ae0dde36859267df39acc6ef38547d0d1fb56164669c9c93b8d6869a93b13`、CN `c2bdea2bc14533e6d363052335d52001a92ef837183da11087f19ac1abc1fa73`。COM 首轮误用通用 publisher 关闭 reason 而失败；只读确认当前为 `enabled=false / legacyAllowed=false / policy_revision_mismatch` 后，第二轮绑定实际精确 reason/revision 通过，没有启用 publisher。临时 canary device 已清理，CN 是无店铺 dark canary。
+- 新 website approval：COM `39c7a8a3e527aab0d1cd1671a0e6742c045acbafdcd25549aca9335cef6e5022`、CN `d8a03171ab9fcf9e4a29b7d7bc665d1e6bcaf9c7d4e8b9ef1cc06671ee9423f4`。canonical deploy lock 下两区 CAS 均返回 `ACTIVATED`，精确旧批准摘要分别为 `1da5ae08...2541d4`、`95adda74...f25bd3`。
+- 官网切换后再次按 `VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=true` 执行正式 VPS verifier，两区均 `0 failure / 1 warning`。post-publication canonical evidence：COM `e6f347f02690612f7432e0a9b148d70e50cc3d431e8f6df954014ba9c19d3567`、CN `af32870574031fda44e84fa3857798b075debbfa52c1267d8b635101390e0ce1`。CN 两个临时 account session 已从 Redis 撤销，远端三份凭据/清理文件与本机四份本轮 token 副本已删除；现有用户浏览器登录 session 未撤销。
+- 匿名 distribution probe 与最终 publication verifier 均通过，完整下载四个 ZIP、核验签名/版本/commit/批准/body SHA-256。系统 DNS 返回 `ECONNREFUSED` 时，以 Google/Cloudflare 两个 HTTPS DNS 的新鲜相同公网 A 记录建立固定地址 transport；原 probe 的同源、TLS、无凭据、拒绝跳转与字节边界保持。distribution receipt：COM `5c4fcee46f3f2b58e1c7ffb83aa6ca11ca4de9338b96e70d6e83f1bf9ce3edc2`、CN `6cd8f9b88e59a9fafd8f39e29ec0d8c8f3a538a175da0623d067557c586fcc69`。
+- CF 登录环境边界：9444 原实例是 headless，9222 app 登录页也曾显示 `300030`，不能把打开页面等同于验证成功。当前已登录的 COM admin 会话经 `/api/user/me` 核对为同一合法 owner，直接使用现有 account/设备 owner 合同继续，未关闭 Turnstile、伪造 challenge 或改写账户权限。此操作解除本轮发布阻塞，不宣称修好了所有浏览器的 CF；CN canary 的限时维护 session 已单独创建并完成清理。
+- 本轮 Provider/Ozon 请求与新增业务费用均为 0；用户新授权最高 CNY 0.28 未使用。私有原件集中在 `C:\Users\550W\AppData\Local\SS-ERP\private\release-fdee8103-website`，不进入 Git。官网公开与默认入口已交付；复制 SKU 服务端持久化、donor 淘宝/PDD collector、翻译质量及 precision 实时 Provider/BYOK/Ozon 全链仍按各自 owner 留待后续，不被本次历史 suite 兼容证据冒称通过。
 
 ### 2026-10-02 精铺默认入口和旧模块清理
 
@@ -149,7 +162,9 @@ ui/presentation/controllers/ui-scale-controller.js eb6b5dfc126c8f0e52bae11d4eb6b
 - BYOK 与翻译 fixture：`C:\Users\550W\AppData\Local\Temp\ss-erp-precision-ui-evidence-nMABkC\summary.json`，覆盖单图未知结果只读恢复、PNG Blob 预览、显式审核、ingest/readback 和 `CREATE_TRANSLATION`。
 - 参考图、全图修图、圈选重绘 fixture 分别通过 `--byok-edit-quick`、`--byok-edit-full`、`--byok-edit-inpaint`；Cloud 包验证 `568 pass`、Local 包验证 `564 pass`，均 `0 failure / 0 warning`。完整 `pnpm preflight` 已通过（server `6417 passed / 325 skipped`）。
 
-## 本地预览与回退
+## 1.0.396 历史本地预览与回退
+
+本节只保留旧预览阶段的操作记录；`1.0.403` 已默认使用 precision，下面的开关不再控制公开安装包入口。
 
 预览仍要求现有 donor enabled 与精确商品 allowlist，同时设置新的 `ss-erp:precision-workbench-preview-enabled=true`。它只选择前端入口，不授予店铺、写入或生图权限。新 iframe 先通过 READY 收到投影，在空 referrer 时核验允许的 parent origin 并固定后续消息来源；页面输入不能成为服务端权威。
 
@@ -175,6 +190,6 @@ chrome.storage.local.set({
 - [x] A2.2 接通 donor 原 1688 采集器，完成 canonical 映射及同一实时商品的 SKU/图片只读验收；其他平台另行接线。
 - [x] A2.3 接自定义提示词、单图/套图、修图、翻译与 hosted/自带 API 设置，同一工作台显示审核和应用：**自定义 hosted 方向、BYOK 单图、参考图/FULL_EDIT/INPAINT owner flow/控件、图片翻译 CREATE_TRANSLATION 入口、套图审核/应用、自带 API 设置和私有 frame/session owner 已完成本地接线与浏览器 fixture**；真实 Provider、翻译质量和最终安装版验收属于后续 A3 运行验收。
 - [x] A2.4 接现有 ERP publisher 的预览、明确确认和回执到原上传按钮；本地 owner/浏览器 fixture 已通过，真实发布属于 A3。
-- [ ] A3 在功能链完成后执行对应实时商品与第三方验收，再生成签名发布候选。
+- [ ] A3 完成剩余 precision 实时商品与第三方功能验收；`1.0.403` 的默认入口、签名候选、双区部署与官网发布已完成，不能替代其余功能的真实验收。
 
-用户明确要求完整功能通过后排除旧扩展。当前保留旧入口作为回退；A2.3/A2.4 与最终功能验收完成后切换默认入口并退出旧媒体流程，不能因仅采集/编辑通过而提前删除共享权限、计费或 publisher owner。
+用户后续明确要求清理旧采集/生图/上架入口，保留利润等独立功能；`1.0.403` 已按此范围默认切换并公开，旧 UI 原件留在仓库历史及旧发布包中。共享权限、计费和 publisher owner 保持；A2.1 的复制 SKU 持久化与 A3 的其余第三方真实功能验收仍未关闭。

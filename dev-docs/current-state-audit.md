@@ -1,5 +1,9 @@
 # SS ERP 当前状态审计
 
+## 2026-10-03 `fdee8103 / 1.0.403` 精铺默认入口公开发布完成
+
+两区应用、官网 pointer 和四个 Cloud/Local 下载均绑定 `fdee810303d1216d2f587d4c09c9a9f59766abed / 1.0.403`。正式 QA04、新 canonical VPS evidence、双区 REL-04 canary、website approval、CAS、匿名完整下载与最终 publication verifier 已通过。新 UI 默认入口的源码/MV3 证据与套图历史原件分别保留，没有把历史套图冒称为本轮 precision 实时全流程；本轮未新增 Provider/Ozon 请求或费用，新 CNY 0.28 授权未使用。完整回执摘要、CF 登录环境限制及后续功能范围见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-03-精铺默认入口签名部署与官网发布)。
+
 ## 2026-10-02 `8bab3486 / 1.0.401` 双区官网公开发布完成
 
 COM/CN current、官网 latest 和 cloud/local 下载均绑定 `8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4 / 1.0.401`。正式 QA04、COM hosted-pilot 与 CN no-shop dark REL-04 canary、双区 website approval、CAS、匿名 distribution probe 和 final verifier 均通过；无 Provider POST、Ozon 写入或新增费用。CN 首轮 origin 误用 COM 扩展 ID 的失败回执保留为失败证据，随后使用 CN 签名包的 `bfpadpmmgokbblmlmobpndbaaeknfncd` origin 重跑通过。
