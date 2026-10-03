@@ -2,6 +2,13 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-03 `93bc0879 / 1.0.404` 工作台修复签名与双区部署
+
+- 本轮工作台修复提交为 `93bc0879db011c0587d3c04a1ef92cc2f5c88e1d`，已推送到 `feat/ai-media-prompt-registry`。Cloud/Local `1.0.404` 候选均通过包校验并使用 `ss-erp-extension-release-2026-09-05-01` Ed25519 签名；COM 签名摘要 `73b59b79511a491dd1bfc79ce30a08a7e7c51af2c6ac747ce62f8cd0a191f48c`，CN `777960acb25ebfa994511733099a1834a9bd911a2d3742b910e378c48cd914cd`。
+- COM pilot 与 CN direct/RDS 均已切换到该提交，三服务 active。COM 继续原 owner/shop/session 的 hosted pilot 与 `IMAGE_TO_IMAGE/SUITE` 限制；CN 继续 AI、BYOK、Ozon dark。COM/CN migration 无待执行项，AI media suite DB guard 通过。
+- 双区正式 VPS verifier 首次只读检查因运行时备份状态仍绑定旧目录而拒绝；按既有 `BACKUP_LOCAL_DIR=/var/backups/ss-erp-runtime`、`DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp` 分离合同刷新运行时备份与恢复演练后重新通过。COM canonical VPS evidence SHA-256 `8fae1f67f7d512f59b6f7c4767de2441ef6ae07c5804f4fb7b8f3d4278f6eb2e`，CN `bdd935e3c17c2fcbbde953482aefa9fcd5ebd0c8e656a6140406c816c6e116ca`，均 `0 failure`。
+- 官网仍安全服务已批准的 `fdee8103 / 1.0.403` pointer；本轮未执行 website approval、CAS、distribution probe 或官网 pointer 切换。Provider/Ozon 请求与新增费用均为 `0`。
+
 ### 2026-10-03 工作台滚动、翻译与编辑入口修复
 
 - 用户反馈确认：SKU 区与图片区可以局部滚动，但外层工作台不能滚动、图片翻译按钮无效、基础信息/继续编辑入口错接。根因分别是 donor 表格 wheel handler 无条件 `preventDefault()` 加平滑逐行跳动、翻译按钮始终走套图或被初始化禁用、入口 handler 重新启动 session，以及基础信息误开 copy modal。
