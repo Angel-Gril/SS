@@ -2,6 +2,16 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-04 `1.0.409` 真实三商品对照与原套图恢复
+
+- `08f9b9ce7599f005a9971b2aa28fbbdef174ce5f / 1.0.409` 已推送、区域签名并完成 COM/CN 标准部署。COM 第一次在活动临时 session 被 `REFRESH_REUSE_DETECTED` 撤销后精确 pilot gate 失败，current 未切换；旧版三服务先正常恢复，再将未激活 release 原件移到 recoverable failed-releases，使用当前相同 owner/DOTH/权限/策略重新标准部署。CN 无阻塞。两区 full canonical VPS PASS、`0 failure / 1 warning`；warning 仍为远端备份未配置。COM/CN 摘要分别 `ace0f445edb13a8d4236b98e6eaaf8d55232edb9f679acbcb15858dba1243e23`、`8fc7a5814d79bdb4332adc299cbf301e22511555eff96305fa0ca5a30b97f931`。私有原件在 `release-08f9b9ce-website`；官网仍 `0d695279 / 1.0.405`，未执行 CAS。
+- 新干净 profile 加载 1.0.409 签名原字节并正常配对，三个真实来源页分别读出 `16/35/1` SKU；在同一工作台选择 DOTH、单 SKU、采集和创建隔离草稿，没有跳转 ERP。长袖 T 恤推荐第一项为“长袖 T 恤”，卫衣推荐“连帽衫/卫衣/运动衫”，收纳盒推荐收纳类目；后者仍需用户明确选择具体用途，不能宣称自动命中百分之百。官方树、属性只读预览与类目保存均完成真实验收，截图和读回仅保留于私有证据目录。
+- 原始 `CREATE_AND_REVIEW_PLAN` 两份请求/响应已完整采集：素材 alias 由后端反解当前快照原键，报价为两图/最高 CNY `0.28`；`START` 与 `CONTINUE` 各只有一次。suite `cmuswsmny000e5opv17rey53f` 两槽各 `attempt=1`，两笔原预留各 `14 minor`；本次授权已经用于这两个已接受任务，不再发新的 Provider POST。原两 job 目前 `FAILED/MANUAL_REVIEW`，预留 `RECONCILIATION_REQUIRED`、`actualCostCents=NULL/billedUnits=0`，没有伪结算。
+- 只读使用同一正式 Provider `poll()` 获取既有 task 与结果：各 `1 task GET / 1 result GET / 0 POST`，两张都是 `800×800 PNG/1 page`。SHA-256 为 `cc5ab28db0a54c276e691a5492dff8be0f60b0bd50f66a46a4967ed95a8bbcca`、`e3af3ae41a2367c5ac30a09a62afa3aa47a89fdfb7aaaf698a088dc08a8eae2a`；VPS 私有原件与本机副本保持一致。对应冻结输入是清晰 `800×800 JPEG`，SHA `789a200daa6371a4b147ea82f13ab478002032f79d919f0f94005ab458f101b1`；可见块状纹理失真来自 Provider 输出。两候选不满足商品图质量，恢复后应 `REJECT`，不能为通过 gate 人工批准或 assignment。
+- 精确 `800×800` fallback 的 normalizer 回归先 RED 再 GREEN，邻近 `799/801/800×799` 与 portrait profile 仍拒绝；final 仍 `900×1200 contain PNG`。实际原图宽高现在来自安全 decoder 的 `providerOutput`，不把 800px 原字节错误标为请求的 1024px；原尺寸审计的最小恢复执行测试也 RED→GREEN。
+- 专用恢复复用已有超级管理员 `RESUME` 接口和 Worker reconciliation owner：只对原尺寸失败、同原 task/attempt/fingerprint/owner/预留、原接受期限内、无 final 的 Wanx 单次子任务建立持久授权；SQL 前向迁移只允许有效 lease、同事务不可变恢复审计绑定的 `FAILED → SUCCEEDED`，其余终态保持不可改。不创建新的 job、attempt、预留或 Provider POST；原失败/error 保存在不可变审计，原 CNY `0.14` 只做一次 `RECONCILED_CHARGE`，结果进入 `PENDING` 人工审核。
+- 主 Agent 独立执行全部 `152` migrations 和五项真实 PostgreSQL 测试，证明旧 raw insert owner 实际拒绝、新两槽恢复、越权/过期/错 lease/task/金额/尺寸拒绝、后段触发器故障全量回滚以及完成后的 exact RESUME replay；最终后端定向 `82/82` GREEN，typecheck、ESLint 与独立源码审查通过。当前恢复修复尚未推送/签名/生产迁移；新的质量测试额度问题已询问用户，未将本次授权扩展为额外请求。
+
 ### 2026-10-04 真实采集参考图到托管计划的接线修复
 
 - `cef39186 / 1.0.408` 已签名并完成 COM/CN 标准部署：151 migrations 无待执行项，suite DB guard、current 切换与 `/ready` 通过；COM 保持仅 DOTH hosted pilot，CN dark。官网仍公开 `0d695279 / 1.0.405`，本轮未执行 CAS。1.0.407/408 的 build、backup/restore 和部署原件分别保存在对应私有 `release-*-website`，不改写旧回执。

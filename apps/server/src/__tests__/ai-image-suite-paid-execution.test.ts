@@ -71,6 +71,7 @@ function normalizedOutput(): NormalizedAiImageSuiteProviderOutput {
     height: 1200,
     sha256: FINAL_SHA256,
     normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
+    providerOutput: { width: 1024, height: 1536 },
   };
 }
 
@@ -176,6 +177,26 @@ describe('AI image suite paid Provider dispatch boundary', () => {
     await expect(executeAiImageSuitePaidProvider(request, deps)).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_INVALID_IMAGE' });
     expect(deps.recordProviderResultEvidence).not.toHaveBeenCalled();
     expect(deps.complete).not.toHaveBeenCalled();
+  });
+
+  it('archives the actual 800px recovered Provider bytes without relabelling the raw output as 1024px', async () => {
+    const bytes = await sharp({ create: { width: 800, height: 800, channels: 3, background: 'red' } }).png().toBuffer();
+    const request = input();
+    Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', estimatedCostCents: 14, maximumCostCents: 14 });
+    Object.assign(request.job, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', providerJobId: 'wanx-original', estimatedCostCents: 14 });
+    request.maximumCostCents = 14;
+    const execute = vi.fn();
+    const deps = dependencies({ uploadBuffer: validUploads(), prepareProvider: async () => ({ evidenceLevel: 'sandbox-verified',
+      providerRequest: { width: 1024, height: 1024 }, execute,
+      recover: async () => ({ status: 'SUCCEEDED', providerJobId: 'wanx-original', providerStatus: 'SUCCEEDED',
+        actualCostCents: 14, image: { buffer: bytes, mimeType: 'image/png' } }),
+    }) });
+    await expect(recoverAiImageSuitePaidProvider(request, deps)).resolves.toBe('completed');
+    expect(deps.recordProviderOutput).toHaveBeenCalledWith(expect.objectContaining({ width: 800, height: 800,
+      sha256: createHash('sha256').update(bytes).digest('hex') }));
+    expect(deps.complete).toHaveBeenCalledWith(expect.objectContaining({ actualCostCents: 14,
+      output: expect.objectContaining({ width: 900, height: 1200 }) }));
+    expect(execute).not.toHaveBeenCalled(); expect(deps.markProviderDispatchStarted).not.toHaveBeenCalled();
   });
 
   it('does not mark or fetch when Provider preparation fails', async () => {

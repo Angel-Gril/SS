@@ -26,6 +26,21 @@ const runtimeConfig = {
 };
 
 describe('AI Provider reconciliation worker lookup', () => {
+  it('routes a claimed suite child to the suite owner rather than the generic edit completion', async () => {
+    const original = { ...claim(), operation: 'IMAGE_TO_IMAGE' as const, provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' };
+    const result = { status: 'SUCCEEDED' as const, providerJobId: original.providerJobId, providerStatus: 'SUCCEEDED',
+      image: { buffer: Buffer.from('synthetic'), mimeType: 'image/png' }, actualCostCents: 12 };
+    const suiteRecovery = { lookup: vi.fn(async () => result), recover: vi.fn(async () => undefined) };
+    const generic = { claimDue: vi.fn().mockResolvedValueOnce([original]).mockResolvedValue([]), defer: vi.fn(), markManualReview: vi.fn(),
+      completeRecovered: vi.fn(), completeNoOutput: vi.fn(), getClaimedEditJob: vi.fn() };
+    await expect(runAiProviderReconciliationTick({ repository: generic, suiteRecovery,
+      suiteRecoveryRepository: { isSuiteClaim: vi.fn(async () => true), getClaimedGraph: vi.fn(), complete: vi.fn() },
+      now: () => new Date('2026-07-21T08:00:00.000Z'), uploadBuffer: vi.fn() })).resolves.toMatchObject({ recovered: 1 });
+    expect(suiteRecovery.lookup).toHaveBeenCalledWith(original);
+    expect(suiteRecovery.recover).toHaveBeenCalledWith(original, result);
+    expect(generic.getClaimedEditJob).not.toHaveBeenCalled();
+    expect(generic.completeRecovered).not.toHaveBeenCalled();
+  });
   it('claims one task with a lease that covers Provider poll and result download', async () => {
     const claimDue = vi.fn(async () => []);
 

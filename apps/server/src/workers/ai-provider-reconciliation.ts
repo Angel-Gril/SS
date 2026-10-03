@@ -21,6 +21,8 @@ import {
   type AiImageTranslationProviderRuntimeConfig,
 } from './ai-image-translation.js';
 import { createAiImageEditRecovery, type AiImageEditRecoveryOptions } from '../services/ai-image-edit-recovery.js';
+import { PrismaAiImageSuiteRecoveryRepository } from '../repositories/ai-image-suite-recovery-repository.js';
+import { createAiImageSuiteRecovery, type AiImageSuiteRecoveryOptions } from '../services/ai-image-suite-recovery.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_LIMIT = 1;
@@ -154,6 +156,8 @@ type TickOverrides = LookupOverrides & {
   getEditProviderConfig?: AiImageEditRecoveryOptions['getProviderConfig'];
   createWanxEditProvider?: AiImageEditRecoveryOptions['createProvider'];
   loadEditInputBuffer?: AiImageEditRecoveryOptions['loadInputBuffer'];
+  suiteRecovery?: ReturnType<typeof createAiImageSuiteRecovery>;
+  suiteRecoveryRepository?: AiImageSuiteRecoveryOptions['repository'];
 };
 
 export async function runAiProviderReconciliationTick(overrides: TickOverrides = {}) {
@@ -169,11 +173,20 @@ export async function runAiProviderReconciliationTick(overrides: TickOverrides =
     createProvider: overrides.createWanxEditProvider,
     loadInputBuffer: overrides.loadEditInputBuffer,
   });
+  const suiteRepository = overrides.suiteRecoveryRepository || new PrismaAiImageSuiteRecoveryRepository(prisma);
+  const suiteRecovery = overrides.suiteRecovery || createAiImageSuiteRecovery({ repository: suiteRepository, uploadBuffer });
+  const suiteClaims = new Set<string>();
   const service = createAiProviderReconciliationService({
     repository,
-    lookupProviderTask: (claim) => isWanxEditReconciliationOperation(claim)
-      ? editRecovery.lookup(claim) : lookupAiImageTranslationProviderTask(claim, overrides),
-    recoverEditOutput: editRecovery.recover,
+    lookupProviderTask: async (claim) => {
+      if (claim.operation === 'IMAGE_TO_IMAGE' && claim.workflowId && await suiteRepository.isSuiteClaim(claim)) {
+        suiteClaims.add(claim.jobId);
+        return suiteRecovery.lookup(claim);
+      }
+      return isWanxEditReconciliationOperation(claim) ? editRecovery.lookup(claim) : lookupAiImageTranslationProviderTask(claim, overrides);
+    },
+    recoverEditOutput: (claim, result) => suiteClaims.has(claim.jobId)
+      ? suiteRecovery.recover(claim, result) : editRecovery.recover(claim, result),
     uploadBuffer,
     now: overrides.now,
   });

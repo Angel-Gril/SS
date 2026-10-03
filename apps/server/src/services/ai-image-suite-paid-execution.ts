@@ -180,7 +180,6 @@ async function persistOutputs(
     ExecuteAiImageSuitePaidProviderDependencies<unknown>,
     'assertClaim' | 'uploadBuffer' | 'recordProviderOutput'
   >,
-  providerRequest = { width: 1024, height: 1536 },
 ) {
   const rawSha256 = createHash('sha256').update(raw.buffer).digest('hex');
   await dependencies.assertClaim();
@@ -198,8 +197,8 @@ async function persistOutputs(
   const rawAsset = storedAsset(rawStored, {
     mimeType: raw.mimeType,
     sizeBytes: raw.buffer.length,
-    width: providerRequest.width,
-    height: providerRequest.height,
+    width: normalized.providerOutput.width,
+    height: normalized.providerOutput.height,
     sha256: rawSha256,
     metadata: {
       version: 'ai-image-suite-provider-output/v1',
@@ -346,7 +345,7 @@ export async function executeAiImageSuitePaidProvider<T>(
       providerJobId,
       actualCostCents,
       providerResultReceivedAt,
-    }, dependencies, prepared.providerRequest);
+    }, dependencies);
     await dependencies.assertClaim();
     return await dependencies.complete({
       providerJobId,

@@ -18,6 +18,9 @@ export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_HEIGHT = 1536;
 // still fail closed before any candidate is persisted.
 export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_WIDTH = 880;
 export const AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_HEIGHT = 880;
+// Current 1688 references also produced two independently verified 800x800
+// PNG outputs from accepted Wanx tasks under the same frozen request profile.
+const AI_IMAGE_SUITE_PROVIDER_OUTPUT_REFERENCE_SQUARE_SIZE = 800;
 
 const AI_IMAGE_SUITE_OUTPUT_NORMALIZER_MAX_METADATA_PIXELS = 16_000_000;
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 } as const;
@@ -57,6 +60,7 @@ export interface NormalizedAiImageSuiteProviderOutput {
   height: typeof AI_IMAGE_SUITE_OUTPUT_HEIGHT;
   sha256: string;
   normalizerVersion: typeof AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION;
+  providerOutput: { width: number; height: number };
 }
 
 function normalizeDeclaredMime(value: unknown): AiImageSuiteProviderOutputMimeType | null {
@@ -187,7 +191,11 @@ export async function normalizeAiImageSuiteProviderOutput(
     && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
     && metadata.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_WIDTH
     && metadata.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_SQUARE_FALLBACK_HEIGHT;
-  if (!matchesRequestedProfile && !matchesKnownWanxFallback && !matchesKnownWanxSquareFallback) {
+  const matchesKnownWanxReferenceSquare = providerRequest.width === AI_IMAGE_WANX21_EDIT_PROFILE.width
+    && providerRequest.height === AI_IMAGE_WANX21_EDIT_PROFILE.height
+    && metadata.width === AI_IMAGE_SUITE_PROVIDER_OUTPUT_REFERENCE_SQUARE_SIZE
+    && metadata.height === AI_IMAGE_SUITE_PROVIDER_OUTPUT_REFERENCE_SQUARE_SIZE;
+  if (!matchesRequestedProfile && !matchesKnownWanxFallback && !matchesKnownWanxSquareFallback && !matchesKnownWanxReferenceSquare) {
     throw new AiImageSuiteOutputNormalizerError(
       'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
       `Provider output must be exactly ${providerRequest.width}x${providerRequest.height} pixels`,
@@ -247,5 +255,6 @@ export async function normalizeAiImageSuiteProviderOutput(
     height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
     sha256: sha256(normalized.data),
     normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
+    providerOutput: { width: metadata.width!, height: metadata.height! },
   };
 }

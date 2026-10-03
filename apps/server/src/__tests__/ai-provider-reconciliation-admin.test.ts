@@ -110,6 +110,28 @@ function database(input: {
 }
 
 describe('AI Provider reconciliation admin service', () => {
+  it('replays an accepted suite RESUME after recovery from its immutable authorization', async () => {
+    const db = database({ providerJobId: 'accepted-suite-task', costProviderJobId: 'accepted-suite-task',
+      providerAcceptedAt: new Date('2026-07-21T07:55:00.000Z') });
+    Object.assign(db.job, { operation: 'IMAGE_TO_IMAGE', provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', errorMessage: '800x800 rejected', requestFingerprint: 'a'.repeat(64),
+      width: 900, height: 1200, requestedImageCount: 1, attemptCount: 1, maxAttempts: 1, estimatedCostCents: 14, assets: [] });
+    Object.assign(db.reservation, { status: 'RECONCILIATION_REQUIRED', provider: db.job.provider, model: db.job.model,
+      operation: 'IMAGE_TO_IMAGE', currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14 });
+    Object.assign(db.job.workflow, { status: 'FAILED', reviewStatus: 'NOT_READY', selectedOutputAssetId: null, operation: 'IMAGE_TO_IMAGE',
+      suiteSlot: { id: 'slot-1', ownerUserId: 'owner-1', childWorkflowId: 'workflow-1', attempt: 1, status: 'FAILED', estimatedCostCents: 14,
+        maximumCostCents: 14, suite: { id: 'suite-1', ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', status: 'FAILED',
+          itemCount: 2, maximumCostCents: 28, provider: db.job.provider, model: db.job.model } } });
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const item = (await service.listReconciliations()).items[0];
+    const decision = { jobId: db.job.id, actorUserId: 'owner-1', requestId: 'suite-resume-once', expectedStatus: 'MANUAL_REVIEW' as const,
+      expectedRevision: 1, expectedEvidenceHash: item!.evidenceHash, action: 'RESUME' as const,
+      providerJobId: 'accepted-suite-task', providerAcceptedAt: '2026-07-21T07:55:00.000Z', reason: 'Recover the existing task without another create' };
+    await service.resolveReconciliation(decision);
+    Object.assign(db.job, { status: 'SUCCEEDED', providerReconciliationStatus: 'RECOVERED', providerReconciliationRevision: 4, assets: [{ id: 'final' }] });
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'RECOVERED' });
+    expect(db.providerEvents.size).toBe(1);
+  });
   it('keeps manual-review work independently pageable behind a stable scoped cursor', async () => {
     const db = database();
     const jobs = [
@@ -370,7 +392,7 @@ describe('AI Provider reconciliation admin service', () => {
     db.job.assets = [{ id: 'asset-1' }];
     const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
     await expect(service.listReconciliations()).resolves.toMatchObject({
-      items: [{ allowedActions: ['RESUME', 'NO_OUTPUT'] }],
+      items: [{ allowedActions: ['NO_OUTPUT'] }],
     });
   });
 

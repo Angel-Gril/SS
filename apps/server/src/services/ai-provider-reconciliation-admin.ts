@@ -8,6 +8,8 @@ import {
   aiProviderReconciliationEventData,
   aiProviderReconciliationEventKey,
 } from './ai-provider-reconciliation-events.js';
+import { aiImageSuiteRecoveryAuthorization } from './ai-image-suite-recovery.js';
+import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 
 const UNRESOLVED_STATUSES = ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] as const;
 const LIST_STATUSES = ['ALL', ...UNRESOLVED_STATUSES] as const;
@@ -180,12 +182,12 @@ function include() {
         contextId: true,
         contextSkuKey: true,
         contextSlotKey: true,
+        operation: true,
+        status: true,
+        reviewStatus: true,
+        selectedOutputAssetId: true,
         suiteSlot: {
-          select: {
-            id: true,
-            suiteId: true,
-            suite: { select: { id: true, status: true } },
-          },
+          include: { suite: true },
         },
       },
     },
@@ -241,7 +243,8 @@ function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO
   const identitiesConflict = Boolean(
     jobProviderId && costProviderId && jobProviderId !== costProviderId,
   );
-  const resumeAllowed = (!job.workflowId || isCurrentAttempt(job)) && !identitiesConflict;
+  const resumeAllowed = (!job.workflowId || isCurrentAttempt(job)) && !identitiesConflict
+    && (!job.workflow?.suiteSlot || aiImageSuiteRecoveryAuthorization(job, now) !== null);
   const base: Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> = jobProviderId
     ? (resumeAllowed ? ['RESUME', 'NO_OUTPUT'] : ['NO_OUTPUT'])
     : (costProviderId || job.costReservation?.providerAcceptedAt
@@ -335,6 +338,7 @@ export function createAiProviderReconciliationAdminService(input: {
             job.id,
             `PROVIDER_RECONCILIATION_MANUAL:${requestId}`,
           );
+          const existing = await tx.aiProviderReconciliationEvent.findUnique({ where: { eventKey } });
           const requestedProviderJobId = raw.action === 'RESUME'
             ? required(
               raw.providerJobId || job.providerJobId || job.costReservation?.providerRequestId,
@@ -352,6 +356,12 @@ export function createAiProviderReconciliationAdminService(input: {
             reason,
             providerJobId: requestedProviderJobId,
             providerAcceptedAt: acceptedAt?.toISOString() || null,
+            ...(raw.action === 'RESUME' && job.workflow?.suiteSlot
+              ? existing
+                ? (Object.prototype.hasOwnProperty.call(existing.payload, 'suiteRecovery')
+                  ? { suiteRecovery: existing.payload.suiteRecovery } : {})
+                : { suiteRecovery: aiImageSuiteRecoveryAuthorization(job, now()) }
+              : {}),
           };
           const nextRevision = Number(job.providerReconciliationRevision) + 1;
           const nextStatus = raw.action === 'RESUME'
@@ -368,12 +378,11 @@ export function createAiProviderReconciliationAdminService(input: {
             payload: replayPayload,
             eventDiscriminator: `PROVIDER_RECONCILIATION_MANUAL:${requestId}`,
           });
-          const existing = await tx.aiProviderReconciliationEvent.findUnique({ where: { eventKey } });
           if (existing) {
             const exactReplay = existing.actorUserId === actorUserId
               && existing.jobId === job.id
               && Number(existing.reconciliationRevision) === raw.expectedRevision + 1
-              && existing.payloadHash === reconciliationEvent.payloadHash;
+              && hashAiMediaPlanningJson(existing.payload) === hashAiMediaPlanningJson(reconciliationEvent.payload);
             if (!exactReplay) {
               throw new AiProviderReconciliationAdminError(
                 'IDEMPOTENCY_KEY_CONFLICT',
@@ -463,7 +472,9 @@ export function createAiProviderReconciliationAdminService(input: {
             providerReconciliationStatus: 'PENDING',
             providerReconciliationRevision: nextRevision,
             providerReconciliationNextAt: timestamp,
-            providerReconciliationDeadlineAt: new Date(timestamp.getTime() + MAX_RECONCILIATION_AGE_MS),
+            providerReconciliationDeadlineAt: job.workflow?.suiteSlot
+              ? new Date(aiImageSuiteRecoveryAuthorization(job, timestamp)!.deadlineAt)
+              : new Date(timestamp.getTime() + MAX_RECONCILIATION_AGE_MS),
             providerReconciliationLastErrorCode: null,
             providerReconciliationLastErrorMessage: null,
             providerReconciledAt: null,

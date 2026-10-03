@@ -83,6 +83,25 @@ describe('AI image suite output normalizer', () => {
     expect(result).toMatchObject({ width: 900, height: 1200, mimeType: 'image/png' });
   });
 
+  it('accepts the observed 800x800 Wanx output and preserves the product in the frozen canvas', async () => {
+    const result = await normalizeAiImageSuiteProviderOutput({ buffer: await providerPng(800, 800), mimeType: 'image/png',
+      providerRequest: { width: 1024, height: 1024 } });
+    const decoded = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    expect(decoded.info).toMatchObject({ width: 900, height: 1200, channels: 3 });
+    expect(pixelAt(decoded.data, 900, 3, 450, 149)).toEqual([255, 255, 255]);
+    expect(pixelAt(decoded.data, 900, 3, 450, 150)).toEqual([214, 38, 55]);
+    expect(pixelAt(decoded.data, 900, 3, 450, 1049)).toEqual([214, 38, 55]);
+    expect(pixelAt(decoded.data, 900, 3, 450, 1050)).toEqual([255, 255, 255]);
+  });
+
+  it('rejects neighboring unverified sizes and an 800px output under a portrait request', async () => {
+    for (const [width, height, requestHeight] of [[799, 799, 1024], [801, 801, 1024], [800, 799, 1024], [800, 800, 1536]]) {
+      await expect(normalizeAiImageSuiteProviderOutput({ buffer: await providerPng(width, height), mimeType: 'image/png',
+        providerRequest: { width: 1024, height: requestHeight! } }))
+        .rejects.toEqual(expectNormalizerError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'));
+    }
+  });
+
   it('does not accept square output under a portrait request or an arbitrary new Provider size', async () => {
     await expect(normalizeAiImageSuiteProviderOutput({
       buffer: await providerPng(1024, 1024), mimeType: 'image/png',
