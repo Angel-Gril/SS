@@ -9,6 +9,7 @@
 - 在独立 headed Chrome `9499` 加载签名 Cloud `1.0.406` 原字节；真实商品 `845581683597` 在同一精铺工作台读出 `16 SKU / 26 图片`。通过账户 pairing-code 与 shipped Worker claim 建立仅 DOTH、四项既有 scope 的临时测试设备，未手写凭据或 binding，未复活旧已撤销 session。来源页可信坐标点击重新读取后，正常显示 DOTH 与最新草稿状态。用户原 `9222` 浏览器会话保留。
 - 复核发现新增 catalog 的服务端推荐 owner 最多返回五项，但 shipped 客户端 parser 只允许三项，四至五项会导致整份响应拒绝。修复只把接收上限对齐为五项；展示仍为前三项，六项及非法 match 继续拒绝。最小真实 parser 测试先 RED `invalid category recommendations`，修复后客户端/类目 dialog/套图主按钮 `26/26` GREEN。此修复尚未进入 `1.0.406` 签名原件，必须使用新候选验证，不改写原包或旧证据。
 - 当前新一轮授权的最高 CNY `0.28` 尚未使用，未发送 Provider POST 或 Ozon 写入。真实多商品类目选择、两图套图、审核和草稿应用仍待完成，不能把部署、采集或本地 fixture 等同于完整功能验收。
+- 真实 1.0.407 类目读取还发现第二个合同缺口：服务端返回的完整官方树在既定 2 MiB 响应预算内，但扩展 device transport 对所有普通 JSON 响应仍使用旧 512 KiB 上限，因而安全失败为 `source workbench response is too large`。修复只对 `/source-workbench/editor/catalog` 使用 2 MiB 上限，普通状态/草稿接口仍为 512 KiB；新增独立 transport 回归证明 1.5 MiB 类目响应可读、超过 2 MiB 仍拒绝。该修复尚未进入签名包，必须生成新候选后再继续真实类目与套图验收。
 
 ### 2026-10-03 原版扩展对照与精铺流程继续适配
 

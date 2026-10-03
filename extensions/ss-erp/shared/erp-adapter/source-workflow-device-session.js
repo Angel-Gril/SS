@@ -5,6 +5,11 @@
   var DEFAULT_PUBLISH_REQUEST_TIMEOUT_MS = 30000;
   var DEFAULT_MASK_REQUEST_TIMEOUT_MS = 60000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
+  // The server's bounded official-category projection is capped at 2 MiB
+  // (tree <= 1 MiB plus the surrounding response). Keep ordinary status
+  // reads at 512 KiB while allowing the explicitly bounded catalog route to
+  // carry the complete tree and five recommendations.
+  var MAX_CATEGORY_RESPONSE_BYTES = 2 * 1024 * 1024;
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
   var MAX_PUBLISH_RESPONSE_BYTES = 4 * 1024 * 1024;
   var MAX_PUBLISH_REQUEST_BYTES = 1 * 1024 * 1024;
@@ -688,7 +693,9 @@
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
           }
-          var maximumResponseBytes = path === BYOK_PUBLISH_PREVIEW_PATH
+          var maximumResponseBytes = path === '/api/extension-device/source-workbench/editor/catalog'
+            ? MAX_CATEGORY_RESPONSE_BYTES
+            : path === BYOK_PUBLISH_PREVIEW_PATH
             || path === WORKBENCH_PUBLISH_PREVIEW_PATH
             || browserOneClickJobWriteRequest
             ? MAX_PUBLISH_RESPONSE_BYTES
