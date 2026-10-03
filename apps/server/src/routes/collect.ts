@@ -2588,6 +2588,7 @@ export function buildSourceOzonCategoryCandidates(input: {
     const historyTextScore = categoryTextScore(sourceTerms, {
       categoryName: String(mapping.categoryName || catalog?.categoryNameRu || tree?.categoryName || ''),
       typeName: String(mapping.typeName || catalog?.typeNameRu || tree?.typeName || ''),
+      typeNameZh: catalog?.typeNameZh,
     }, catalog ? [catalog.displayPathZh, catalog.searchText, ...catalog.keywords].join(' ') : '');
     if (genericSignature && historyTextScore <= 0) continue;
     const baseScore = genericSignature
@@ -2604,7 +2605,7 @@ export function buildSourceOzonCategoryCandidates(input: {
   const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);
   for (const row of treeRows) {
     const catalog = catalogByKey.get(sourceOzonCategoryKey(row.categoryId, row.typeId));
-    const textScore = categoryTextScore(sourceTerms, row, catalog ? [catalog.displayPathZh, catalog.searchText, ...catalog.keywords].join(' ') : '');
+    const textScore = categoryTextScore(sourceTerms, { ...row, typeNameZh: catalog?.typeNameZh }, catalog ? [catalog.displayPathZh, catalog.searchText, ...catalog.keywords].join(' ') : '');
     if (!sourceIsAdult && isAdultOzonCategoryCandidate(row)) continue;
     if (textScore <= 0) continue;
     addCandidate(row, 30 + textScore, 'tree_match', ['类目名称相似', '源商品画像'], 0);

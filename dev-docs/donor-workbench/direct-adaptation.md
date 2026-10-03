@@ -2,6 +2,16 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-04 真实采集参考图到托管计划的接线修复
+
+- `cef39186 / 1.0.408` 已签名并完成 COM/CN 标准部署：151 migrations 无待执行项，suite DB guard、current 切换与 `/ready` 通过；COM 保持仅 DOTH hosted pilot，CN dark。官网仍公开 `0d695279 / 1.0.405`，本轮未执行 CAS。1.0.407/408 的 build、backup/restore 和部署原件分别保存在对应私有 `release-*-website`，不改写旧回执。
+- 独立新 profile 加载 1.0.408 后，真实官方 catalog 返回约 `1,057,297` 字节，shipped Worker/client 成功解析 `50` 个首屏条目、`5` 个推荐和 `22` 个树根；在同一工作台选择长袖 T 恤、只读预览官方属性，再通过 editor owner 保存，隔离单 SKU 草稿进入 `ATTRIBUTE_REVIEW/r2/v2`。旧 profile 的重复目录替换与 Worker/资源缓存不一致原件保留；新 profile 的实际模块与接口读回才作为修复验收，不把 manifest 版本当成加载字节证明。
+- “准备套图”真实路径仍暴露素材键接线缺陷：canonical capture 键是 `media:image|product_main|0|https://...`，但 frame/Worker/client/服务端输入合同要求 URL-free ID；原 UI 发送原键被 bridge 静默拒绝后等待 90 秒，服务端只读 current plan 为 null，没有 Provider POST 或费用。当前修复在扩展薄适配将已选择的 canonical 键转换为服务端已有 `media-key-sha256` 投影，plan owner 仅在当前授权候选全集中唯一反解回原键。原 source-media/翻译标识、plan 冻结原键、binding/hash、幂等和权限保持；未知、直接 URL、其他快照/SKU、重复、超量与歧义别名拒绝。
+- 当前真实 precision producer 最小测试先因 `invalid donor reference selection` RED，再 GREEN；独立审查发现 digest 期间双击及 binding 变化，补两项行为 RED（进入两次编译、错误上下文仍 dispatch），修复后 producer 五项全部通过。输入在发送前通过相同 closed contract，非法输入立即 `NOT_SUBMITTED`，不再冒称未知已提交。backend plan owner `57` 项及关联 route/authority/binding `103` 项、主 Agent 综合后端 `228` 项、扩展定向 `19` 项和 donor package verifier 通过；完整精铺 `--byok-flow --translation` 浏览器 fixture PASS，明确是本地模拟外部边界。
+- 实际类目推荐出现长袖 T 恤混入足球制服；共享评分已按官方具体 type 优先、检索别名限权、词项去重、长袖 T 恤/连帽卫衣/收纳盒特征与完整英文性别边界修复。七项 owner 测试先 `6 failed / 1 passed` 再 GREEN；原 Web 与扩展关联 `218` 项通过。推荐仍为候选，由用户明确选择，不自动保存、不展示伪造百分比。
+- 独立审查发现 Web 的两个共享评分调用漏传官方 `typeNameZh`，造成同一“玻璃杯”在 Web 为 risky、扩展为 optional。最小真实 Web helper 回归先 RED，两个薄消费者补齐后，最终后端联合 `229/229` GREEN；不修改 Web 原有选中状态或保存权限。
+- 上述计划接线与排序修复尚待新候选签名部署，再用正常配对设备完成真实两图验收。本轮已创建的旧临时 profile session 已按正常 owner 撤销，不清理用户原浏览器会话。新授权总上限 CNY `0.28` 仍未使用，Ozon 写入为 `0`；不得将当前采集、类目或 fixture 通过写成真实套图/全部功能完成。
+
 ### 2026-10-04 `1.0.406` 双区部署与真实工作台验收接续
 
 - COM/CN 已部署 `26d3fabcd2c2ba77aae1dd3955712e953132b2ac / 1.0.406`，当前提交完整 offline 与两区 canonical VPS verifier 通过，均为 `0 failure / 1 warning`；warning 为既定远端备份未配置。COM 保持 DOTH hosted pilot，CN 保持 direct/RDS dark。官网仍为 `0d695279 / 1.0.405`，未执行新官网 CAS。私有原件在 `release-26d3fabc-website`。

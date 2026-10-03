@@ -60,6 +60,15 @@ import {
 import { buildOzonCategoryCatalog } from '../services/ozon-category-catalog.js';
 
 describe('collect publish helpers', () => {
+  it('uses the official Chinese product type for Web category matching as the extension does', () => {
+    const categoryTree = [{ description_category_id: 100, category_name: 'Посуда', children: [{ type_id: 200, type_name: 'Стакан', children: [] }] }];
+    const categoryCatalog = buildOzonCategoryCatalog(categoryTree).map(entry => ({ ...entry,
+      typeNameZh: '玻璃杯', displayPathZh: '餐具 / 玻璃杯', keywords: ['玻璃杯'], searchText: 'Посуда Стакан 玻璃杯',
+    }));
+    const candidates = buildSourceOzonCategoryCandidates({ item: { title: '玻璃杯', sourcePlatform: '1688' }, categoryTree, categoryCatalog });
+    expect(candidates[0]).toMatchObject({ typeId: 200, label: 'optional' });
+  });
+
   it('scopes legacy Ozon category confirmation history to the current tenant', () => {
     expect(sourceOzonLegacyConfirmedMappingWhere(
       'tenant-a',

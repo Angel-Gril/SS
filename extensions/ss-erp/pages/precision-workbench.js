@@ -9,6 +9,7 @@ import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
 import { createTranslationFlow } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
+import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -71,6 +72,11 @@ let parentOrigin = allowedOrigin(document.referrer);
 function command(type, fields = {}) {
   if (!parentOrigin && type !== 'READY') return Promise.reject(new Error('请从来源商品页打开工作台'));
   const requestId = crypto.randomUUID();
+  const outgoing = { contractVersion: Contract.CONTRACT_VERSION, type, requestId, ...fields };
+  if (type === 'EXECUTE_HOSTED_SUITE') {
+    try { Contract.parseFrameCommand(outgoing); }
+    catch { return Promise.reject(Object.assign(new Error('套图输入未通过校验，请重新读取并检查参考图与创作方向'), { outcome: 'NOT_SUBMITTED' })); }
+  }
   const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION'].includes(type)
     || type === 'PUBLISH' && fields.action === 'CONFIRM';
   const promise = new Promise((resolve, reject) => {
@@ -80,7 +86,7 @@ function command(type, fields = {}) {
     }, 90000);
     pending.set(requestId, { resolve, reject, timer, type, mutation });
   });
-  parent.postMessage({ contractVersion: Contract.CONTRACT_VERSION, type, requestId, ...fields }, parentOrigin || '*');
+  parent.postMessage(outgoing, parentOrigin || '*');
   return promise;
 }
 
@@ -1069,21 +1075,31 @@ async function suiteCommand(action, costConfirmed = false) {
   const draftId = listing().id;
   let creativeBrief;
   let candidateMediaKeys;
+  let referenceSelection;
+  let planBinding;
   const quoteWitness = action === 'START' ? currentQuoteWitness() : undefined;
   if (action === 'CREATE_AND_REVIEW_PLAN') {
     if (promptLockState() || planSubmissionBusy) throw new Error('该草稿已有或正在提交套图计划，请读取并继续现有计划');
     if (visualJsonError) throw new Error(visualJsonError);
     creativeBrief = Prompt.compileCreativeBrief({ prompt: promptText.value, negativePrompt: negativeText.value });
     const eligible = new Set(eligibleReferenceMedia().map((item) => item.key));
-    candidateMediaKeys = [...referenceKeys];
-    if (!candidateMediaKeys.length) throw new Error('请选择至少一张当前草稿的参考图，再准备套图');
-    if (candidateMediaKeys.length > 5 || candidateMediaKeys.some((key) => !eligible.has(key))) throw new Error('参考图与当前草稿不一致，请重新选择');
+    const selectedKeys = [...referenceKeys];
+    if (!selectedKeys.length) throw new Error('请选择至少一张当前草稿的参考图，再准备套图');
+    if (selectedKeys.length > 5 || selectedKeys.some((key) => !eligible.has(key))) throw new Error('参考图与当前草稿不一致，请重新选择');
+    referenceSelection = { selectedKeys, eligible: eligibleReferenceMedia() };
+    planBinding = JSON.stringify(currentEditorBinding());
     planSubmissionBusy = true;
     promptPlanLocks.set(draftId, { status: 'submitting' });
     render();
   }
   log(action === 'CREATE_AND_REVIEW_PLAN' ? '准备 ERP 套图计划' : '提交图片操作');
   try {
+    if (action === 'CREATE_AND_REVIEW_PLAN') {
+      candidateMediaKeys = await compileHostedReferenceSelection(referenceSelection.selectedKeys, referenceSelection.eligible);
+      if (JSON.stringify(currentEditorBinding()) !== planBinding) {
+        throw Object.assign(new Error('草稿已变化，请重新读取后准备套图'), { outcome: 'NOT_SUBMITTED' });
+      }
+    }
     await command('EXECUTE_HOSTED_SUITE', { listingWorkflowId: draftId, action, slotKey: null, decision: null, costConfirmed,
       ...(creativeBrief ? { creativeBrief } : {}),
       ...(quoteWitness ? { quoteWitness } : {}),

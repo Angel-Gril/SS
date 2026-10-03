@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
@@ -132,6 +133,7 @@ function setup(input: {
   enabled?: boolean;
   plan?: AiMediaPlanRecord;
   bindingSkuKeys?: string[];
+  bindingMediaKeys?: string[];
 } = {}) {
   const currentPlan = input.plan ?? plan();
   const seededBinding = createExtensionHostedAiImagePlanBindingRecord({
@@ -139,7 +141,7 @@ function setup(input: {
     identity,
     binding,
     selectedSkuKeys: input.bindingSkuKeys ?? ['sku-1', 'sku-2'],
-    candidateMediaKeys: ['media-1', 'media-2'],
+    candidateMediaKeys: input.bindingMediaKeys ?? ['media-1', 'media-2'],
   });
   const planning = {
     createRuleBased: vi.fn(async (_input: CreateRuleBasedAiMediaPlanningInput) => ({ plan: currentPlan, replayed: false })),
@@ -241,6 +243,79 @@ describe('extension hosted AI image plan service', () => {
       references: [{ candidateId: expect.stringMatching(/^media-key-sha256:[a-f0-9]{64}$/u) }],
     }] } } });
   });
+
+  it('resolves selected source aliases to exact frozen media keys while keeping the public plan URL-free', async () => {
+    const sourceKey = 'media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg';
+    const alias = `media-key-sha256:${createHash('sha256').update(sourceKey).digest('hex')}`;
+    const mediaKeys = [sourceKey, 'media-2'].sort();
+    const current = plan();
+    const fixture = setup({
+      plan: current,
+      authority: authority({ candidateMediaKeys: mediaKeys }),
+      bindingMediaKeys: mediaKeys,
+    });
+    const frozen = current.currentVersion!.inputSnapshot as Record<string, unknown>;
+    frozen.candidates = [{ id: sourceKey }];
+    frozen.referenceSelection = { authorityCandidateMediaHash: fixture.seededBinding.candidateMediaHash };
+    (current.currentVersion!.planPayload as any).slots[0].references = [{ candidateId: sourceKey }];
+
+    const result = await fixture.service.create({
+      identity, binding, idempotencyKey: 'source-alias-selection', candidateMediaKeys: [alias],
+    });
+    expect(fixture.planning.createRuleBased).toHaveBeenCalledWith(expect.objectContaining({
+      candidateMediaKeys: [sourceKey],
+      referenceSelectionScopeHash: fixture.seededBinding.candidateMediaHash,
+    }));
+    expect(fixture.bindings.bind).toHaveBeenCalledWith(fixture.seededBinding);
+    expect(result).toMatchObject({ data: { plan: { currentVersion: { slots: [{
+      references: [{ candidateId: alias }],
+    }] } } } });
+    expect(JSON.stringify(result)).not.toContain('https:');
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      data: { plan: { id: 'plan-1' } },
+    });
+
+    fixture.planning.createRuleBased.mockResolvedValueOnce({ plan: current, replayed: true });
+    await expect(fixture.service.create({
+      identity, binding, idempotencyKey: 'source-alias-replay', candidateMediaKeys: [alias],
+    })).resolves.toMatchObject({ replayed: true });
+    expect(fixture.planning.createRuleBased.mock.calls[1]![0])
+      .toEqual(fixture.planning.createRuleBased.mock.calls[0]![0]);
+  });
+
+  it.each([
+    ['unknown alias', ['media-key-sha256:' + '0'.repeat(64)]],
+    ['other snapshot alias', [`media-key-sha256:${createHash('sha256').update('media:image|product_main|0|https://cbu01.alicdn.com/img/other-snapshot.jpg').digest('hex')}`]],
+    ['unselected SKU alias', [`media-key-sha256:${createHash('sha256').update('media:image|sku_main|1|https://cbu01.alicdn.com/img/other-sku.jpg').digest('hex')}`]],
+    ['raw structured URL', ['media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg']],
+    ['direct URL', ['https://cbu01.alicdn.com/img/source.jpg']],
+    ['over-limit selection', Array.from({ length: 26 }, (_, index) => `media-${index}`)],
+  ])('rejects %s before resolving or invoking planning', async (_label, candidateMediaKeys) => {
+    const sourceKey = 'media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg';
+    const fixture = setup({ authority: authority({ candidateMediaKeys: [sourceKey] }) });
+    await expect(fixture.service.create({
+      identity, binding, idempotencyKey: 'invalid-source-selection', candidateMediaKeys,
+    } as never)).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST' });
+    expect(fixture.planning.createRuleBased).not.toHaveBeenCalled();
+    expect(fixture.bindings.bind).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate or ambiguous source aliases before planning', async () => {
+    const sourceKey = 'media:image|product_main|0|https://cbu01.alicdn.com/img/source.jpg';
+    const alias = `media-key-sha256:${createHash('sha256').update(sourceKey).digest('hex')}`;
+    for (const [mediaKeys, selectedKeys] of [
+      [[sourceKey], [alias, alias]],
+      [[sourceKey, alias], [alias]],
+    ]) {
+      const fixture = setup({ authority: authority({ candidateMediaKeys: mediaKeys }) });
+      await expect(fixture.service.create({
+        identity, binding, idempotencyKey: 'ambiguous-source-selection', candidateMediaKeys: selectedKeys,
+      })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST' });
+      expect(fixture.planning.createRuleBased).not.toHaveBeenCalled();
+      expect(fixture.bindings.bind).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([[], ['media-attacker'], ['media-1', 'media-1'], ['https://private.example'], null].map((value) => [value]))(
     'rejects invalid or ineligible explicit reference keys %j before planning', async (candidateMediaKeys) => {
       const fixture = setup();

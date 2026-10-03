@@ -764,6 +764,7 @@ const requiredDonorWorkbenchFiles = [
   'pages/donor/category-dialog.js',
   'pages/donor/category-dialog.css',
   'pages/donor/suite-primary-action.js',
+  'pages/donor/hosted-reference-selection.js',
   'pages/donor/translation-flow.js',
   'pages/donor/copy-editor.js',
   'pages/donor/official-attribute-editor.js',

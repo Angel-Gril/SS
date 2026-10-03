@@ -237,10 +237,23 @@ function selectedReferenceKeys(value: unknown, eligible: string[]): string[] {
       // eslint-disable-next-line no-control-regex
       || /[\u0000-\u001f\u007f]/u.test(key)
       || /(?:https?|ftp|file|blob|data|javascript|ws|wss):|\b[a-z][a-z0-9+.-]*:\/\/|www\.|[?#]/iu.test(key))
-    || new Set(value).size !== value.length || value.some((key) => !eligible.includes(key))) {
+    || new Set(value).size !== value.length) {
     return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, '所选参考素材不在当前快照的可用范围');
   }
-  return [...value].sort();
+  const candidatesByPublicKey = new Map<string, string | null>();
+  for (const candidate of eligible) {
+    const publicKey = safeCandidateId(candidate);
+    if (publicKey === null) continue;
+    candidatesByPublicKey.set(publicKey, candidatesByPublicKey.has(publicKey) ? null : candidate);
+  }
+  const selected = value.map((key) => {
+    const candidate = candidatesByPublicKey.get(key);
+    if (!candidate) {
+      return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, '所选参考素材不在当前快照的可用范围');
+    }
+    return candidate;
+  });
+  return selected.sort();
 }
 
 function normalizeIdentity(value: ExtensionHostedAiImagePlanIdentity) {
