@@ -11,6 +11,7 @@
 - 精确 `800×800` fallback 的 normalizer 回归先 RED 再 GREEN，邻近 `799/801/800×799` 与 portrait profile 仍拒绝；final 仍 `900×1200 contain PNG`。实际原图宽高现在来自安全 decoder 的 `providerOutput`，不把 800px 原字节错误标为请求的 1024px；原尺寸审计的最小恢复执行测试也 RED→GREEN。
 - 专用恢复复用已有超级管理员 `RESUME` 接口和 Worker reconciliation owner：只对原尺寸失败、同原 task/attempt/fingerprint/owner/预留、原接受期限内、无 final 的 Wanx 单次子任务建立持久授权；SQL 前向迁移只允许有效 lease、同事务不可变恢复审计绑定的 `FAILED → SUCCEEDED`，其余终态保持不可改。不创建新的 job、attempt、预留或 Provider POST；原失败/error 保存在不可变审计，原 CNY `0.14` 只做一次 `RECONCILED_CHARGE`，结果进入 `PENDING` 人工审核。
 - 主 Agent 独立执行全部 `152` migrations 和五项真实 PostgreSQL 测试，证明旧 raw insert owner 实际拒绝、新两槽恢复、越权/过期/错 lease/task/金额/尺寸拒绝、后段触发器故障全量回滚以及完成后的 exact RESUME replay；最终后端定向 `82/82` GREEN，typecheck、ESLint 与独立源码审查通过。当前恢复修复尚未推送/签名/生产迁移；新的质量测试额度问题已询问用户，未将本次授权扩展为额外请求。
+- 来源工作台历史查询原先排除了带 `suiteSlot` 的托管子任务；补齐受当前来源商品约束的 `SUCCEEDED/PARTIAL_FAILURE` 套图分支后，恢复候选可在同一草稿中显示。审核仍需逐槽明确决定，质量不合格候选必须驳回。
 
 ### 2026-10-04 真实采集参考图到托管计划的接线修复
 

@@ -598,8 +598,18 @@ export function createExtensionSourceWorkbenchService(options: {
       ];
       const mediaWhere = {
         ownerUserId,
-        suiteSlot: { is: null },
-        OR: mediaContexts,
+        OR: [
+          { suiteSlot: { is: null }, OR: mediaContexts },
+          // Hosted suite child workflows use the immutable collect context;
+          // expose them to the same source draft history after recovery so the
+          // extension can review the original task result. Ownership, shop,
+          // snapshot and draft binding remain enforced by the suite projection.
+          {
+            suiteSlot: { is: { suite: { status: { in: ['SUCCEEDED', 'PARTIAL_FAILURE'] } } } },
+            contextType: 'collect',
+            contextId: supplyGoodsId,
+          },
+        ],
       } satisfies Prisma.AiMediaWorkflowWhereInput;
       const mediaRows = await client.aiMediaWorkflow.findMany({
         where: mediaWhere,

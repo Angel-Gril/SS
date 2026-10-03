@@ -401,17 +401,11 @@ describe('extension source workbench status service', () => {
     expect(client.aiMediaWorkflow.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         ownerUserId: 'owner-1',
-        suiteSlot: { is: null },
-        OR: [{
-          contextType: 'collect',
-          contextId: 'goods-1',
+        OR: [{ suiteSlot: { is: null }, OR: [{
+          contextType: 'collect', contextId: 'goods-1',
           inputs: { some: { asset: { is: { sourceCaptureSnapshotId: 'snapshot-1' } } } },
-        }, {
-          contextType: 'listing-draft',
-          contextId: 'draft-1',
-          contextDraftRevision: 8,
-          contextDraftVersion: 3,
-        }],
+        }, { contextType: 'listing-draft', contextId: 'draft-1', contextDraftRevision: 8, contextDraftVersion: 3 }] },
+        { suiteSlot: { is: { suite: { status: { in: ['SUCCEEDED', 'PARTIAL_FAILURE'] } } } }, contextType: 'collect', contextId: 'goods-1' }],
       }),
     }));
     expect(client.aiMediaWorkflow.findMany).not.toHaveBeenCalledWith(expect.objectContaining({
