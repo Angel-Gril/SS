@@ -2,6 +2,14 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-04 `1.0.406` 双区部署与真实工作台验收接续
+
+- COM/CN 已部署 `26d3fabcd2c2ba77aae1dd3955712e953132b2ac / 1.0.406`，当前提交完整 offline 与两区 canonical VPS verifier 通过，均为 `0 failure / 1 warning`；warning 为既定远端备份未配置。COM 保持 DOTH hosted pilot，CN 保持 direct/RDS dark。官网仍为 `0d695279 / 1.0.405`，未执行新官网 CAS。私有原件在 `release-26d3fabc-website`。
+- 首次 COM 部署因实际活动设备 session 与旧 expectation 不同失败；核对当前同 owner/DOTH/scopes 后，未激活 release 可恢复移入 `failed-releases`，再由标准入口部署成功。CN 原部署已经完成，后续重复部署被锁/release 保护拒绝，未覆盖既有 release；最终 current、三服务与完整 VPS evidence 已确认。
+- 在独立 headed Chrome `9499` 加载签名 Cloud `1.0.406` 原字节；真实商品 `845581683597` 在同一精铺工作台读出 `16 SKU / 26 图片`。通过账户 pairing-code 与 shipped Worker claim 建立仅 DOTH、四项既有 scope 的临时测试设备，未手写凭据或 binding，未复活旧已撤销 session。来源页可信坐标点击重新读取后，正常显示 DOTH 与最新草稿状态。用户原 `9222` 浏览器会话保留。
+- 复核发现新增 catalog 的服务端推荐 owner 最多返回五项，但 shipped 客户端 parser 只允许三项，四至五项会导致整份响应拒绝。修复只把接收上限对齐为五项；展示仍为前三项，六项及非法 match 继续拒绝。最小真实 parser 测试先 RED `invalid category recommendations`，修复后客户端/类目 dialog/套图主按钮 `26/26` GREEN。此修复尚未进入 `1.0.406` 签名原件，必须使用新候选验证，不改写原包或旧证据。
+- 当前新一轮授权的最高 CNY `0.28` 尚未使用，未发送 Provider POST 或 Ozon 写入。真实多商品类目选择、两图套图、审核和草稿应用仍待完成，不能把部署、采集或本地 fixture 等同于完整功能验收。
+
 ### 2026-10-03 原版扩展对照与精铺流程继续适配
 
 - 已在独立 Chrome 中加载用户原版 `C:\Users\550W\Downloads\jp20260803`，对 1688 商品 `845581683597`、`990499606077`、`1048072018093` 做真实页面只读采集：分别读回 16/35/1 个 SKU，采集耗时约 42/36/54ms，Provider/Ozon/ERP mutation 均为 0。原版的快速采集主要由扩展本地 DOM/内嵌商品模型完成，不依赖 ERP 抓取商品。

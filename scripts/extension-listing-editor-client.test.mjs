@@ -30,6 +30,23 @@ test('category catalog transports an exact readonly preview and retains the offi
   assert.deepEqual(JSON.parse(JSON.stringify(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand(command))),command);
 });
 
+test('category catalog accepts all five server recommendations and rejects excess or invalid entries', async () => {
+  const recommendations = Array.from({ length: 5 }, (_, index) => ({
+    categoryId: 10 + index, typeId: 20 + index, label: '服装 / 类目 ' + index,
+    match: 'recommended', reasons: ['源商品画像'],
+  }));
+  let data = { catalogRevision: 'catalog-1', entries: [], total: 0, truncated: false, recommendations };
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: {
+    get: async () => {}, post: async () => ({ state: 'response', body: { code: 1, data } }),
+  } });
+  const result = await client.readDraftCatalog({ binding, query: '' });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.catalog.recommendations)), recommendations);
+  data = { ...data, recommendations: [...recommendations, { ...recommendations[0], typeId: 99 }] };
+  await assert.rejects(client.readDraftCatalog({ binding, query: '' }), /invalid category recommendations/u);
+  data = { ...data, recommendations: [{ ...recommendations[0], match: 'automatic' }] };
+  await assert.rejects(client.readDraftCatalog({ binding, query: '' }), /invalid category recommendations/u);
+});
+
 test('editor preserves only server-bound ordered publish media and bounded readiness fields', async () => {
   const readiness = { ...editor, stage: 'MEDIA_REVIEW', validation: { status: 'STALE' }, blockers: [],
     freshness: { category: 'CURRENT', attributes: 'CURRENT', content: 'CURRENT', media: 'CURRENT', pricing: 'CURRENT', validation: 'STALE' },

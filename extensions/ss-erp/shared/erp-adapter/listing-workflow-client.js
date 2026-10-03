@@ -1389,7 +1389,7 @@
           });};
           if(!validTree(data.tree,0)||typeof data.treeTruncated!=='boolean')throw new Error('invalid catalog tree');
         }
-        if(data.recommendations!==undefined&&(!Array.isArray(data.recommendations)||data.recommendations.length>3
+        if(data.recommendations!==undefined&&(!Array.isArray(data.recommendations)||data.recommendations.length>5
           ||!data.recommendations.every(function(leaf){return record(leaf)&&Number.isSafeInteger(leaf.categoryId)&&leaf.categoryId>0&&Number.isSafeInteger(leaf.typeId)&&leaf.typeId>0&&text(leaf.label,1000)&&['recommended','optional','risky'].includes(leaf.match)&&Array.isArray(leaf.reasons)&&leaf.reasons.length<=10&&leaf.reasons.every(function(reason){return text(reason,1000);});})))throw new Error('invalid category recommendations');
         if(data.attributePreview!==undefined){var workspace={schemaRevision:data.attributePreview.schemaRevision,fields:data.attributePreview.fields,values:[]};
           if(!preview||data.attributePreview.categoryId!==preview.categoryId||data.attributePreview.typeId!==preview.typeId||data.attributePreview.catalogRevision!==preview.catalogRevision||!validAttributeWorkspace(workspace))throw new Error('invalid category attribute preview');}

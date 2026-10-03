@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 精铺类目候选 `1.0.406` 已双区部署，真实功能验收继续
+
+COM/CN 已运行 `26d3fabc / 1.0.406`，当前提交 offline 与两区 canonical VPS evidence 通过；官网仍为 `0d695279 / 1.0.405`。独立真实浏览器已采集 `16 SKU / 26 图片` 并通过正常 owner 配对连接 DOTH。接续检查发现后台五个类目推荐与扩展三项接收限制不一致，最小修复已完成 RED→GREEN，需进入新候选。部署恢复、真实输入路径与费用边界仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-04-10406-双区部署与真实工作台验收接续)；新授权 CNY 0.28 尚未使用，不宣称真实套图或全部功能完成。
+
 ## 2026-10-03 `0d695279 / 1.0.405` 工作台修复双区官网公开发布完成
 
 COM/CN 应用、官网 latest 与四个 Cloud/Local ZIP 均已绑定 `0d695279369e8fcb4cf71563c4d8a8510b580481 / 1.0.405`。正式 QA04、新双区 VPS/canary、website approval、CAS、匿名完整下载与最终 publication verifier 均通过；整页滚动、类目显式选择、编辑入口和 BYOK 注册恢复已进入公开包，生产图片翻译仍按服务端准入显示不可用。当前证据与限制只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-03-10405-双区官网公开发布完成)，公开日志见根目录 `CHANGELOG.md`。本轮没有新增 Provider/Ozon 请求或费用，临时 canary 设备与 CN account sessions 已清理。
