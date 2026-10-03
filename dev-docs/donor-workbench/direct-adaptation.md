@@ -2,6 +2,24 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-03 `1.0.405` 双区官网公开发布完成
+
+- 最终运行和公开候选绑定 `0d695279369e8fcb4cf71563c4d8a8510b580481 / 1.0.405`，包含 `93bc0879` 的工作台修复和 QA04 会话生命周期校验。`1.0.404` 保留为已签名部署、未公开候选，不列入已发布 CHANGELOG；本次公开变更按 Keep a Changelog 1.1.0 移入 `[1.0.405] - 2026-10-03`。
+- 54 项 QA04 owner 回归、当前提交完整原生 offline（server `6433 passed / 331 skipped`、PostgreSQL scope `7`、AI media PostgreSQL `203`、升级回放、lint/typecheck/build/Cloud/Local verifier）通过。首次隔离 checkout 的 CRLF 源码正则失败及一次受控中断留作原件；最终完整回执来自同提交的干净主 checkout，未伪造或拼接日志。正式 QA04 SHA-256 为 `7890c01b51d072fc0c68522ef7242bd83d77201f835cfa75f0d58cb0bebf4082`。
+- 原 `58cc814e` suite/START/CONTINUE/审核/assignment/费用/replay 原件保持；执行源码 bridge 通过，当前全 owner pending 五项为零，原 suite 两条 assignment 和零 Ozon 写入已只读核验。历史期间发生合法 device session 更换；当前 session 被独立核验为同 owner、仅 DOTH 与四项既有 scope。controller v2 接受设备数量不增长且其他 authority 字段全量相等，不把数量变化冒称原设备集合的纯撤销收缩，也不宣称新 session 执行过原套图。`targetUiProductionVerified=false` 与原质量限制保持。
+- COM pilot/CN direct-RDS 均已标准部署，151 migrations 无待执行项、DB guard、三服务、本机/公网 `/ready` 通过。运行时与部署备份目录保持分离，新提交部署备份/临时恢复 COM `144`、CN `143` 表通过并清理。发布后正式 VPS verifier 两区均 `0 failure / 1 warning`，唯一 warning 为既定未配置远端备份。
+
+| 发布证据 SHA-256 | COM | CN |
+| --- | --- | --- |
+| Release signature | `c90ac242f0818ed2e938d689b02e18b18428dad131637a6a47b065ea1949f7c5` | `55b7b64355e1eab45ef8e99975b780a120e213dff2d81547fde422bedac2818b` |
+| REL-04 canary | `ace49f3c7f08447c9ca46f54ab103a863c8236a9b36cdbab352ca58caa506392` | `5c292d1f8d9d5f1f232d9fe15b34bd2a81f4ab151d3ad91514c0020539779ee1` |
+| Website approval | `5a707c2e373f223359d0d67e2b907c89a7683f35228fd8f48daba25f32040995` | `0c7da2ffd18e5777df2378b362d8a32a2294c447946f206078eec17a6221ef48` |
+| Distribution receipt | `94217a92792207b606435a5668e7d41f9d49a128b93c8093c0b98f9c98450703` | `0f0a475567451079ea9c8feb9561e534dd73fe7e1387006cd4717218e9054c80` |
+| Post-publication VPS | `28409169d185f22bc46545e817d77b2a5476e7537692c9d2c49de056128edff7` | `7cdcf153dfc4a4f7449cea4bc4c69fea63a17cd0e3c9b803e3e96c90f28cd43f` |
+
+- 双区官网 CAS 均 `ACTIVATED`，精确旧 approval 摘要分别为 `39c7a8a3…cef6e5022` 与 `d8a03171…1ee9423f4`。匿名完整 ZIP 下载、版本/commit/批准/字节 SHA-256 与最终 publication verifier 全部通过。COM 首地址连接超时保留失败事实，随后使用同份新鲜 Google/Cloudflare DNS quorum 中的另一公网地址 `172.67.140.112` 固定 transport，通过全部原有 TLS/同源/拒绝跳转/大小/30 秒边界；没有放宽超时或替换为元数据检查。
+- 私有原件位于 `C:\Users\550W\AppData\Local\SS-ERP\private\release-0d695279-website`。canary 临时设备由原 owner 清理；CN 两个临时 account Redis sessions 已撤销，远端三个本轮凭据文件和本机四份 token 副本已删除，现有用户浏览器会话保留。本轮 Provider/Ozon 请求与新增费用均 `0`。生产图片翻译仍未开放；官网公开不等于该能力及剩余 precision 真实 Provider/BYOK/Ozon 全链已验收。
+
 ### 2026-10-03 官网 `1.0.404` 发布前置的会话生命周期校验
 
 当前目标仍为官网公开工作台修复。`58cc814e → 93bc0879` 的正式执行源码比对通过；controller v2 的原套图记录 `deviceCount=2`，当前合法设备只读记录为 `1`，其他 owner/shop/operations/rollout/source-policy 字段相同。原校验错误地把会话过期或撤销导致的收缩当作配置变化。T2 新回归先 RED 后修复：仅后续 target cleanup 允许正数设备数量减少，其他投影字段保持全量精确相等；设备增加/零设备、店铺、操作和策略变化继续拒绝，原 v1 执行仍要求全部相等。未补配对或改写原套图原件；该校验修复需冻结新提交、新候选及部署后再消费正式发布证据。

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-03 `0d695279 / 1.0.405` 工作台修复双区官网公开发布完成
+
+COM/CN 应用、官网 latest 与四个 Cloud/Local ZIP 均已绑定 `0d695279369e8fcb4cf71563c4d8a8510b580481 / 1.0.405`。正式 QA04、新双区 VPS/canary、website approval、CAS、匿名完整下载与最终 publication verifier 均通过；整页滚动、类目显式选择、编辑入口和 BYOK 注册恢复已进入公开包，生产图片翻译仍按服务端准入显示不可用。当前证据与限制只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-03-10405-双区官网公开发布完成)，公开日志见根目录 `CHANGELOG.md`。本轮没有新增 Provider/Ozon 请求或费用，临时 canary 设备与 CN account sessions 已清理。
+
 ## 2026-10-03 `fdee8103 / 1.0.403` 精铺默认入口双区公开发布完成
 
 COM/CN 应用、官网 latest 和四个 Cloud/Local ZIP 均已绑定 `fdee810303d1216d2f587d4c09c9a9f59766abed / 1.0.403`。正式 QA04、新的双区 canonical VPS evidence、REL-04 canary、website approval、CAS、匿名完整下载和最终 publication verifier 已通过；来源页默认打开直接复用的精铺工作台，旧采集/生图/上架安装包入口已清理，利润/物流等独立功能保留。当前证据、CF 登录边界与未覆盖功能只维护在[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-03-精铺默认入口签名部署与官网发布)。本轮没有新增 Provider/Ozon 请求或费用；新授权的最高 CNY 0.28 未使用。
