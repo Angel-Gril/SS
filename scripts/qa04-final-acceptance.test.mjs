@@ -1103,6 +1103,12 @@ test('suite v2 rejects queue retention ambiguity, restricted pilot drift, and ma
   }
 });
 
+test('original execution control still rejects device-count changes', t => {
+  const f = historicalRestrictedSuiteFixture(t);
+  f.change(f.input.normalErp.controllerStatus, value => { value.after.result.deviceCount = 1; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
 test('suite separates later target-runtime cleanup from immutable original execution evidence', t => {
   const f = historicalRestrictedSuiteFixture(t);
   const previous = f.get(f.input.normalErp.controllerStatus);
@@ -1121,6 +1127,20 @@ test('suite separates later target-runtime cleanup from immutable original execu
     after: { ...previous.after, gitCommit: f.targetGitCommit, observedAt: '2026-09-16T11:30:00.000Z' } };
   f.input.normalErp.controllerStatus = f.put('current-cleanup-controller.json', controller);
   assert.equal(f.verify().report.provenance.normalErp.executionCommit, f.executionGitCommit);
+  f.change(f.input.normalErp.controllerStatus, value => { value.after.result.deviceCount = 1; });
+  assert.equal(f.verify().report.provenance.normalErp.configurationRestored, true,
+    'later cleanup may have fewer valid devices without changing the pilot authority');
+  for (const mutate of [value => { value.after.result.deviceCount = 3; },
+    value => { value.after.result.deviceCount = 0; },
+    value => { value.after.result.allowedOperations.push('FULL_EDIT'); },
+    value => { value.after.result.shopIds.push('another-shop'); },
+    value => { value.after.result.rolloutRevision++; },
+    value => { value.after.result.sourcePolicyRevision = 'another-policy'; }]) {
+    const original = f.get(f.input.normalErp.controllerStatus);
+    f.change(f.input.normalErp.controllerStatus, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(f.input.normalErp.controllerStatus, f.put('current-cleanup-controller.json', original));
+  }
   for (const mutate of [value => { value.pending.recovery = 1; },
     value => { value.gitCommit = f.executionGitCommit; },
     value => { value.readOnly = false; },

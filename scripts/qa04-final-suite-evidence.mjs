@@ -323,11 +323,19 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       return value;
     };
     const beforePilot = pilot(controller.before, commit), afterPilot = pilot(controller.after, cleanupCommit);
+    // Account/device sessions may expire or be revoked between execution and a
+    // later maintenance readback. Keep every authority field identical and
+    // reject growth; the original execution controller remains exact.
+    const pilotAuthority = value => Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'deviceCount'));
+    const samePilot = targetCleanup
+      ? afterPilot.result.deviceCount <= beforePilot.result.deviceCount
+        && equal(pilotAuthority(beforePilot.result), pilotAuthority(afterPilot.result))
+      : equal(beforePilot.result, afterPilot.result);
     check((controller.schemaVersion === 1 || targetCleanup) && controller.gitCommit === cleanupCommit && controller.version === afterPilot.version
       && controller.region === 'COM' && controller.ownerSha256 === owner && controller.currency === 'CNY'
       && controller.maximumTaskCostCents === 28 && controller.configurationChanged === false
       && equal(controller.pending, expectedPending)
-      && equal(beforePilot.result, afterPilot.result)
+      && samePilot
       && time(beforePilot.observedAt) <= time(binding.launchedAt)
       && time(afterPilot.observedAt) >= time(applied.at));
     if (targetCleanup) {
