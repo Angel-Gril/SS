@@ -259,8 +259,10 @@ describe('extension source media history service', () => {
     expect(serialized).not.toContain('other.example');
     expect(client.aiMediaWorkflow.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
-        ownerUserId: 'owner-1', suiteSlot: { is: null }, contextType: 'listing-draft',
-        contextId: 'listing-1', contextDraftRevision: 11, contextDraftVersion: 7,
+        ownerUserId: 'owner-1', OR: expect.arrayContaining([
+          expect.objectContaining({ suiteSlot: { is: null }, contextType: 'listing-draft',
+            contextId: 'listing-1', contextDraftRevision: 11, contextDraftVersion: 7 }),
+        ]),
       }),
       take: 2,
     }));

@@ -774,16 +774,18 @@ export function createExtensionSourceWorkbenchService(options: {
       const rows = await client.aiMediaWorkflow.findMany({
         where: {
           ownerUserId,
-          suiteSlot: { is: null },
-          contextType: 'listing-draft',
-          contextId: listingWorkflowId,
-          contextDraftRevision: revision,
-          contextDraftVersion: draftVersion,
+          OR: [{
+            suiteSlot: { is: null }, contextType: 'listing-draft', contextId: listingWorkflowId,
+            contextDraftRevision: revision, contextDraftVersion: draftVersion,
+          }, {
+            suiteSlot: { is: { suite: { status: { in: ['SUCCEEDED', 'PARTIAL_FAILURE'] } } } },
+            contextType: 'collect', contextId: supplyGoodsId,
+          }],
           ...(cursor ? {
-            OR: [
+            AND: [{ OR: [
               { updatedAt: { lt: cursor.updatedAt } },
               { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
-            ],
+            ] }],
           } : {}),
         } satisfies Prisma.AiMediaWorkflowWhereInput,
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
