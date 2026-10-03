@@ -6,6 +6,8 @@ import { createOfficialAttributeEditor } from './donor/official-attribute-editor
 import { createCopyEditor } from './donor/copy-editor.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
 import { createByokEditor } from './donor/byok-editor.js';
+import { createCategoryPicker } from './donor/category-picker.js';
+import { createTranslationFlow } from './donor/translation-flow.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -19,6 +21,10 @@ let selectedSkuKey = '';
 let editorSignature = '';
 let editorRenderOwner = '';
 let mediaSignature = '';
+let candidateSignature = '';
+let skuSelectSignature = '';
+let shopSelectSignature = '';
+let byokRegistrationContext = '';
 let drafts = [];
 let sourceReady = false;
 let userPromptEdited = false;
@@ -43,8 +49,11 @@ let editorLoadKey = '';
 let editorLoading = false;
 let saveBusy = false;
 let lastSave = null;
-let catalog = null;
+let imageMode = 'ai-suite';
+let translationAvailability = { binding: '', state: 'idle', available: false, reason: '' };
 const referenceKeys = new Set();
+const translationKeys = new Set();
+let translationSelectionContext = '';
 const pending = new Map();
 const events = [];
 function allowedOrigin(value) {
@@ -202,6 +211,23 @@ for (const [id, label] of [['precision-plan', '准备套图'], ['precision-gener
 }
 const candidates = make('div', 'precision-candidates');
 element('image-queue').append(mediaToolbar, suiteActions, library, promptArea, candidates);
+const translationPanel = make('section', 'precision-translation-panel');
+translationPanel.id = 'precision-translation-panel'; translationPanel.hidden = true;
+const translationState = make('p'); translationState.id = 'precision-translation-state'; translationState.setAttribute('role', 'status');
+translationPanel.append(make('strong', '', '翻译已勾选的图片 · 中文 → 俄文'), make('p', '', '仅翻译图片中的文字；每次最多 5 张，原图保留。'), translationState);
+const translationProgress = make('div', 'precision-translation-progress'); translationPanel.append(translationProgress);
+const translationRefresh = make('button', 'ghost', '重新检查翻译可用性'); translationRefresh.id = 'precision-translation-refresh'; translationPanel.append(translationRefresh);
+library.before(translationPanel);
+const translation = createTranslationFlow({
+  getContext: () => { const draft = listing(); return draft && { snapshotId: projection.handoff?.snapshotId, shopId: draft.shopId, listingWorkflowId: draft.id, draftRevision: draft.revision, draftVersion: draft.draftVersion }; },
+  getSelectedMedia: () => eligibleReferenceMedia().filter(item => translationKeys.has(item.key)),
+  submit: fields => command('CREATE_TRANSLATION', fields),
+  onState: view => {
+    translationState.textContent = view.error || (view.busy ? '正在提交所选图片…' : view.queuedCount ? `${view.queuedCount} 张已提交，处理结果可在图片任务中重新读取。` : '勾选下方图片后，点击开始翻译。');
+    translationProgress.replaceChildren(...view.items.map(item => make('span', '', `图片 ${eligibleReferenceMedia().findIndex(media => media.key === item.sourceMediaKey) + 1} · ${{SUBMITTING:'提交中',QUEUED:'已提交',UNKNOWN:'待核对',FAILED:'未提交'}[item.status]}`)));
+    renderImageMode();
+  },
+});
 function precisionByokBinding() {
   const draft = listing();
   const handoff = projection.handoff;
@@ -219,16 +245,58 @@ const byok = createByokEditor({ root: element('ui-scale-root'), container: eleme
   openSession: async (value) => (await command('OPEN_EMBEDDED_MEDIA', value)).data,
   getBusy: () => projection.busy || saveBusy || mediaMutationBusy || publishBusy,
   onBound: async () => { await command('REFRESH'); }, report,
-  onModeChange: (value) => { suiteActions.hidden = candidates.hidden = value === 'byok'; promptArea.hidden = value === 'byok'; } });
+  onModeChange: () => renderImageMode() });
 const byokMode = make('label');
 const byokRadio = make('input'); byokRadio.type = 'radio'; byokRadio.name = 'image-workflow-mode'; byokRadio.value = 'byok';
 byokMode.append(byokRadio, make('span', '', '自带 API')); element('image-workflow-mode').append(byokMode);
 document.querySelector('input[name="image-workflow-mode"][value="ai-suite"]').closest('label').querySelector('span').textContent = 'ERP 托管套图';
 document.querySelectorAll('input[name="image-workflow-mode"]').forEach((input) => input.addEventListener('change', () => {
-  if (input.checked) byok.setMode(input.value);
+  if (input.checked) { imageMode = input.value; byok.setMode(imageMode); renderMedia(); }
 }));
+function renderImageMode() {
+  suiteActions.hidden = promptArea.hidden = imageMode !== 'ai-suite';
+  candidates.hidden = imageMode === 'byok';
+  translationPanel.hidden = imageMode !== 'translate';
+  translateImage.hidden = imageMode !== 'translate';
+  const button = element('image-workflow-start-btn');
+  button.textContent = imageMode === 'translate' ? (translation.state().busy ? '提交翻译中…' : '开始翻译所选图片')
+    : imageMode === 'byok' ? '连接自带 API' : '开始处理套图';
+  button.disabled = !listing() || projection.busy || mediaMutationBusy || translation.state().busy || translation.state().unknown
+    || (imageMode === 'translate' && !translationAvailability.available);
+  translateImage.disabled = button.disabled;
+  translationRefresh.disabled = translationAvailability.state === 'loading' || translation.state().busy;
+  if (imageMode === 'translate') {
+    if (listing() && projection.handoff) {
+      const identity = JSON.stringify(currentEditorBinding());
+      if (identity !== translationAvailability.binding) void readTranslationAvailability();
+    }
+    if (!translation.state().busy && !translation.state().error && !translationAvailability.available) translationState.textContent = translationAvailability.state === 'loading'
+      ? '正在核对当前草稿的图片翻译状态…' : translationAvailability.reason || '请先创建当前店铺草稿';
+  }
+  document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { if (input.value !== 'ai-main-translate') input.disabled = translation.state().busy; });
+}
+async function readTranslationAvailability(force = false) {
+  const draft = listing(); if (!draft) return;
+  const binding = JSON.stringify(currentEditorBinding());
+  if (!force && translationAvailability.binding === binding) return;
+  const requestState = { binding, state: 'loading', available: false, reason: '' }; translationAvailability = requestState;
+  renderImageMode();
+  try {
+    const response = await command('CHECK_TRANSLATION', { listingWorkflowId: draft.id });
+    if (translationAvailability !== requestState || binding !== JSON.stringify(currentEditorBinding())) return;
+    const data = response.data;
+    if (!data || typeof data.available !== 'boolean') throw new Error('图片翻译状态暂不可用，请重新读取');
+    translationAvailability = { binding, state: 'ready', available: data.available,
+      reason: data.available ? '' : ({ MEDIA_PROVIDER_NOT_ALLOWED: '当前环境尚未开放图片翻译。', MEDIA_CREATE_DISABLED: 'ERP 当前关闭了图片翻译。', AI_MEDIA_OPERATION_DISABLED: 'ERP 当前关闭了图片翻译。', MEDIA_STORAGE_NOT_READY: '图片存储暂不可用，请稍后重新读取。' }[data.reasonCode] || '当前草稿的图片翻译不可用，请核对 ERP 图片设置后重新读取。') };
+  } catch (error) {
+    if (translationAvailability !== requestState) return;
+    translationAvailability = { binding, state: 'error', available: false, reason: error.message || '图片翻译状态读取失败，请重新读取' };
+  }
+  renderImageMode();
+}
+trusted('precision-translation-refresh', () => readTranslationAvailability(true));
 const localNotice = make('div', 'precision-local-fields');
-const editorState = make('span', '', '创建 ERP 草稿后可分别保存售价、货号、包装与类目；复制行仍待接线。');
+const editorState = make('span', '', '编辑售价、货号和实测包装参数后，保存到当前店铺草稿。');
 const currency = make('select'); currency.id = 'editor-currency'; currency.setAttribute('aria-label', '售价币种');
 currency.append(...['CNY', 'RUB'].map((value) => { const option = make('option', '', value); option.value = value; return option; }));
 function renderCurrencyLabels() {
@@ -248,14 +316,41 @@ element('product-editor').after(localNotice);
 const categoryModal = make('div', 'settings-modal'); categoryModal.id = 'editor-category-modal'; categoryModal.hidden = true;
 const categoryDialog = make('div', 'settings-dialog');
 const categoryHead = make('div', 'settings-head'); categoryHead.append(make('div', 'settings-title', '选择 Ozon 类目'));
-const categoryClose = make('button', 'ghost', '关闭'); categoryClose.addEventListener('click', () => { categoryModal.hidden = true; }); categoryHead.append(categoryClose);
+const categoryClose = make('button', 'ghost', '关闭'); categoryClose.id = 'editor-category-close';
+categoryClose.addEventListener('click', () => { categoryPicker.close(); categoryModal.hidden = true; element('category-select-btn').focus(); }); categoryHead.append(categoryClose);
 const categoryBody = make('div', 'settings-body');
-const search = make('input'); search.id = 'editor-category-query'; search.placeholder = '输入商品或类目名称';
+const search = make('input'); search.id = 'editor-category-query'; search.placeholder = '搜索 Ozon 类目，例如：T恤、收纳盒'; search.setAttribute('aria-label', '搜索 Ozon 类目');
 const searchButton = make('button', 'ghost', '搜索'); searchButton.id = 'editor-category-search';
 const categorySelect = make('select'); categorySelect.id = 'editor-category-select'; categorySelect.setAttribute('aria-label', 'Ozon 官方类目');
 const categorySave = make('button', 'primary', '确认类目'); categorySave.id = 'editor-category-save';
 categorySave.disabled = true;
-categoryBody.append(search, searchButton, categorySelect, categorySave); categoryDialog.append(categoryHead, categoryBody); categoryModal.append(categoryDialog); element('ui-scale-root').append(categoryModal);
+const categorySearchRow = make('div', 'precision-category-search'); categorySearchRow.append(search, searchButton);
+const categoryNotice = make('p', 'precision-category-state'); categoryNotice.id = 'editor-category-status'; categoryNotice.setAttribute('role', 'status');
+const categoryLabel = make('label', 'field', 'Ozon 官方商品类目'); categoryLabel.append(categorySelect);
+categoryBody.append(categorySearchRow, categoryNotice, categoryLabel, categorySave); categoryDialog.append(categoryHead, categoryBody); categoryModal.append(categoryDialog); element('ui-scale-root').append(categoryModal);
+let categoryOptionsSignature = '';
+const categoryPicker = createCategoryPicker({ getBinding: currentEditorBinding,
+  loadCatalog: async (binding, query) => {
+    const response = await command('EDITOR_CATALOG', { binding, listingWorkflowId: binding.listingWorkflowId, query });
+    return response.data?.catalog;
+  }, onState: view => {
+    categoryNotice.textContent = view.message;
+    searchButton.disabled = view.status === 'loading'; searchButton.textContent = view.status === 'loading' ? '读取中…' : '搜索';
+    categorySelect.disabled = view.status !== 'ready'; categorySave.disabled = !view.canSave || saveBusy;
+    const signature = JSON.stringify([view.entries, view.catalogRevision]);
+    if (signature !== categoryOptionsSignature) {
+      categoryOptionsSignature = signature;
+      const placeholder = make('option', '', view.status === 'loading' ? '正在读取…' : '请选择与商品匹配的类目'); placeholder.value = '';
+      categorySelect.replaceChildren(placeholder, ...view.entries.map((entry, index) => { const option = make('option', '', entry.label); option.value = String(index); return option; }));
+    }
+    categorySelect.value = view.selected ? String(view.entries.findIndex(entry => entry.categoryId === view.selected.categoryId && entry.typeId === view.selected.typeId)) : '';
+  },
+});
+categorySelect.addEventListener('change', () => {
+  const view = categoryPicker.state();
+  categoryPicker.select(categorySelect.value === '' ? null : view.entries[Number(categorySelect.value)]);
+});
+search.addEventListener('keydown', event => { if (event.isTrusted && event.key === 'Enter' && !searchButton.disabled) { event.preventDefault(); void searchCategories().catch(report); } });
 const attributes = createOfficialAttributeEditor({
   root: element('ui-scale-root'), send: command, getEditor: currentEditorForPublish, getBinding: currentEditorBinding,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), onSave: (value) => saveEditor('ATTRIBUTES', value),
@@ -497,7 +592,7 @@ async function loadEditor() {
     const response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
     acceptEditor(response.data?.editor);
     editorState.textContent = editor.fieldIssues?.length ? editor.fieldIssues.map((item) => item.message).join(' ')
-      : '售价、货号和包装参数分别保存到 ERP；复制行仍待接线。';
+      : '修改后请分别保存价格与货号、包装参数。';
   } finally { editorLoading = false; }
 }
 async function saveEditor(action, value, replay = false) {
@@ -576,20 +671,14 @@ trusted('editor-packaging-save-btn', () => {
 });
 trusted('editor-replay-btn', () => lastSave ? saveEditor(lastSave.action, lastSave.value, true) : undefined);
 async function searchCategories() {
-  categorySave.disabled = true;
-  const binding = currentEditorBinding();
-  const response = await command('EDITOR_CATALOG', { binding, listingWorkflowId: binding.listingWorkflowId, query: search.value.trim() });
-  catalog = response.data?.catalog;
-  if (!catalog || !Array.isArray(catalog.entries)) throw new Error('Ozon 类目目录读取失败');
-  categorySelect.replaceChildren(...catalog.entries.map((entry, index) => { const option = make('option', '', entry.label); option.value = String(index); return option; }));
-  categorySave.disabled = !catalog.entries.length;
-  if (!catalog.entries.length) status('未找到匹配类目，请调整关键词', 'warn');
+  await categoryPicker.search(search.value);
 }
 trusted('editor-category-search', searchCategories);
 trusted('editor-category-save', async () => {
-  const selected = catalog?.entries[Number(categorySelect.value)];
+  const selected = categoryPicker.selection();
   if (!selected) throw new Error('请选择官方 Ozon 类目');
-  await saveEditor('CATEGORY', { categoryId: selected.categoryId, typeId: selected.typeId, catalogRevision: catalog.catalogRevision });
+  await saveEditor('CATEGORY', selected);
+  categoryPicker.close();
   categoryModal.hidden = true;
 });
 
@@ -672,8 +761,9 @@ async function reviewCandidate(workflowId, outputId, decision) {
   const { draft, billing, history } = currentMediaContext();
   const item = history?.items.find((candidate) => candidate.id === workflowId);
   const output = item?.outputs.find((candidate) => candidate.id === outputId);
-  if (!draft || !billing || !item || !output || item.status !== 'SUCCEEDED'
-    || item.reviewStatus !== 'PENDING' || item.application) throw new Error('候选或草稿已变化，请重新读取状态');
+  if (!draft || !item || !output || item.status !== 'SUCCEEDED'
+    || item.reviewStatus !== 'PENDING' || item.application
+    || (!billing && item.operation !== 'IMAGE_TRANSLATE')) throw new Error('候选或草稿已变化，请重新读取状态');
   const slot = suiteSlotForItem(billing, item);
   if (slot) {
     if (!suiteCandidateCanReview(slot, item, output)) throw new Error('当前套图槽不允许审核，请重新读取状态');
@@ -780,6 +870,12 @@ function renderMedia() {
   const media = eligibleReferenceMedia(skus);
   const eligible = new Set(media.map((item) => item.key));
   for (const key of referenceKeys) if (!eligible.has(key)) referenceKeys.delete(key);
+  for (const key of translationKeys) if (!eligible.has(key)) translationKeys.delete(key);
+  const translationTarget = listing() ? `${projection.handoff?.snapshotId}:${listing().shopId}:${listing().id}` : '';
+  if (imageMode === 'translate' && translationTarget && translationTarget !== translationSelectionContext) {
+    translationSelectionContext = translationTarget;
+    translationKeys.clear(); media.slice(0, 5).forEach(item => translationKeys.add(item.key));
+  }
   if (!referenceSelectionInitialized && media.length) {
     media.slice(0, 4).forEach((item) => referenceKeys.add(item.key));
     referenceSelectionInitialized = true;
@@ -791,7 +887,7 @@ function renderMedia() {
     media.forEach((item) => {
       const tile = make('div', `precision-source-tile${referenceKeys.has(item.key) ? ' is-selected' : ''}`);
       tile.dataset.referenceKey = item.key;
-      const image = make('img');
+      const image = make('img'); image.decoding = 'async';
       image.src = item.url;
       image.alt = roleLabel(item.role);
       image.referrerPolicy = 'no-referrer';
@@ -802,16 +898,18 @@ function renderMedia() {
       check.checked = referenceKeys.has(item.key);
       check.setAttribute('aria-label', `选择${roleLabel(item.role)}`);
       check.addEventListener('change', () => {
-        if (check.disabled || promptLockState() || planSubmissionBusy) {
-          check.checked = referenceKeys.has(item.key);
+        const selectedKeys = imageMode === 'translate' ? translationKeys : referenceKeys;
+        if (check.disabled || (imageMode !== 'translate' && promptLockState()) || planSubmissionBusy) {
+          check.checked = selectedKeys.has(item.key);
           return;
         }
-        if (check.checked && referenceKeys.size >= 5) {
-          check.checked = false; status('最多选择 5 张参考图', 'warn'); return;
+        if (check.checked && selectedKeys.size >= 5) {
+          check.checked = false; status(imageMode === 'translate' ? '每次最多选择 5 张翻译图片' : '最多选择 5 张参考图', 'warn'); return;
         }
-        if (check.checked) referenceKeys.add(item.key); else referenceKeys.delete(item.key);
+        if (check.checked) selectedKeys.add(item.key); else selectedKeys.delete(item.key);
         tile.classList.toggle('is-selected', check.checked);
-        compilePrompt();
+        if (imageMode !== 'translate') compilePrompt();
+        renderImageMode();
       });
       const open = make('button', 'ghost preview-button', '预览');
       open.addEventListener('click', () => preview.open({ id: item.key }));
@@ -820,11 +918,16 @@ function renderMedia() {
     });
   }
   library.querySelectorAll('input[type="checkbox"]').forEach((check) => {
-    check.disabled = Boolean(promptLockState()) || planSubmissionBusy || projection.busy;
+    const keys = imageMode === 'translate' ? translationKeys : referenceKeys;
+    check.checked = keys.has(check.closest('.precision-source-tile').dataset.referenceKey);
+    check.closest('.precision-source-tile').classList.toggle('is-selected', check.checked);
+    check.disabled = (imageMode !== 'translate' && Boolean(promptLockState())) || planSubmissionBusy || projection.busy || translation.state().busy;
   });
-  skuSelect.replaceChildren(...skus.map((sku) => {
-    const option = make('option', '', sku.label); option.value = sku.key; return option;
-  }));
+  const nextSkuSignature = JSON.stringify(skus.map(sku => [sku.key, sku.label]));
+  if (nextSkuSignature !== skuSelectSignature) {
+    skuSelectSignature = nextSkuSignature;
+    skuSelect.replaceChildren(...skus.map((sku) => { const option = make('option', '', sku.label); option.value = sku.key; return option; }));
+  }
   if (!skus.some((sku) => sku.key === selectedSkuKey)) selectedSkuKey = skus[0]?.key || '';
   skuSelect.value = selectedSkuKey;
   const context = currentMediaContext();
@@ -836,20 +939,28 @@ function renderMedia() {
   element('precision-generate').disabled = mediaBusy || !quote?.previewHash || Boolean(billing?.suite);
   element('precision-continue').disabled = mediaBusy || !billing?.suite;
   element('precision-assign').disabled = mediaBusy || !assignableSuiteSlots(context).length;
-  candidates.replaceChildren();
+  const nextCandidateSignature = JSON.stringify([context.draft?.id, context.history?.items, billing?.suite?.slots]);
+  if (candidateSignature !== nextCandidateSignature) {
+  candidateSignature = nextCandidateSignature;
+  const existingCandidates = new Map([...candidates.querySelectorAll('.precision-candidate')].map(card => [`${card.dataset.candidateWorkflow}:${card.dataset.candidateOutput}`, card]));
+  const nextCandidates = [];
   for (const item of context.history?.items || []) {
     const slot = suiteSlotForItem(billing, item);
     for (const output of item.outputs) {
-      const card = make('article', 'precision-candidate');
+      const card = existingCandidates.get(`${item.id}:${output.id}`) || make('article', 'precision-candidate');
       card.dataset.candidateWorkflow = item.id;
       card.dataset.candidateOutput = output.id;
-      const image = make('img'); image.src = output.url; image.alt = '候选图'; image.referrerPolicy = 'no-referrer';
-      image.addEventListener('click', () => preview.open({ id: `candidate:${output.id}` }));
+      let image = card.querySelector('img');
+      if (!image) {
+        image = make('img'); image.src = output.url; image.alt = '候选图'; image.referrerPolicy = 'no-referrer'; image.decoding = 'async';
+        image.addEventListener('click', () => preview.open({ id: `candidate:${output.id}` }));
+      } else if (image.getAttribute('src') !== output.url) image.src = output.url;
       const reviewLabel = item.reviewStatus === 'APPROVED' && item.selectedOutputAssetId !== output.id
         ? '历史候选 · 未选用' : reviewStatusLabel(item.reviewStatus);
-      card.append(image, make('p', '', reviewLabel));
-      const canReview = billing && (slot ? suiteCandidateCanReview(slot, item, output)
-        : item.status === 'SUCCEEDED' && item.reviewStatus === 'PENDING' && !item.application);
+      card.replaceChildren(image, make('p', '', reviewLabel));
+      const canReview = slot ? suiteCandidateCanReview(slot, item, output)
+        : item.status === 'SUCCEEDED' && item.reviewStatus === 'PENDING' && !item.application
+          && (Boolean(billing) || item.operation === 'IMAGE_TRANSLATE');
       if (canReview) {
         for (const [decision, label] of [['APPROVE', '通过'], ['REJECT', '驳回']]) {
           const button = make('button', 'ghost', label);
@@ -866,17 +977,25 @@ function renderMedia() {
       if (item.selectedOutputAssetId === output.id && item.application) {
         card.append(make('p', '', item.application.state === 'APPLIED' ? '已应用到草稿' : '已撤回应用'));
       }
-      candidates.append(card);
+      nextCandidates.push(card);
     }
   }
+  candidates.replaceChildren(...nextCandidates);
+  }
+  candidates.querySelectorAll('button').forEach(button => { button.disabled = mediaBusy; });
   compilePrompt();
   renderPromptState();
+  renderImageMode();
 }
 function render() {
   band.firstChild.textContent = projection.source.title || '正在读取商品';
   band.lastChild.textContent = `${projection.source.platform} · ${projection.skus.length} SKU · ${projection.media.length} 张图`;
   const select = element('erp-shop-select');
-  select.replaceChildren(...projection.shops.map((shop) => { const option = make('option', '', shop.name); option.value = shop.id; return option; }));
+  const nextShopSignature = JSON.stringify(projection.shops.map(shop => [shop.id, shop.name]));
+  if (shopSelectSignature !== nextShopSignature) {
+    shopSelectSignature = nextShopSignature;
+    select.replaceChildren(...projection.shops.map((shop) => { const option = make('option', '', shop.name); option.value = shop.id; return option; }));
+  }
   if (!projection.shops.some((shop) => shop.id === selectedShopId)) selectedShopId = projection.shops[0]?.id || '';
   select.value = selectedShopId;
   element('store-switch-btn').textContent = projection.shops.find((shop) => shop.id === selectedShopId)?.name || '选择店铺';
@@ -901,6 +1020,7 @@ function render() {
   replaySave.disabled = projection.busy || saveBusy;
   attributes.renderState();
   copyEditor.sync();
+  categoryPicker.syncBinding();
   validate.disabled = !currentEditorForPublish() || !attributes.currentSchemaRevision() || projection.busy || saveBusy || Boolean(lastSave);
   copyOpen.disabled = !listing() || projection.busy || saveBusy;
   const validationEditor = currentEditorForPublish();
@@ -910,6 +1030,11 @@ function render() {
   if (binding && binding !== editorLoadKey && !projection.busy && !session.isActive() && !editorLoading && !saveBusy) {
     editorLoadKey = binding;
     void loadEditor().catch(report);
+  }
+  const registrationContext = JSON.stringify([projection.source.sourceProductId, projection.shops.map(shop => shop.id)]);
+  if (projection.shops.length && registrationContext !== byokRegistrationContext && !byok.state().registered) {
+    byokRegistrationContext = registrationContext;
+    void byok.initialize();
   }
   schedulePolling();
 }
@@ -933,6 +1058,7 @@ function schedulePolling() {
 }
 
 trusted('start-btn', async () => {
+  if (listing()) { element('product-editor').scrollIntoView({ block: 'start' }); status('继续编辑当前店铺草稿'); return; }
   log('读取来源商品并选择 SKU');
   const selectedShopAtStart = selectedShopId;
   const draft = await session.start({ shopId: selectedShopAtStart, selectSkus: async (raw) => {
@@ -950,11 +1076,19 @@ trusted('start-btn', async () => {
 });
 trusted('store-switch-btn', () => openModal('shop-modal'));
 trusted('shop-confirm-btn', () => { selectedShopId = element('erp-shop-select').value; element('shop-modal').hidden = true; render(); });
-trusted('settings-btn', () => copyEditor.open());
+trusted('settings-btn', () => {
+  const draft = listing(); const info = element('basic-info');
+  const values = [['商品标题', projection.source.title], ['来源平台', projection.source.platform], ['来源类目', projection.source.categoryName || '未提供'],
+    ['当前店铺', projection.shops.find(shop => shop.id === selectedShopId)?.name || '未选择'], ['已选 SKU', String(draftSkuChoices().length)], ['来源图片', String(projection.media.length)], ['店铺草稿', draft ? '已创建' : '尚未创建']];
+  info.replaceChildren(...values.map(([label, value]) => { const row = make('div', 'field'); row.append(make('label', '', label), make('div', '', value)); return row; }));
+  openModal('basic-modal');
+});
 trusted('category-select-btn', async () => {
   if (!listing()) throw new Error('请先开始执行并创建草稿');
   if (!editor) await loadEditor();
   categorySave.disabled = true;
+  categoryPicker.open();
+  if (!search.value.trim()) search.value = projection.source.categoryName.slice(0, 100);
   openModal('editor-category-modal');
   await searchCategories();
 });
@@ -962,7 +1096,7 @@ for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () =>
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
-trusted('erp-refresh-btn', async () => { await command('REFRESH'); status('商品与草稿状态已刷新'); });
+trusted('erp-refresh-btn', async () => { await command('REFRESH'); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品与草稿状态已刷新'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });
 async function suiteCommand(action, costConfirmed = false) {
   if (!listing()) throw new Error('请先开始执行并创建 ERP 草稿');
@@ -1018,6 +1152,7 @@ trusted('precision-assign', () => runMediaMutation(async () => {
   log('ERP 已确认图片应用结果');
 }));
 trusted('image-workflow-start-btn', async () => {
+  if (imageMode === 'translate') { await startTranslation(); return; }
   if (byokRadio.checked) { await byok.readMediaState(); return; }
   if (!projection.billing.quote) return suiteCommand('CREATE_AND_REVIEW_PLAN');
   if (projection.billing.suite) { status('已有套图任务，请查看过程或审核结果'); return; }
@@ -1026,14 +1161,17 @@ trusted('image-workflow-start-btn', async () => {
   if (confirm(`生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。确认开始？`)) await suiteCommand('START', true);
 });
 trusted('precision-image-translate', async () => {
-  const draft = listing(); if (!draft) throw new Error('请先创建当前店铺草稿');
-  const item = projection.media.find((media) => media.scope === 'PRODUCT' || !media.skuKeys.length)
-    || eligibleReferenceMedia()[0];
-  if (!item) throw new Error('当前草稿没有可翻译的来源图片');
-  await command('CREATE_TRANSLATION', { listingWorkflowId: draft.id, sourceMediaKey: item.key });
-  status('图片翻译任务已进入 ERP 队列。', 'ok');
-  await command('REFRESH');
+  await startTranslation();
 });
+async function startTranslation() {
+  if (!translationAvailability.available || translationAvailability.binding !== JSON.stringify(currentEditorBinding())) throw new Error(translationAvailability.reason || '请先核对当前草稿的图片翻译状态');
+  const count = eligibleReferenceMedia().filter(item => translationKeys.has(item.key)).length;
+  if (!count) throw new Error('请勾选要翻译的来源图片');
+  if (!confirm(`翻译已勾选的 ${count} 张图片中的中文文字为俄文，原图保留。确认提交 ERP 图片翻译？`)) return;
+  const view = await translation.start();
+  status(`${view.queuedCount} 张翻译图片已提交，可重新读取处理状态。`, 'ok');
+  await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing().id });
+}
 trusted('confirm-export-btn', openPublish);
 trusted('pricing-tool-btn', () => { element('product-editor').scrollIntoView({ block: 'center' }); status('填写售价、折扣前价与货号，再点击保存价格与货号。'); });
 window.addEventListener('message', (event) => {
@@ -1045,6 +1183,9 @@ window.addEventListener('message', (event) => {
       selectedDraftSkuKeys = null; selectedDraftShopId = ''; referenceKeys.clear(); referenceSelectionInitialized = false; userPromptEdited = false; mediaStateBinding = '';
       promptText.value = ''; negativeText.value = ''; visualJson.value = ''; visualJsonError = '';
       editor = null; editorLoadKey = '';
+      translation.reset(); byok.invalidate(); byokRegistrationContext = '';
+      translationKeys.clear(); translationSelectionContext = '';
+      translationAvailability = { binding: '', state: 'idle', available: false, reason: '' };
       attributes.reset();
       copyEditor.reset();
       unsavedListingFields.clear(); publishEditRevision += 1; invalidatePublishPreview('来源商品已变化，请重新预览上传。');
@@ -1074,8 +1215,8 @@ createUiScaleController().init();
 element('language-select').disabled = true;
 document.querySelectorAll('input[name="image-workflow-mode"]').forEach((radio) => {
   radio.checked = radio.value === 'ai-suite';
-  radio.disabled = !['ai-suite', 'byok'].includes(radio.value);
-  if (radio.disabled) radio.closest('label').title = '此流程仍待接线';
+  radio.disabled = !['translate', 'ai-suite', 'byok'].includes(radio.value);
+  if (radio.disabled) { radio.closest('label').title = '主图与图片翻译的连续处理暂不可用，请分别选择套图或仅翻译'; radio.closest('label').querySelector('span').textContent = 'AI主图+翻译（暂不可用）'; }
 });
 element('plugin-version').textContent = 'SS ERP 接口适配版';
 render();

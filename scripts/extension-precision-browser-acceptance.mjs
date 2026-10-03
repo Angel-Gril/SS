@@ -162,8 +162,9 @@ function parentHtml() {
     let result;
     let candidateId;
     let replayed=false;
+    if(command.type==='CHECK_TRANSLATION')result={available:window.__precisionTranslationDenied!==true,reasonCode:window.__precisionTranslationDenied?'MEDIA_PROVIDER_NOT_ALLOWED':'READY'};
     if(command.type==='CREATE_TRANSLATION'){
-      result={state:'completed',replay:false,operation:'IMAGE_TRANSLATE',workflowId:'translation-fixture',status:'QUEUED',revision:1};
+      result={state:'completed',replay:false,operation:'IMAGE_TRANSLATE',workflowId:'translation-fixture-'+command.sourceMediaKey,status:'QUEUED',revision:1};
     }
     if(command.type==='OPEN_EMBEDDED_MEDIA'){
       window.__precisionByokLaunch(command.preferredSkuKey);
@@ -419,7 +420,7 @@ async function run() {
   let cdp;
   let diagnose;
   const child = spawn(chromeExecutable(), [
-    '--headless=new', '--user-data-dir=' + profile, '--remote-debugging-port=0',
+    '--headless=new', '--window-size=1440,1100', '--user-data-dir=' + profile, '--remote-debugging-port=0',
     '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
     '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions',
     '--host-resolver-rules=MAP * ~NOTFOUND', 'about:blank',
@@ -500,6 +501,15 @@ async function run() {
       summary.screenshots.push(file);
     };
     await screenshot('donor-workspace');
+    if (process.argv.includes('--usability-only')) {
+      assert.equal(await workspace('document.querySelector("input[name=image-workflow-mode][value=translate]").disabled'), false,
+        'translation must have its own usable image workflow instead of a permanently disabled donor button');
+      await click('input[name="image-workflow-mode"][value="translate"] + span');
+      await until(() => workspace('document.getElementById("precision-translation-state").textContent.includes("请先创建")'), 'translation before draft shows prerequisite instead of throwing');
+      assert.equal(await workspace('document.getElementById("image-workflow-start-btn").disabled'), true);
+      assert.deepEqual(await workspace('parent.__precisionScriptErrors||[]'), []);
+      await click('input[name="image-workflow-mode"][value="ai-suite"] + span');
+    }
     await click('#start-btn');
     await until(() => workspace('document.getElementById("sku-picker").hidden===false'), 'original donor SKU picker');
     assert.equal(await workspace('document.querySelectorAll(".sku-picker-item").length'), 16);
@@ -518,11 +528,73 @@ async function run() {
     assert.ok(await workspace('document.querySelector(".editor-table-spec").textContent.includes("颜色 1")'));
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
+    if (process.argv.includes('--usability-only')) {
+      const outer = await workspace('(()=>{const e=document.querySelector(".content");return{overflowY:window.getComputedStyle(e).overflowY,height:e.clientHeight,total:e.scrollHeight};})()');
+      assert.equal(outer.overflowY, 'auto', 'the whole workbench content must scroll');
+      assert.ok(outer.total > outer.height, 'the full editor/image content has an outer scroll range');
+      await workspace('document.querySelector(".content").scrollTop=0');
+      const wheelPoint = await workspace('(()=>{const r=document.querySelector(".content").getBoundingClientRect();return{x:r.left+3,y:r.top+r.height/2};})()');
+      const toolbarTop = await workspace('document.querySelector(".toolbar").getBoundingClientRect().top');
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...wheelPoint });
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      summary.wheelBefore = await workspace(`(()=>{const e=document.querySelector('.content');return{left:e.getBoundingClientRect().left,top:e.getBoundingClientRect().top,scrollTop:e.scrollTop,total:e.scrollHeight,height:e.clientHeight,hit:document.elementFromPoint(${wheelPoint.x},${wheelPoint.y})?.className};})()`);
+      await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...wheelPoint, deltaX: 0, deltaY: 350 });
+      await until(() => workspace('document.querySelector(".content").scrollTop>0'), 'actual mouse wheel scrolls the complete workbench');
+      assert.equal(await workspace('document.querySelector(".toolbar").getBoundingClientRect().top'), toolbarTop, 'toolbar stays available during body scroll');
+      await screenshot('usability-outer-scroll');
+      const before = await evaluate('window.__precisionCommands.filter(c=>["COLLECT","CREATE_DRAFT"].includes(c.type)).length');
+      await click('#start-btn');
+      await pause(150);
+      assert.equal(await workspace('document.getElementById("sku-picker").hidden'), true, 'continue editing must not reopen SKU collection');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>["COLLECT","CREATE_DRAFT"].includes(c.type)).length'), before);
+      await click('#settings-btn');
+      await until(() => workspace('document.getElementById("basic-modal").hidden===false'), 'basic information opens its original modal');
+      assert.equal(await workspace('document.getElementById("basic-info").textContent.includes("长袖上衣")'), true);
+      await click('[data-close-modal="basic-modal"]');
+      await click('#category-select-btn');
+      await until(() => workspace('document.getElementById("editor-category-select").options.length>1'), 'category choices and explicit placeholder');
+      assert.equal(await workspace('document.getElementById("editor-category-save").disabled'), true, 'an arbitrary first official category is never approved automatically');
+      await screenshot('usability-category');
+      await click('#editor-category-close');
+      await click('input[name="image-workflow-mode"][value="translate"] + span');
+      await until(() => workspace('document.getElementById("precision-translation-panel").hidden===false'), 'translation mode panel');
+      assert.equal(await workspace('document.getElementById("precision-prompt-text").closest(".precision-prompt").hidden'), true, 'translation must hide hosted generation prompts');
+      assert.equal(await workspace('document.getElementById("precision-byok-generation").hidden'), true);
+      if (process.argv.includes('--translation-denied')) {
+        await evaluate('window.__precisionTranslationDenied=true');
+        await click('#erp-refresh-btn');
+        await pause(200);
+        assert.equal(await workspace('document.getElementById("image-workflow-start-btn").disabled'), true, 'a disabled production translation provider is shown as unavailable before any mutation');
+        assert.equal(await workspace('document.getElementById("precision-image-translate").disabled'), true, 'the secondary translation button obeys the same readiness');
+        assert.match(await workspace('document.getElementById("precision-translation-state").textContent'), /未开放|未开启/u);
+        assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="CREATE_TRANSLATION"||c.type==="EXECUTE_HOSTED_SUITE")'), false);
+        await screenshot('usability-translation-disabled');
+        summary.usability = { translationProviderDisabled: true, translationPosts: 0, suitePosts: 0 };
+        summary.ok = true;
+        await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+        return;
+      }
+      if (!await workspace('document.querySelector("[data-reference-key=image-7] input").checked')) await click('[data-reference-key=image-7] input');
+      await click('#image-workflow-start-btn');
+      await until(() => workspace('document.getElementById("precision-translation-state").textContent.includes("3 张已提交")'), 'selected images reach translation owner and the bounded batch completes');
+      const translated = await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION")');
+      assert.equal(translated.length, 3);
+      assert.deepEqual(translated.map(c=>c.sourceMediaKey), ['image-0','image-1','image-7']);
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="EXECUTE_HOSTED_SUITE")'), false, 'translation never falls into suite generation');
+      await screenshot('usability-translation');
+      await click('#image-workflow-start-btn');
+      await pause(150);
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION").length'), 3, 'queued translations are not submitted again');
+      summary.usability = { outerContentScroll: true, continueDoesNotRecollect: true, explicitCategorySelection: true, translationCommands: 3, suiteCommands: 0 };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      return;
+    }
     const byokEditMode = process.argv.includes('--byok-edit-inpaint') ? 'INPAINT'
       : process.argv.includes('--byok-edit-full') ? 'FULL_EDIT'
         : process.argv.includes('--byok-edit-quick') ? 'IMAGE_TO_IMAGE' : '';
     if (byokEditMode) {
-      await click('input[name=image-workflow-mode][value=byok]');
+      await click('input[name=image-workflow-mode][value=byok] + span');
       await click('#precision-byok-config');
       await until(() => workspace('document.getElementById("precision-byok-config-modal").hidden===false'), 'BYOK edit profile opens');
       await replaceText('#precision-byok-name', '参考图测试接口');
@@ -574,6 +646,7 @@ async function run() {
       await send('Input.insertText', { text: value });
     }
     async function replaceText(selector, value) {
+      await until(() => workspace(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});return node&&!node.disabled&&!node.readOnly&&node.getClientRects().length>0;})()`), 'editable control: ' + selector);
       await click(selector);
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
@@ -645,7 +718,10 @@ async function run() {
     await click('#editor-save-btn');
     await until(() => workspace('document.querySelector(".precision-local-fields").textContent.includes("ERP 已保存价格")'), 'unsaved pricing can be committed separately');
     await click('#category-select-btn');
-    await until(() => workspace('document.getElementById("editor-category-save").disabled===false'), 'official category options');
+    await until(() => workspace('document.getElementById("editor-category-select").options.length>1'), 'official category options');
+    assert.equal(await workspace('document.getElementById("editor-category-save").disabled'), true, 'an explicit selection is required even for a single match');
+    await workspace('(()=>{const e=document.getElementById("editor-category-select");e.value="0";e.dispatchEvent(new Event("change",{bubbles:true}));})()');
+    await until(() => workspace('document.getElementById("editor-category-save").disabled===false'), 'explicit official category choice');
     await click('#editor-category-save');
     await until(() => workspace('document.getElementById("editor-category-modal").hidden===true'), 'category saved without leaving the workbench');
     const categorySave = await evaluate('window.__precisionCommands.find(command=>command.type==="EDITOR_SAVE"&&command.action==="CATEGORY")');
@@ -767,7 +843,7 @@ async function run() {
     assert.ok(await workspace('document.getElementById("preview-image").src.endsWith("/suite-output-1.png")'));
     await screenshot('pending-suite-preview');
     await click('#preview-close-btn');
-    await click('input[name=image-workflow-mode][value=byok]');
+    await click('input[name=image-workflow-mode][value=byok] + span');
     await until(() => workspace('document.getElementById("precision-byok-config")?.disabled===false'), 'registered private API configuration');
     await click('#precision-byok-config');
     await until(() => workspace('document.getElementById("precision-byok-config-modal")?.hidden===false'), 'same-window provider configuration');
@@ -791,7 +867,7 @@ async function run() {
     await click('#precision-byok-clear-key');
     await until(() => workspace('document.getElementById("precision-byok-config-state").textContent.includes("已清除")'), 'session key cleared');
     await click('#precision-byok-config-close');
-    await click('input[name=image-workflow-mode][value=ai-suite]');
+    await click('input[name=image-workflow-mode][value=ai-suite] + span');
     await click('[data-suite-slot-key=slot-1][data-review-decision=APPROVE]');
     await click('[data-suite-slot-key=slot-1][data-review-decision=APPROVE]');
     await until(() => workspace('document.querySelector("[data-candidate-output=suite-output-1]")?.textContent.includes("已通过")'), 'slot owner approved readback');
@@ -825,7 +901,7 @@ async function run() {
     await replaceText('input[data-row-index="1"][data-field-key="包装高度，毫米"]', '61');
     await until(() => workspace(`!document.querySelector(${JSON.stringify('[data-field-key=official-201][data-row-index="1"]')}).disabled`), 'official copy-related field ready');
     await replaceText('[data-field-key=official-201][data-row-index="1"]', 'Для спальни');
-    await click('#settings-btn');
+    await click('#ai-translation-process-btn');
     await until(() => workspace('document.getElementById("precision-copy-modal")?.hidden===false'), 'same-window manual Russian copy');
     await replaceText('#precision-copy-title', 'Товар для дома');
     await replaceText('#precision-copy-description', 'Для хранения вещей.');
@@ -839,7 +915,7 @@ async function run() {
     assert.equal(copyCreates.length, 2);
     assert.equal(copyCreates[0].operationKey, copyCreates[1].operationKey);
     assert.deepEqual(copyCreates[0].value, copyCreates[1].value);
-    await click('#settings-btn');
+    await click('#ai-translation-process-btn');
     await until(() => workspace('document.querySelectorAll("[data-copy-candidate]").length===1&&document.querySelector("[data-copy-candidate]").disabled===false'), 'manual copy saved as pending review');
     assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EDITOR_SAVE"&&command.action==="COPY_APPROVE")'), false, 'creating copy cannot implicitly approve it');
     await click('[data-copy-candidate]');
@@ -848,12 +924,12 @@ async function run() {
     await screenshot('manual-copy-preview');
     await click('#precision-copy-close');
     await evaluate('window.__precisionSetCopySourceCurrent(false)');
-    await click('#settings-btn');
+    await click('#ai-translation-process-btn');
     await until(() => workspace('document.querySelector("[data-copy-candidate]")?.textContent.includes("来源已变化")'), 'stale copy source readback');
     assert.equal(await workspace('document.getElementById("precision-copy-approve").disabled'), true, 'stale source candidates cannot be approved');
     await click('#precision-copy-close');
     await evaluate('window.__precisionSetCopySourceCurrent(true)');
-    await click('#settings-btn');
+    await click('#ai-translation-process-btn');
     await until(() => workspace('document.querySelector("[data-copy-candidate]")?.disabled===false'), 'current copy source readback');
     await click('[data-copy-candidate]');
     await click('#precision-copy-approve');
@@ -940,7 +1016,7 @@ async function run() {
     await screenshot('publish-receipt');
     await click('#precision-publish-close');
     if (false && process.argv.includes('--byok-edit') && !process.argv.includes('--byok-flow')) {
-      await click('input[name=image-workflow-mode][value=byok]');
+      await click('input[name=image-workflow-mode][value=byok] + span');
       await click('#precision-byok-config');
       await until(() => workspace('document.getElementById("precision-byok-config-modal").hidden===false'), 'BYOK edit profile opens');
       await replaceText('#precision-byok-name', '参考图测试接口');
@@ -970,10 +1046,10 @@ async function run() {
       assert.equal(editCallTypes.includes('ss-erp:ai-image-workbench-edit-preview'), true);
       assert.equal(editCallTypes.includes('ss-erp:ai-image-workbench-edit-review'), true);
       summary.byokEdit = { operation: 'IMAGE_TO_IMAGE', sourceMediaKey: 'image-0', candidatePreviewed: true, reviewHandoff: true };
-      await click('input[name=image-workflow-mode][value=ai-suite]');
+      await click('input[name=image-workflow-mode][value=ai-suite] + span');
     }
     if (process.argv.includes('--byok-flow')) {
-      await click('input[name=image-workflow-mode][value=byok]');
+      await click('input[name=image-workflow-mode][value=byok] + span');
       await click('#precision-byok-config');
       await until(() => workspace('document.getElementById("precision-byok-config-modal").hidden===false'), 'BYOK configuration reopens');
       await replaceText('#precision-byok-key', 'ss-erp-fixture-private-secret-sentinel');
@@ -1018,16 +1094,17 @@ async function run() {
       await screenshot('byok-single-bound');
       summary.byokSingle = { scope: 'NATIVE_RUNTIME_STUB_LOCAL_FIXTURE', sourceLaunches: 1, simulatedProviderDispatches: 1,
         simulatedIngestRequests: 1, explicitReviews: 1, blobDecoded: true, unknownGenerationReadback: true, unknownIngestReadback: true, receiptId: 'byok-receipt-fixture' };
-      await click('input[name=image-workflow-mode][value=ai-suite]');
+      await click('input[name=image-workflow-mode][value=ai-suite] + span');
     }
     if (process.argv.includes('--translation')) {
+      await click('input[name="image-workflow-mode"][value="translate"] + span');
+      await until(() => workspace('document.getElementById("image-workflow-start-btn").disabled===false'), 'translation readiness readback');
       await click('#precision-image-translate');
-      await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="CREATE_TRANSLATION")'), 'translation owner command');
-      const translationCommand = await evaluate('window.__precisionCommands.find(command=>command.type==="CREATE_TRANSLATION")');
-      assert.equal(translationCommand.listingWorkflowId, 'draft-fixture');
-      assert.equal(translationCommand.sourceMediaKey, 'image-0');
-      assert.equal(await workspace('document.getElementById("status-text").textContent.includes("图片翻译任务已进入")'), true);
-      summary.translation = { ownerCommand: 'CREATE_TRANSLATION', sourceMediaKey: 'image-0', replaySafe: true };
+      await until(() => workspace('document.getElementById("status-text").textContent.includes("3 张翻译图片已提交")'), 'selected translation batch submitted');
+      const translationCommands = await evaluate('window.__precisionCommands.filter(command=>command.type==="CREATE_TRANSLATION")');
+      assert.deepEqual(translationCommands.map(command=>command.listingWorkflowId), ['draft-fixture', 'draft-fixture', 'draft-fixture']);
+      assert.deepEqual(translationCommands.map(command=>command.sourceMediaKey), ['image-0', 'image-1', 'image-7']);
+      summary.translation = { ownerCommand: 'CREATE_TRANSLATION', sourceMediaKeys: ['image-0', 'image-1', 'image-7'], replaySafe: true };
     }
     const commands = await evaluate('window.__precisionCommands');
     const mutationCommands = commands.filter((command) => ['COLLECT', 'CREATE_DRAFT'].includes(command.type));
@@ -1063,7 +1140,7 @@ async function run() {
     await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
   } finally {
     if (!summary.ok && diagnose) {
-      try { await writeFile(path.join(artifacts, 'failure.json'), JSON.stringify(await diagnose(), null, 2)); console.error('Failure diagnostics: ' + path.join(artifacts, 'failure.json')); } catch {}
+      try { await writeFile(path.join(artifacts, 'failure.json'), JSON.stringify({ ...(await diagnose()), wheelBefore: summary.wheelBefore }, null, 2)); console.error('Failure diagnostics: ' + path.join(artifacts, 'failure.json')); } catch {}
     }
     if (cdp) { try { await cdp.send('Browser.close'); } catch {} }
     if (child.exitCode === null) child.kill();

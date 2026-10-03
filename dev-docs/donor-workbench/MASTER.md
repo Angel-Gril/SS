@@ -31,3 +31,5 @@ The user has corrected the direction to direct adaptation of the original `jp202
 ## Next Steps
 
 The default entry cutover and public distribution are complete. Keep backend permission and payment authority intact, then address A2.1 duplicated-SKU persistence and the remaining donor-specific A3 live flow, other-platform collector and translation/BYOK/Ozon acceptance. Public distribution and historical hosted-suite evidence do not close those separate functionality checks.
+
+The 2026-10-03 usability follow-up is closed locally: outer workbench scrolling, native table wheel behavior, explicit category selection, independent translation mode/readiness, recoverable BYOK registration, and same-window edit entry behavior are covered by the current owner tests and isolated Chrome fixture. Production image translation remains gated by the server readiness owner and is displayed as unavailable when that gate is closed; this follow-up has no release or deployment evidence.

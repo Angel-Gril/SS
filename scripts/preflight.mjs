@@ -325,7 +325,12 @@ const steps = [
   {
     name: 'extension donor workbench shell contract',
     command: 'node',
-    args: ['--test', 'scripts/extension-donor-workbench-shell.test.mjs', 'scripts/extension-precision-workflow.test.mjs', 'scripts/extension-precision-byok-flow.test.mjs', 'scripts/extension-precision-byok-edit-flow.test.mjs', 'scripts/extension-donor-1688-capture.test.mjs', 'scripts/extension-listing-editor-client.test.mjs'],
+    args: ['--test', 'scripts/extension-donor-workbench-shell.test.mjs', 'scripts/extension-precision-workflow.test.mjs', 'scripts/extension-precision-byok-flow.test.mjs', 'scripts/extension-precision-byok-edit-flow.test.mjs', 'scripts/extension-donor-1688-capture.test.mjs', 'scripts/extension-listing-editor-client.test.mjs', 'scripts/extension-precision-category-picker.test.mjs', 'scripts/extension-precision-translation-flow.test.mjs', 'scripts/extension-precision-translation-status.test.mjs', 'scripts/extension-donor-editor-wheel.test.mjs'],
+  },
+  {
+    name: 'extension precision BYOK registration recovery',
+    command: 'node',
+    args: ['--test', 'scripts/extension-precision-byok-registration-ui.test.mjs'],
   },
   {
     name: 'extension donor workbench package verifier contract',

@@ -3,14 +3,18 @@ const operationLabels = { TEXT_TO_IMAGE: '单图生成', IMAGE_TO_IMAGE: '参考
 export function createByokEditor({ root, container, runtime, getShopId, getBinding, openSession, getBusy = () => false, onBound, onModeChange, report }) {
   const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const settings = runtime?.settings;
+  const available = typeof runtime?.registerUi === 'function' && typeof settings?.listProfiles === 'function';
   let registered = false, profiles = [], selectedId = '', selectedState = null, permission = null, dirty = false, busy = false, prepared = null;
+  let initialization = null, initializing = false, registrationError = '', profileOptions = '', editCatalog = '';
   let flow = null, flowConnecting = false, flowState = null, flowPreview = null, mode = '', generationError = '';
   let edit = null, editStateValue = null, editSelectedKeys = new Set(), editBusy = false, editError = '';
   const panel = make('div', 'precision-suite-actions'); panel.hidden = true;
   const panelState = make('span', '', '请配置自带 API。'); panelState.id = 'precision-byok-state';
   const configure = make('button', 'ghost', '配置自带 API'); configure.id = 'precision-byok-config';
+  const reconnect = make('button', 'ghost', '重新连接扩展'); reconnect.id = 'precision-byok-reconnect';
   const profileSelect = make('select'); profileSelect.id = 'precision-byok-profile'; profileSelect.setAttribute('aria-label', '自带 API 档案');
-  panel.append(panelState, profileSelect, configure); container.append(panel);
+  panel.append(panelState, profileSelect, configure, reconnect); container.append(panel);
+  panelState.setAttribute('role', 'status');
   const generation = make('section', 'precision-byok-generation'); generation.id = 'precision-byok-generation'; generation.hidden = true;
   const generationHead = make('div', 'precision-byok-generation-head');
   generationHead.append(make('strong', '', '单图生成 · 当前草稿'), make('small', '', '候选图必须先预览、审核，再由 ERP 绑定到当前 SKU 草稿。'));
@@ -88,6 +92,9 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   function errorText(error) {
     if (error?.reasonCode) return { POLICY_DISABLED: 'ERP 尚未开放自带 API', OWNER_NOT_ALLOWED: '当前账号尚未获授权', SHOP_NOT_ALLOWED: '当前店铺尚未获授权', DEVICE_NOT_ALLOWED: '当前设备尚未获授权', ORIGIN_NOT_ALLOWED: '此接口来源尚未进入 ERP 允许列表', OPERATION_NOT_ALLOWED: '此图片能力尚未获授权', GENERATION_DISABLED: 'ERP 已关闭此图片能力' }[error.reasonCode] || '请重新核对 ERP 权限';
     return { SS_ERP_PRECISION_PRIVATE_RUNTIME_UNAVAILABLE: '请从已安装的 SS ERP 扩展打开工作台', SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID: '接口地址须为公开 HTTPS API 地址', SS_ERP_BYOK_PROFILE_INVALID: '请完整填写接口名称、地址、模型及图片功能',
+      SS_ERP_PRECISION_UI_REGISTRATION_FAILED: '扩展注册失败，请确认商品页已完成采集、ERP 设备已配对，再重新连接扩展。',
+      SS_ERP_PRECISION_UI_REGISTRATION_TIMEOUT: '扩展连接超时，请重新连接扩展；若仍无响应，请重新加载扩展和来源商品页。',
+      SS_ERP_PRECISION_UI_REGISTRATION_REQUIRED: '请先重新连接扩展，再处理当前草稿图片。',
       SS_ERP_PRECISION_BYOK_CONTEXT_STALE: '商品、店铺或草稿已变化，请回到原任务读取状态。',
       SS_ERP_PRECISION_BYOK_INPUT_INVALID: '请填写有效提示词与图片尺寸。',
       SS_ERP_PRECISION_BYOK_PREVIEW_REQUIRED: '预览未成功加载，不能通过审核。',
@@ -98,18 +105,22 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   }
   function render() {
     const flowView = flow?.state() || flowState;
-    const working = busy || flowConnecting || Boolean(flowView?.busy) || getBusy();
+    const working = busy || initializing || flowConnecting || Boolean(flowView?.busy) || getBusy();
     const settingsLocked = working || Boolean(flowView?.candidate) || Boolean(flowView?.readbackRequired) || Boolean(flowView?.generationUnknown);
     panel.hidden = mode !== 'byok';
     configure.disabled = !registered || settingsLocked; profileSelect.disabled = !registered || settingsLocked;
+    reconnect.hidden = registered;
+    reconnect.disabled = !available || working;
     save.disabled = !registered || settingsLocked; fresh.disabled = !registered || settingsLocked;
     setKey.disabled = !registered || settingsLocked || !selected() || dirty;
     clearKey.disabled = !registered || settingsLocked || !selectedState?.hasKey;
     prepare.disabled = !registered || settingsLocked || !selected() || dirty || !getShopId();
-    request.disabled = !prepared || settingsLocked || dirty;
+    request.disabled = !registered || !prepared || settingsLocked || dirty;
     modes.textContent = selectedState?.evidence?.length ? '已验证请求方式：' + selectedState.evidence.map((evidence) => `${operationLabels[evidence.operation] || evidence.operation} ${evidence.requestMode}`).join('、')
       : '请求方式由接口能力验证确定，可支持 JSON、multipart 或 async；尚无验证记录。';
-    panelState.textContent = !registered ? '自带 API 尚未连接扩展运行时' : selected()
+    panelState.textContent = !available ? '自带 API 运行时未加载，请重新加载扩展和来源商品页。'
+      : initializing ? '正在连接扩展，请稍候。'
+      : !registered ? registrationError || '自带 API 尚未连接，请重新连接扩展。' : selected()
       ? `${selected().name} · ${selectedState?.hasKey ? '会话密钥已加载' : '等待会话密钥'} · ${permission?.granted ? '来源已授权' : '等待来源授权'}` : '请配置自带 API。';
     const canTextGenerate = Boolean(flowView?.ready && selected()?.allowedOperations?.includes('TEXT_TO_IMAGE') && selectedState?.hasKey && !dirty);
     generation.hidden = mode !== 'byok';
@@ -124,13 +135,13 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     prompt.disabled = !registered || settingsLocked;
     negative.disabled = prompt.disabled;
     size.disabled = prompt.disabled;
-    generate.disabled = !canTextGenerate || settingsLocked;
-    refreshGeneration.disabled = !runtime || working || !getBinding?.();
+    generate.disabled = !registered || !canTextGenerate || settingsLocked;
+    refreshGeneration.disabled = !registered || working || !getBinding?.();
     refreshGeneration.textContent = flowView?.context ? '读取原任务状态' : '连接当前 SKU 图片会话';
-    showPreview.disabled = working || !flowView?.ready || !flowView?.candidate || flowView.candidate.deliveryState !== 'NOT_INGESTED';
-    approve.disabled = working || !flowView?.ready || !flowView?.candidate || !flowView.previewReady || flowView.candidate.reviewState !== 'CANDIDATE_READY' || Boolean(flowView.readbackRequired);
-    reject.disabled = working || !flowView?.ready || !flowView?.candidate || flowView.candidate.deliveryState !== 'NOT_INGESTED' || Boolean(flowView.readbackRequired);
-    ingest.disabled = working || !flowView?.ready || !flowView?.candidate || flowView.candidate.reviewState !== 'APPROVED' || flowView.candidate.deliveryState !== 'NOT_INGESTED' || Boolean(flowView.readbackRequired);
+    showPreview.disabled = !registered || working || !flowView?.ready || !flowView?.candidate || flowView.candidate.deliveryState !== 'NOT_INGESTED';
+    approve.disabled = !registered || working || !flowView?.ready || !flowView?.candidate || !flowView.previewReady || flowView.candidate.reviewState !== 'CANDIDATE_READY' || Boolean(flowView.readbackRequired);
+    reject.disabled = !registered || working || !flowView?.ready || !flowView?.candidate || flowView.candidate.deliveryState !== 'NOT_INGESTED' || Boolean(flowView.readbackRequired);
+    ingest.disabled = !registered || working || !flowView?.ready || !flowView?.candidate || flowView.candidate.reviewState !== 'APPROVED' || flowView.candidate.deliveryState !== 'NOT_INGESTED' || Boolean(flowView.readbackRequired);
     if (flowView?.candidate?.deliveryState === 'BOUND') generationState.textContent = 'ERP 已将候选图规范化并绑定到当前草稿。';
     else if (flowView?.readbackRequired) generationState.textContent = '上次结果待核对；请读取状态，不会自动重试或重复扣费。';
     else if (flowView?.generationUnknown) generationState.textContent = 'Provider 结果未知；请读取状态，不要再次生成。';
@@ -148,10 +159,10 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     if (flowPreview?.objectUrl && image.src !== flowPreview.objectUrl) image.src = flowPreview.objectUrl;
     previewMeta.textContent = flowView?.candidate ? `${flowView.candidate.reviewState} · ${flowView.candidate.deliveryState}` : '';
     const editView = editStateValue;
-    editLoad.disabled = working || !editFlowApi || !getBinding?.();
+    editLoad.disabled = !registered || working || !editFlowApi || !getBinding?.();
     const editOperationValue = editOperation.value;
     editMaskFile.hidden = editOperationValue !== 'INPAINT';
-    editStart.disabled = working || editBusy || !editView?.connected || !editPrompt.value.trim()
+    editStart.disabled = !registered || working || editBusy || !editView?.connected || !editPrompt.value.trim()
       || editOperationValue === 'IMAGE_TO_IMAGE' && (editSelectedKeys.size < 1 || editSelectedKeys.size > 4)
       || editOperationValue !== 'IMAGE_TO_IMAGE' && !editSource.value
       || editOperationValue === 'INPAINT' && !editMaskFile.files?.[0];
@@ -160,16 +171,22 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     else if (editView?.candidate) editState.textContent = '参考图候选已生成，可先预览再交给 ERP 审核。';
     else if (editView?.connected) editState.textContent = `已选择 ${editSelectedKeys.size} 张参考图。`;
     else editState.textContent = '读取来源素材后可选择 1-4 张参考图。';
-    editSources.replaceChildren(...(editView?.catalog || []).map(item => {
-      const label = make('label', 'precision-byok-edit-source'); const input = make('input'); input.type = 'checkbox'; input.value = item.sourceMediaKey; input.checked = editSelectedKeys.has(item.sourceMediaKey);
-      input.addEventListener('change', () => { if (input.checked) editSelectedKeys.add(item.sourceMediaKey); else editSelectedKeys.delete(item.sourceMediaKey); render(); });
-      label.append(input, make('span', '', item.label)); return label;
-    }));
-    editSource.replaceChildren(...(editView?.catalog || []).map(item => { const option = make('option', '', item.label); option.value = item.sourceMediaKey; return option; }));
-    if (editView?.catalog?.length && !editView.catalog.some(item => item.sourceMediaKey === editSource.value)) editSource.value = editView.catalog[0].sourceMediaKey;
+    const catalog = editView?.catalog || [];
+    const catalogProjection = JSON.stringify(catalog.map(item => [item.sourceMediaKey, item.label]));
+    if (editCatalog !== catalogProjection) {
+      const selectedSource = editSource.value;
+      editCatalog = catalogProjection;
+      editSources.replaceChildren(...catalog.map(item => {
+        const label = make('label', 'precision-byok-edit-source'); const input = make('input'); input.type = 'checkbox'; input.value = item.sourceMediaKey; input.checked = editSelectedKeys.has(item.sourceMediaKey);
+        input.addEventListener('change', () => { if (input.checked) editSelectedKeys.add(item.sourceMediaKey); else editSelectedKeys.delete(item.sourceMediaKey); render(); });
+        label.append(input, make('span', '', item.label)); return label;
+      }));
+      editSource.replaceChildren(...catalog.map(item => { const option = make('option', '', item.label); option.value = item.sourceMediaKey; return option; }));
+      editSource.value = catalog.some(item => item.sourceMediaKey === selectedSource) ? selectedSource : catalog[0]?.sourceMediaKey || '';
+    }
     const editCandidateAttempt = editView?.snapshot?.alternatives?.find(item => item.state === 'CANDIDATE_READY' && item.candidateId);
-    editPreview.disabled = working || editBusy || !editCandidateAttempt;
-    editReview.disabled = working || editBusy || !editView?.candidate || editView.candidate.state !== 'CANDIDATE_READY';
+    editPreview.disabled = !registered || working || editBusy || !editCandidateAttempt;
+    editReview.disabled = !registered || working || editBusy || !editView?.candidate || editView.candidate.state !== 'CANDIDATE_READY';
   }
   function fill(profile) {
     name.value = profile?.name || ''; endpoint.value = profile?.baseUrl || ''; model.value = profile?.model || ''; key.value = '';
@@ -180,7 +197,11 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     if (!registered) return;
     const listed = await settings.listProfiles(); profiles = listed.profiles || [];
     if (!profiles.some((profile) => profile.id === selectedId)) selectedId = profiles[0]?.id || '';
-    profileSelect.replaceChildren(...profiles.map((profile) => { const option = make('option', '', profile.name); option.value = profile.id; return option; }));
+    const optionsProjection = JSON.stringify(profiles.map(profile => [profile.id, profile.name]));
+    if (profileOptions !== optionsProjection) {
+      profileOptions = optionsProjection;
+      profileSelect.replaceChildren(...profiles.map((profile) => { const option = make('option', '', profile.name); option.value = profile.id; return option; }));
+    }
     profileSelect.value = selectedId;
     if (selected()) {
       selectedState = await settings.getProfileState(selectedId); permission = await settings.getPermissionStatus(selectedId);
@@ -194,6 +215,30 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     catch (error) { state.textContent = errorText(error); }
     finally { busy = false; render(); }
   }
+  async function registerRuntime() {
+    try {
+      const reply = await runtime.registerUi();
+      if (reply?.registered !== true) throw new Error('SS_ERP_PRECISION_UI_REGISTRATION_FAILED');
+      registered = true; registrationError = '';
+      return reply;
+    } catch (error) {
+      registered = false; registrationError = errorText(error);
+      throw error;
+    }
+  }
+  function initialize() {
+    if (initialization) return initialization;
+    if (registered) return Promise.resolve(true);
+    if (!available) { render(); return Promise.resolve(false); }
+    initializing = true; registrationError = ''; render();
+    initialization = (async () => {
+      try { await registerRuntime(); await refresh(); return true; }
+      catch (error) { registered = false; registrationError = errorText(error); state.textContent = registrationError; return false; }
+      finally { initializing = false; initialization = null; render(); }
+    })();
+    return initialization;
+  }
+  reconnect.addEventListener('click', event => { if (event.isTrusted && !reconnect.disabled) void initialize(); });
   for (const input of [name, endpoint, model, ...operations.querySelectorAll('input')]) input.addEventListener('input', () => { dirty = true; prepared = null; settings?.invalidatePreparedPermissions(); render(); });
   configure.addEventListener('click', (event) => { if (event.isTrusted && !configure.disabled) void act(async () => { modal.hidden = false; await refresh(); state.textContent = '配置与密钥分开保存；选择图片任务后再确认执行。'; }); });
   fresh.addEventListener('click', (event) => { if (!event.isTrusted || fresh.disabled) return; selectedId = ''; selectedState = permission = null; fill(null); render(); });
@@ -231,11 +276,12 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     void act(async () => { await pending; permission = await settings.getPermissionStatus(selectedId); state.textContent = permission.granted ? '此接口精确来源已授权。' : '来源授权未完成。'; });
   });
   async function ensureFlow() {
+    if (!registered) throw new Error('SS_ERP_PRECISION_UI_REGISTRATION_REQUIRED');
     if (!flowApi || !runtime?.media || typeof getBinding !== 'function' || typeof openSession !== 'function') throw Object.assign(new Error('SS_ERP_PRECISION_BYOK_FLOW_UNAVAILABLE'), { code: 'SS_ERP_PRECISION_BYOK_FLOW_UNAVAILABLE' });
     if (!flow) {
       flow = flowApi.createController({
         media: runtime.media,
-        registerUi: () => runtime.registerUi(),
+        registerUi: registerRuntime,
         openSession,
         getBinding,
         newOperationKey: () => 'precision-byok-' + crypto.randomUUID(),
@@ -249,13 +295,14 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     return flow;
   }
   async function ensureEditFlow() {
+    if (!registered) throw new Error('SS_ERP_PRECISION_UI_REGISTRATION_REQUIRED');
     if (!editFlowApi || !runtime?.media || typeof getBinding !== 'function' || typeof openSession !== 'function') throw Object.assign(new Error('SS_ERP_PRECISION_BYOK_EDIT_FLOW_UNAVAILABLE'), { code: 'SS_ERP_PRECISION_BYOK_EDIT_FLOW_UNAVAILABLE' });
     if (!edit) edit = editFlowApi.createController({ media: runtime.media, getBinding, onChange: next => { editStateValue = next; render(); } });
     if (!editStateValue?.connected) editStateValue = await edit.connect();
     return edit;
   }
   async function mediaAct(run) {
-    if (busy || getBusy()) return;
+    if (!registered || busy || getBusy()) return;
     busy = true; generationError = ''; render();
     try { await run(); }
     catch (error) { generationError = errorText(error); }
@@ -280,11 +327,13 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
       await openCandidatePreview();
     });
   });
-  async function readMediaState() { return mediaAct(async () => {
-    if (!registered) { await runtime.registerUi(); registered = true; }
-    await ensureFlow(); flowState = await flow.refresh();
-    if (flowState.candidate?.deliveryState === 'BOUND') await onBound?.(flowState);
-  }); }
+  async function readMediaState() {
+    if (!registered && !await initialize()) return;
+    return mediaAct(async () => {
+      await ensureFlow(); flowState = await flow.refresh();
+      if (flowState.candidate?.deliveryState === 'BOUND') await onBound?.(flowState);
+    });
+  }
   refreshGeneration.addEventListener('click', (event) => { if (event.isTrusted && !refreshGeneration.disabled) void readMediaState(); });
   editLoad.addEventListener('click', event => { if (!event.isTrusted || editLoad.disabled) return; void mediaAct(async () => { try { editError = ''; const active = await ensureEditFlow(); editStateValue = await active.loadCatalog(); } catch (error) { editError = errorText(error); throw error; } }); });
   editStart.addEventListener('click', event => { if (!event.isTrusted || editStart.disabled) return; void mediaAct(async () => {
@@ -306,11 +355,10 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   ingest.addEventListener('click', (event) => { if (event.isTrusted && !ingest.disabled) void mediaAct(async () => { flowState = await flow.ingest(); flowPreview = null; await onBound?.(flowState); }); });
   render();
   return {
-    panel, configure, render, readMediaState,
-    async initialize() { if (!runtime) return; try { await runtime.registerUi(); registered = true; await refresh(); } catch (error) { state.textContent = errorText(error); } finally { render(); } },
+    panel, configure, reconnect, render, readMediaState, initialize,
     setMode(value) { mode = value; onModeChange(value); render(); },
-    isBusy: () => busy || Boolean(flow?.state().busy),
+    isBusy: () => busy || initializing || Boolean(flow?.state().busy),
     invalidate() { flow?.invalidate(); generationError = ''; render(); },
-    state: () => ({ registered, selectedProfileId: selectedId, hasKey: selectedState?.hasKey === true }),
+    state: () => ({ registered, initializing, available, selectedProfileId: selectedId, hasKey: selectedState?.hasKey === true }),
   };
 }

@@ -2,6 +2,15 @@
 
 ## 当前结果：精铺默认入口已在双区官网公开发布
 
+### 2026-10-03 工作台滚动、翻译与编辑入口修复
+
+- 用户反馈确认：SKU 区与图片区可以局部滚动，但外层工作台不能滚动、图片翻译按钮无效、基础信息/继续编辑入口错接。根因分别是 donor 表格 wheel handler 无条件 `preventDefault()` 加平滑逐行跳动、翻译按钮始终走套图或被初始化禁用、入口 handler 重新启动 session，以及基础信息误开 copy modal。
+- `product-editor-table-behavior.js` 现在只接管横向/Shift 横向滚动，垂直方向交给浏览器原生滚动并允许边界链到 `.content`；precision CSS 使用自然纵向 flow 和外层 `overflow-y:auto`。独立真实 Chrome wheel 断言已通过（外层 `scrollTop` 变化，窗口 `1440×1100` 解决测试 compositor surface 与 DOM viewport 不一致）。
+- 新增 `category-picker.js` 和 `translation-flow.js`。类目读取按草稿绑定、搜索 epoch 和 catalog revision fence，空 placeholder 必须明确选择；翻译按所选最多 5 张图片串行提交，已确认项不重复提交，未知回执锁定等待读回，明确未提交才允许继续。`CHECK_TRANSLATION` 是只读合同，bridge 再核对 handoff、店铺、草稿 revision/version、launch context 与 `IMAGE_TRANSLATE` readiness。
+- 图片翻译生产准入仍由 `resolveExtensionMediaTranslationReadiness()` 管理；当前 production 返回 `MEDIA_PROVIDER_NOT_ALLOWED`，工作台显示“当前环境尚未开放图片翻译”并阻止 mutation。该 UI 接线不等于生产翻译能力已发布，也未新增 Provider/Ozon 请求或费用。
+- 签名前只读复核发现未建草稿切换“仅翻译”会调用空 binding 并抛错；真实浏览器前置路径先 RED（`TGjcE3`），再补 listing/handoff guard 后 GREEN。模式选择保持可用，显示创建草稿前置条件并禁用提交；原正常采集/建草稿路径继续通过。受影响 shell/workflow/BYOK/category/translation/wheel 联合回归为 `65 passed`。
+- 本轮定向合同/控制器/真实浏览器测试通过：wheel、category、translation status/flow、BYOK registration、default bridge 共 `40` 项；`--usability-only` 正例与 `--translation-denied` 均通过，完整 BYOK+translation 本地 fixture 通过（Provider/Ozon/production mutations=0）。本轮未签名、未部署、未切换官网 pointer。
+
 用户确认以 `C:\Users\550W\Downloads\jp20260803` 的成熟界面与操作流程为基础直接改造。旧目录保持只读，实际复用的源码放在 `extensions/ss-erp/pages/donor/`，入口为 `pages/precision-workbench.html`。当前产品开发不把新一轮付费 suite 或官网发布证据作为界面、采集和草稿接线的前置条件。
 
 之前阶段的“完成”描述证明的是当时的接口/发布边界，不等于旧扩展全部功能已经可用。COM/CN 应用和官网公开下载现均为 `fdee810303d1216d2f587d4c09c9a9f59766abed / 1.0.403`，来源页默认使用 `precision-workbench.html`，移除 preview/allowlist 门槛；安装包与来源页装配清理了旧采集、生图、审核、草稿和上架 UI，利润/物流扩展功能保留，核价面板只负责成本/利润和找货源。本次使用新区域签名候选、正式回执和 canary，未复用旧官网批准或旧面板 canary。

@@ -760,6 +760,8 @@ const requiredDonorWorkbenchFiles = [
   'pages/donor/ui/presentation/views/preview-view.js',
   'pages/donor/ui/presentation/views/sku-picker-view.js',
   'pages/donor/byok-editor.js',
+  'pages/donor/category-picker.js',
+  'pages/donor/translation-flow.js',
   'pages/donor/copy-editor.js',
   'pages/donor/official-attribute-editor.js',
   'pages/donor/precision-private-runtime.js',

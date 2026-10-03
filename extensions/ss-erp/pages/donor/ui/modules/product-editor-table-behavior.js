@@ -110,13 +110,7 @@ export function setupRowWheel(arg6) {
           return;
         }
       }
-      arg7.preventDefault();
-      const querySelectorResult31 = querySelectorResult16.querySelector("tbody tr");
-      const selectedValue32 = querySelectorResult31 ? querySelectorResult31.getBoundingClientRect().height : 64;
-      querySelectorResult16.scrollBy({
-        top: (arg7.deltaY > 0 ? 1 : -1) * selectedValue32,
-        behavior: "smooth"
-      });
+      // Preserve native vertical scrolling and let table boundaries chain to the workbench.
     }, {
       passive: false
     });

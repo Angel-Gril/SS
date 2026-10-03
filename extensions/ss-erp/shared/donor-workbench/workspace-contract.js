@@ -9,7 +9,7 @@
     'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE',
     'EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE',
     'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY',
-    'PUBLISH', 'CREATE_TRANSLATION',
+    'PUBLISH', 'CREATE_TRANSLATION', 'CHECK_TRANSLATION',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -648,6 +648,12 @@
       return Object.freeze({ contractVersion: CONTRACT_VERSION, type: 'PUBLISH', requestId: publishRequestId,
         listingWorkflowId: text(item.listingWorkflowId, 200), action: item.action,
         ...(item.action === 'CONFIRM' ? { previewHash: item.previewHash } : {}) });
+    }
+    if (item && item.type === 'CHECK_TRANSLATION') {
+      var translationStatusId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId']);
+      if (!text(item.listingWorkflowId, 200)) throw new TypeError('invalid translation status command');
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: translationStatusId,
+        listingWorkflowId: text(item.listingWorkflowId, 200) });
     }
     if (item && item.type === 'CREATE_TRANSLATION') {
       var translationRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'sourceMediaKey']);

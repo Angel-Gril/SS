@@ -49,13 +49,35 @@
 #stock-manager-btn, #watermark-settings-btn, #wm-open-btn { display: none; }
 .precision-draft-ready .editor-control, .precision-draft-ready .editor-sku-prefix-control { pointer-events: none; background: #f1f5f9; }
 .precision-local-fields { padding: 8px 16px; color: var(--muted); font-size: 12px; background: #fff; }
-.content-view.editor-view { grid-template-rows: minmax(180px, 1fr) auto minmax(200px, 1fr) !important; }
-#image-card { display: flex; flex-direction: column; min-height: 0; max-height: 440px; }
+[hidden] { display: none !important; }
+.panel > .content { overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior-y: contain; }
+.content-view.editor-view.is-active { display: flex; flex-direction: column; flex: 0 0 auto; overflow: visible; grid-template-rows: none !important; }
+.content-view.editor-view .product-editor { flex: 0 0 auto; overflow: visible; }
+.content-view.editor-view .editor-table-body-viewport { flex: 0 0 auto; max-height: 320px; overflow-y: auto; }
+#image-card { display: flex; flex-direction: column; flex: 0 0 auto; min-height: 0; max-height: none; }
 #image-translate-bar { flex: 0 0 auto; min-height: 46px; }
-#image-queue { display: block; flex: 1 1 auto; overflow: auto; min-height: 0; }
+#image-queue { display: block; flex: 0 0 auto; overflow: visible; min-height: 0; height: auto; max-height: none; padding: 0; }
+.precision-source-library { max-height: 320px; overflow-y: auto; scrollbar-gutter: stable; }
 .panel { grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .settings-body { overflow-wrap: anywhere; }
 .precision-local-fields { display: flex; align-items: center; gap: 10px; min-height: 46px; }
 .precision-local-fields > span { margin-right: auto; }
 .precision-local-fields select { width: 80px; }
 #editor-category-select { grid-column: 1 / -1; }
+.precision-category-search { display: flex; gap: 10px; align-items: center; }
+.precision-category-search input { flex: 1; min-width: 0; }
+.precision-category-search button { flex: 0 0 auto; }
+#editor-category-modal input, #editor-category-modal select { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); font: inherit; min-height: 40px; width: 100%; }
+#editor-category-modal .settings-body { display: flex; flex-direction: column; gap: 12px; }
+.precision-category-state { margin: 0; min-height: 20px; color: var(--muted); font-size: 13px; }
+.precision-translation-panel { padding: 10px 12px; border-bottom: 1px solid var(--line); background: #fff; }
+.precision-translation-panel p { margin: 5px 0; color: var(--muted); }
+.precision-translation-progress { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.precision-translation-progress span { border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+.image-workflow-mode input:disabled + span { opacity: .5; cursor: not-allowed; }
+.image-workflow-mode input:focus-visible + span { outline: 2px solid var(--brand); outline-offset: 2px; }
+@media (max-width: 820px) {
+  .precision-source-library { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .precision-local-fields { flex-wrap: wrap; }
+  .precision-local-fields > span { flex-basis: 100%; }
+}

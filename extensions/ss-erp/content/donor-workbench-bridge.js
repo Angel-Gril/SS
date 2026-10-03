@@ -622,10 +622,44 @@
         sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
         listingWorkflowId: listing.id, sourceMediaKey, action: 'CREATE_TRANSLATION' });
       if (!response || !response.ok || !response.result) throw new Error(response && response.error || '图片翻译任务创建失败');
-      commandResult(command.requestId, true, '', null, response.result);
       await loadProjection({ force: true });
+      // Do not acknowledge before the authoritative refresh releases the bridge:
+      // batched translation callers may submit the next image immediately.
+      setBusy(false, '');
+      commandResult(command.requestId, true, '', null, response.result);
     } catch (error) { commandResult(command.requestId, false, error.message || String(error)); }
     finally { setBusy(false, ''); }
+  }
+
+  async function checkTranslation(command) {
+    const listing = currentProjection.workbench.status.listing.items.find(item => item.id === command.listingWorkflowId);
+    const handoff = currentProjection.handoff;
+    if (!listing || !handoff) return commandResult(command.requestId, false, '请先创建当前店铺草稿');
+    try {
+      const response = await sendRuntimeMessage({ type: 'ss-erp:source-listing-workbench-status',
+        sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
+        listingWorkflowId: listing.id });
+      if (!response?.ok || response.result?.state !== 'ready') throw new Error('图片翻译状态读取失败，请重新读取');
+      const live = response.result.status?.listing?.items.find(item => item.id === listing.id);
+      if (!live || live.shopId !== listing.shopId || live.revision !== listing.revision || live.draftVersion !== listing.draftVersion
+        || !['snapshotId', 'supplyGoodsId', 'sourceProductId', 'platform'].every(key => response.handoff?.[key] === handoff[key]
+          && currentProjection.handoff?.[key] === handoff[key])) {
+        throw new Error('草稿已变化，请重新读取后核对图片翻译');
+      }
+      const launch = response.launch;
+      const capability = launch?.operations?.IMAGE_TRANSLATE
+        || (launch?.capability?.operation === 'IMAGE_TRANSLATE' ? launch.capability : null);
+      const context = launch?.context;
+      if (context && (context.id !== listing.id || context.shopId !== listing.shopId
+        || context.snapshotId !== handoff.snapshotId || context.supplyGoodsId !== handoff.supplyGoodsId
+        || context.revision !== listing.revision || context.draftVersion !== listing.draftVersion)) {
+        throw new Error('草稿已变化，请重新读取后核对图片翻译');
+      }
+      const available = launch?.state === 'ready' && Boolean(context) && capability?.enabled === true && capability.ready === true;
+      commandResult(command.requestId, true, '', null, { available,
+        reasonCode: String(!available && capability?.ready ? 'MEDIA_CREATE_CONTEXT_STALE'
+          : capability?.reasonCode || 'MEDIA_READINESS_UNAVAILABLE').slice(0, 100) });
+    } catch (error) { commandResult(command.requestId, false, error.message || '图片翻译状态读取失败'); }
   }
 
   async function editorCommand(command) {
@@ -832,6 +866,7 @@
     if (command.type === 'EXECUTE_HOSTED_SUITE') void executeHostedSuite(command);
     if (command.type === 'OPEN_EMBEDDED_MEDIA') void openEmbeddedMedia(command);
     if (command.type === 'CREATE_TRANSLATION') void createTranslation(command);
+    if (command.type === 'CHECK_TRANSLATION') void checkTranslation(command);
     if (command.type === 'ASSIGN_HOSTED_SUITE') void assignHostedSuite(command);
   });
 
