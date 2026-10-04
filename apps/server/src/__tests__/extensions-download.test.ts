@@ -203,6 +203,7 @@ async function publishedFixture(input: {
   buildRoot: string;
   version?: string;
   canaryVersion?: 1 | 2 | 3;
+  pilotOperations?: string[];
   region?: 'COM' | 'CN';
   mutateApproval?: (value: Record<string, unknown>) => void;
   mutateDarkCanary?: (value: Record<string, unknown>) => void;
@@ -430,7 +431,7 @@ async function publishedFixture(input: {
       deviceSessionIds: ['device-session-01', 'device-session-02'],
       rolloutRevision: 15,
       sourcePolicyRevision: 'pilot-source-revision-15',
-      allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+      allowedOperations: input.pilotOperations || ['IMAGE_TO_IMAGE', 'SUITE'],
     };
     darkCanary.schemaVersion = 3;
     darkCanary.kind = 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY';
@@ -723,6 +724,30 @@ describe('extensionDownloadRoutes', () => {
     expect(latest.statusCode).toBe(200);
     expect(latest.json().data.publicationApprovalSha256).toBe(published.approvalSha256);
     await app.close();
+  });
+
+  it('serves the explicitly reviewed translation pilot without accepting extra operations', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3,
+      pilotOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'] });
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    const latest = await app.inject({ method: 'GET', url: '/latest' });
+    expect(latest.statusCode).toBe(200);
+    const cloud = await app.inject({ method: 'GET', url: latest.json().data.targets.cloud.downloadUrl.replace(/^\/api\/extensions/u, '') });
+    expect(cloud.statusCode).toBe(200);
+    expect(cloud.headers['x-publication-approval-sha256']).toBe(published.approvalSha256);
+    await app.close();
+    for (const operation of ['TEXT_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+      const invalid = await fixture();
+      const candidate = await publishedFixture({ ...invalid, canaryVersion: 3,
+        pilotOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE', operation] });
+      await expect(loadPublishedExtensionRelease({ publicationRoot: candidate.publicationRoot,
+        keyringPath: candidate.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+        expectedRegion: 'COM', trustedOwnerUid: null })).rejects.toThrow(/restricted pilot/u);
+    }
   });
 
   it.each(['SS_ERP_DARK_MAINTENANCE_BASELINE', 'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE',

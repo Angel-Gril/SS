@@ -2,6 +2,13 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 `1.0.420` 官网CAS后COM消费者兼容收口
+
+- `f4b133e6bd796620663f8a103479b54bfe173ecc / 1.0.420` 完整native offline9 gates通过（server6628、PG209、Cloud584/Local580）；正式QA04 SHA `9af42607ce030181eb573f586241790216d3f5cde6ae56c251a45dc6c801f3e6`，明确保留c4execution、新target offline及cleanup读回，生图执行源码一致。双区部署/VPS、REL04 canary、approval均通过；物理officiallauncher与新create-plan按钮已真实创建/审核两槽计划、报价CNY0.28，但未START，无新增费用。
+- 双区CAS实际完成，COM/CNapproval SHA `9a03b1d085e3505558a6e0395566e2dc62bf9ebeb6379346164b306293f87892` / `782984605982d5f56a0a4abaf41cd0254b7a2ba3ced0e2ab769c09be48abaeb3`。CN完整匿名下载两ZIP及publication verifier通过，distribution SHA `1b6da0e14150aaa86de00925dbb27c7dbce5cb65ac0401a48226fbdc35b74b4e`；COM源站latest与公开端均404，publication消费者TS仍硬编码两项operation，而脚本签名门禁允许显式三项，不能说双区分发完成。
+- 受控恢复COMpointer：验证current420摘要和原405批准/region/version后，用既有durable atomic writer恢复旧pointer，保留420pointer原件；源站latest立即200、1.0.405。CN继续公开420，不重复CAS或回滚已通过区域。API/Worker/Web均active，无Provider/Ozon。现CODE受限产品范围仍原DOTH翻译pilot、CNdark。
+- T2新增真实signed fixture+latest+ZIP consumer正例先404 RED，再最小仅允许exact两项或exact三项；TEXT/FULL_EDIT/INPAINT额外操作签名证据仍拒绝。下载回归34/3既有skipped、server typecheck/eslint GREEN。下一1.0.421仅改publication consumer，属于QA04已明确execution-neutral文件，不改schema/生图/费用/设备权限，原fresh suite/审核/assignment/replay可保留绑定419execution并重新生成target证据；不新增Provider请求。
+
 ### 2026-10-04 `1.0.419` 双区验收、fresh normal suite 与计划按钮修复
 
 - `c4a391e1344bee6ceba18652b57e05ed2245b7af / 1.0.419` 已推送、区域签名、COM/CN 标准部署。两区 canonical VPS 均 0 failure / 1 warning（原远端备份未配置）；COM DOTH 受限翻译 pilot 与 CN dark准确，签名包 MV3 默认入口/来源拒绝/Blob 双向通过。完整 native offline 9 gates PASS：server 6628/350 skipped、scope PG7、AI PG209、升级回放、build/lint/typecheck和 Cloud584/Local580均通过；receipt/log SHA `f8af08a6ca272738b211546d3080fe46a5d8c55d38245e0fb5982ea5693fd340` / `7c5d54da36aa12d633fea82bdaf3445f2fd669fbf71e17e05c5db15a4fe16742`。

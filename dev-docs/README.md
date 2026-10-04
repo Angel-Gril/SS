@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 `1.0.420` 已双区部署；COM 下载消费者修复准备 `1.0.421`
+
+`f4b133e6 / 1.0.420` 已完成完整offline、正式QA04、双区VPS/canary/approval/CAS；CN匿名Cloud/Local完整下载通过，COM下载返回404，根因为服务端publication消费者仍只允许原两项operation，脚本已接受显式三项。COM已受控CAS恢复原已批准`1.0.405`并确认latest正常，420pointer原件保留；CN公开420。消费者最小修复T2 RED→GREEN、34项下载回归与typecheck/lint通过，新增TEXT/FULL_EDIT/INPAINT仍拒绝。下一421候选仅publication owner变化，无生图/费用逻辑改动，沿用419suite明确execution bridge，不新增Provider。唯一事实见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-04 `1.0.419` 双区与正式 QA04通过；计划按钮修复准备1.0.420
 
 `c4a391e1 / 1.0.419` 双区部署/canonical VPS、完整native offline及签名包MV3通过。真实两图收纳盒suite完成PENDING→preview→review→store-draft assignment/replay，正式QA04已生成；卫衣两图失真已驳回。本轮Provider POST4、ERP费用CNY0.56、Ozon0。真实验收发现官方计划按钮仍转发已删除的旧source listener；最小扩展修复已通过定向回归，最终1.0.420将直接复用既有plan-binding runtime客户端并走新target offline/VPS/canary/approval，再CAS分发。ERP执行源码不变可沿用明确c4execution原件，不重新收费。官网仍1.0.405；事实只维护在[直接适配owner](donor-workbench/direct-adaptation.md)。

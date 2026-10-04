@@ -486,7 +486,8 @@ function validateRestrictedPilotPolicy(value: unknown, rollout: unknown) {
   const allowedOperations = policy.allowedOperations;
   if (policy.expectation !== 'hosted-pilot'
     || !Array.isArray(allowedOperations)
-    || JSON.stringify(allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
+    || ![JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE']),
+      JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'])].includes(JSON.stringify(allowedOperations))
     || !Number.isSafeInteger(policy.rolloutRevision)
     || Number(policy.rolloutRevision) < 0
     || typeof policy.sourcePolicyRevision !== 'string'
