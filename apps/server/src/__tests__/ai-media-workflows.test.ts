@@ -313,7 +313,16 @@ describe('AI media workflow service', () => {
     await expect(service.createImageTranslation({ ...input, translationRuntimeContract: undefined })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
     await expect(service.createImageTranslation(input)).resolves.toMatchObject({ jobId: 'translation-job-1' });
     expect(repo.createImageTranslation).toHaveBeenCalledTimes(1);
-    await expect(createAiMediaWorkflowService(repo).createImageTranslation(input)).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    await expect(createAiMediaWorkflowService(repo).createImageTranslation(input)).resolves.toMatchObject({ jobId: 'translation-job-1' });
+    for (const unverified of [
+      { ...capability, evidenceLevel: 'adapter-characterized' as const, sandboxEvidence: [] },
+      { ...capability, sandboxEvidence: [{ ...capability.sandboxEvidence[0]!, endpointSha256: 'b'.repeat(64) }] },
+    ]) {
+      const refused = repository();
+      await expect(createAiMediaWorkflowService(refused, { resolveCapability: () => unverified }).createImageTranslation(input))
+        .rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+      expect(refused.createImageTranslation).not.toHaveBeenCalled();
+    }
   });
 
   it('rejects image translation before persistence for invalid language or terminology input', async () => {

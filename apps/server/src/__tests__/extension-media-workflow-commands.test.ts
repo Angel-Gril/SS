@@ -20,7 +20,13 @@ it('authorizes translation retries only against their exact frozen price and cre
       estimatedCostCents: 14, operationConfig: { translationRuntime: runtime } },
     readiness: { ...settings, ready: true, testOnly: false, costPerImageCents: 14, globalDailyBudgetCents: 100 } };
   expect(assertExtensionMediaJobProviderAuthorized(authorization, () => capability)).toEqual({ paid: true, globalDailyBudgetCents: 100 });
-  expect(() => assertExtensionMediaJobProviderAuthorized(authorization)).toThrow();
+  expect(assertExtensionMediaJobProviderAuthorized(authorization)).toEqual({ paid: true, globalDailyBudgetCents: 100 });
+  for (const unverified of [
+    { ...capability, evidenceLevel: 'adapter-characterized' as const, sandboxEvidence: [] },
+    { ...capability, sandboxEvidence: [{ ...capability.sandboxEvidence[0]!, endpointSha256: 'b'.repeat(64) }] },
+  ]) {
+    expect(() => assertExtensionMediaJobProviderAuthorized(authorization, () => unverified)).toThrow();
+  }
   expect(() => assertExtensionMediaJobProviderAuthorized({ ...authorization, readiness: {
     ...authorization.readiness, credentialRevision: { ...settings.credentialRevision, revision: 3 },
   } }, () => capability)).toThrow();

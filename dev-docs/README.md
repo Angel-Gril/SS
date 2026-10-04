@@ -2,6 +2,8 @@
 
 ## 2026-10-04 最终候选前 Provider 校验收口
 
+`102711d9 / 1.0.417` COM 部署/canonical VPS 通过；原 DOTH 翻译 pilot 已经由配置 API 显式开启、runtime READY，逐图审核及 CN dark 保持。完整 offline 又发现两处依赖旧全局未准入状态的后端测试负例，已在 capability→persistence→execute owner 链复核后改为显式缺证据/异端点负例，七套 `229/229`、typecheck/lint 通过；没有改业务运行时。最终 `1.0.418` 需绑定新 clean commit 完整 offline，官网仍 `1.0.405`，新 suite/QA04/公开门禁尚未执行。当前新增 Provider/Ozon/费用为零；唯一详情见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 接续审计确认原工作树 clean；Provider sandbox 审核表同步已推送为 `c07531fd / 1.0.416` 候选，但该提交完整 offline 在旧默认入口 fixture 缺 `testOnly:false` 处真实失败，没有 PASS receipt。两处 fixture 与正式 QA04 的受限三项 operation 合同现已一起收口，precision 关联 `136/136`、QA04 定向 `3/3`、ESLint 通过，未扩大 operation/endpoint/参考图或生产权限。最终候选使用 `1.0.417`，仍需新的 native offline、fresh normal SUITE/QA04 和双区官网发布门禁；旧签名和失败日志保留。唯一证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-04 受限翻译能力评审与新官网发布准备

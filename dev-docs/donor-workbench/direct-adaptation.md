@@ -4,6 +4,9 @@
 
 ### 2026-10-04 最终候选前发布合同校验收口
 
+- `102711d9 / 1.0.417` 已推送、区域签名；COM 标准部署和 canonical VPS 通过，CN 标准部署进行中。COM 通过既有带 revision 的配置 API 显式启用原 DOTH 翻译 pilot，22 项通用中文→俄文术语、配置前后原件与 CAS 回退输入均保存在私有目录；exact runtime readiness 为 READY、CNY `0.01`/张，pilot 三 operation 与原 owner/shop/device/revisions 完全匹配，CN 不改开关。尚未发出新 Provider 请求。
+- `102711d9` 第二份 native offline 已通过全部前置，随后全 server 为 `6626 passed / 350 skipped / 2 failed`：`ai-media-workflows` 与 `extension-media-workflow-commands` 仍依赖全局翻译未准入作为负例。日志 SHA-256 `fbe3a299aa322dade11bb29dace9fc9a5b8b9e99fbff627f1a6ec8e64c33a718`，没有 PASS receipt。重新核对唯一 capability owner→workflow persistence→device execute 链后，仅同步测试：正常 exact registry 为正例；独立注入 characterized/missing evidence 或其他 endpoint 的负例仍拒绝且不持久化。相关七套 `229/229`、server typecheck/ESLint 通过，没有运行时逻辑改动。
+- 下一最终候选使用 `1.0.418`，不覆盖 `1.0.417` 签名与失败原件。正式完整 offline 只对最终 clean commit 重跑一次；有新失败才扩大。fresh normal SUITE/正式 QA04、双区 canary、website approval、CAS 和 distribution 均尚未执行，官网仍 `1.0.405`。不限费用授权仍有效，当前本轮新增 Provider/Ozon/费用为零。
 - 根工作树接续检查时为 clean，HEAD `2a4a90de` 已推送；不存在摘要中所述尚未提交的运行时修改。`lint`、workspace `typecheck`、source/Cloud/Local verifier 均通过。
 - 原 `pnpm preflight` 在 sandbox Provider contract 处真实失败：注册表已记录 exact `qwen-mt-image` 翻译 transport，sandbox 审核表仍期待 `adapter-characterized`。T2 以该失败为 RED；最小修复仅同步 `official DashScope / IMAGE_TRANSLATE / public_url / async` 的精确证据断言，新增拒绝文本/编辑继承、其他端点、transport/result mode 和参考图数量扩大的回归，原 foundation contract GREEN。不修改生产 feature flag、scope 或质量结论。
 - `c07531fd / 1.0.416` 区域候选已签名，双区备份恢复演练与签名包 MV3 默认入口/来源拒绝/Blob 验证通过，标准部署已发起。完整 native offline 原件在 `release-c07531fd-website/qa04-offline.log` 真实失败：默认入口测试的两处旧断言缺当前 `testOnly:false` 字段；没有 PASS receipt，不能重标或冒称通过。两处 fixture 同步后，precision/翻译关联 `136/136` 通过。
