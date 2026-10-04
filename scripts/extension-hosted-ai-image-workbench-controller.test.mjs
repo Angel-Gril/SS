@@ -974,13 +974,13 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
 
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const firstCreate = test.calls.filter((row) => row[0] === 'runtime-message'
-    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay')[0];
+  const firstCreate = test.calls.find((row) => row[0] === 'create-plan');
   assert.ok(firstCreate);
   assert.equal(
-    test.calls.some((row) => row[0] === 'create-plan'),
+    test.calls.some((row) => row[0] === 'runtime-message'
+      && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay'),
     false,
-    'a source-bound workbench must create plans only through the source-page relay',
+    'the official workbench uses its authorized plan-binding owner without a retired source listener',
   );
   assert.equal(test.nodes.hostedCreatePlanButton.disabled, false);
 
@@ -991,10 +991,7 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   reloadedPage.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
   assert.deepEqual(
-    JSON.parse(JSON.stringify(reloadedPage.calls.find((row) => (
-      row[0] === 'runtime-message'
-      && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay'
-    ))[1])),
+    JSON.parse(JSON.stringify(reloadedPage.calls.find((row) => row[0] === 'create-plan')[1])),
     JSON.parse(JSON.stringify(firstCreate[1])),
     'the exact source-page create intent must survive a full page reload deterministically',
   );
@@ -1003,8 +1000,7 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   test.setProjection(emptyProjection());
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const creates = test.calls.filter((row) => row[0] === 'runtime-message'
-    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay');
+  const creates = test.calls.filter((row) => row[0] === 'create-plan');
   assert.equal(creates.length, 2);
   assert.deepEqual(
     JSON.parse(JSON.stringify(creates[1][1])),
@@ -1039,16 +1035,15 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   assert.equal(test.nodes.hostedCreatePlanButton.disabled, false);
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const created = test.calls.find((row) => row[0] === 'runtime-message'
-    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay')[1];
-  assert.equal(created.action, 'CREATE_AND_REVIEW_PLAN');
+  const created = test.calls.find((row) => row[0] === 'create-plan')[1];
+  assert.deepEqual(JSON.parse(JSON.stringify(created.galleryGoals)), ['scene']);
+  assert.deepEqual(JSON.parse(JSON.stringify(created.binding)), hostedBinding());
   assert.equal(test.nodes.hostedGalleryGoals.disabled, true, 'the submitted target selection stays frozen until authority resolves it');
   test.nodes['hostedGalleryGoal-detail'].checked = true;
   test.nodes['hostedGalleryGoal-detail'].dispatch('change');
   test.nodes.hostedCreatePlanButton.dispatch('click');
   await settle(40);
-  const retried = test.calls.filter((row) => row[0] === 'runtime-message'
-    && row[1].type === 'ss-erp:source-listing-workbench-ai-image-suite-relay').at(-1)[1];
+  const retried = test.calls.filter((row) => row[0] === 'create-plan').at(-1)[1];
   assert.deepEqual(
     JSON.parse(JSON.stringify(retried)),
     JSON.parse(JSON.stringify(created)),

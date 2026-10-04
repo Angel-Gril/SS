@@ -2,6 +2,14 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 `1.0.419` 双区验收、fresh normal suite 与计划按钮修复
+
+- `c4a391e1344bee6ceba18652b57e05ed2245b7af / 1.0.419` 已推送、区域签名、COM/CN 标准部署。两区 canonical VPS 均 0 failure / 1 warning（原远端备份未配置）；COM DOTH 受限翻译 pilot 与 CN dark准确，签名包 MV3 默认入口/来源拒绝/Blob 双向通过。完整 native offline 9 gates PASS：server 6628/350 skipped、scope PG7、AI PG209、升级回放、build/lint/typecheck和 Cloud584/Local580均通过；receipt/log SHA `f8af08a6ca272738b211546d3080fe46a5d8c55d38245e0fb5982ea5693fd340` / `7c5d54da36aa12d633fea82bdaf3445f2fd669fbf71e17e05c5db15a4fe16742`。
+- 原卫衣 `990499606077` 两图真实正常生成并各结算一次 CNY0.14，但纹理失真和scene不达标，两槽已明确 REJECT，未assignment。另收纳盒 `1048072018093` 通过原空草稿owner选择，生成两图 `cmutpk2vn003m5oe1erq31tw6`，各attempt1、900×1200 PNG、原CNY0.14一次CHARGE；审核前PENDING UI/DB、START/CONTINUE原响应、两图preview与逐图review完整。容器主体/提手/凹槽无新增文字或水印，人工批准只用于隔离草稿验收；两图接近来源背景，不能宣称scene创意效果优秀。
+- DOTH草稿 `draft-3509f416-a246-4dc5-bfa5-e9ffe9ea7063` r1/v1→r2/v2增加2 assignment；原请求与原幂等键replay返回200/replayed=true、同batch及两条素材。全owner pending五计数0、只读队列保留策略REMOVE_ON_COMPLETE、Ozon attempts0。正式原生QA04通过，SHA `269b706cb9994012119650e81fc6e99b8d3f579c5a4b59350cba98f7faddb6f2`，保留卫衣反例和既有技术反例，不改写质量结论。新Provider POST4、ERP费用CNY0.56、Ozon写入0、未读取Provider控制台。
+- 真实官方launcher物理点击通过，但创建计划按钮发现已退役 source relay listener 缺失。通过既有授权runtime plan client证实服务端plan-binding正常；T2 controller正例先RED，再删除该页旧relay函数，统一调用runtimeClient.createPlan，保持source/草稿binding、galleryGoals与deterministic idempotency。controller/runtime/authorization定向27、ESLint通过。该修复只改扩展UI调用，不改服务端执行源码、权限、费用和schema；最终公开候选1.0.420绑定新clean commit，并以明确c4 execution和新target offline/cleanup验证源码一致，不重新收费。
+- 官网仍1.0.405，尚未进行最终双区canary、website approval、CAS或distribution。私有运行原件在fresh-normal-storage419-20261004、fresh-normal-20261004（驳回卫衣）与release-c4a391e1-website。
+
 ### 2026-10-04 最终候选前发布合同校验收口
 
 - `102711d9 / 1.0.417` 已推送、区域签名；COM 标准部署和 canonical VPS 通过，CN 标准部署进行中。COM 通过既有带 revision 的配置 API 显式启用原 DOTH 翻译 pilot，22 项通用中文→俄文术语、配置前后原件与 CAS 回退输入均保存在私有目录；exact runtime readiness 为 READY、CNY `0.01`/张，pilot 三 operation 与原 owner/shop/device/revisions 完全匹配，CN 不改开关。尚未发出新 Provider 请求。

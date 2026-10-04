@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 `1.0.419` 双区与正式 QA04通过；计划按钮修复准备1.0.420
+
+`c4a391e1 / 1.0.419` 双区部署/canonical VPS、完整native offline及签名包MV3通过。真实两图收纳盒suite完成PENDING→preview→review→store-draft assignment/replay，正式QA04已生成；卫衣两图失真已驳回。本轮Provider POST4、ERP费用CNY0.56、Ozon0。真实验收发现官方计划按钮仍转发已删除的旧source listener；最小扩展修复已通过定向回归，最终1.0.420将直接复用既有plan-binding runtime客户端并走新target offline/VPS/canary/approval，再CAS分发。ERP执行源码不变可沿用明确c4execution原件，不重新收费。官网仍1.0.405；事实只维护在[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-04 最终候选前 Provider 校验收口
 
 `102711d9 / 1.0.417` COM 部署/canonical VPS 通过；原 DOTH 翻译 pilot 已经由配置 API 显式开启、runtime READY，逐图审核及 CN dark 保持。完整 offline 又发现两处依赖旧全局未准入状态的后端测试负例，已在 capability→persistence→execute owner 链复核后改为显式缺证据/异端点负例，七套 `229/229`、typecheck/lint 通过；没有改业务运行时。最终 `1.0.418` 需绑定新 clean commit 完整 offline，官网仍 `1.0.405`，新 suite/QA04/公开门禁尚未执行。当前新增 Provider/Ozon/费用为零；唯一详情见[直接适配 owner](donor-workbench/direct-adaptation.md)。
