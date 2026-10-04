@@ -4,6 +4,8 @@
 
 ### 2026-10-04 图案水印、官方视频与托管翻译接线（本地完成 3/3）
 
+- 接续发布：功能提交 `82b142c82d59034645056af08697e9f6bc99f8f3 / 1.0.414` 已推送并生成区域签名候选；签名包 COM/CN 隔离 MV3 默认入口、来源拒绝与 Blob transport 均通过。COM 标准部署已完成，CN 收尾中。最后旧 `1.0.405` client 复核发现总返回空 `videoBindings` 会违背 strict v1 响应；新增四项 RED→GREEN，两个发布 owner 现无视频时省略新增字段，有视频与 previewHash 仍完整绑定。该最小兼容修复需独立 `1.0.415` 候选，不改写已签名 414。真实翻译两张中文校准输入已准备，仅本地文件与 hash；最高 CNY 0.28 费用问题仍待用户回复，尚未发布公网输入或提交 Provider。
+
 - [x] U6 图案水印：`source-listing-image-watermark.ts` 与现水印 owner 通过当前账号/店铺模板 ID 读取安全图案，不接受调用方 URL。原 PNG alpha 与设置透明度相乘，支持六位置、缩放、平铺；来源图、模板像素和模板版本进入预览 hash。提交期间模板归属/URL/版本变化在事务末拒绝并回滚清理。通用模板、精确店铺和现服务端兼容的旧店铺名都受归属检查。donor 原弹窗支持文字/图片切换、模板读取、预览和应用；无图案时说明 ERP 图片处理→水印模板维护路径。
 - [x] U7 官方视频：新增 `source-listing-video.ts` / Prisma owner / `source-listing-video-media.ts`，当前设备、店铺、快照、草稿 r/v 与官方 schema 限权。主图/富内容按 SKU 保存、清空和幂等重放，切换 shop/snapshot/SKU/category 撤销旧绑定。compiler 保留 `complex_id`、富内容 `raVideo`，视频不进入 images；当前 schema 不支持、旧 schema、冲突 rich attributes 仍拒绝。既有 publisher 和 previewHash 包含完整视频，前端可在原窗口确认。只接已上传到 Ozon 的官方 CDN/sc-temporary 媒体；未调用旧 Cookie 私有上传，也未把普通 1688 视频直接当可发布素材。
 - [x] U8 付费翻译框架：`ai-image-translation-runtime-contract.ts` 在 exact provider/model/official endpoint/input transport/async 与 sandbox capability 全量成立后才准入。paid command 必须携带当前单张 `priceConfirmation`，runtime/credential revision/currency/单价冻结进 job；CNY reservation、原 worker 原 task GET 恢复、审核与草稿应用、幂等及成功张数结算复用原 owners。已开始的未知请求不能因 flag/config 变化被误标未提交，禁止盲重试；未冻结 legacy job不晋升。Web 尚无报价确认 UI 时返回 `WEB_TRANSLATION_PRICE_CONFIRMATION_UNAVAILABLE`，不显示假可用。当前 registry `qwen-mt-image` 仍 adapter-characterized，不改 flag 或能力证据。

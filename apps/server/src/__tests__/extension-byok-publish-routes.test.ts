@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionByokPublishRoutes } from '../routes/extension-byok-publish.js';
 import {
@@ -166,6 +167,16 @@ async function build(options: {
 }
 
 describe('extension BYOK publish routes', () => {
+  it.each([false, true])('keeps exact v1 BYOK preview keys when video bindings are empty (explicit=%s)', async explicit => {
+    const initial = draft(); if (explicit) initial.media.videoBindings = [];
+    const f = await build({ currentDraft: initial });
+    const response = await f.app.inject({ method: 'POST', url: '/preview', payload: previewRequest() });
+    expect(response.statusCode).toBe(200); const data = response.json().data;
+    expect(Object.keys(data).sort()).toEqual([...Object.keys(previewRequest()), 'selectedSkuKeys', 'orderedMedia', 'previewHash'].sort());
+    const { previewHash, ...content } = data;
+    expect(previewHash).toBe(createHash('sha256').update(JSON.stringify({ publishDraftRevision: initial.revision, ...content, videoBindings: [] })).digest('hex'));
+    await f.app.close();
+  });
   it('binds video selections to BYOK publish confirmation', async () => {
     const initial = draft(); initial.media.videoBindings = [{ skuKey: 'sku-1', role: 'MAIN', sourceMediaKey: null,
       url: 'https://cdn1.ozone.ru/s3/sc-temporary/video.mp4', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64),

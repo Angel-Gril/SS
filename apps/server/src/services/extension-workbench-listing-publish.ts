@@ -142,7 +142,7 @@ export interface ExtensionWorkbenchListingPublishPreview
   previewHash: string;
   selectedSkuKeys: string[];
   orderedMedia: ExtensionWorkbenchListingPublishOrderedMedia[];
-  videoBindings: OzonListingDraftVideoBinding[];
+  videoBindings?: OzonListingDraftVideoBinding[];
 }
 
 export interface ExtensionWorkbenchListingPublishPrepared {
@@ -552,9 +552,10 @@ export function createExtensionWorkbenchListingPublishService(options: {
       currentDraftVersion: context.draft.draftVersion,
       selectedSkuKeys: context.selectedSkuKeys,
       orderedMedia: context.orderedMedia,
-      videoBindings: structuredClone(context.draft.media.videoBindings || []),
     };
-    return { ...content, previewHash: previewHash(content) };
+    const videoBindings = structuredClone(context.draft.media.videoBindings || []);
+    return { ...content, ...(videoBindings.length ? { videoBindings } : {}),
+      previewHash: previewHash({ ...content, videoBindings }) };
   }
 
   return {

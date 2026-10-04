@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionWorkbenchPublishRoutes } from '../routes/extension-workbench-publish.js';
@@ -178,6 +179,17 @@ async function build(options: {
 }
 
 describe('extension workbench publish routes', () => {
+  it.each([false, true])('keeps exact v1 preview keys when video bindings are empty (explicit=%s)', async explicit => {
+    const initial = draft(); if (explicit) initial.media.videoBindings = [];
+    const f = await build({ currentDraft: initial });
+    const response = await f.app.inject({ method: 'POST', url: '/preview', payload: previewRequest() });
+    expect(response.statusCode).toBe(200); const data = response.json().data;
+    expect(Object.keys(data).sort()).toEqual([...Object.keys(previewRequest()), 'currentDraftRevision', 'currentDraftVersion',
+      'selectedSkuKeys', 'orderedMedia', 'previewHash'].sort());
+    const { previewHash, ...content } = data;
+    expect(previewHash).toBe(createHash('sha256').update(JSON.stringify({ ...content, videoBindings: [] })).digest('hex'));
+    await f.app.close();
+  });
   it('includes video selections in confirmation and rejects a changed video preview hash', async () => {
     const initial = draft(); initial.media.videoBindings = [{ skuKey: 'sku-1', role: 'MAIN', sourceMediaKey: null,
       url: 'https://cdn1.ozone.ru/s3/sc-temporary/video.mp4', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64),

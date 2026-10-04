@@ -149,7 +149,7 @@ export interface ExtensionByokListingPublishPreview
   previewHash: string;
   selectedSkuKeys: string[];
   orderedMedia: ExtensionByokListingPublishOrderedMedia[];
-  videoBindings: OzonListingDraftVideoBinding[];
+  videoBindings?: OzonListingDraftVideoBinding[];
 }
 
 export interface ExtensionByokListingPublishPrepared {
@@ -611,8 +611,10 @@ export function createExtensionByokListingPublishService(options: {
     publishDraftRevision: number,
     videoBindings: OzonListingDraftVideoBinding[],
   ): ExtensionByokListingPublishPreview {
-    const content = { ...binding, selectedSkuKeys, orderedMedia: media, videoBindings: structuredClone(videoBindings) };
-    return { ...content, previewHash: previewHash(content, publishDraftRevision) };
+    const content = { ...binding, selectedSkuKeys, orderedMedia: media };
+    const normalizedVideoBindings = structuredClone(videoBindings);
+    return { ...content, ...(normalizedVideoBindings.length ? { videoBindings: normalizedVideoBindings } : {}),
+      previewHash: previewHash({ ...content, videoBindings: normalizedVideoBindings }, publishDraftRevision) };
   }
 
   return {
