@@ -7,6 +7,7 @@ import { PrismaAiProviderReconciliationRepository } from '../repositories/ai-pro
 import { createAiProviderReconciliationAdminService } from '../services/ai-provider-reconciliation-admin.js';
 import { createAiImageSuiteProviderRuntimeSnapshot } from '../services/ai-image-suite-provider-runtime.js';
 import { type AiProviderReconciliationClaim } from '../services/ai-provider-reconciliation.js';
+import { checksumAiPromptRevision } from '../services/ai-prompt-templates.js';
 
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1';
 const url = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
@@ -41,10 +42,15 @@ describe.skipIf(!enabled)('original suite task recovery PostgreSQL owner', () =>
     await db.$transaction(async (tx: any) => {
       for (const table of tables) await tx.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
       await tx.aiPromptTemplate.upsert({ where: { key: templateKey }, update: {}, create: { key: templateKey, label: 'Synthetic suite' } });
-      await tx.aiPromptRevision.create({ data: { id: id('template_revision'), templateKey, status: 'PUBLISHED', promptTemplate: '保留商品',
-        negativePromptTemplate: '', checksum: H('template'), createdByUserId: owner, updatedByUserId: owner } });
+      const promptTemplate = '槽位：{{slot_spec_json}}\n参考：{{reference_manifest_json}}\n已核事实：{{verified_facts_json}}';
+      const negativePromptTemplate = '附加限制：{{safety_constraints_json}}';
+      const templateChecksum = checksumAiPromptRevision({ templateKey, promptTemplate, negativePromptTemplate });
+      await tx.aiPromptRevision.create({ data: { id: id('template_revision'), templateKey, status: 'PUBLISHED', promptTemplate,
+        negativePromptTemplate, checksum: templateChecksum, createdByUserId: owner, updatedByUserId: owner } });
+      await tx.aiPromptTestRun.create({ data: { id: id('template_test'), revisionId: id('template_revision'),
+        revisionChecksum: templateChecksum, status: 'PASS', actorUserId: owner } });
       await tx.aiPromptRelease.create({ data: { id: id('release'), templateKey, revisionId: id('template_revision'), sequence: 1000,
-        action: 'PUBLISH', actorUserId: owner } });
+        action: 'PUBLISH', testRunId: id('template_test'), actorUserId: owner } });
       await tx.aiMediaPlan.create({ data: { id: id('plan'), ownerUserId: owner, actorUserId: owner, sourceSubjectId: subject,
         contextType: 'collect', contextId: id('goods'), idempotencyKey: id('plan_key'), requestFingerprint: H('request'), revision: 2,
         latestVersion: 0, reviewStatus: 'NOT_READY' } });
@@ -70,7 +76,7 @@ describe.skipIf(!enabled)('original suite task recovery PostgreSQL owner', () =>
       const shared = { suiteId, ownerUserId: owner, version: 'ai-image-suite-prompt-set/v1', operationKey: id('prompt_key'), requestFingerprint: H('request'),
         planId: id('plan'), planVersionId: id('version'), sourceSubjectId: subject, sourceCaptureSnapshotId: snapshotId, sourceCaptureHash: H('capture'),
         sourceProfileHash: H('profile'), sourceSchemaVersion: 'source-product-capture-v2', templateKey, templateReleaseId: id('release'),
-        templateRevisionId: id('template_revision'), templateSequence: 1000, templateChecksum: H('template'), templateSnapshot: {}, templateSnapshotHash: H('template'),
+        templateRevisionId: id('template_revision'), templateSequence: 1000, templateChecksum, templateSnapshot: {}, templateSnapshotHash: H('template'),
         compilerVersion: 'ai-image-suite-prompt-compiler-wanx/v1', policyVersion: 'test', policyHash: H('policy'), referenceSetHash: H('ref') };
       await tx.aiMediaSuitePromptSet.create({ data: { ...shared, id: id('promptset'), actorUserId: owner, planHash: H('plan'),
         provider: runtime.providerConfig!.provider, model: runtime.providerConfig!.model, providerConfigHash: runtime.providerConfig!.providerConfigHash,
@@ -94,7 +100,7 @@ describe.skipIf(!enabled)('original suite task recovery PostgreSQL owner', () =>
         await tx.aiImageJob.create({ data: { id: key('job'), ownerUserId: owner, actorUserId: owner, operation: 'IMAGE_TO_IMAGE', status: 'FAILED',
           workflowId: key('workflow'), workflowAttempt: 1, provider: runtime.providerConfig!.provider, model: runtime.providerConfig!.model,
           prompt: '保留商品', negativePrompt: '', resolvedPrompt: '保留商品', resolvedNegativePrompt: '', templateKey, templateReleaseId: id('release'),
-          templateChecksum: H('template'), templateSnapshot: {}, requestFingerprint: H(key('request')),
+          templateChecksum, templateSnapshot: {}, requestFingerprint: H(key('request')),
           inputAssets: [{ assetId: source.id, role: 'REFERENCE', ordinal: 0, sha256: H('reference') }], operationConfig: config,
           width: 900, height: 1200, maxAttempts: 1, attemptCount: 1, estimatedCostCents: 14, billedUnits: 0, progress: 0,
           startedAt: accepted, completedAt: new Date(), providerDispatchedAt: accepted, providerJobId: key('accepted_task'),
@@ -110,7 +116,7 @@ describe.skipIf(!enabled)('original suite task recovery PostgreSQL owner', () =>
           errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', errorMessage: '800x800 rejected' } });
         await tx.aiMediaSuiteSlotPrompt.create({ data: { id: key('prompt'), promptSetId: id('promptset'), suiteId, slotId: key('slot'), ownerUserId: owner,
           version: 'ai-image-suite-slot-prompt/v1', ordinal, slotKey: key('slotkey'), slotHash: H('slot'), referencesHash: H('refs'), referenceSetHash: H('ref'),
-          templateKey, templateReleaseId: id('release'), templateRevisionId: id('template_revision'), templateSequence: 1000, templateChecksum: H('template'),
+          templateKey, templateReleaseId: id('release'), templateRevisionId: id('template_revision'), templateSequence: 1000, templateChecksum,
           templateSnapshot: {}, templateSnapshotHash: H('template'), variablesSnapshot: {}, variablesHash: H('variables'), resolvedPrompt: '保留商品',
           resolvedNegativePrompt: '', compiledPromptHash: H('compiled'), compilerVersion: 'ai-image-suite-prompt-compiler-wanx/v1',
           policyVersion: 'test', policyHash: H('policy'), resolvedPromptHash: H('保留商品'), resolvedNegativePromptHash: H(''), bindingHash: H('binding') } });
@@ -131,7 +137,9 @@ describe.skipIf(!enabled)('original suite task recovery PostgreSQL owner', () =>
       decisions.push(decision);
       await admin.resolveReconciliation(decision);
     }
-    claims = await new PrismaAiProviderReconciliationRepository(db).claimDue({ workerId: 'synthetic-suite-worker', now: new Date(), limit: 10, leaseMs: 120000 });
+    const targetJobIds = new Set([id('job_0'), id('job_1')]);
+    const allClaims = await new PrismaAiProviderReconciliationRepository(db).claimDue({ workerId: 'synthetic-suite-worker', now: new Date(), limit: 10, leaseMs: 120000 });
+    claims = allClaims.filter((claim) => targetJobIds.has(claim.jobId));
     expect(claims).toHaveLength(2);
   },120000);
   afterAll(async () => db?.$disconnect());

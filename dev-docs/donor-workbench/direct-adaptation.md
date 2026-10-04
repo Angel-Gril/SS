@@ -5,6 +5,8 @@
 ### 2026-10-04 最终候选前发布合同校验收口
 
 - `102711d9 / 1.0.417` 已推送、区域签名；COM 标准部署和 canonical VPS 通过，CN 标准部署进行中。COM 通过既有带 revision 的配置 API 显式启用原 DOTH 翻译 pilot，22 项通用中文→俄文术语、配置前后原件与 CAS 回退输入均保存在私有目录；exact runtime readiness 为 READY、CNY `0.01`/张，pilot 三 operation 与原 owner/shop/device/revisions 完全匹配，CN 不改开关。尚未发出新 Provider 请求。
+- `f4cebd01 / 1.0.418` 首次 native offline 在 PG integration 处失败，无 receipt，原日志 SHA `75ac66fc48b2a924304a55954a3f22478ab756c6271d80f2f4bbfd6eb9e549a1`。根因已证实是测试隔离：共享 schema 的 recovery claimDue 看到其他 fixture 的 due jobs；手工 Prompt fixture 缺严格 revision checksum、PASS test run 和 release testRunId。修复仅改测试 owner：按本测试 job ID 过滤 claims，并建立符合真实 source contract 的 Wanx Prompt revision/release。随后 26 个 PG 文件 `209/209`、153 migrations 和 upgrade integration 全通过；生产 claimDue、Prompt resolver、schema 未改。
+- 最终提交将在该测试修复上生成 `1.0.419`，完整 offline 只重跑一次；之前 `1.0.418` 的候选和失败原件保留。官网仍 `1.0.405`，fresh normal SUITE/QA04、双区 canary、approval/CAS/distribution 尚未执行。当前无新增 Provider/Ozon 请求或费用。
 - `102711d9` 第二份 native offline 已通过全部前置，随后全 server 为 `6626 passed / 350 skipped / 2 failed`：`ai-media-workflows` 与 `extension-media-workflow-commands` 仍依赖全局翻译未准入作为负例。日志 SHA-256 `fbe3a299aa322dade11bb29dace9fc9a5b8b9e99fbff627f1a6ec8e64c33a718`，没有 PASS receipt。重新核对唯一 capability owner→workflow persistence→device execute 链后，仅同步测试：正常 exact registry 为正例；独立注入 characterized/missing evidence 或其他 endpoint 的负例仍拒绝且不持久化。相关七套 `229/229`、server typecheck/ESLint 通过，没有运行时逻辑改动。
 - 下一最终候选使用 `1.0.418`，不覆盖 `1.0.417` 签名与失败原件。正式完整 offline 只对最终 clean commit 重跑一次；有新失败才扩大。fresh normal SUITE/正式 QA04、双区 canary、website approval、CAS 和 distribution 均尚未执行，官网仍 `1.0.405`。不限费用授权仍有效，当前本轮新增 Provider/Ozon/费用为零。
 - 根工作树接续检查时为 clean，HEAD `2a4a90de` 已推送；不存在摘要中所述尚未提交的运行时修改。`lint`、workspace `typecheck`、source/Cloud/Local verifier 均通过。
