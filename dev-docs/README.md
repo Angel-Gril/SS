@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 `556e7ca2 / 1.0.413` 图片工作台适配已推送、签名并双区部署
+
+逐 SKU 图片管理、审核刷新提示、水印服务端预览/应用、1688 来源视频保留/预览和 hero-only“AI 主图＋翻译”已进入新运行版。COM 保持 DOTH 原 pilot，CN 保持 direct/RDS dark；153 migrations、数据库 guard、三服务与 `/ready` 通过。两区完整 canonical VPS 均 `0 failure / 1 warning`，warning 为未配置远端备份；签名 COM Cloud 包的隔离 MV3 来源页/Blob transport 验收通过。官网仍公开 `0d695279 / 1.0.405`，未执行 website approval、发布 canary、CAS 或 distribution probe。功能范围、证据与仍未完成的正式 Ozon 视频发布/生产翻译准入只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。本轮无新增 Provider/Ozon 请求或费用。
+
 ## 2026-10-04 原版图片处理剩余功能已本地闭合，准备 1.0.413 受控部署
 
 逐 SKU 图片表、同窗来源/结果管理之后，本轮补齐水印设置/预览/应用、1688 来源视频保留与预览、hero-only 的“AI 主图＋翻译”顺序。服务端水印使用 `IMAGE_PROCESSED` 独立资产类型、当前来源快照/草稿 CAS、设备店铺权限、幂等回执和失败清理；不产生 AI 费用。来源视频可播放预览，不宣称已支持 Ozon 正式视频发布。`galleryGoals: []` 只生成当前 SKU 主图，默认缺省仍为原套图目标。

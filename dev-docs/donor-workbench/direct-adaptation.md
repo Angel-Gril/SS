@@ -2,6 +2,14 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 `556e7ca2 / 1.0.413` 签名、双区部署与安装验收完成
+
+- 功能提交 `556e7ca2b8153c8081f49e6c742911aad7f3549c` 已推送到 `feat/ai-media-prompt-registry`。最终定向后端 `237/237`、扩展关联 `96/96`、水印真实隔离 PostgreSQL `4/4`、全 workspace lint/typecheck、Cloud/Local verifier 通过。精铺图片、水印和主图＋翻译的浏览器请求为明确本地 fixture，不冒称实际生产翻译或图像质量验收。
+- 同 clean commit 的 COM/CN `1.0.413` 候选分别构建并签名，保持独立 .com/.cn origins。两区标准 deployment backup/restore 均生成 target-bound attestation，临时恢复库 144/143 张表后清理；第 153 项迁移仅新增 `IMAGE_PROCESSED` enum，不改写既有资产/费用。COM 使用原 DOTH/session/scopes/rollout expectation；CN direct/RDS、AI/BYOK/Ozon dark。current、API/Worker/Web 均运行该 commit，readiness 首次 HTTP 200。
+- 初次 COM full verifier 因 runtime backup 仍绑定旧 commit 失败；使用正常 runtime backup 入口刷新两区回执后，canonical VPS 均 PASS，`0 failure / 1 warning`（warning 仍为未配置远端备份）。COM evidence SHA-256 `dfb5c94fba2d583060e6c37542b8c55910b4b791457bde4b10b8a77afa210298`；CN `340f3bfc6d983a5e5f6aec4a6fccae12c2d7870bfa33b0960b79c53df4abf2f7`。签名摘要分别 `a9e693e8280afc774387d41e1eedbcbbc35c5bc2bfef30365cd87eae98a07b47`、`0554975ee862573102689e84abb1a6a65c72e04f99f34a2335ac59e2a1b42978`。私有部署/回执原件在 `release-556e7ca2-website`。
+- 最终签名 COM Cloud 包在隔离 Chrome 真正安装，默认 source-page iframe、普通商品、伪造/登录页拒绝、来源图和双向 Blob transport 通过，`worktreeClean=true`，Provider/Ozon/production mutations 全 0。原验收 runner 按源码未带 `(Cloud)` 的完整名称选 Worker，第一次误拒绝已正确加载的签名包；只在本轮 ignored 适配 helper 中使用签名 manifest 的精确名称，不改变包、消息策略或原件。最终证据为系统临时目录 `ss-erp-donor-mv3-evidence-XptEle/summary.json`，候选 extension tree SHA-256 `1cb995bd8f864cecf3b68c35ec2b05eed35a4c7471ebca810e0c7738566a06d5`。两区未认证水印 preview 请求均返回 401，证明路由存在且未绕过设备身份。
+- 未执行官网 approval、REL-04 publication canary、CAS 或 distribution probe；官网仍公开 `0d695279 / 1.0.405`。正式 Ozon 主图/富内容视频发布仍需独立视频 assignment/compiler；本版完成的是来源视频采集与预览。文字水印完整可用，图案水印模板尚未接入；生产图片翻译继续受现有服务端准入，不因 UI 模式启用而扩大 pilot。无新增 Provider POST、Ozon 写入或业务费用。
+
 ### 2026-10-04 水印、来源视频与 AI 主图＋翻译本地闭合
 
 - [x] U3 水印：复用 donor 水印设置交互，服务端生成 `IMAGE_PROCESSED`，绑定当前来源快照、店铺、设备 session、草稿版本和 media slot；预览哈希、幂等 replay、CAS/上传回滚、费用为 0 均通过。应用不会把水印结果伪装为 Provider 图片。
