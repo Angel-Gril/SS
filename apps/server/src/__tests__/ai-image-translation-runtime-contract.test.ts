@@ -25,8 +25,10 @@ const capability = {
 };
 
 describe('paid image translation runtime', () => {
-  it('keeps the actual characterized registry dark', () => {
-    expect(resolvePaidAiImageTranslationReadiness(settings, storage)).toMatchObject({ ready: false, reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED' });
+  it('uses the reviewed translation registry while explicit runtime and feature gates remain required', () => {
+    expect(resolvePaidAiImageTranslationReadiness(settings, storage)).toMatchObject({ ready: true, testOnly: false });
+    expect(resolvePaidAiImageTranslationReadiness({ ...settings, enabled: false }, storage).ready).toBe(false);
+    expect(resolvePaidAiImageTranslationReadiness({ ...settings, hasApiKey: false }, storage).ready).toBe(false);
   });
 
   it('requires exact registered endpoint/model/operation transport evidence', () => {

@@ -24,7 +24,8 @@ describe('Normal AI image protocol admission', () => {
       sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const, inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
     const job = { provider: runtime.provider, model: runtime.model, operation: 'IMAGE_TRANSLATE', operationConfig: { translationRuntime: runtime } };
     expect(canUseAiImageJobOperation(job, true, () => capability)).toBe(true);
-    expect(canUseAiImageJobOperation(job, true)).toBe(false);
+    expect(canUseAiImageJobOperation(job, true)).toBe(true);
+    expect(canUseAiImageJobOperation(job, true, () => ({ ...capability, evidenceLevel: 'adapter-characterized' }))).toBe(false);
     expect(canUseAiImageJobOperation({ ...job, operationConfig: {} }, true, () => capability)).toBe(false);
     expect(canUseAiImageJobOperation({ ...job, operationConfig: { translationRuntime: { ...runtime, baseUrlSha256: 'a'.repeat(64) } } }, true, () => capability)).toBe(false);
   });

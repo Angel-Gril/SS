@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
+import { normalizeAiMediaHostedPilotExpectation, verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
 
 const owner = 'owner-1';
 const shop = 'shop-1';
@@ -75,4 +75,57 @@ test('rejects an enabled operation outside the explicit pilot allowlist', () => 
     ...expected,
     allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
   }), /operation|FULL_EDIT|allowlist/iu);
+});
+
+const translationExpected = { ...expected, allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'] };
+function translationSnapshot() {
+  const value = snapshot();
+  for (const key of ['feature_ai_media_full_edit', 'feature_ai_media_inpaint']) value.configRows.find(row => row.key === key).value = 'false';
+  value.configRows.push({ key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
+    { key: 'ai_image_translation_model', value: 'qwen-mt-image' });
+  return value;
+}
+test('accepts explicitly allowed translation while keeping the existing owner/shop/device scopes exact', () => {
+  assert.deepEqual(verifyAiMediaHostedPilotPolicy(translationSnapshot(), translationExpected), {
+    expectation: 'hosted-pilot', ...translationExpected,
+  });
+});
+test('does not permit translation in the old generation-only pilot expectation', () => {
+  assert.throws(() => verifyAiMediaHostedPilotPolicy(translationSnapshot(), { ...translationExpected,
+    allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'] }), /feature_image_translate|IMAGE_TRANSLATE|allowlist/iu);
+});
+for (const [key, value] of [
+  ['feature_image_translate', 'false'], ['feature_image_translate', 'invalid'],
+  ['ai_image_translation_provider', 'disabled'], ['ai_image_translation_provider', 'fake'],
+  ['ai_image_translation_provider', 'unverified-provider'], ['ai_image_translation_model', 'different-model'],
+]) test(`rejects allowed translation with ${key}=${value}`, () => {
+  const input = translationSnapshot(); input.configRows.find(row => row.key === key).value = value;
+  assert.throws(() => verifyAiMediaHostedPilotPolicy(input, translationExpected), /translation|translate|IMAGE_TRANSLATE/iu);
+});
+for (const operation of ['TEXT_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'UNKNOWN_OPERATION']) {
+  test(`rejects widening a translation pilot with ${operation}`, () => {
+    assert.throws(() => normalizeAiMediaHostedPilotExpectation({ ...translationExpected,
+      allowedOperations: [...translationExpected.allowedOperations, operation] }), /operation|translation/iu);
+  });
+}
+test('requires the original image-to-image/suite pilot when adding translation', () => {
+  assert.throws(() => normalizeAiMediaHostedPilotExpectation({ ...translationExpected, allowedOperations: ['IMAGE_TRANSLATE'] }), /operation|translation/iu);
+});
+for (const key of ['feature_image_translate', 'ai_image_translation_provider', 'ai_image_translation_model']) {
+  test(`does not infer allowed translation from a missing ${key}`, () => {
+    const value = translationSnapshot(); value.configRows = value.configRows.filter(row => row.key !== key);
+    assert.throws(() => verifyAiMediaHostedPilotPolicy(value, translationExpected), /translation|translate|IMAGE_TRANSLATE/iu);
+  });
+}
+test('rejects malformed non-allowlisted translation flags instead of treating them as false', () => {
+  const value = snapshot(); value.configRows.push({ key: 'feature_image_translate', value: 'invalid' });
+  assert.throws(() => verifyAiMediaHostedPilotPolicy(value, expected), /feature_image_translate/iu);
+});
+test('keeps source owner, shop and device scope checks active for a translation pilot', () => {
+  for (const mutate of [
+    value => { value.deviceSessions[0].shopIds.push('another-shop'); },
+    value => { value.deviceSessions[0].ownerUserId = 'another-owner'; },
+    value => { value.deviceSessions[0].id = 'another-device'; },
+  ]) { const value = translationSnapshot(); mutate(value); assert.throws(() => verifyAiMediaHostedPilotPolicy(value, translationExpected)); }
 });

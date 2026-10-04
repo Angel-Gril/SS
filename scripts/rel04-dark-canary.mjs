@@ -19,6 +19,7 @@ import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { publicOriginForPublication } from './extension-release-publication-contract.mjs';
 import { verifyAiMediaDarkPolicy } from './verify-ai-media-dark-policy.mjs';
 import {
+  isRestrictedAiMediaHostedPilotOperations,
   normalizeAiMediaHostedPilotExpectation,
   verifyAiMediaHostedPilotPolicy,
 } from './verify-ai-media-pilot-policy.mjs';
@@ -76,6 +77,7 @@ export const REL04_DARK_CONFIG_KEYS = Object.freeze([
 export const REL04_PILOT_CONFIG_KEYS = Object.freeze([
   ...new Set([
     ...REL04_DARK_CONFIG_KEYS,
+    'ai_image_translation_model',
     'feature_source_listing_workflow',
     'source_workflow_rollout_policy',
   ]),
@@ -271,7 +273,7 @@ function aiMediaRolloutExpectation(environment) {
   try {
     const hostedPilot = normalizeAiMediaHostedPilotExpectation(parsed);
     if (hostedPilot.ownerUserIds.length !== 1
-      || JSON.stringify(hostedPilot.allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])) {
+      || !isRestrictedAiMediaHostedPilotOperations(hostedPilot.allowedOperations)) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }
     return { expectation, hostedPilot };
@@ -733,8 +735,7 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }
     if (hostedPilotExpectation.ownerUserIds.length !== 1
-      || JSON.stringify(hostedPilotExpectation.allowedOperations)
-        !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
+      || !isRestrictedAiMediaHostedPilotOperations(hostedPilotExpectation.allowedOperations)
       || !hostedPilotExpectation.shopIds.includes(shopId)) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }

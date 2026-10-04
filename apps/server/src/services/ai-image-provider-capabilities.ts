@@ -107,8 +107,12 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
     supportsMask: false,
     inputTransport: 'public_url',
     resultMode: 'async',
-    evidenceLevel: 'adapter-characterized',
-    evidence: 'request and polling contract characterized from the reference client; sandbox acceptance remains pending',
+    evidenceLevel: 'sandbox-verified',
+    evidence: 'official DashScope zh-to-ru public-source submit/poll/download verified on seven synthetic product images at 848d308a; five passed manual review and two were rejected for title fidelity or Chinese residue; every production result remains a pending candidate requiring explicit review, not an automatic listing image',
+    sandboxEvidence: [{
+      endpointSha256: aiImageProviderEndpointSha256('dashscope-qwen-mt-image', 'https://dashscope.aliyuncs.com/api/v1'),
+      operation: 'IMAGE_TRANSLATE', inputTransport: 'public_url', resultMode: 'async',
+    }],
   },
   {
     provider: 'dashscope-wanx',

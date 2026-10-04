@@ -13,6 +13,7 @@ const OPERATION_FLAGS = Object.freeze({
   IMAGE_TO_IMAGE: 'feature_ai_media_image_to_image',
   FULL_EDIT: 'feature_ai_media_full_edit',
   INPAINT: 'feature_ai_media_inpaint',
+  IMAGE_TRANSLATE: 'feature_image_translate',
 });
 
 const FORBIDDEN_FLAGS = Object.freeze([
@@ -28,7 +29,14 @@ const REQUIRED_SCOPES = Object.freeze([
   'listing:write',
   'media:execute',
 ]);
-const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE']);
+const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE']);
+const TRANSLATION_PILOT_OPERATIONS = ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'];
+
+/** Publication canaries keep the original scope, with translation only when explicitly requested. */
+export function isRestrictedAiMediaHostedPilotOperations(operations) {
+  return JSON.stringify(operations) === JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
+    || JSON.stringify(operations) === JSON.stringify(TRANSLATION_PILOT_OPERATIONS);
+}
 
 function fail(message) {
   throw new Error(message);
@@ -89,6 +97,10 @@ export function normalizeAiMediaHostedPilotExpectation(expected) {
     || new Set(operations).size !== operations.length) {
     fail('pilot expectation.allowedOperations is invalid');
   }
+  if (operations.includes('IMAGE_TRANSLATE') && (operations.length !== TRANSLATION_PILOT_OPERATIONS.length
+    || TRANSLATION_PILOT_OPERATIONS.some(operation => !operations.includes(operation)))) {
+    fail('translation pilot operations must retain IMAGE_TO_IMAGE and SUITE without adding other operations');
+  }
   if (!Number.isSafeInteger(expected.rolloutRevision) || expected.rolloutRevision < 0) {
     fail('pilot expectation.rolloutRevision is invalid');
   }
@@ -124,11 +136,20 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
     if (values.get(key)?.trim() !== 'true') fail(`${key} must be true for hosted pilot`);
   }
   for (const [operation, key] of Object.entries(OPERATION_FLAGS)) {
+    if (operation === 'IMAGE_TRANSLATE' && values.has(key) && !['true', 'false'].includes(values.get(key)?.trim())) {
+      fail(`${key} must be true, false, or absent for hosted pilot`);
+    }
     const enabled = values.get(key)?.trim() === 'true';
     if (expected.allowedOperations.includes(operation)) {
       if (!enabled) fail(`${key} must be true for the explicitly allowed ${operation} operation`);
     } else if (enabled) {
       fail(`${key} must remain false outside the explicit pilot operation allowlist`);
+    }
+  }
+  if (expected.allowedOperations.includes('IMAGE_TRANSLATE')) {
+    if (values.get('ai_image_translation_provider') !== 'dashscope-qwen-mt-image'
+      || values.get('ai_image_translation_model') !== 'qwen-mt-image') {
+      fail('explicit IMAGE_TRANSLATE pilot requires the configured dashscope-qwen-mt-image / qwen-mt-image provider');
     }
   }
   for (const key of FORBIDDEN_FLAGS) {

@@ -22,7 +22,7 @@ import {
   sha256,
   websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
-import { normalizeAiMediaHostedPilotExpectation } from './verify-ai-media-pilot-policy.mjs';
+import { isRestrictedAiMediaHostedPilotOperations, normalizeAiMediaHostedPilotExpectation } from './verify-ai-media-pilot-policy.mjs';
 
 const MAX_DARK_CANARY_BYTES = 256 * 1024;
 const MAX_DARK_CANARY_AGE_MS = 24 * 60 * 60 * 1000;
@@ -320,7 +320,7 @@ function validateRestrictedPilotEvidence(value, rollout) {
   }
   if (policy.expectation !== 'hosted-pilot'
     || normalized.ownerUserIds.length !== 1
-    || JSON.stringify(normalized.allowedOperations) !== JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])) {
+    || !isRestrictedAiMediaHostedPilotOperations(normalized.allowedOperations)) {
     fail('REL-04 restricted pilot scope is invalid');
   }
   const binding = exactKeys(rollout, ['expectation', 'policySha256'], 'REL-04 rollout binding');

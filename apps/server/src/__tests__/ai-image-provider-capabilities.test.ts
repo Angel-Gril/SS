@@ -45,10 +45,22 @@ describe('AI image provider capability matrix', () => {
     });
     expect(resolveAiImageProviderCapability('dashscope-qwen-mt-image', 'qwen-mt-image')).toMatchObject({
       operations: ['IMAGE_TRANSLATE'], maxReferences: 1, inputTransport: 'public_url',
-      evidenceLevel: 'adapter-characterized',
+      evidenceLevel: 'sandbox-verified',
     });
     expect(supportsAiMediaOperation('dashscope-qwen-mt-image', 'qwen-mt-image', 'IMAGE_TRANSLATE', 1)).toBe(true);
     expect(supportsAiMediaOperation('dashscope-qwen-mt-image', 'qwen-mt-image', 'IMAGE_TRANSLATE', 2)).toBe(false);
+  });
+
+  it('binds the reviewed Qwen translation transport only to the exact official operation and endpoint', () => {
+    const capability = resolveAiImageProviderCapability('dashscope-qwen-mt-image', 'qwen-mt-image');
+    const input = { capability, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', operation: 'IMAGE_TRANSLATE' as const,
+      inputTransport: 'public_url' as const, resultMode: 'async' as const };
+    expect(hasExactAiMediaSandboxEvidence(input)).toBe(true);
+    expect(hasExactAiMediaSandboxEvidence({ ...input, baseUrl: 'https://relay.example/api/v1' })).toBe(false);
+    expect(hasExactAiMediaSandboxEvidence({ ...input, operation: 'IMAGE_TO_IMAGE' })).toBe(false);
+    expect(hasExactAiMediaSandboxEvidence({ ...input, inputTransport: 'base64' })).toBe(false);
+    expect(supportsAiMediaOperation(input.provider, input.model, 'FULL_EDIT', 1)).toBe(false);
   });
 
   it('keeps the fake provider available for deterministic lifecycle tests only', () => {

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 受限翻译能力评审与新官网发布准备
+
+已完成七张中文→俄文真实样本：五张通过、两张驳回，保留尺寸表中文残留和密集标题反例。代码注册 exact 翻译 transport，所有结果仍须逐图审核；COM 仅准备在原 DOTH pilot 显式增翻译，CN 保持 dark，当前开关尚未修改。官网旧套图证据被当前源码门禁正确拒绝，正在准备同最终提交的完整 fresh normal suite 与 QA04/双区发布门禁。费用授权已延续为本轮不限金额，不重复询问；未读取 Provider 控制台或写 Ozon。唯一事实与证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-04 `848d308a / 1.0.415` 双区部署与中文→俄文翻译校准完成
 
 `848d308ac3ab49679f61f99620c6cb3a27e9933b / 1.0.415` 已完成 COM pilot、CN dark 双区标准部署。两区 API/Worker/Web active，153 migrations、AI suite DB guard、runtime backup、canonical VPS 均通过（各 0 failure / 1 warning，warning 为未配置远端备份）；Cloud/Local 扩展包 581 pass。官网仍旧 pointer `0d695279 / 1.0.405`，未执行官网 CAS、publication canary 或 distribution probe。

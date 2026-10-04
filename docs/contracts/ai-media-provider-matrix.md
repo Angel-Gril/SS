@@ -11,7 +11,7 @@ The server registry describes implemented operation/input contracts. Normal rout
 | `dashscope-wanx` | exact `wanx2.1-imageedit` | `FULL_EDIT`, `INPAINT` only | one owned 1024x1024 source; one matching mask only for inpaint; bounded JSON/data URLs and a complete 800-character prompt | async task + bounded polling + URL download | official Beijing edit transport verified; per-image visual review remains required |
 | `openai-images`  | exact `gpt-image-1`; legacy wildcard remains text-to-image compatibility only | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, `INPAINT` | multipart; up to 16 references, with one mask only for inpaint | sync JSON (`b64_json` or URL) | adapter characterized, **not sandbox verified** |
 | `custom` | exact model configured per environment; wildcard is compatibility only | `TEXT_TO_IMAGE` | no source asset | OpenAI-compatible sync JSON (`b64_json` or URL) | adapter characterized, exact host/model not sandbox verified |
-| `dashscope-qwen-mt-image` | exact `qwen-mt-image` model                                         | `IMAGE_TRANSLATE`                 | one owned HTTPS/public source URL; `imageSegment=false`                   | async task + immediate URL download | adapter characterized, **not sandbox verified** |
+| `dashscope-qwen-mt-image` | exact `qwen-mt-image` model                                         | `IMAGE_TRANSLATE`                 | one owned HTTPS/public source URL; `imageSegment=false`                   | async task + immediate URL download | sandbox verified transport; mandatory candidate review |
 
 Normal single-image admission supports registered operations at the official OpenAI endpoint, implemented operations at the official Beijing Wanx endpoint, and text-to-image through an administrator-configured custom OpenAI-compatible endpoint. Custom text models may use the declared compatibility wildcard; that wildcard does not claim `sandbox-verified` status or enable reference/masked editing. Unknown providers, unsupported operations, mismatched transports and unregistered custom editing remain rejected. Selecting `openai-images` cannot route credentials to a relay. Registration does not enable feature flags or tenant rollout. Suite/batch and image-translation gates retain their separate contracts.
 
@@ -104,6 +104,19 @@ The static provider contract also rejects wildcard, malformed, duplicated, or op
 sandbox evidence.
 
 ## Controlled DashScope Translation A/B (2026-07-24)
+
+The observation below is historical. On 2026-10-04, seven synthetic Chinese product
+images exercised the exact official `qwen-mt-image` public-URL/async transport, one
+submission per image. All tasks returned decoded results; five passed manual image
+review and two were rejected for title fidelity or Chinese residue in a size table.
+The transport capability is registered for `IMAGE_TRANSLATE` only. This registration
+does not claim error-free translation or enable a feature flag. Every result remains
+subject to review before draft application. The controlled rollout retains the
+existing owner/shop/device scope and explicitly enables translation as a third
+operation; CN stays dark. Task fees use the confirmed server single-image price,
+reservation and success settlement. Provider invoices were not read or required to
+claim these ERP task-fee semantics. Private source/results and reports are indexed
+only by the current internal acceptance owner.
 
 One controlled synthetic `en` to `ru` A/B exercised the official DashScope `qwen-mt-image` adapter while every production entry point remained dark. The reviewed semantic request inputs used the same source bytes, language pair, model, adapter and domain context; the terminology glossary was the only changed translation input.
 

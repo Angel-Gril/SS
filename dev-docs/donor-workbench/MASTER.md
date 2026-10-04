@@ -22,6 +22,15 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 
 ## Current Status
 
+Translation admission now records the exact verified transport with mandatory result
+review. Seven zh→ru synthetic samples returned results; five passed and two were
+rejected, with failures retained. The next controlled COM pilot can explicitly add
+translation to the existing owner/shop/device scope; CN remains dark. A new normal
+SUITE is being prepared because native QA04 rejects the old ERP execution source.
+The user's unrestricted test-cost authorization persists for this run; no Ozon write
+or Provider-console access is authorized. Current facts and pending website gates
+are maintained only in [direct-adaptation.md](./direct-adaptation.md).
+
 The `848d308a / 1.0.415` candidate is deployed to COM/CN and verified healthy. The user authorized unrestricted cost for a controlled translation check; exactly two DashScope `qwen-mt-image` zh→ru submissions were made, one per synthetic calibration image, both succeeded and were manually reviewed. ERP quote was CNY 0.01 per image; provider invoice was not read. This does not promote the provider to production because the registry remains adapter-characterized and the broader zh→ru quality corpus is still missing. Public download remains 1.0.405; no website CAS or publication gate ran.
 
 The next direct-adaptation slice is complete locally: image watermark templates, reviewed official Ozon video bindings through the existing publisher, and paid extension translation quote/runtime/billing/recovery wiring. Local PostgreSQL tests (16), extension tests (68), Chrome image-watermark/video/paid-price fixtures, lint and typecheck pass. The full backend run passed 6520 business tests; five pre-existing fixture dependency-copy failures were repaired and their original 103 tests passed independently. No real Provider/Ozon mutation or charge occurred. Production translation remains dark until actual zh→ru capability/quality evidence passes; captured source videos still require official upload before binding. Exact ownership, compatibility and evidence live only in [direct-adaptation.md](./direct-adaptation.md).

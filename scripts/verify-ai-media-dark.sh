@@ -71,6 +71,7 @@ try {
           'ai_image_provider',
           'feature_image_translate',
           'ai_image_translation_provider',
+          'ai_image_translation_model',
           'ai_media_workflow_v2_rollout_policy',
           'feature_extension_hosted_ai',
           'feature_extension_byok_ai',

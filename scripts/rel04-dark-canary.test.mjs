@@ -147,6 +147,11 @@ function fixtureFetcher(options = {}) {
   const calls = [];
   const config = options.pilot ? pilotConfigValues() : darkConfigValues();
   if (options.enabledFlag) config.set(options.enabledFlag, 'true');
+  if (options.translationPilot) {
+    config.set('feature_image_translate', 'true');
+    config.set('ai_image_translation_provider', 'dashscope-qwen-mt-image');
+    config.set('ai_image_translation_model', 'qwen-mt-image');
+  }
   let revoked = false;
   let canceled = false;
   let claimed = false;
@@ -221,7 +226,7 @@ function fixtureFetcher(options = {}) {
       assert.equal(init.headers.authorization, `Bearer ${adminToken}`);
       const key = decodeURIComponent(url.pathname.slice('/api/admin/system-config/'.length));
       assert.ok(REL04_DARK_CONFIG_KEYS.includes(key)
-        || ['feature_source_listing_workflow', 'source_workflow_rollout_policy'].includes(key));
+        || ['feature_source_listing_workflow', 'source_workflow_rollout_policy', 'ai_image_translation_model'].includes(key));
       return config.has(key)
         ? jsonResponse({ code: 1, data: { key, value: config.get(key) } })
         : jsonResponse({ code: 0 }, 404);
@@ -619,6 +624,25 @@ test('runs a candidate-bound restricted hosted pilot canary without Provider or 
   assert.throws(() => validateRel04DarkCanarySummary(tampered, expected), /pilot|rollout|digest|policy/iu);
 });
 
+test('accepts an explicitly restricted translation pilot without issuing translation or Ozon writes', async () => {
+  const expectation = { ...pilotExpectation, allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'] };
+  const summary = await runRel04DarkCanary(input({ rolloutExpectation: 'hosted-pilot', hostedPilotExpectation: expectation }), {
+    fetcher: fixtureFetcher({ pilot: true, translationPilot: true }),
+    randomUUID: () => '00000000-0000-4000-8000-000000000001',
+  });
+  assert.equal(summary.status, 'PASS');
+  assert.deepEqual(summary.checks.find(check => check.id === 'restricted-pilot-policy').evidence.allowedOperations, expectation.allowedOperations);
+  assert.equal(summary.requestAudit.providerDispatchSent, false); assert.equal(summary.requestAudit.ozonMutationSent, false);
+  const expected = { expectedGitCommit: gitCommit, expectedApiOrigin: apiOrigin, expectedCandidate: releaseBinding().candidate,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z', requireReleaseBinding: true };
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, expected));
+  const widened = structuredClone(summary);
+  const policy = widened.checks.find(check => check.id === 'restricted-pilot-policy').evidence;
+  policy.allowedOperations.push('FULL_EDIT');
+  widened.bindings.rollout.policySha256 = sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8'));
+  assert.throws(() => validateRel04DarkCanarySummary(widened, expected), /pilot|scope/iu);
+});
+
 test('CN dark canary explicitly accepts an empty shop inventory without treating it as publisher success', async () => {
   const binding = releaseBinding();
   binding.candidate.apiOrigin = 'https://api.example.cn';
@@ -986,6 +1010,14 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   const parsedPilot = parse(pilotEnvironment);
   assert.equal(parsedPilot.rolloutExpectation, 'hosted-pilot');
   assert.deepEqual(parsedPilot.hostedPilotExpectation, pilotExpectation);
+  const translationExpectation = { ...pilotExpectation, allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'] };
+  assert.deepEqual(parse({ ...pilotEnvironment, REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(translationExpectation) }).hostedPilotExpectation, translationExpectation);
+  for (const allowedOperations of [['IMAGE_TRANSLATE'], ['IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE'],
+    ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE', 'FULL_EDIT'], ['IMAGE_TO_IMAGE', 'SUITE', 'UNKNOWN_OPERATION']]) {
+    assert.throws(() => parse({ ...pilotEnvironment,
+      REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify({ ...pilotExpectation, allowedOperations }),
+    }), /PILOT_EXPECTATION_INVALID/u);
+  }
   assert.throws(() => parse({
     ...pilotEnvironment,
     REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: '{',

@@ -312,7 +312,7 @@ describe('AI image translation worker recovery', () => {
     expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'STORAGE_NOT_READY' });
   });
 
-  it('fails a public HTTPS paid job before dispatch while its capability is not sandbox verified', async () => {
+  it('rejects a legacy paid job without the frozen runtime before a new Provider dispatch', async () => {
     const paidJob = {
       ...job('QUEUED', null),
       provider: 'dashscope-qwen-mt-image',
@@ -342,12 +342,12 @@ describe('AI image translation worker recovery', () => {
       resolveProvider,
       uploadBuffer: vi.fn(),
       schedulePoll: vi.fn(),
-    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    })).rejects.toMatchObject({ code: 'PROVIDER_CONFIG_CHANGED' });
 
     expect(resolveProvider).not.toHaveBeenCalled();
     expect(provider.submit).not.toHaveBeenCalled();
     expect(provider.poll).not.toHaveBeenCalled();
-    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_NOT_READY' });
+    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_CONFIG_CHANGED' });
   });
 
   it('fails paid translation before dispatch when sandbox evidence belongs to another endpoint', async () => {

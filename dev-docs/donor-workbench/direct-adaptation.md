@@ -2,6 +2,14 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 中文→俄文受限翻译能力评审与官网发布接续
+
+- 对既有两张校准图之外新增密集规格、S/M/L 尺寸表、彩色斜放标签、工具型号单位、透明袋日期五张合成图，每张恰好一次 Provider POST，均完成原 task polling/result GET。新增五张质量评审为 `3 APPROVED / 2 REJECTED`：尺寸表有“胸”中文字残留，密集规格标题不准确；原请求已包含对应完整术语，不重复同输入请求洗证据。合计七图 `5 APPROVED / 2 REJECTED`，任务成功不能冒充质量全部通过。
+- 产品决定：正式注册的是 exact `qwen-mt-image / IMAGE_TRANSLATE / official DashScope / public_url / async` transport 能力，保持默认 PENDING 和逐图人工审核；不承诺零差错、不自动应用尺寸表或不合格标题。只准备在 COM 原 owner/DOTH/device 范围显式增 `IMAGE_TRANSLATE`，CN dark、BYOK/Ozon publisher 等其他权限保持原合同。运行时仍须当前配置、凭据修订、报价确认、日额度、同源存储、租户/草稿 authority，来源 CDN proxy 已独立匿名 GET 验证 200、实际字节 hash 相符。
+- 部署与官网 canary/approval 的受限 operation 合同现在允许原 `[IMAGE_TO_IMAGE,SUITE]` 或显式 `[IMAGE_TO_IMAGE,SUITE,IMAGE_TRANSLATE]`，禁止以翻译扩大 FULL_EDIT/INPAINT/TEXT 或 owner/shop/device。门禁回归、注册/运行时/旧未冻结任务拒绝测试先 RED→GREEN；尚未修改生产开关。
+- 新官网 QA04 确实拒绝旧 `58cc` execution：planner、套图恢复/尺寸、费用、schema/shared 草稿合同均变化，不能扩大中立例外复用。翻译样例不能替代正常两图 SUITE。下一候选在同一最终源码完成 fresh normal suite，保留 PENDING→preview→review→assignment/replay 全部原件，再正式 QA04、双区 canary/approval、CAS 与匿名完整下载。
+- 用户本轮明确授权真实 Provider 测试不限金额，当前授权持续有效；不读取 Provider 控制台、不写 Ozon、不盲重未知 POST。图片和原 URL/凭据只在私有目录，Git 仅记录聚合范围与限制。
+
 ### 2026-10-04 `848d308a / 1.0.415` 翻译校准与双区部署收口
 
 - `848d308ac3ab49679f61f99620c6cb3a27e9933b / 1.0.415` 已推送、签名并部署 COM/CN；COM 仍精确 DOTH pilot，CN 保持 AI/BYOK/Ozon dark。两区 runtime backup、153 migrations、DB guard、内部/公网 readiness、canonical VPS 均通过，扩展 verifier 各 `581 pass / 0 failure / 0 warning`。旧版无视频 `videoBindings` 字段兼容修复已随本候选进入。

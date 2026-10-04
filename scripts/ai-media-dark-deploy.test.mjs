@@ -194,6 +194,7 @@ for (const rows of [
     { key: 'ai_image_provider', value: 'disabled' },
     { key: 'feature_image_translate', value: 'true' },
     { key: 'ai_image_translation_provider', value: 'disabled' },
+    { key: 'ai_image_translation_model', value: 'qwen-mt-image' },
     { key: 'ai_media_workflow_v2_rollout_policy', value: '{"revision":8,"tenantIds":[]}' },
   ],
 ]) {
@@ -494,6 +495,14 @@ for (const rows of [
   [
     { key: 'feature_image_translate', value: 'true' },
     { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
+  ],
+  [
+    { key: 'feature_ai_media_workflow_v2', value: 'false' },
+    { key: 'feature_extension_hosted_ai', value: 'false' },
+    { key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
+    { key: 'ai_image_translation_model', value: 'qwen-mt-image' },
+    { key: 'ai_media_workflow_v2_rollout_policy', value: '{"revision":8,"mode":"allowlist","tenantIds":[]}' },
   ],
   [{ key: 'feature_image_translate', value: 'invalid' }],
   [{ key: 'ai_media_workflow_v2_rollout_policy', value: '{}' }],
