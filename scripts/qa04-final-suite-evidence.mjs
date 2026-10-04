@@ -1,4 +1,5 @@
 import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
+import { isRestrictedAiMediaHostedPilotOperations } from './verify-ai-media-pilot-policy.mjs';
 
 const CODE = 'QA04_SUITE_INVALID';
 const check = condition => requireThat(condition, CODE);
@@ -318,7 +319,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
         && /^\d+\.\d+\.\d+$/u.test(value.version) && value.region === 'COM'
         && value.providerRequests === 0 && value.ozonWrites === 0 && value.result?.expectation === 'hosted-pilot'
         && value.result.ownerSha256 === owner && equal(value.result.shopIds, [binding.shopId])
-        && positive(value.result.deviceCount) && equal(value.result.allowedOperations, ['IMAGE_TO_IMAGE', 'SUITE'])
+        && positive(value.result.deviceCount) && isRestrictedAiMediaHostedPilotOperations(value.result.allowedOperations)
         && positive(value.result.rolloutRevision) && text(value.result.sourcePolicyRevision));
       return value;
     };

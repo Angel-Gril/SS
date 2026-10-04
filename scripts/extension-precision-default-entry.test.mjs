@@ -115,12 +115,12 @@ async function translationStatus(responseTransform = value => value, exercise) {
 }
 
 test('translation availability reads the selected draft and preserves a disabled Provider reason', async () => {
-  assert.deepEqual((await translationStatus()).data, { available: true, reasonCode: 'READY' });
+  assert.deepEqual((await translationStatus()).data, { available: true, testOnly: false, reasonCode: 'READY' });
   const denied = await translationStatus(value => {
     value.launch.operations.IMAGE_TRANSLATE = { enabled: false, ready: false, reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED' };
     return value;
   });
-  assert.deepEqual(denied.data, { available: false, reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED' });
+  assert.deepEqual(denied.data, { available: false, testOnly: false, reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED' });
 });
 
 test('translation availability rejects another source snapshot or changed draft revisions', async () => {

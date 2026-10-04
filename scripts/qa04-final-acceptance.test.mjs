@@ -1109,6 +1109,24 @@ test('original execution control still rejects device-count changes', t => {
   assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
 });
 
+test('suite accepts explicitly reviewed translation in the unchanged restricted pilot and rejects authority growth', t => {
+  const f = historicalRestrictedSuiteFixture(t);
+  f.change(f.input.normalErp.controllerStatus, value => {
+    value.before.result.allowedOperations.push('IMAGE_TRANSLATE');
+    value.after.result.allowedOperations.push('IMAGE_TRANSLATE');
+  });
+  assert.equal(f.verify().report.decision, 'PASS');
+  for (const mutate of [value => { value.after.result.allowedOperations.pop(); },
+    value => { value.before.result.allowedOperations.push('FULL_EDIT'); value.after.result.allowedOperations.push('FULL_EDIT'); },
+    value => { value.after.result.shopIds.push('another-shop'); },
+    value => { value.after.result.deviceCount++; }]) {
+    const original = f.get(f.input.normalErp.controllerStatus);
+    f.change(f.input.normalErp.controllerStatus, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(f.input.normalErp.controllerStatus, f.put('translation-pilot-controller.json', original));
+  }
+});
+
 test('suite separates later target-runtime cleanup from immutable original execution evidence', t => {
   const f = historicalRestrictedSuiteFixture(t);
   const previous = f.get(f.input.normalErp.controllerStatus);

@@ -2,7 +2,7 @@
 
 ## 2026-10-04 最终候选前 Provider 校验收口
 
-当前 HEAD 接续审计确认工作树 clean；发布前 preflight 发现 sandbox 审核表仍使用旧翻译分类，与已注册的精确受限 transport 不一致。最小合同修复已通过 foundation 回归，未扩大 operation/endpoint/参考图或生产权限。下一 `1.0.416` 候选将绑定修复后的新提交，仍需新的 native offline、fresh normal SUITE/QA04 和双区官网发布门禁。唯一证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+接续审计确认原工作树 clean；Provider sandbox 审核表同步已推送为 `c07531fd / 1.0.416` 候选，但该提交完整 offline 在旧默认入口 fixture 缺 `testOnly:false` 处真实失败，没有 PASS receipt。两处 fixture 与正式 QA04 的受限三项 operation 合同现已一起收口，precision 关联 `136/136`、QA04 定向 `3/3`、ESLint 通过，未扩大 operation/endpoint/参考图或生产权限。最终候选使用 `1.0.417`，仍需新的 native offline、fresh normal SUITE/QA04 和双区官网发布门禁；旧签名和失败日志保留。唯一证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-04 受限翻译能力评审与新官网发布准备
 

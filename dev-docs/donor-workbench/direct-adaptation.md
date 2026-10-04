@@ -2,11 +2,13 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
-### 2026-10-04 最终候选前 Provider 合同校验收口
+### 2026-10-04 最终候选前发布合同校验收口
 
 - 根工作树接续检查时为 clean，HEAD `2a4a90de` 已推送；不存在摘要中所述尚未提交的运行时修改。`lint`、workspace `typecheck`、source/Cloud/Local verifier 均通过。
 - 原 `pnpm preflight` 在 sandbox Provider contract 处真实失败：注册表已记录 exact `qwen-mt-image` 翻译 transport，sandbox 审核表仍期待 `adapter-characterized`。T2 以该失败为 RED；最小修复仅同步 `official DashScope / IMAGE_TRANSLATE / public_url / async` 的精确证据断言，新增拒绝文本/编辑继承、其他端点、transport/result mode 和参考图数量扩大的回归，原 foundation contract GREEN。不修改生产 feature flag、scope 或质量结论。
-- 下一候选固定为 `1.0.416`，必须绑定这次修复后的 clean commit。旧 `1.0.415` 应用与 `1.0.405` 官网 pointer 尚未切换；正式 native offline、fresh normal SUITE、QA04 与双区公开发布仍需在新提交上闭合。本项无 Provider/Ozon 写入或新增费用。
+- `c07531fd / 1.0.416` 区域候选已签名，双区备份恢复演练与签名包 MV3 默认入口/来源拒绝/Blob 验证通过，标准部署已发起。完整 native offline 原件在 `release-c07531fd-website/qa04-offline.log` 真实失败：默认入口测试的两处旧断言缺当前 `testOnly:false` 字段；没有 PASS receipt，不能重标或冒称通过。两处 fixture 同步后，precision/翻译关联 `136/136` 通过。
+- 再复核发现正式 QA04 仍硬编码原两项 operations；新 T2 正例先 RED，再复用唯一受限 operation owner，精确原两项或显式三项均可，但前后不一致、FULL_EDIT、额外店铺及设备数增长仍拒绝。定向 `3/3` GREEN 和脚本 ESLint 通过。这是发布证据合同同步，不开启生产功能、不替代新套图原件。
+- 最终候选将使用 `1.0.417` 并绑定这次完整收口后的 clean commit；`1.0.416` 原件保留，不覆盖签名。正式 native offline、fresh normal SUITE、QA04 与双区公开发布仍需在最终提交上闭合，官网仍 `1.0.405`。本项无 Provider/Ozon 写入或新增费用。
 
 ### 2026-10-04 中文→俄文受限翻译能力评审与官网发布接续
 
