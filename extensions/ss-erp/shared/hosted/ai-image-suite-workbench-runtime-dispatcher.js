@@ -196,7 +196,7 @@
 
   function normalizeGalleryGoals(value, code) {
     if (value === undefined) return undefined;
-    if (!Array.isArray(value) || value.length < 1 || value.length > GALLERY_GOALS.length
+    if (!Array.isArray(value) || value.length > GALLERY_GOALS.length
       || value.some(function (goal) { return !GALLERY_GOALS.includes(goal); })
       || new Set(value).size !== value.length) fail(code);
     return value.slice();

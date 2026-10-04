@@ -568,7 +568,7 @@ export function createAiMediaContextService(
       const assignmentById = new Map(assignmentAssets.map((asset) => [String(asset.id), asset]));
       if (assignmentAssetIds.some((id) => (
         assignmentById.get(id)?.sourceCaptureSnapshotId !== snapshot.id
-        || !['SOURCE_ORIGINAL', 'AI_GENERATED'].includes(String(assignmentById.get(id)?.kind || ''))
+        || !['SOURCE_ORIGINAL', 'AI_GENERATED', 'IMAGE_PROCESSED'].includes(String(assignmentById.get(id)?.kind || ''))
         || !String(assignmentById.get(id)?.mimeType || '').startsWith('image/')
       ))) {
         throw new AiMediaContextError(

@@ -3159,7 +3159,7 @@ async function executeAuthoritativeSourceAiImageSuitePlan(message) {
   const created = await client.createPlan({
     binding,
     idempotencyKey: createIdempotencyKey,
-    galleryGoals: ['scene'],
+    galleryGoals: message.galleryGoals === undefined ? ['scene'] : message.galleryGoals,
     ...(creativeBrief === undefined ? {} : { creativeBrief }),
     ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys }),
   });
@@ -3249,12 +3249,15 @@ async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
     'creativeBrief',
     'candidateMediaKeys',
     'quoteWitness',
+    'galleryGoals',
   ]);
   if (!message || typeof message !== 'object' || Array.isArray(message)
     || Object.keys(message).some((key) => !allowedKeys.has(key))) {
     throw new Error('ERP AI 主图/套图请求字段无效');
   }
   const action = typeof message.action === 'string' ? message.action : '';
+  if (message.galleryGoals !== undefined && (action !== 'CREATE_AND_REVIEW_PLAN'
+    || !Array.isArray(message.galleryGoals) || message.galleryGoals.length !== 0)) throw new Error('ERP AI 主图计划字段无效');
   if (message.quoteWitness !== undefined && action !== 'START') throw new Error('ERP AI 主图/套图请求字段无效');
   if ((Object.prototype.hasOwnProperty.call(message, 'creativeBrief') || Object.prototype.hasOwnProperty.call(message, 'candidateMediaKeys'))
     && action !== 'CREATE_AND_REVIEW_PLAN') {
@@ -6579,6 +6582,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
+    return true;
+  }
+
+  if (['ss-erp:source-workbench-watermark-preview', 'ss-erp:source-workbench-watermark-apply'].includes(message.type)) {
+    const apply = message.type.endsWith('-apply');
+    let submitted = false;
+    resolveCurrentSourceWorkbenchAuthority(message, sender).then(async ({ handoff, listing }) => {
+      const input = message.request;
+      if (Object.keys(message).some(key => !['type','platform','sourceProductId','listingWorkflowId','request'].includes(key))
+        || !input || input.contractVersion !== 'extension-workbench-watermark/v1'
+        || input.snapshotId !== handoff.snapshotId || input.supplyGoodsId !== handoff.supplyGoodsId
+        || input.shopId !== listing.shopId || input.listingWorkflowId !== listing.listingWorkflowId) {
+        throw Object.assign(new Error('水印请求不属于当前草稿'), { outcome: 'NOT_SUBMITTED' });
+      }
+      submitted = apply;
+      const response = await getByokDeviceTransport().post(`/api/extension-device/workbench-watermark/${apply ? 'apply' : 'preview'}`,
+        input, { requiredScope: 'media:execute' });
+      if (response?.state !== 'response' || response.body?.code !== 1 || !response.body.data) {
+        throw Object.assign(new Error(response?.body?.msg || '水印处理未完成'), {
+          outcome: response?.state === 'response' ? 'NOT_SUBMITTED' : apply ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED' });
+      }
+      return response.body.data;
+    }).then(result => sendResponse({ ok: true, result })).catch(error => sendResponse({ ok: false,
+      error: error.message || String(error), code: error.code || null, outcome: error.outcome || (submitted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED') }));
     return true;
   }
 

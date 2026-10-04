@@ -191,6 +191,8 @@
       '/api/extension-device/source-workbench/editor/attributes',
       '/api/extension-device/source-workbench/editor/dictionary',
       '/api/extension-device/source-workbench/editor/save',
+      '/api/extension-device/workbench-watermark/preview',
+      '/api/extension-device/workbench-watermark/apply',
       HOSTED_PLAN_PATH,
       HOSTED_LISTING_ASSIGNMENT_PATH,
       HOSTED_PREVIEW_PATH,

@@ -10,6 +10,7 @@
     'EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE',
     'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY',
     'PUBLISH', 'CREATE_TRANSLATION', 'CHECK_TRANSLATION',
+    'WATERMARK_PREVIEW', 'WATERMARK_APPLY',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -152,6 +153,7 @@
     var seen = new Set();
     accepted.some(function (value, index) {
       var item = record(value) || {};
+      if (item.kind === 'video' || item.role === 'video') return false;
       var url = httpsUrl(item.url || item.imageUrl);
       if (!url || seen.has(url)) return false;
       seen.add(url);
@@ -164,6 +166,18 @@
       return rows.length >= MAX_MEDIA;
     });
     return Object.freeze(rows);
+  }
+
+  function videoRows(product, capture) {
+    var values = Array.isArray(capture && capture.media) ? capture.media : [];
+    if (!values.length && Array.isArray(product && product.sourceVideos)) values = product.sourceVideos.map(function (url, index) {
+      return { key: 'source-video-' + index, kind: 'video', url: url, skuKeys: [], disposition: 'accepted' };
+    });
+    return Object.freeze(values.filter(function (item) { return record(item) && item.disposition === 'accepted'
+      && (item.kind === 'video' || item.role === 'video'); }).slice(0, 10).map(function (item) {
+      return Object.freeze({ key: text(item.key, 500), kind: 'video', url: httpsUrl(item.url),
+        skuKeys: Object.freeze(unique(item.skuKeys, MAX_SKUS)) });
+    }).filter(function (item) { return item.key && item.url; }));
   }
 
   function shopRows(values) {
@@ -560,6 +574,7 @@
       }),
       skus: projectedSkus,
       media: mediaRows(product, capture),
+      videos: videoRows(product, capture),
       shops: shopRows(options.shops),
       handoff: handoffProjection(options.handoff),
       workbench: projectedWorkbench,
@@ -598,11 +613,12 @@
             return { key: row.key, name: row.label, imageUrl: row.imageUrl,
               sourceSkuId: row.sourceSkuId, priceCny: row.priceCny, stock: row.stock };
           }),
-          media: (Array.isArray(item.media) ? item.media : []).map(function (media) {
+          media: [...(Array.isArray(item.media) ? item.media : []), ...(Array.isArray(item.videos) ? item.videos : [])].map(function (media) {
             var row = record(media) || {};
             return {
               key: row.key,
               role: row.role,
+              kind: row.kind,
               disposition: 'accepted',
               url: row.url,
               skuKeys: row.skuKeys,
@@ -633,6 +649,31 @@
 
   function parseFrameCommand(value) {
     var item = record(value);
+    if (item && ['WATERMARK_PREVIEW', 'WATERMARK_APPLY'].includes(item.type)) {
+      var watermarkRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'request']);
+      var watermark = record(item.request);
+      var watermarkFields = ['contractVersion', 'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
+        'draftRevision', 'draftVersion', 'items', 'config'];
+      if (item.type === 'WATERMARK_APPLY') watermarkFields.push('idempotencyKey', 'previewHash');
+      var config = watermark && record(watermark.config);
+      if (!exactKeys(watermark, watermarkFields) || watermark.contractVersion !== 'extension-workbench-watermark/v1'
+        || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(function (key) { return text(watermark[key], 200); })
+        || !['draftRevision', 'draftVersion'].every(function (key) { return Number.isSafeInteger(watermark[key]) && watermark[key] > 0; })
+        || !Array.isArray(watermark.items) || !watermark.items.length || watermark.items.length > 5
+        || !watermark.items.every(function (entry) { return record(entry) && Object.keys(entry).every(function (key) {
+          return ['skuKey', 'slotKey', 'sourceMediaKey', 'sourceAssetId'].includes(key);
+        }) && (entry.skuKey === null || text(entry.skuKey, 500)) && text(entry.slotKey, 200)
+          && Boolean(text(entry.sourceMediaKey, 500)) !== Boolean(text(entry.sourceAssetId, 500)); })
+        || !config || Object.keys(config).some(function (key) { return !['type','text','position','opacity','fontSize','fontColor'].includes(key); })
+        || config.type !== 'text' || typeof config.text !== 'string' || !config.text.trim() || config.text.length > 120
+        || !['bottom-right','bottom-left','top-right','top-left','center','tile'].includes(config.position)
+        || !Number.isInteger(config.opacity) || config.opacity < 1 || config.opacity > 100
+        || item.type === 'WATERMARK_APPLY' && (!/^[a-f0-9]{64}$/u.test(watermark.previewHash) || !text(watermark.idempotencyKey, 200))) {
+        throw new TypeError('invalid watermark request');
+      }
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: watermarkRequestId,
+        request: Object.freeze(JSON.parse(JSON.stringify(watermark))) });
+    }
     if (item && item.type === 'OPEN_EMBEDDED_MEDIA') {
       var embeddedRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'preferredSkuKey']);
       if (!text(item.listingWorkflowId, 200) || !text(item.preferredSkuKey, 500)) throw new TypeError('invalid embedded media launch');
@@ -868,6 +909,14 @@
         'action', 'slotKey', 'decision', 'costConfirmed',
       ];
       var quoteWitness;
+      var galleryGoals;
+      if (Object.prototype.hasOwnProperty.call(item, 'galleryGoals')) {
+        hostedFields.push('galleryGoals');
+        if (item.action !== 'CREATE_AND_REVIEW_PLAN' || !Array.isArray(item.galleryGoals) || item.galleryGoals.length !== 0) {
+          throw new TypeError('invalid donor main image plan');
+        }
+        galleryGoals = Object.freeze([]);
+      }
       if (item.action === 'START') {
         hostedFields.push('quoteWitness');
         if (!exactKeys(item.quoteWitness, ['previewHash', 'currency', 'itemCount', 'maxCostMinor'])
@@ -940,6 +989,7 @@
         ...(creativeBrief === undefined ? {} : { creativeBrief: creativeBrief }),
         ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys: candidateMediaKeys }),
         ...(quoteWitness === undefined ? {} : { quoteWitness: quoteWitness }),
+        ...(galleryGoals === undefined ? {} : { galleryGoals: galleryGoals }),
       });
     }
     if (item.type === 'ASSIGN_HOSTED_SUITE') {

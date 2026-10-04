@@ -107,6 +107,8 @@
     'ss-erp:precision-source-attestation',
     'ss-erp:source-listing-workbench-draft-create',
     'ss-erp:source-listing-workbench-editor-save',
+    'ss-erp:source-workbench-watermark-preview',
+    'ss-erp:source-workbench-watermark-apply',
     'ss-erp:source-listing-workbench-publish',
   ]);
 
@@ -404,7 +406,8 @@
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
     var kind = senderKind(sender, runtimeId);
-    if (['ss-erp:source-listing-workbench-editor-save', 'ss-erp:source-listing-workbench-publish', 'ss-erp:precision-source-attestation'].includes(messageType)
+    if (['ss-erp:source-listing-workbench-editor-save', 'ss-erp:source-listing-workbench-publish', 'ss-erp:precision-source-attestation',
+      'ss-erp:source-workbench-watermark-preview', 'ss-erp:source-workbench-watermark-apply'].includes(messageType)
       && (!sender || sender.frameId !== 0 || typeof sender.documentId !== 'string' || !sender.documentId)) return false;
     if (messageType === 'ss-erp:erp-source-image-open') return kind === 'erp';
     if (kind === 'media_editor') return SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);

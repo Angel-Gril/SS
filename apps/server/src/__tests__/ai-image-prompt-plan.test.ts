@@ -56,6 +56,18 @@ function input(): ImagePromptPlanInput {
 }
 
 describe('AI image prompt plan', () => {
+  it('treats explicitly empty gallery goals as one hero per SKU, including model fallback', () => {
+    const source = { ...input(), galleryGoals: [] };
+    const expectedKeys = ['sku:blue-single:hero', 'sku:red-pair:hero', 'sku:red-single:hero'];
+    const rule = createRuleBasedImagePromptPlan(source);
+    const fallback = normalizeAiImagePromptPlanOutput(source, '{broken-json');
+    expect(rule.slots.map((slot) => slot.slotKey)).toEqual(expectedKeys);
+    expect(rule.slots.every((slot) => slot.goal === 'sku_hero' && slot.status === 'READY')).toBe(true);
+    expect(fallback.mode).toBe('fallback');
+    expect(fallback.slots).toEqual(rule.slots);
+    expect(createRuleBasedImagePromptPlan(input()).slots).toHaveLength(17);
+  });
+
   it('shares gallery for color-only variants but splits bundle-changing variants', () => {
     const plan = createRuleBasedImagePromptPlan(input());
     const groups = plan.compatibilityGroups

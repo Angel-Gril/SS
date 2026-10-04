@@ -6,6 +6,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTENSION_ROOT = path.join(ROOT, 'extensions', 'ss-erp');
@@ -99,15 +100,16 @@ function fixtureProduct() {
         key: 'sku-' + index, sourceSkuId: 'source-' + index, specText: '颜色 ' + index + ' / M',
         priceCny: 11.5, stock: index === 0 ? 0 : 99, mediaKeys: ['image-' + index],
       })),
-      media: Array.from({ length: 16 }, (_, index) => ({
+      media: [...Array.from({ length: 16 }, (_, index) => ({
         key: 'image-' + index, role: index % 2 ? 'product_detail' : 'product_main',
         disposition: 'accepted', url: IMAGE_ORIGIN + '/image-' + index + '.png',
         skuKeys: index === 0 ? [] : ['sku-' + index],
-      })),
+      })), { key: 'video-fixture', kind: 'video', role: 'video', disposition: 'accepted',
+        url: IMAGE_ORIGIN + '/source.mp4', skuKeys: [] }],
     },
   };
 }
-function parentHtml() {
+function parentHtml(watermarkJpeg) {
   return `<!doctype html><html><head><script src="/shared/donor-workbench/workspace-contract.js"></script></head>
   <body style="margin:0"><iframe id="workspace" src="/pages/precision-workbench.html" referrerpolicy="no-referrer"
   style="position:fixed;inset:0;width:100vw;height:100vh;border:0"></iframe>
@@ -119,6 +121,7 @@ function parentHtml() {
   let readyForPublish=false,assignedMedia=false,publishPreviews=0,publishStatusPolls=0,publishCommitted=false;
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
   const savedOperations=new Set();
+  const watermarkRequests=new Map();
   const attributeValues=new Map();
   let attributeSchema='c'.repeat(64);
   const attributeFields=[
@@ -160,6 +163,30 @@ function parentHtml() {
       blockerCount:0,warningCount:0,blockers:[],warnings:[],updatedAt:'2026-09-30T08:00:00Z'
     }]},media:{items:[]}}};}
     let result;
+    if(command.type==='WATERMARK_PREVIEW')result={contractVersion:'extension-workbench-watermark/v1',previewHash:'d'.repeat(64),
+      items:command.request.items.map(item=>({...item,width:128,height:128,dataUrl:'data:image/jpeg;base64,${watermarkJpeg}'})),erpGenerationChargeMinor:0};
+    if(command.type==='WATERMARK_APPLY'){
+      const prior=watermarkRequests.get(command.request.idempotencyKey);
+      if(prior)result={...prior,replayed:true};
+      else{
+        const draft=workbench.status.listing.items[0];draft.revision++;draft.draftVersion++;
+        result={draft:{...draft,sourceCaptureSnapshotId:handoff.snapshotId,supplyGoodsId:handoff.supplyGoodsId},
+          assets:command.request.items.map((item,index)=>({id:'watermark-'+index,url:'${IMAGE_ORIGIN}/watermarked-'+index+'.jpg',kind:'IMAGE_PROCESSED'})),
+          applied:command.request.items.length,replayed:false};
+        watermarkRequests.set(command.request.idempotencyKey,result);
+      }
+    }
+    if(command.type==='LOAD_BILLING'&&window.__precisionFailNextMediaRead){
+      window.__precisionFailNextMediaRead=false;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,
+        ok:false,error:'测试只读刷新暂时不可用',outcome:'NOT_SUBMITTED'},location.origin);
+      return;
+    }
+    if(command.type==='LOAD_BILLING'&&(!billing||billing.projection.plan===null)&&workbench){
+      const draft=workbench.status.listing.items[0];
+      billing={state:'ready',listingWorkflowId:draft.id,projection:{contractVersion:'extension-ai-image-suite-projection/v1',
+        context:{listingWorkflowId:draft.id,shopId:draft.shopId,draftRevision:draft.revision,draftVersion:draft.draftVersion},plan:null,suite:null}};
+    }
     let candidateId;
     let replayed=false;
     if(command.type==='CHECK_TRANSLATION')result={available:window.__precisionTranslationDenied!==true,reasonCode:window.__precisionTranslationDenied?'MEDIA_PROVIDER_NOT_ALLOWED':'READY'};
@@ -229,7 +256,8 @@ function parentHtml() {
     if(command.type==='EDITOR_DICTIONARY')result={state:'ready',dictionary:{schemaRevision:attributeSchema,attributeId:command.attributeId,values:command.attributeId===202?[{id:7,value:'Синий'},{id:8,value:'Зеленый'}]:[101,102,103,104].map(id=>({id,value:'选项'+id})),complete:true,dictionaryComplete:true,resultExhaustive:true,hasMore:false,resultTruncated:false}};
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='CREATE_AND_REVIEW_PLAN'){
       const draft=workbench.status.listing.items[0];
-      billing={state:'ready',listingWorkflowId:draft.id,projection:{contractVersion:'extension-ai-image-suite-projection/v1',context:{listingWorkflowId:draft.id,shopId:draft.shopId,draftRevision:draft.revision,draftVersion:draft.draftVersion},plan:{preview:{hash:'f'.repeat(64),currency:'CNY',itemCount:2,estimatedCostCents:28,maximumCostCents:28}},suite:null}};
+      const count=command.galleryGoals?.length===0?1:2;
+      billing={state:'ready',listingWorkflowId:draft.id,projection:{contractVersion:'extension-ai-image-suite-projection/v1',context:{listingWorkflowId:draft.id,shopId:draft.shopId,draftRevision:draft.revision,draftVersion:draft.draftVersion},plan:{preview:{hash:'f'.repeat(64),currency:'CNY',itemCount:count,estimatedCostCents:count*14,maximumCostCents:count*14}},suite:null}};
     }
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='START'){
       const draft=workbench.status.listing.items[0];
@@ -237,6 +265,11 @@ function parentHtml() {
       const item=(id,reviewStatus,outputs)=>({id,operation:'IMAGE_TO_IMAGE',status:'SUCCEEDED',reviewStatus,revision:1,contextSkuKey:'sku-1',contextSlotKey:id,selectedOutputAssetId:'',outputs,application:null,createdAt:'2026-09-30T08:00:00Z',updatedAt:'2026-09-30T08:00:00Z'});
       history={state:'ready',listingWorkflowId:draft.id,context:{snapshotId:'snapshot-fixture',supplyGoodsId:'goods-fixture',shopId:draft.shopId,listingWorkflowId:draft.id,revision:draft.revision,draftVersion:draft.draftVersion},items:[item('suite-workflow-1','PENDING',[output('suite-output-1'),output('suite-old-output')]),item('suite-workflow-2','PENDING',[output('suite-output-2')]),item('rejected-workflow','REJECTED',[output('rejected-output')])],nextCursor:null,receipt:null};
       billing.projection.suite={status:'SUCCEEDED',slots:[1,2].map(index=>({slotKey:'slot-'+index,goal:'scene',status:'SUCCEEDED',workflowId:'suite-workflow-'+index,reviewStatus:'PENDING',output:{id:'suite-output-'+index},commands:index===1?{REVIEW_SLOT:{workflowId:'suite-workflow-1',outputAssetId:'suite-output-1'}}:{},allowedActions:index===1?['REVIEW_SLOT']:[],billing:{mode:'ERP_HOSTED',currency:'CNY',estimatedCostMinor:14,maximumCostMinor:14,reservationStatus:'SETTLED',settlement:{kind:'CHARGE',actualCostMinor:14,billedUnits:1}}}))};
+      if(billing.projection.plan.preview.itemCount===1){
+        billing.projection.suite.slots=billing.projection.suite.slots.slice(0,1);
+        billing.projection.suite.slots[0].goal='sku_hero';
+        history.items=history.items.slice(0,1);
+      }
     }
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='REVIEW_SLOT'){
       await new Promise(resolve=>setTimeout(resolve,200));
@@ -425,6 +458,8 @@ async function run() {
   const summary = { ok: false, artifacts, scope: 'LOCAL_BROWSER_FIXTURE', screenshots: [], pageErrors: [], blockedRequests: [], providerRequests: 0, ozonRequests: 0, productionMutations: 0 };
   let cdp;
   let diagnose;
+  const require = createRequire(path.join(ROOT, 'apps/server/package.json'));
+  const watermarkJpeg = (await require('sharp')(await readFile(path.join(EXTENSION_ROOT, 'icons/icon128.png'))).jpeg().toBuffer()).toString('base64');
   const child = spawn(chromeExecutable(), [
     '--headless=new', '--window-size=1440,1100', '--user-data-dir=' + profile, '--remote-debugging-port=0',
     '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
@@ -462,7 +497,7 @@ async function run() {
       void (async () => {
         const url = new URL(event.request.url);
         let body, type;
-        if (url.href === PAGE_URL) { body = Buffer.from(parentHtml()); type = 'text/html'; }
+        if (url.href === PAGE_URL) { body = Buffer.from(parentHtml(watermarkJpeg)); type = 'text/html'; }
         else if (url.origin === PAGE_ORIGIN && url.pathname === '/favicon.ico') {
           await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 204 }); return;
         } else if (url.origin === PAGE_ORIGIN) {
@@ -491,10 +526,29 @@ async function run() {
     await send('Page.navigate', { url: PAGE_URL });
     await until(() => evaluate('!!document.getElementById("workspace")?.contentDocument?.getElementById("start-btn")'), 'workbench document');
     await until(() => workspace('document.querySelectorAll("tr[data-editor-row-index]").length === 16'), 'all sixteen donor editor rows');
+    if (process.argv.includes('--sku-images')) {
+      assert.equal(await workspace('document.querySelectorAll("[data-image-sku-key]").length'), 16,
+        'the image workspace must show one original-style summary row per canonical SKU');
+      assert.equal(await workspace('!!document.getElementById("precision-media-sku")'), false,
+        'SKU image navigation must use rows, not the old draft SKU dropdown');
+      assert.ok(await workspace('(()=>{const content=document.querySelector(".content");return window.getComputedStyle(content).overflowY==="auto"&&content.scrollHeight>content.clientHeight;})()'),
+        'all sixteen SKU image rows retain whole-workbench vertical scrolling');
+    }
     await until(() => workspace('document.querySelectorAll(".precision-source-tile img").length === 16'), 'sixteen images');
     assert.equal(await workspace('document.referrer'), '');
     await until(() => workspace('[...document.querySelectorAll(".precision-source-tile img")].every(image=>image.complete&&image.naturalWidth>0)'), 'decoded preview images');
     const click = async (selector) => {
+      // Navigate the actual SKU dialog before interacting with its controls.
+      // All clicks, including navigation, still use trusted CDP mouse input.
+      const location = await workspace('(()=>{const node=document.querySelector(' + JSON.stringify(selector) + ');return {inside:!!node?.closest("#precision-image-manager"),nested:!!node?.closest(".settings-modal,.preview-modal"),open:document.getElementById("precision-image-manager")?.hidden===false,result:!!node?.closest("#precision-image-result-panel"),source:!!node?.closest("#precision-image-source-panel"),creative:!!node?.closest(".precision-creative-options"),detailsOpen:node?.closest(".precision-creative-options")?.open};})()');
+      if (location.open && !location.inside && !location.nested && selector !== '#precision-image-close') await click('#precision-image-close');
+      if (location.inside && !location.open) {
+        await click('[data-image-sku-key="sku-1"]');
+        await click('#precision-image-scope');
+      }
+      if (location.inside && location.result && await workspace('document.getElementById("precision-image-result-panel").hidden')) await click('#precision-image-results');
+      if (location.source && await workspace('document.getElementById("precision-image-source-panel").hidden')) await click('#precision-image-sources');
+      if (location.creative && !location.detailsOpen && selector !== '.precision-creative-options summary') await click('.precision-creative-options summary');
       const point = await workspace('(() => {const node=document.querySelector(' + JSON.stringify(selector) + ');if(!node)throw new Error("missing "+' + JSON.stringify(selector) + ');node.scrollIntoView({block:"center"});const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()');
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
@@ -508,6 +562,18 @@ async function run() {
     };
     await screenshot('donor-workspace');
     if (process.argv.includes('--usability-only')) {
+      const outer = await workspace('(()=>{const e=document.querySelector(".content");return{overflowY:window.getComputedStyle(e).overflowY,height:e.clientHeight,total:e.scrollHeight};})()');
+      assert.equal(outer.overflowY, 'auto', 'the whole workbench content must scroll');
+      assert.ok(outer.total > outer.height, 'sixteen SKU rows provide a natural outer scroll range');
+      await workspace('document.querySelector(".content").scrollTop=0');
+      const wheelPoint = await workspace('(()=>{const r=document.querySelector(".content").getBoundingClientRect();return{x:r.left+3,y:r.top+r.height/2};})()');
+      const toolbarTop = await workspace('document.querySelector(".toolbar").getBoundingClientRect().top');
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...wheelPoint });
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...wheelPoint, deltaX: 0, deltaY: 350 });
+      await until(() => workspace('document.querySelector(".content").scrollTop>0'), 'actual mouse wheel scrolls the complete workbench');
+      assert.equal(await workspace('document.querySelector(".toolbar").getBoundingClientRect().top'), toolbarTop);
+      await screenshot('usability-outer-scroll');
       assert.equal(await workspace('document.querySelector("input[name=image-workflow-mode][value=translate]").disabled'), false,
         'translation must have its own usable image workflow instead of a permanently disabled donor button');
       await click('input[name="image-workflow-mode"][value="translate"] + span');
@@ -528,26 +594,111 @@ async function run() {
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="CREATE_DRAFT")'), 'draft create command');
     await until(() => workspace('document.getElementById("status-text").textContent.includes("草稿已就绪")'), 'draft readback');
     assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'), 2);
-    await until(() => workspace('document.querySelectorAll("#precision-media-sku option").length===2'), 'image workbench uses only selected draft SKUs');
-    assert.deepEqual(await workspace('[...document.querySelectorAll("#precision-media-sku option")].map(option=>option.value)'), ['sku-1', 'sku-7']);
+    await until(() => workspace('document.querySelectorAll("[data-image-sku-key]").length===2'), 'image workbench uses only selected draft SKUs');
+    assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'), ['sku-1', 'sku-7']);
     assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-1', 'image-7'], 'product-level and selected SKU media are eligible');
     assert.ok(await workspace('document.querySelector(".editor-table-spec").textContent.includes("颜色 1")'));
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
+    if (process.argv.includes('--watermark-flow')) {
+      await click('#watermark-settings-btn');
+      await until(() => workspace('document.getElementById("watermark-modal").hidden===false'), 'original watermarks dialog');
+      await click('#wm-text'); await send('Input.insertText', { text: 'DOTH' });
+      await click('#wm-preview-btn');
+      await until(() => workspace('document.getElementById("wm-apply-btn").disabled===false'), 'server watermark preview decoded and frozen');
+      assert.equal(await workspace('document.getElementById("wm-preview-canvas").width'), 128);
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="WATERMARK_APPLY")'), false);
+      await screenshot('watermark-preview');
+      await click('#wm-apply-btn');
+      await until(() => workspace('document.getElementById("wm-status").textContent.includes("已应用")'), 'watermark application readback');
+      assert.equal(await workspace('document.getElementById("wm-apply-btn").disabled'), true);
+      assert.equal(await evaluate('window.__precisionCommands.filter(command=>command.type==="WATERMARK_APPLY").length'), 1);
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE"||command.type==="CREATE_TRANSLATION"||command.type==="PUBLISH")'), false);
+      await screenshot('watermark-applied');
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.watermark = { preview: true, applyRequests: 1, erpGenerationChargeMinor: 0, scope: 'LOCAL_OWNER_FIXTURE' };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2)); return;
+    }
+    if (process.argv.includes('--combined-flow')) {
+      await click('[data-image-sku-key="sku-1"] .precision-source-video-button');
+      assert.equal(await workspace('document.getElementById("precision-source-video-modal").hidden'), false);
+      assert.ok(await workspace('document.getElementById("precision-source-video-player").src.endsWith("source.mp4")'));
+      await workspace('document.getElementById("precision-source-video-player").dispatchEvent(new window.Event("error"))');
+      assert.match(await workspace('document.getElementById("precision-source-video-modal").textContent'), /暂时无法播放/u);
+      await click('#precision-source-video-close');
+      assert.equal(await workspace('document.getElementById("precision-source-video-player").getAttribute("src")'), null);
+      await click('input[name=image-workflow-mode][value=ai-main-translate] + span');
+      await until(() => workspace('document.getElementById("image-workflow-start-btn").disabled===false'), 'combined translation availability checked');
+      await click('#image-workflow-start-btn');
+      await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-suite-state").textContent.includes("0.14")'), 'single-image ERP quote');
+      const request = await evaluate('window.__precisionCommands.find(c=>c.type==="EXECUTE_HOSTED_SUITE")');
+      assert.deepEqual(request.galleryGoals, []);
+      await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-image-primary").textContent.includes("审核")'), 'main image review is required before translation');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="CREATE_TRANSLATION")'), false);
+      await click('#precision-image-primary');
+      await click('[data-suite-slot-key=slot-1][data-review-decision=APPROVE]');
+      await until(() => workspace('document.getElementById("precision-image-primary").textContent.includes("继续翻译")'), 'approval enables follow-up translations');
+      await click('#precision-image-sources');
+      await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-translation-state").textContent.includes("3 张已提交")'), 'selected source translations follow reviewed AI main');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION").length'), 3);
+      await click('#precision-image-primary');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION").length'), 3);
+      await screenshot('combined-main-translation');
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.combined = { mainImageCount: 1, sourceTranslations: 3, explicitMainReview: true, sourceVideoPreview: true,
+        realVideoPlaybackVerified: false, ozonVideoPublish: false };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      return;
+    }
+    if (process.argv.includes('--sku-images')) {
+      await workspace('document.getElementById("image-card").scrollIntoView({block:"start"})');
+      await screenshot('sku-image-summary');
+      await click('[data-image-sku-key="sku-7"]');
+      assert.equal(await workspace('document.getElementById("precision-image-manager").hidden'), false);
+      assert.match(await workspace('document.getElementById("precision-image-manager-title").textContent'), /颜色 7/u);
+      assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-7']);
+      await click('#precision-image-previous');
+      assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-1']);
+      await click('#precision-image-scope');
+      assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-1', 'image-7']);
+      assert.equal(await workspace('!!document.getElementById("precision-plan")||!!document.getElementById("precision-generate")||!!document.getElementById("precision-continue")'), false);
+      await screenshot('sku-image-sources');
+      await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-image-primary").textContent.includes("确认费用")'), 'single primary action shows authoritative quote');
+      await click('#precision-image-primary');
+      await until(() => workspace('document.querySelectorAll(".precision-candidate").length===4'), 'fixture suite results');
+      await click('#precision-image-results');
+      await evaluate('window.__precisionFailNextMediaRead=true');
+      await click('[data-suite-slot-key=slot-1][data-review-decision=REJECT]');
+      await until(() => workspace('document.querySelector("[data-candidate-output=suite-output-1]")?.textContent.includes("已驳回")'), 'rejected candidate readback');
+      await until(() => workspace('document.getElementById("precision-image-notice").textContent.includes("状态刷新暂未完成")'), 'confirmed review is distinct from unavailable readback');
+      assert.equal(await workspace('document.getElementById("status-text").classList.contains("err")'), false, 'confirmed review clears stale failure notice');
+      assert.equal(await evaluate('window.__precisionCommands.filter(command=>command.type==="EXECUTE_HOSTED_SUITE"&&command.action==="REVIEW_SLOT").length'), 1);
+      await click('#precision-image-refresh');
+      await until(() => workspace('document.getElementById("precision-image-notice").textContent.includes("已刷新")'), 'explicit read refresh clears the warning without another mutation');
+      assert.match(await workspace('document.querySelector("[data-image-sku-key=sku-1]").textContent'), /已驳回/u);
+      assert.equal(await workspace('document.getElementById("precision-assign").disabled'), true, 'rejected images cannot be applied');
+      await screenshot('sku-image-results');
+      await click('#precision-image-close');
+      await screenshot('sku-image-task-rows');
+      assert.equal(await workspace('document.getElementById("precision-image-manager").hidden'), true);
+      assert.equal(await workspace('document.activeElement.dataset.imageSkuKey'), 'sku-7', 'closing returns focus to the SKU row');
+      await send('Emulation.setDeviceMetricsOverride', { width: 393, height: 844, deviceScaleFactor: 1, mobile: false });
+      await pause(100);
+      assert.ok(await workspace('document.documentElement.scrollWidth<=window.innerWidth'), 'SKU table scroll stays inside workbench at narrow widths');
+      await screenshot('sku-image-mobile');
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.skuImages = { selectedRows: 2, scopedSources: true, singlePrimary: true, review: 'REJECTED', assignmentRequests: 0 };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      return;
+    }
     if (process.argv.includes('--usability-only')) {
-      const outer = await workspace('(()=>{const e=document.querySelector(".content");return{overflowY:window.getComputedStyle(e).overflowY,height:e.clientHeight,total:e.scrollHeight};})()');
-      assert.equal(outer.overflowY, 'auto', 'the whole workbench content must scroll');
-      assert.ok(outer.total > outer.height, 'the full editor/image content has an outer scroll range');
-      await workspace('document.querySelector(".content").scrollTop=0');
-      const wheelPoint = await workspace('(()=>{const r=document.querySelector(".content").getBoundingClientRect();return{x:r.left+3,y:r.top+r.height/2};})()');
-      const toolbarTop = await workspace('document.querySelector(".toolbar").getBoundingClientRect().top');
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...wheelPoint });
-      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-      summary.wheelBefore = await workspace(`(()=>{const e=document.querySelector('.content');return{left:e.getBoundingClientRect().left,top:e.getBoundingClientRect().top,scrollTop:e.scrollTop,total:e.scrollHeight,height:e.clientHeight,hit:document.elementFromPoint(${wheelPoint.x},${wheelPoint.y})?.className};})()`);
-      await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...wheelPoint, deltaX: 0, deltaY: 350 });
-      await until(() => workspace('document.querySelector(".content").scrollTop>0'), 'actual mouse wheel scrolls the complete workbench');
-      assert.equal(await workspace('document.querySelector(".toolbar").getBoundingClientRect().top'), toolbarTop, 'toolbar stays available during body scroll');
-      await screenshot('usability-outer-scroll');
       const before = await evaluate('window.__precisionCommands.filter(c=>["COLLECT","CREATE_DRAFT"].includes(c.type)).length');
       await click('#start-btn');
       await pause(150);
@@ -581,14 +732,14 @@ async function run() {
         return;
       }
       if (!await workspace('document.querySelector("[data-reference-key=image-7] input").checked')) await click('[data-reference-key=image-7] input');
-      await click('#image-workflow-start-btn');
+      await click('#precision-image-primary');
       await until(() => workspace('document.getElementById("precision-translation-state").textContent.includes("3 张已提交")'), 'selected images reach translation owner and the bounded batch completes');
       const translated = await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION")');
       assert.equal(translated.length, 3);
       assert.deepEqual(translated.map(c=>c.sourceMediaKey), ['image-0','image-1','image-7']);
       assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="EXECUTE_HOSTED_SUITE")'), false, 'translation never falls into suite generation');
       await screenshot('usability-translation');
-      await click('#image-workflow-start-btn');
+      await click('#precision-image-primary');
       await pause(150);
       assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_TRANSLATION").length'), 3, 'queued translations are not submitted again');
       summary.usability = { outerContentScroll: true, continueDoesNotRecollect: true, explicitCategorySelection: true, translationCommands: 3, suiteCommands: 0 };
@@ -652,7 +803,7 @@ async function run() {
       await send('Input.insertText', { text: value });
     }
     async function replaceText(selector, value) {
-      await until(() => workspace(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});return node&&!node.disabled&&!node.readOnly&&node.getClientRects().length>0;})()`), 'editable control: ' + selector);
+      await until(() => workspace(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});return node&&!node.disabled&&!node.readOnly;})()`), 'editable control: ' + selector);
       await click(selector);
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
@@ -787,12 +938,12 @@ async function run() {
     await click('#editor-packaging-save-btn');
     await until(() => workspace('document.getElementById("editor-packaging-save-btn").disabled===false'), 'packaging save after attribute edits');
     await evaluate('document.getElementById("workspace").contentWindow.location.reload()');
-    await until(() => workspace('document.querySelectorAll("tr[data-editor-row-index]").length===2&&document.querySelectorAll("#precision-media-sku option").length===2'), 'reopened existing draft retains only selected SKUs');
+    await until(() => workspace('document.querySelectorAll("tr[data-editor-row-index]").length===2&&document.querySelectorAll("[data-image-sku-key]").length===2'), 'reopened existing draft retains only selected SKUs');
     await screenshot('saved-pricing-category');
     assert.equal(await workspace('document.getElementById("precision-prompt-text").value'), '', 'empty brief uses service rules');
     assert.equal(await workspace('!!document.getElementById("precision-negative-prompt")'), true, 'optional negative direction is available');
     await replaceText('#precision-prompt-text', '😀'.repeat(301));
-    await click('#precision-plan');
+    await click('#precision-image-primary');
     await until(() => workspace('document.getElementById("status-text").textContent.includes("300")'), 'over-limit direction rejected visibly');
     assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE")'), false, 'invalid direction submits no plan');
     await replaceText('#precision-visual-json', JSON.stringify({ subject: 'forged product', composition: '居中', background: '浅灰厨房台面', lighting: '柔和自然光', style: '写实' }));
@@ -806,7 +957,7 @@ async function run() {
     const checkedReferences = await workspace('[...document.querySelectorAll(".precision-source-tile")].filter(tile=>tile.querySelector("input").checked).map(tile=>tile.dataset.referenceKey)');
     for (const key of checkedReferences) await click(`[data-reference-key="${key}"] input[type="checkbox"]`);
     assert.equal(await workspace('document.getElementById("precision-prompt-text").value'), compiledDirection + '；侧视角', 'reference selection preserves suite direction');
-    await click('#precision-plan');
+    await click('#precision-image-primary');
     await until(() => workspace('document.getElementById("status-text").textContent.includes("参考图")'), 'empty reference selection rejected visibly');
     assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE")'), false, 'empty references cannot silently create a plan');
     await click('#erp-refresh-btn');
@@ -815,7 +966,7 @@ async function run() {
     await click('[data-reference-key=image-7] input[type="checkbox"]');
     await workspace('document.getElementById("precision-prompt-text").scrollIntoView({block:"center"})');
     await screenshot('editable-suite-direction');
-    await click('#precision-plan');
+    await click('#precision-image-primary');
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE")'), 'same-window plan request');
     await until(() => workspace('document.getElementById("precision-prompt-text").readOnly===true'), 'frozen direction locked');
     const planRequest = await evaluate('window.__precisionCommands.find(command=>command.type==="EXECUTE_HOSTED_SUITE")');
@@ -828,10 +979,10 @@ async function run() {
     await click('#erp-refresh-btn');
     await until(() => workspace('document.getElementById("status-text").textContent.includes("已刷新")'), 'frozen plan readonly refresh');
     assert.equal(await workspace('document.getElementById("precision-prompt-text").value'), compiledDirection + '；侧视角');
-    assert.equal(await workspace('document.getElementById("precision-plan").disabled'), true, 'same owner cannot create a second plan by editing directions');
+    assert.ok(await workspace('document.getElementById("precision-image-primary").textContent.includes("确认费用")'), 'frozen plan offers only its next action, not another plan');
     await workspace('document.getElementById("precision-prompt-text").scrollIntoView({block:"center"})');
     await screenshot('frozen-suite-direction');
-    await click('#precision-generate');
+    await click('#precision-image-primary');
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE"&&command.action==="START")'), 'fixture starts frozen plan from same window');
     const startRequest = await evaluate('window.__precisionCommands.find(command=>command.type==="EXECUTE_HOSTED_SUITE"&&command.action==="START")');
     assert.equal(startRequest.costConfirmed, true);

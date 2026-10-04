@@ -673,7 +673,6 @@ function normalizeCreateInput(
   let galleryGoals: AiMediaGalleryGoal[] | undefined;
   if (input.galleryGoals !== undefined) {
     if (!Array.isArray(input.galleryGoals)
-      || input.galleryGoals.length < 1
       || input.galleryGoals.length > AI_MEDIA_GALLERY_GOALS.length
       || input.galleryGoals.some((goal) => !AI_MEDIA_GALLERY_GOALS.includes(goal))) {
       throw new TypeError('AI media planning galleryGoals is invalid');
@@ -920,7 +919,7 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
       evidenceIds: [selectedCandidateEvidenceId(input.sourceCaptureSnapshotId, candidate.id)],
     })),
     verifiedFacts: input.verifiedFacts,
-    ...(input.galleryGoals ? { galleryGoals: input.galleryGoals } : {}),
+    ...(input.galleryGoals === undefined ? {} : { galleryGoals: input.galleryGoals }),
   });
   const creativeBrief = input.creativeBrief === undefined ? undefined : aiImageCreativeBriefSchema.parse(input.creativeBrief);
   const plan = creativeBrief === undefined ? basePlan : { ...basePlan, creativeBrief };
@@ -943,7 +942,7 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
     skus: input.skus,
     candidates: input.candidates,
     verifiedFacts: input.verifiedFacts,
-    galleryGoals: input.galleryGoals || null,
+    galleryGoals: input.galleryGoals ?? null,
     ...(creativeBrief === undefined ? {} : { creativeBrief }),
     ...(input.referenceSelectionScopeHash === undefined ? {} : {
       referenceSelection: { authorityCandidateMediaHash: input.referenceSelectionScopeHash },

@@ -2813,6 +2813,7 @@ enum AiCostSettlementKind {
 
 enum MediaAssetKind {
   AI_GENERATED
+  IMAGE_PROCESSED
   SOURCE_ORIGINAL
   EDIT_MASK
   AI_PROVIDER_OUTPUT

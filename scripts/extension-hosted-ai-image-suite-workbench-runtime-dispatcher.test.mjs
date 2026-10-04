@@ -302,13 +302,23 @@ const api = loadApi();
   galleryGoals.push('detail');
   assert.deepEqual(plain(forwarded.galleryGoals), ['scene']);
   assert.equal(Object.isFrozen(forwarded.galleryGoals), true);
-  for (const invalid of [null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
+  const heroOnly = [];
+  const heroResult = await selected.dispatcher.handlers[MESSAGE_TYPES.CREATE_PLAN]({
+    payload: { binding: binding(), idempotencyKey: 'hero-only-plan-1', galleryGoals: heroOnly }, sender: selected.sender,
+  });
+  assert.equal(heroResult.ok, true);
+  const heroForwarded = selected.calls.filter((row) => row[0] === 'createPlan')[1][1];
+  assert.deepEqual(plain(heroForwarded.galleryGoals), []);
+  assert.equal(Object.isFrozen(heroForwarded.galleryGoals), true);
+  heroOnly.push('scene');
+  assert.deepEqual(plain(heroForwarded.galleryGoals), []);
+  for (const invalid of [null, ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
     await rejects(selected.dispatcher.handlers[MESSAGE_TYPES.CREATE_PLAN], {
       payload: { binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals: invalid },
       sender: selected.sender,
     }, 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID');
   }
-  assert.equal(selected.calls.filter((row) => row[0] === 'createPlan').length, 1);
+  assert.equal(selected.calls.filter((row) => row[0] === 'createPlan').length, 2);
 }
 assert.equal(
   api.CONTRACT_VERSION,

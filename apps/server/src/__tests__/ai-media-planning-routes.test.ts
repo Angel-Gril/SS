@@ -109,6 +109,30 @@ async function build(
 }
 
 describe('AI media planning routes', () => {
+  it('accepts explicit hero-only goals without converting them to the omitted default', async () => {
+    const { app, service } = await build();
+    try {
+      const response = await app.inject({ method: 'POST', url: '/plans', payload: {
+        context: { type: 'collect', id: 'goods-1' }, idempotencyKey: 'hero-only-plan-create', galleryGoals: [],
+      } });
+      expect(response.statusCode).toBe(202);
+      expect(service.createCurrentRuleBased).toHaveBeenCalledWith(expect.objectContaining({ galleryGoals: [] }));
+    } finally { await app.close(); }
+  });
+
+  it.each([null, ['scene', 'scene'], ['unknown'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
+    'rejects invalid gallery goals %j before invoking the planner', async (galleryGoals) => {
+      const { app, service } = await build();
+      try {
+        const response = await app.inject({ method: 'POST', url: '/plans', payload: {
+          context: { type: 'collect', id: 'goods-1' }, idempotencyKey: 'invalid-gallery-plan', galleryGoals,
+        } });
+        expect(response.statusCode).toBe(400);
+        expect(service.createCurrentRuleBased).not.toHaveBeenCalled();
+      } finally { await app.close(); }
+    },
+  );
+
   it('returns owner-scoped current plans with curation, slots and evidence while stripping secrets', async () => {
     const { app, service } = await build();
     const response = await app.inject({ method: 'GET', url: '/plans/current?contextType=collect&contextId=goods-1' });

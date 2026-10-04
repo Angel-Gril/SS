@@ -16,7 +16,7 @@ const helper = existsSync(helperPath) ? await import('../' + helperPath) : {};
 function producer(options = {}) {
   const source = readFileSync(`${root}/pages/precision-workbench.js`, 'utf8');
   const begin = source.indexOf('async function suiteCommand(');
-  const end = source.indexOf("trusted('precision-plan'", begin);
+  const end = source.indexOf("trusted('precision-assign'", begin);
   assert.ok(begin >= 0 && end > begin);
   const commands = [];
   const context = { Set, Map, Array, Error, crypto: webcrypto,
@@ -26,8 +26,8 @@ function producer(options = {}) {
     promptText: { value: '浅灰背景，柔和自然光' }, negativeText: { value: '' },
     Prompt: { compileCreativeBrief: ({ prompt }) => ({ prompt }) },
     eligibleReferenceMedia: () => [{ key: rawKey }], referenceKeys: new Set([rawKey]),
-    visualJsonError: '', planSubmissionBusy: false, promptPlanLocks: new Map(), pollingAttempts: 0,
-    render() {}, log() {}, renderPromptState() {}, refreshMediaState: async () => {},
+    visualJsonError: '', imageMode: options.imageMode || 'ai-suite', planSubmissionBusy: false, promptPlanLocks: new Map(), pollingAttempts: 0,
+    render() {}, log() {}, renderPromptState() {}, refreshConfirmedMedia: async () => {},
     command: async (type, fields) => {
       const parsed = contract.parseFrameCommand({ contractVersion: contract.CONTRACT_VERSION, requestId: 'test-plan', type, ...fields });
       commands.push(parsed);
@@ -43,6 +43,12 @@ test('the shipped precision plan producer sends captured references through the 
   assert.equal(commands.length, 1);
   assert.deepEqual([...commands[0].candidateMediaKeys], [expectedAlias]);
   assert.equal([...context.referenceKeys][0], rawKey, 'display/translation source identity stays intact');
+});
+test('combined image mode passes explicit hero-only intent through the shipped producer and closed frame contract', async () => {
+  const { context, commands } = producer({ imageMode: 'ai-main-translate' });
+  await context.suiteCommand('CREATE_AND_REVIEW_PLAN');
+  assert.deepEqual([...commands[0].galleryGoals], []);
+  assert.deepEqual([...commands[0].candidateMediaKeys], [expectedAlias]);
 });
 
 test('pending reference compilation prevents a second plan submission', async () => {

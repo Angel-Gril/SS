@@ -69,6 +69,28 @@ function authority(): AiMediaPlanningAuthority {
 }
 
 describe('AI media planning rule worker', () => {
+  it('freezes hero-only goals separately from omitted default goals without generating gallery slots', () => {
+    const build = (galleryGoals?: []) => buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput({
+      ...planningInput(), ...(galleryGoals === undefined ? {} : { galleryGoals }),
+    }, authority()));
+    const mainOnly = build([]);
+    const original = build();
+    expect(mainOnly.plan.slots.map((slot) => [slot.slotKey, slot.goal])).toEqual([['sku:red-single:hero', 'sku_hero']]);
+    expect(mainOnly.inputSnapshot.galleryGoals).toEqual([]);
+    expect(original.inputSnapshot.galleryGoals).toBeNull();
+    expect(original.plan.slots).toHaveLength(8);
+    expect(mainOnly.requestFingerprint).not.toBe(original.requestFingerprint);
+    expect(mainOnly.planHash).not.toBe(original.planHash);
+    expect(build([])).toEqual(mainOnly);
+  });
+
+  it.each([null, ['unknown'], ['scene', 'scene'], ['SCENE'], 'scene', ['scene', 1], Array(8).fill('scene')].map((value) => [value]))(
+    'rejects invalid gallery goals %j before freezing a plan', (galleryGoals) => {
+      expect(() => resolveRuleBasedAiMediaPlanningInput({ ...planningInput(), galleryGoals } as never, authority()))
+        .toThrow(/galleryGoals/u);
+    },
+  );
+
   it('persists the server-owned reference scope seal only when explicit references were selected', () => {
     const first = buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput({
       ...planningInput(), referenceSelectionScopeHash: 'a'.repeat(64),

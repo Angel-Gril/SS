@@ -222,7 +222,7 @@ function positiveInteger(value: unknown, name: string): number {
 
 function normalizeGalleryGoals(value: unknown): AiMediaGalleryGoal[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length < 1 || value.length > AI_MEDIA_GALLERY_GOALS.length
+  if (!Array.isArray(value) || value.length > AI_MEDIA_GALLERY_GOALS.length
     || value.some((goal) => !AI_MEDIA_GALLERY_GOALS.includes(goal))
     || new Set(value).size !== value.length) {
     return error('HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST', 400, 'galleryGoals is invalid');

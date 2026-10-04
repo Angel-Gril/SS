@@ -10,6 +10,10 @@ import { createCategoryDialog } from './donor/category-dialog.js';
 import { createTranslationFlow } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
+import { buildSkuImageRows, createSkuImageWorkspace, describeSuite } from './donor/sku-image-workspace.js';
+import { createSourceVideoView } from './donor/source-video-view.js';
+import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
+import { createWatermarkEditor } from './donor/watermark-editor.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -24,7 +28,6 @@ let editorSignature = '';
 let editorRenderOwner = '';
 let mediaSignature = '';
 let candidateSignature = '';
-let skuSelectSignature = '';
 let shopSelectSignature = '';
 let byokRegistrationContext = '';
 let drafts = [];
@@ -77,7 +80,7 @@ function command(type, fields = {}) {
     try { Contract.parseFrameCommand(outgoing); }
     catch { return Promise.reject(Object.assign(new Error('套图输入未通过校验，请重新读取并检查参考图与创作方向'), { outcome: 'NOT_SUBMITTED' })); }
   }
-  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION'].includes(type)
+  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY'].includes(type)
     || type === 'PUBLISH' && fields.action === 'CONFIRM';
   const promise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -95,6 +98,8 @@ function listing() { return Workflow.listingForShop(projection, selectedShopId);
 function status(message, variant = '') {
   element('status-text').textContent = message;
   element('status-text').className = `status-pill ${variant}`;
+  const notice = element('precision-image-notice');
+  if (notice) { notice.textContent = message; notice.className = `image-manager-global-status${variant ? ` is-${variant}` : ''}`; }
 }
 function log(message, error = false) {
   events.push({ message, error, at: new Date().toLocaleTimeString() });
@@ -142,8 +147,8 @@ const preview = createPreviewController({
   getRoleLabel: (item) => item.reviewStatus ? '生成候选' : roleLabel(item.role),
   getStatusLabel: (item) => reviewStatusLabel(item.reviewStatus) || '来源素材',
   getItems: () => [
-    ...eligibleReferenceMedia().map((item) => ({ ...item, id: item.key, originalUrl: item.url, group: 'gallery' })),
-    ...(currentMediaContext().history?.items || []).flatMap((item) => item.outputs.map((output) => ({
+    ...visibleWorkspaceMedia(eligibleReferenceMedia()).map((item) => ({ ...item, id: item.key, originalUrl: item.url, group: 'gallery' })),
+    ...(currentMediaContext().history?.items || []).filter(item => imageWorkspace.state().all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey).flatMap((item) => item.outputs.map((output) => ({
       id: `candidate:${output.id}`, originalUrl: output.url, reviewStatus: item.reviewStatus, group: 'gallery',
     }))),
   ],
@@ -163,12 +168,34 @@ function make(tag, className, text) {
 const band = make('div', 'erp-source-band');
 band.append(make('strong', '', '正在读取商品'), make('span', '', 'SS ERP'));
 document.querySelector('.toolbar').after(band);
+const sourceVideo = createSourceVideoView({ root: element('ui-scale-root'), getVideos: () => projection.videos,
+  getSkuKey: () => selectedSkuKey, onSelectSku: key => { selectedSkuKey = key; }, onMessage: message => status(message, 'warn'),
+  getContextKey: () => `${projection.source.sourceProductId}:${projection.handoff?.snapshotId}` });
+const imageWorkspace = createSkuImageWorkspace({ container: element('image-queue'), root: element('ui-scale-root'),
+  renderVideoCell: sourceVideo.renderCell,
+  onSelect: key => { if (selectedSkuKey !== key) { selectedSkuKey = key; byok.invalidate(); } }, onChange: () => renderMedia(),
+  onModeChange: mode => { imageMode = mode;
+    document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.checked = input.value === mode; });
+    byok.setMode(mode); renderMedia(); } });
 const mediaToolbar = make('div', 'precision-media-toolbar');
-mediaToolbar.append(make('strong', '', '草稿 SKU'));
-const skuSelect = make('select');
-skuSelect.id = 'precision-media-sku';
-skuSelect.addEventListener('change', () => { selectedSkuKey = skuSelect.value; });
-mediaToolbar.append(skuSelect, make('span', '', '参考图按整个草稿选择；ERP 为每张套图从勾选素材挑选参考。'));
+mediaToolbar.append(make('span', '', '套图参考图用于整个草稿；可切换 SKU 或查看整个草稿的素材。'));
+const mediaSelectionCount = make('span'); mediaToolbar.append(mediaSelectionCount);
+function watermarkItems() {
+  const selected = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
+  let gallery = 0;
+  return visibleWorkspaceMedia(eligibleReferenceMedia()).filter(item => selected.has(item.key)).slice(0, 5).map(item => {
+    const skuKey = item.skuKeys.length ? selectedSkuKey : null;
+    return { sourceMediaKey: item.key, skuKey,
+      slotKey: skuKey ? `sku:${skuKey}:hero` : gallery++ === 0 ? 'product-main' : `product-gallery-${gallery - 1}` };
+  }).filter((item, index, all) => all.findIndex(other => other.slotKey === item.slotKey) === index);
+}
+const watermark = createWatermarkEditor({ root: element('ui-scale-root'), command,
+  getBinding: () => listing() ? currentEditorBinding() : null, getItems: watermarkItems,
+  getBusy: () => projection.busy || mediaMutationBusy || saveBusy || publishBusy,
+  onApplied: async () => { await command('REFRESH'); await loadEditor(); status('水印图片已应用到当前草稿', 'ok'); }, report });
+trusted('watermark-settings-btn', () => watermark.open());
+const watermarkImageButton = make('button', 'ghost', '水印设置'); watermarkImageButton.id = 'precision-watermark-settings';
+mediaToolbar.append(watermarkImageButton);
 const translateImage = make('button', 'ghost', '图片翻译'); translateImage.id = 'precision-image-translate'; mediaToolbar.append(translateImage);
 const library = make('div', 'precision-source-library');
 library.id = 'precision-source-library';
@@ -211,13 +238,17 @@ const suiteActions = make('div', 'precision-suite-actions');
 const suiteState = make('span', '', '等待草稿');
 suiteState.id = 'precision-suite-state';
 suiteActions.append(suiteState);
-for (const [id, label] of [['precision-plan', '准备套图'], ['precision-generate', '确认并生成'], ['precision-continue', '继续任务'], ['precision-assign', '应用已审核图片']]) {
-  const button = make('button', 'ghost', label);
-  button.id = id;
-  suiteActions.append(button);
-}
+const assignButton = make('button', 'ghost', '应用已审核图片'); assignButton.id = 'precision-assign';
+suiteActions.append(assignButton);
 const candidates = make('div', 'precision-candidates');
-element('image-queue').append(mediaToolbar, suiteActions, library, promptArea, candidates);
+const creativeOptions = make('details', 'precision-creative-options');
+creativeOptions.append(make('summary', '', '创作方向与视觉 JSON（可选）'), promptArea);
+imageWorkspace.sourcePanel.append(mediaToolbar, library, creativeOptions);
+trusted('precision-watermark-settings', () => watermark.open());
+imageWorkspace.resultPanel.append(candidates);
+imageWorkspace.foot.append(suiteActions);
+const imagePrimary = make('button', 'primary'); imagePrimary.id = 'precision-image-primary'; imageWorkspace.foot.append(imagePrimary);
+const mediaRefresh = make('button', 'ghost', '读取最新状态'); mediaRefresh.id = 'precision-image-refresh'; imageWorkspace.foot.append(mediaRefresh);
 const translationPanel = make('section', 'precision-translation-panel');
 translationPanel.id = 'precision-translation-panel'; translationPanel.hidden = true;
 const translationState = make('p'); translationState.id = 'precision-translation-state'; translationState.setAttribute('role', 'status');
@@ -247,7 +278,7 @@ function precisionByokBinding() {
     assignmentOrdinal: Math.max(0, Number(draft.mediaAssignmentCount) || 0),
   };
 }
-const byok = createByokEditor({ root: element('ui-scale-root'), container: element('image-queue'), runtime: privateRuntime,
+const byok = createByokEditor({ root: element('ui-scale-root'), container: imageWorkspace.sourcePanel, runtime: privateRuntime,
   getShopId: () => selectedShopId, getBinding: precisionByokBinding,
   openSession: async (value) => (await command('OPEN_EMBEDDED_MEDIA', value)).data,
   getBusy: () => projection.busy || saveBusy || mediaMutationBusy || publishBusy,
@@ -256,25 +287,31 @@ const byok = createByokEditor({ root: element('ui-scale-root'), container: eleme
 const byokMode = make('label');
 const byokRadio = make('input'); byokRadio.type = 'radio'; byokRadio.name = 'image-workflow-mode'; byokRadio.value = 'byok';
 byokMode.append(byokRadio, make('span', '', '自带 API')); element('image-workflow-mode').append(byokMode);
-document.querySelector('input[name="image-workflow-mode"][value="ai-suite"]').closest('label').querySelector('span').textContent = 'ERP 托管套图';
 document.querySelectorAll('input[name="image-workflow-mode"]').forEach((input) => input.addEventListener('change', () => {
   if (input.checked) { imageMode = input.value; byok.setMode(imageMode); renderMedia(); }
 }));
 function renderImageMode() {
-  suiteActions.hidden = promptArea.hidden = imageMode !== 'ai-suite';
+  const hostedMode = ['ai-suite', 'ai-main-translate'].includes(imageMode);
+  const translationMode = ['translate', 'ai-main-translate'].includes(imageMode);
+  suiteActions.hidden = promptArea.hidden = !hostedMode;
+  creativeOptions.hidden = !hostedMode;
   candidates.hidden = imageMode === 'byok';
-  translationPanel.hidden = imageMode !== 'translate';
+  translationPanel.hidden = !translationMode;
   translateImage.hidden = imageMode !== 'translate';
   const button = element('image-workflow-start-btn');
-  const suiteAction = resolveSuitePrimaryAction({draftId:listing()?.id,busy:projection.busy||mediaMutationBusy||planSubmissionBusy,
-    billing:projection.billing,lock:promptLockState()});
+  const suiteAction = currentImageAction();
   button.textContent = imageMode === 'translate' ? (translation.state().busy ? '提交翻译中…' : '开始翻译所选图片')
-    : imageMode === 'byok' ? '连接自带 API' : suiteAction.label;
+    : imageMode === 'byok' ? '打开图片工作台' : suiteAction.action === 'PREPARE' ? '点击开始处理图片' : suiteAction.label;
   button.disabled = !listing() || projection.busy || mediaMutationBusy || translation.state().busy || translation.state().unknown
-    || (imageMode === 'translate' && !translationAvailability.available) || (imageMode === 'ai-suite' && suiteAction.disabled);
+    || (imageMode === 'translate' && !translationAvailability.available) || (hostedMode && suiteAction.disabled);
   translateImage.disabled = button.disabled;
+  imagePrimary.textContent = hostedMode ? suiteAction.label : imageMode === 'byok' ? '连接自带 API' : button.textContent;
+  imagePrimary.disabled = button.disabled;
+  imagePrimary.hidden = hostedMode && suiteAction.action === 'REVIEW' && imageWorkspace.state().tab === 'results';
+  mediaRefresh.disabled = projection.busy || mediaMutationBusy;
+  imageWorkspace.setMode(imageMode, projection.busy || mediaMutationBusy || translation.state().busy);
   translationRefresh.disabled = translationAvailability.state === 'loading' || translation.state().busy;
-  if (imageMode === 'translate') {
+  if (translationMode) {
     if (listing() && projection.handoff) {
       const identity = JSON.stringify(currentEditorBinding());
       if (identity !== translationAvailability.binding) void readTranslationAvailability();
@@ -282,7 +319,13 @@ function renderImageMode() {
     if (!translation.state().busy && !translation.state().error && !translationAvailability.available) translationState.textContent = translationAvailability.state === 'loading'
       ? '正在核对当前草稿的图片翻译状态…' : translationAvailability.reason || '请先创建当前店铺草稿';
   }
-  document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { if (input.value !== 'ai-main-translate') input.disabled = translation.state().busy; });
+  document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.disabled = translation.state().busy; });
+}
+function currentImageAction() {
+  const input = { draftId: listing()?.id, busy: projection.busy || mediaMutationBusy || planSubmissionBusy,
+    billing: projection.billing, lock: promptLockState() };
+  return imageMode === 'ai-main-translate' ? resolveCombinedImageAction({ ...input,
+    availability: translationAvailability, translation: translation.state() }) : resolveSuitePrimaryAction(input);
 }
 async function readTranslationAvailability(force = false) {
   const draft = listing(); if (!draft) return;
@@ -750,8 +793,7 @@ async function reviewCandidate(workflowId, outputId, decision) {
       outputAssetId: output.id, expectedRevision: item.revision,
       action: decision === 'APPROVE' ? 'REVIEW_APPROVE' : 'REVIEW_REJECT' });
   }
-  await refreshMediaState();
-  log('ERP 已确认候选审核状态');
+  await refreshConfirmedMedia(decision === 'APPROVE' ? '图片审核通过，尚未应用到草稿' : '图片已驳回');
 }
 function renderEditor() {
   const visibleSkus = draftSkuChoices();
@@ -841,14 +883,22 @@ function eligibleReferenceMedia(skus = draftSkuChoices()) {
   const keys = new Set(skus.map((sku) => sku.key));
   return projection.media.filter((item) => !item.skuKeys.length || item.skuKeys.some((key) => keys.has(key)));
 }
+function visibleWorkspaceMedia(media) {
+  const workspaceState = imageWorkspace.state();
+  return workspaceState.open && !workspaceState.all
+    ? media.filter(item => !item.skuKeys.length || item.skuKeys.includes(selectedSkuKey)) : media;
+}
 function renderMedia() {
   const skus = draftSkuChoices();
+  if (!skus.some((sku) => sku.key === selectedSkuKey)) selectedSkuKey = skus[0]?.key || '';
   const media = eligibleReferenceMedia(skus);
+  const workspaceState = imageWorkspace.state();
+  const visibleMedia = visibleWorkspaceMedia(media);
   const eligible = new Set(media.map((item) => item.key));
   for (const key of referenceKeys) if (!eligible.has(key)) referenceKeys.delete(key);
   for (const key of translationKeys) if (!eligible.has(key)) translationKeys.delete(key);
   const translationTarget = listing() ? `${projection.handoff?.snapshotId}:${listing().shopId}:${listing().id}` : '';
-  if (imageMode === 'translate' && translationTarget && translationTarget !== translationSelectionContext) {
+  if (['translate', 'ai-main-translate'].includes(imageMode) && translationTarget && translationTarget !== translationSelectionContext) {
     translationSelectionContext = translationTarget;
     translationKeys.clear(); media.slice(0, 5).forEach(item => translationKeys.add(item.key));
   }
@@ -856,11 +906,11 @@ function renderMedia() {
     media.slice(0, 4).forEach((item) => referenceKeys.add(item.key));
     referenceSelectionInitialized = true;
   }
-  const signature = JSON.stringify([projection.source.sourceProductId, listing()?.id, skus.map((sku) => sku.key), media]);
+  const signature = JSON.stringify([projection.source.sourceProductId, listing()?.id, selectedSkuKey, workspaceState.all, imageMode, visibleMedia]);
   if (signature !== mediaSignature) {
     mediaSignature = signature;
     library.replaceChildren();
-    media.forEach((item) => {
+    visibleMedia.forEach((item) => {
       const tile = make('div', `precision-source-tile${referenceKeys.has(item.key) ? ' is-selected' : ''}`);
       tile.dataset.referenceKey = item.key;
       const image = make('img'); image.decoding = 'async';
@@ -874,8 +924,8 @@ function renderMedia() {
       check.checked = referenceKeys.has(item.key);
       check.setAttribute('aria-label', `选择${roleLabel(item.role)}`);
       check.addEventListener('change', () => {
-        const selectedKeys = imageMode === 'translate' ? translationKeys : referenceKeys;
-        if (check.disabled || (imageMode !== 'translate' && promptLockState()) || planSubmissionBusy) {
+        const selectedKeys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
+        if (check.disabled || (!['translate', 'ai-main-translate'].includes(imageMode) && promptLockState()) || planSubmissionBusy) {
           check.checked = selectedKeys.has(item.key);
           return;
         }
@@ -884,6 +934,7 @@ function renderMedia() {
         }
         if (check.checked) selectedKeys.add(item.key); else selectedKeys.delete(item.key);
         tile.classList.toggle('is-selected', check.checked);
+        renderSelectionCount();
         if (imageMode !== 'translate') compilePrompt();
         renderImageMode();
       });
@@ -894,33 +945,25 @@ function renderMedia() {
     });
   }
   library.querySelectorAll('input[type="checkbox"]').forEach((check) => {
-    const keys = imageMode === 'translate' ? translationKeys : referenceKeys;
+    const keys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
     check.checked = keys.has(check.closest('.precision-source-tile').dataset.referenceKey);
     check.closest('.precision-source-tile').classList.toggle('is-selected', check.checked);
-    check.disabled = (imageMode !== 'translate' && Boolean(promptLockState())) || planSubmissionBusy || projection.busy || translation.state().busy;
+    check.disabled = (!['translate', 'ai-main-translate'].includes(imageMode) && Boolean(promptLockState())) || planSubmissionBusy || projection.busy || translation.state().busy;
   });
-  const nextSkuSignature = JSON.stringify(skus.map(sku => [sku.key, sku.label]));
-  if (nextSkuSignature !== skuSelectSignature) {
-    skuSelectSignature = nextSkuSignature;
-    skuSelect.replaceChildren(...skus.map((sku) => { const option = make('option', '', sku.label); option.value = sku.key; return option; }));
-  }
-  if (!skus.some((sku) => sku.key === selectedSkuKey)) selectedSkuKey = skus[0]?.key || '';
-  skuSelect.value = selectedSkuKey;
+  renderSelectionCount();
   const context = currentMediaContext();
   const billing = context.billing;
-  const quote = billing?.quote;
   const mediaBusy = projection.busy || mediaMutationBusy;
-  suiteState.textContent = quote ? `${quote.itemCount} 张 · 最高 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)} · ${billing.suite?.status || '待开始'}` : projection.billing.error || '先准备套图获取报价';
-  element('precision-plan').disabled = mediaBusy || planSubmissionBusy || !listing() || Boolean(promptLockState());
-  element('precision-generate').disabled = mediaBusy || !quote?.previewHash || Boolean(billing?.suite);
-  element('precision-continue').disabled = mediaBusy || !billing?.suite;
+  suiteState.textContent = describeSuite(billing);
   element('precision-assign').disabled = mediaBusy || !assignableSuiteSlots(context).length;
-  const nextCandidateSignature = JSON.stringify([context.draft?.id, context.history?.items, billing?.suite?.slots]);
+  const visibleHistory = (context.history?.items || []).filter(item => workspaceState.all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey);
+  imageWorkspace.render(buildSkuImageRows({ skus, media, history: context.history, billing, title: projection.source.title }), selectedSkuKey);
+  const nextCandidateSignature = JSON.stringify([context.draft?.id, selectedSkuKey, workspaceState.all, visibleHistory, billing?.suite?.slots]);
   if (candidateSignature !== nextCandidateSignature) {
   candidateSignature = nextCandidateSignature;
   const existingCandidates = new Map([...candidates.querySelectorAll('.precision-candidate')].map(card => [`${card.dataset.candidateWorkflow}:${card.dataset.candidateOutput}`, card]));
   const nextCandidates = [];
-  for (const item of context.history?.items || []) {
+  for (const item of visibleHistory) {
     const slot = suiteSlotForItem(billing, item);
     for (const output of item.outputs) {
       const card = existingCandidates.get(`${item.id}:${output.id}`) || make('article', 'precision-candidate');
@@ -957,11 +1000,17 @@ function renderMedia() {
     }
   }
   candidates.replaceChildren(...nextCandidates);
+  if (!nextCandidates.length) candidates.append(make('p', 'precision-candidates-empty', '当前 SKU 还没有图片结果。处理完成后可在这里预览、审核。'));
   }
   candidates.querySelectorAll('button').forEach(button => { button.disabled = mediaBusy; });
   compilePrompt();
   renderPromptState();
   renderImageMode();
+  byok.render();
+}
+function renderSelectionCount() {
+  const keys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
+  mediaSelectionCount.textContent = `整个草稿已勾选 ${keys.size}/5 张${imageMode === 'translate' ? '翻译图片' : '参考图'}`;
 }
 function render() {
   band.firstChild.textContent = projection.source.title || '正在读取商品';
@@ -983,6 +1032,7 @@ function render() {
   element('erp-connection-status').textContent = projection.shops.length ? 'ERP 已连接' : '尚无授权店铺';
   if (projection.error) status(projection.error, 'err');
   renderEditor(); renderMedia();
+  sourceVideo.refresh();
   renderPublish();
   element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
   element('process-source-summary').replaceChildren(make('div', '', `${projection.skus.length} 个 SKU · ${projection.media.length} 张素材`));
@@ -1015,11 +1065,30 @@ function render() {
   schedulePolling();
 }
 
+let mediaReadback = null;
 async function refreshMediaState() {
   const draft = listing();
   if (!draft) return;
-  await command('LOAD_BILLING', { listingWorkflowId: draft.id });
-  await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: draft.id });
+  const identity = `${draft.id}:${draft.revision}:${draft.draftVersion}`;
+  if (mediaReadback?.identity === identity) return mediaReadback.promise;
+  const promise = (async () => {
+    await command('LOAD_BILLING', { listingWorkflowId: draft.id });
+    if (listing()?.id !== draft.id) return;
+    await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: draft.id });
+  })();
+  mediaReadback = { identity, promise };
+  try { await promise; } finally { if (mediaReadback?.promise === promise) mediaReadback = null; }
+}
+async function refreshConfirmedMedia(message) {
+  status(message, 'ok'); log(message);
+  const draftId = listing()?.id;
+  try { await refreshMediaState(); if (listing()?.id === draftId) status(message, 'ok'); }
+  catch (error) {
+    if (listing()?.id === draftId) {
+      status(`${message}；状态刷新暂未完成，请读取最新状态`, 'warn');
+      log(`操作回执已确认；只读刷新：${error.message || String(error)}`);
+    }
+  }
 }
 function schedulePolling() {
   const suite = projection.billing.suite;
@@ -1068,7 +1137,8 @@ for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () =>
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
-trusted('erp-refresh-btn', async () => { await command('REFRESH'); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品与草稿状态已刷新'); });
+trusted('erp-refresh-btn', async () => { await command('REFRESH'); await refreshMediaState(); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品、草稿与图片任务已刷新', 'ok'); });
+trusted('precision-image-refresh', async () => { await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });
 async function suiteCommand(action, costConfirmed = false) {
   if (!listing()) throw new Error('请先开始执行并创建 ERP 草稿');
@@ -1101,6 +1171,7 @@ async function suiteCommand(action, costConfirmed = false) {
       }
     }
     await command('EXECUTE_HOSTED_SUITE', { listingWorkflowId: draftId, action, slotKey: null, decision: null, costConfirmed,
+      ...(action === 'CREATE_AND_REVIEW_PLAN' && imageMode === 'ai-main-translate' ? { galleryGoals: [] } : {}),
       ...(creativeBrief ? { creativeBrief } : {}),
       ...(quoteWitness ? { quoteWitness } : {}),
       ...(candidateMediaKeys ? { candidateMediaKeys } : {}) });
@@ -1115,38 +1186,39 @@ async function suiteCommand(action, costConfirmed = false) {
     if (action === 'CREATE_AND_REVIEW_PLAN') { planSubmissionBusy = false; renderPromptState(); }
   }
   pollingAttempts = 0;
-  await refreshMediaState();
-  log('ERP 图片操作响应已确认');
+  await refreshConfirmedMedia('图片操作已确认');
 }
-trusted('precision-plan', () => suiteCommand('CREATE_AND_REVIEW_PLAN'));
-trusted('precision-generate', async () => {
-  currentQuoteWitness();
-  const quote = projection.billing.quote;
-  if (!quote) throw new Error('请先准备套图');
-  if (confirm(`生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。确认开始？`)) await suiteCommand('START', true);
-});
-trusted('precision-continue', () => suiteCommand('CONTINUE'));
 trusted('precision-assign', () => runMediaMutation(async () => {
   const context = currentMediaContext();
   if (!context.draft || !assignableSuiteSlots(context).length) throw new Error('尚无可应用的已审核套图，请重新读取状态');
   await command('ASSIGN_HOSTED_SUITE', { listingWorkflowId: context.draft.id });
-  await refreshMediaState();
-  log('ERP 已确认图片应用结果');
+  await refreshConfirmedMedia('图片已应用到草稿');
 }));
-trusted('image-workflow-start-btn', async () => {
+async function startImageWorkflow() {
+  if (!imageWorkspace.state().open) {
+    imageWorkspace.open(selectedSkuKey, { tab: imageMode === 'ai-suite' && projection.billing.suite ? 'results' : 'sources', all: true });
+    return;
+  }
   if (imageMode === 'translate') { await startTranslation(); return; }
   if (byokRadio.checked) { await byok.readMediaState(); return; }
-  const next=resolveSuitePrimaryAction({draftId:listing()?.id,busy:projection.busy||mediaMutationBusy||planSubmissionBusy,
-    billing:projection.billing,lock:promptLockState()});
+  const next = currentImageAction();
   if(next.disabled)return;
+  if(next.action==='CHECK'){await readTranslationAvailability(true);return;}
+  if(next.action==='EXISTING_SUITE'){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});status('已有套图计划，请继续该计划；AI 主图＋翻译需在新草稿准备。','warn');return;}
+  if(next.action==='TRANSLATE'){
+    if(translation.state().queuedCount){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});return;}
+    await startTranslation();return;
+  }
   if(next.action==='READ'){await refreshMediaState();status('已读取当前草稿图片任务，请继续当前步骤');return;}
   if(next.action==='PREPARE')return suiteCommand('CREATE_AND_REVIEW_PLAN');
   if(next.action==='CONTINUE')return suiteCommand('CONTINUE');
-  if(next.action==='REVIEW'){candidates.scrollIntoView({block:'center'});status('预览并审核当前草稿的图片结果');return;}
+  if(next.action==='REVIEW'){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});status('预览并审核当前草稿的图片结果');return;}
   currentQuoteWitness();
   const quote = projection.billing.quote;
   if (confirm(`生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。确认开始？`)) await suiteCommand('START', true);
-});
+}
+trusted('image-workflow-start-btn', startImageWorkflow);
+trusted('precision-image-primary', startImageWorkflow);
 trusted('precision-image-translate', async () => {
   await startTranslation();
 });
@@ -1202,8 +1274,7 @@ createUiScaleController().init();
 element('language-select').disabled = true;
 document.querySelectorAll('input[name="image-workflow-mode"]').forEach((radio) => {
   radio.checked = radio.value === 'ai-suite';
-  radio.disabled = !['translate', 'ai-suite', 'byok'].includes(radio.value);
-  if (radio.disabled) { radio.closest('label').title = '主图与图片翻译的连续处理暂不可用，请分别选择套图或仅翻译'; radio.closest('label').querySelector('span').textContent = 'AI主图+翻译（暂不可用）'; }
+  radio.disabled = false;
 });
 element('plugin-version').textContent = 'SS ERP 接口适配版';
 render();

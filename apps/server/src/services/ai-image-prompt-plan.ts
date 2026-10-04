@@ -10,7 +10,7 @@ import {
 export const AI_IMAGE_PROMPT_PLAN_VERSION = '2.0' as const;
 export const AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES = 5;
 // Bump when parser, normalization, slot rules, or fallback semantics change.
-export const AI_IMAGE_PROMPT_PLAN_IMPLEMENTATION_VERSION = 'ai-image-prompt-plan-implementation/v1' as const;
+export const AI_IMAGE_PROMPT_PLAN_IMPLEMENTATION_VERSION = 'ai-image-prompt-plan-implementation/v2' as const;
 
 export type SkuIdentityImpact =
   | 'color'
@@ -400,7 +400,8 @@ function galleryGoals(input: ImagePromptPlanInput): string[] {
   const supplied = input.galleryGoals
     ?.map((goal) => normalized(goal).replace(/[^a-z0-9_-]+/g, '_'))
     .filter(Boolean);
-  const goals = supplied?.length ? supplied : [...DEFAULT_GALLERY_GOALS];
+  // An explicit empty list requests SKU heroes only; omission retains the full default suite.
+  const goals = input.galleryGoals?.length === 0 ? [] : supplied?.length ? supplied : [...DEFAULT_GALLERY_GOALS];
   if (goals.length > 14) throw new Error('Image prompt plan supports at most 14 gallery goals');
   if (new Set(goals).size !== goals.length) throw new Error('Image prompt plan gallery goals must be unique');
   return goals;

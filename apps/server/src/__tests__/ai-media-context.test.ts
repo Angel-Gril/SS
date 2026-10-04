@@ -660,6 +660,16 @@ describe('AI media listing-draft context', () => {
     )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
   });
 
+  it('reads processed watermark assignments without treating them as raw AI edit inputs', async () => {
+    const database = listingClient({ assets: [], assignmentAssets: [
+      editReadyAsset({ id: 'asset-1', kind: 'IMAGE_PROCESSED' }),
+      editReadyAsset({ id: 'asset-red', kind: 'IMAGE_PROCESSED' }),
+    ] });
+    const result = await createAiMediaContextService(database as never).loadListingDraft('owner-1', 'draft-1', { slotKey: 'main-1' });
+    expect(result.target.assignedAssetId).toBe('asset-1');
+    expect(result.inputs.every(item => item.assetId !== 'asset-1' && item.assetId !== 'asset-red')).toBe(true);
+  });
+
   it('rejects cross-owner, unselected-SKU, and mismatched slot access', async () => {
     const service = createAiMediaContextService(listingClient() as never);
     await expect(service.loadListingDraft('owner-2', 'draft-1'))

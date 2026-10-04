@@ -5,7 +5,7 @@ import { webcrypto } from 'node:crypto';
 import { test } from 'node:test';
 
 const url = 'https://detail.1688.com/offer/845581683597.html';
-function environment() {
+function environment(videoUrls = []) {
   const model = { skuProps: [{ prop: '规格', value: Array.from({ length: 16 }, (_, index) => ({ name: `白色 ${index} / M` })) }], skuInfoMap: {} };
   for (let index = 0; index < 16; index += 1) model.skuInfoMap[`白色 ${index} / M`] = {
     skuId: `native-${index}`, price: index === 2 ? undefined : 11.5,
@@ -14,11 +14,12 @@ function environment() {
   const inline = { textContent: `window.__INIT_DATA__=${JSON.stringify({ skuModel: model })};`, getAttribute: () => null };
   const title = { textContent: '长袖上衣', innerText: '长袖上衣' };
   const gallery = { getAttribute: (key) => key === 'src' ? 'https://cbu01.alicdn.com/img/ibank/main-0-cib.jpg' : null, style: {}, querySelectorAll: () => [] };
+  const videos = videoUrls.map(value => ({ getAttribute: key => key === 'src' ? value : null, currentSrc: value, src: value }));
   const document = {
     title: '长袖上衣', body: { querySelectorAll: () => [] },
     querySelector: (selector) => selector === '.title-text' ? title : null,
     querySelectorAll: (selector) => selector === 'script:not([src])' || selector === 'script' ? [inline]
-      : selector === '.detail-gallery-img' ? [gallery] : [],
+      : selector === '.detail-gallery-img' ? [gallery] : selector === 'video, source' ? videos : [],
     createTreeWalker: () => ({ nextNode: () => false }),
   };
   const context = { URL, TextEncoder, Uint8Array, crypto: webcrypto, document, NodeFilter: { SHOW_ELEMENT: 1 }, location: new URL(url) };
@@ -85,6 +86,37 @@ test('source category and breadcrumbs from the donor survive the canonical snaps
   assert.equal(result.captureV2.sourceCategory.name, '女式T恤');
   assert.deepEqual(Array.from(result.captureV2.sourceCategory.path, item=>item.name), ['服装','女装','女式T恤']);
   assert.equal(result.captureV2.sourceCategory.id, null, 'no Ozon or source category ID is invented');
+});
+
+test('videos found by the actual donor parser survive the canonical capture without becoming SKU images', async () => {
+  const videoUrl = 'https://cloud.video.taobao.com/product-1688.mp4?scene=preview';
+  const context = environment([videoUrl, videoUrl]);
+  vm.runInNewContext(readFileSync('extensions/ss-erp/shared/collectors/donor-1688-capture.js', 'utf8'), context);
+  const result = await context.SS_ERP_DONOR_1688_CAPTURE.collect({ url, extensionVersion: 'fixture' });
+  const videos = result.captureV2.media.filter(item => item.kind === 'video');
+  assert.equal(videos.length, 1);
+  assert.equal(videos[0].url, videoUrl);
+  assert.equal(videos[0].role, 'video');
+  assert.deepEqual(Array.from(videos[0].skuKeys), [], 'a shared product video is never assigned to a made-up SKU');
+  assert.equal(videos[0].rowEvidence.sourceType, 'dom');
+  assert.equal(videos[0].rowEvidence.sourcePath, '/donor/media_gallery/video_urls/0');
+  assert.ok(result.captureV2.skus.every(sku => !sku.mediaKeys.includes(videos[0].key)));
+  const submission = await context.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2.createSourceProductCaptureV2Submission(result.captureV2);
+  assert.equal(context.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2.validateSourceProductCaptureV2Submission(submission).valid, true);
+});
+
+test('invalid, private, non-video and absent donor video URLs cannot become accepted capture assets', async () => {
+  const context = environment();
+  const raw = await context.SS_ERP_DONOR_STRATEGIES.adapter1688.scrape();
+  raw.global_data.media_gallery.video_urls = ['', 'javascript:alert(1)', 'http://media.example/product.mp4',
+    'https://localhost/product.mp4', 'https://preview.localhost/product.mp4', 'https://127.0.0.1/product.mp4',
+    'https://media.example/photo.jpg', 'https://user:secret@media.example/product.mp4', 'https://media.example/product.mp4#marker'];
+  vm.runInNewContext(readFileSync('extensions/ss-erp/shared/collectors/donor-1688-capture.js', 'utf8'), context);
+  const api = context.SS_ERP_DONOR_1688_CAPTURE;
+  const result = api.compile(raw, { url });
+  assert.equal(result.captureV2.media.filter(item => item.kind === 'video').length, 0);
+  delete raw.global_data.media_gallery.video_urls;
+  assert.equal(api.compile(raw, { url }).captureV2.media.filter(item => item.kind === 'video').length, 0);
 });
 
 test('navigation during collection and foreign source URLs are rejected', async () => {

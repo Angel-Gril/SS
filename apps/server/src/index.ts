@@ -132,6 +132,8 @@ import { extensionByokMediaBatchRoutes } from './routes/extension-byok-media-bat
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
 import { extensionListingEditorRoutes } from './routes/extension-listing-editor.js';
+import { extensionWorkbenchWatermarkRoutes } from './routes/extension-workbench-watermark.js';
+import { createPrismaSourceListingWatermarkService } from './services/source-listing-watermark-prisma.js';
 import { createExtensionListingEditorService } from './services/extension-listing-editor.js';
 import { createSourceListingAttributeEditorService } from './services/source-listing-attribute-editor.js';
 import { createSourceListingCopyEditorService } from './services/source-listing-copy-editor.js';
@@ -2886,6 +2888,16 @@ if (isExtensionDeviceAuthEnabled()) {
       config: extensionDeviceAuthConfig,
       requiredScopes: ['listing:review'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+  await app.register(extensionWorkbenchWatermarkRoutes, {
+    prefix: '/api/extension-device/workbench-watermark',
+    service: createPrismaSourceListingWatermarkService({ client: prisma, allowLocalStorage: process.env.NODE_ENV !== 'production' }),
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:write', 'media:execute'],
+      loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
   });
   await app.register(extensionMediaLaunchRoutes, {

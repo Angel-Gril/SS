@@ -20,7 +20,16 @@
         || hostname.includes(':') || /^\d+(?:\.\d+){3}$/u.test(hostname) || hostname.endsWith('.local')
         || hostname === 'metadata.google.internal') return '';
       return url.href;
-    } catch (_) { return ''; }
+    } catch { return ''; }
+  }
+  function videoUrl(value) {
+    var candidate = mediaUrl(value);
+    if (!candidate) return '';
+    var url = new URL(candidate);
+    if (candidate.length > 4096 || url.hash || url.hostname.endsWith('.localhost')
+      || url.hostname === 'metadata' || !url.hostname.includes('.')
+      || !/\.(?:mp4|m3u8|mov|webm|m4v|flv|avi|qt|mpeg|mpg|mkv)$/iu.test(url.pathname)) return '';
+    return candidate;
   }
   function evidence(type, path, observedAt) {
     return { sourceType: type, sourcePath: path, confidence: type === 'derived' ? 0.5 : 0.9,
@@ -57,11 +66,20 @@
     var gallery = record(data.media_gallery);
     var mainImages = (Array.isArray(gallery.main_images) ? gallery.main_images : []).slice(0, 10000).map(mediaUrl).filter(Boolean);
     var detailImages = (Array.isArray(gallery.detail_images) ? gallery.detail_images : []).slice(0, 10000).map(mediaUrl).filter(Boolean);
+    var seenVideos = new Set();
+    var sourceVideos = [];
     var mediaEvidence = {};
     mainImages.concat(detailImages).forEach(function (url, index) { mediaEvidence[url] = evidence('dom', '/donor/media_gallery/' + index, observedAt); });
     skuItems.forEach(function (row, index) { row.images.forEach(function (url) {
       if (!mediaEvidence[url]) mediaEvidence[url] = evidence(skuType, '/donor/sku_matrix/' + index + '/sku_image_url', observedAt);
     }); });
+    (Array.isArray(gallery.video_urls) ? gallery.video_urls : []).slice(0, 10000).forEach(function (value, index) {
+      var url = videoUrl(value);
+      if (!url || seenVideos.has(url)) return;
+      seenVideos.add(url);
+      sourceVideos.push({ url: url });
+      mediaEvidence[url] = evidence('dom', '/donor/media_gallery/video_urls/' + index, observedAt);
+    });
     var title = text(data.product_name, 200000);
     var description = text(data.description_clean_text, 200000);
     if (description === title) description = '';
@@ -91,7 +109,7 @@
         unitPriceText: minimum === null ? '' : '¥' + minimum,
         evidence: Object.assign(evidence('derived', '/donor/sku_minimum', observedAt), { derivedFrom: ['/skus'] }) },
       skuItems: skuItems, attributes: attributes, attributeEvidenceByKey: attributeEvidence,
-      mainImages: mainImages, detailImages: detailImages, sourceVideos: [], mediaEvidenceByUrl: mediaEvidence,
+      mainImages: mainImages, detailImages: detailImages, sourceVideos: sourceVideos, mediaEvidenceByUrl: mediaEvidence,
       factEvidence: { title: evidence('dom', '/donor/product_name', observedAt), description: evidence('dom', '/donor/description', observedAt) },
       packagingRows: packageRows, sources: [], domFallback: {
         categories: [{ id: null,
@@ -106,8 +124,10 @@
     capture.collector.name = 'ss-erp-donor-1688';
     return { platform: '1688', productId: productId, sourceProductId: productId, title: title, sourceUrl: canonicalUrl,
       captureV2: capture, skuItems: skuItems, variants: skuItems, images: mainImages,
-      sourceMainImages: mainImages, sourceDetailImages: detailImages,
-      extractionDiagnostics: { collector: 'DONOR_1688', skuCount: capture.skus.length, imageCount: capture.media.length } };
+      sourceMainImages: mainImages, sourceDetailImages: detailImages, sourceVideos: sourceVideos,
+      extractionDiagnostics: { collector: 'DONOR_1688', skuCount: capture.skus.length,
+        imageCount: capture.media.filter(function (item) { return item.kind === 'image'; }).length,
+        videoCount: sourceVideos.length } };
   }
 
   async function collect(options) {

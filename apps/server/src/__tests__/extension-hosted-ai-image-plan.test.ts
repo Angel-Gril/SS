@@ -417,6 +417,22 @@ describe('extension hosted AI image plan service', () => {
     }
   });
 
+  it('forwards explicit hero-only goals and retains the bound initial-plan identity', async () => {
+    const fixture = setup();
+    await fixture.service.create({ identity, binding, idempotencyKey: 'hero-only-operation-1', galleryGoals: [] });
+    const first = fixture.planning.createRuleBased.mock.calls[0]![0];
+    expect(first.galleryGoals).toEqual([]);
+    fixture.planning.createRuleBased.mockRejectedValueOnce(new AiMediaPlanningError(
+      'AI_MEDIA_PLANNING_IDEMPOTENCY_CONFLICT', 'Different frozen goals', 409,
+    ));
+    await expect(fixture.service.create({ identity, binding, idempotencyKey: 'another-main-operation' }))
+      .rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_REQUEST_CONFLICT' });
+    const second = fixture.planning.createRuleBased.mock.calls[1]![0];
+    expect(second).not.toHaveProperty('galleryGoals');
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(fixture.bindings.bind).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards selected gallery goals without creating a second initial-plan identity', async () => {
     const fixture = setup();
     const request = { identity, binding, idempotencyKey: 'client-gallery-operation-1' };
@@ -457,7 +473,7 @@ describe('extension hosted AI image plan service', () => {
   });
 
 
-  it.each([null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
+  it.each([null, ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
     'rejects invalid gallery goals %j before planning', async (galleryGoals) => {
       const fixture = setup();
       await expect(fixture.service.create({

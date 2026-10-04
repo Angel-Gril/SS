@@ -83,18 +83,18 @@ describe('extension hosted AI image plan routes', () => {
     },
   );
 
-  it('accepts selected gallery goals through the authenticated create contract', async () => {
+  it.each([[], ['scene']].map((value) => [value]))('accepts explicit gallery goals %j through the authenticated create contract', async (galleryGoals) => {
     const fixture = await setup();
     try {
       const response = await fixture.app.inject({
         method: 'POST', url: '/plans', payload: {
           contractVersion: 'extension-hosted-ai-image-plan-create/v1', context,
-          idempotencyKey: 'client-gallery-operation-1', galleryGoals: ['scene'],
+          idempotencyKey: 'client-gallery-operation-1', galleryGoals,
         },
       });
       expect(response.statusCode).toBe(202);
       expect(fixture.service.create).toHaveBeenCalledWith(expect.objectContaining({
-        binding: context, galleryGoals: ['scene'],
+        binding: context, galleryGoals,
         identity: { ownerUserId: 'owner-1', actorUserId: 'owner-1', deviceSessionId: 'session-1' },
       }));
     } finally {
@@ -102,7 +102,7 @@ describe('extension hosted AI image plan routes', () => {
     }
   });
 
-  it.each([null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
+  it.each([null, ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]].map((value) => [value]))(
     'rejects invalid gallery goals %j at the HTTP boundary', async (galleryGoals) => {
       const fixture = await setup();
       try {

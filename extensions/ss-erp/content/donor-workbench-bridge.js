@@ -23,6 +23,7 @@
   var refreshEpoch = 0;
   var historyEpoch = 0;
   var billingEpoch = 0;
+  var hostedAuthorityRefresh = null;
   var currentHistory = {
     state: 'idle', listingWorkflowId: '', error: '', context: null,
     items: [], nextCursor: null, receipt: null,
@@ -462,7 +463,74 @@
     }
   }
 
+  function hostedMediaContext(listingWorkflowId) {
+    var listing = currentProjection.workbench.status.listing.items.find(function (item) {
+      return item.id === listingWorkflowId;
+    });
+    var handoff = currentProjection.handoff;
+    return listing && handoff ? {
+      sourceProductId: currentProjection.source.sourceProductId,
+      platform: currentProjection.source.platform,
+      snapshotId: handoff.snapshotId,
+      supplyGoodsId: handoff.supplyGoodsId,
+      listingWorkflowId: listing.id,
+      shopId: listing.shopId,
+    } : null;
+  }
+
+  function sameHostedMediaContext(context) {
+    var current = context && hostedMediaContext(context.listingWorkflowId);
+    return Boolean(current) && Object.keys(context).every(function (key) {
+      return current[key] === context[key];
+    });
+  }
+
+  function refreshHostedAuthority(context) {
+    if (!sameHostedMediaContext(context)) return Promise.resolve(false);
+    var refresh = { promise: null, epoch: 0 };
+    hostedAuthorityRefresh = refresh;
+    refresh.promise = (async function () {
+      var projectionRead = loadProjection({ force: true });
+      refresh.epoch = refreshEpoch;
+      if (!await projectionRead || hostedAuthorityRefresh !== refresh
+        || !sameHostedMediaContext(context)) return false;
+      setBusy(true, '');
+      return loadBilling({ listingWorkflowId: context.listingWorkflowId });
+    }()).catch(function (error) {
+      if (hostedAuthorityRefresh === refresh && refresh.epoch === refreshEpoch) {
+        setBusy(false, error && error.message ? error.message : String(error));
+      }
+      return false;
+    }).finally(function () {
+      if (hostedAuthorityRefresh !== refresh) return;
+      hostedAuthorityRefresh = null;
+      if (refresh.epoch === refreshEpoch && sameHostedMediaContext(context)) setBusy(false, currentProjection.error);
+    });
+    return refresh.promise;
+  }
+
+  async function readAfterHostedRefresh(command, reader) {
+    var refresh = hostedAuthorityRefresh;
+    if (refresh) {
+      var context = hostedMediaContext(command.listingWorkflowId);
+      var ready = await refresh.promise;
+      if (!sameHostedMediaContext(context)) {
+        if (command.requestId) commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
+        return false;
+      }
+      // Use the exact bound readback already completed after the mutation instead
+      // of racing another billing read against the pre-assignment draft version.
+      if (reader === loadBilling && ready === true && currentProjection.billing.state === 'ready'
+        && currentProjection.billing.listingWorkflowId === command.listingWorkflowId) {
+        if (command.requestId) commandResult(command.requestId, true, '');
+        return true;
+      }
+    }
+    return reader(command);
+  }
+
   async function executeHostedSuite(command) {
+    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作', null, undefined, 'NOT_SUBMITTED');
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
     });
@@ -470,6 +538,7 @@
       commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
       return;
     }
+    var context = hostedMediaContext(listing.id);
     setBusy(true, '');
     try {
       var response = await sendRuntimeMessage({
@@ -484,22 +553,26 @@
         ...(command.creativeBrief === undefined ? {} : { creativeBrief: command.creativeBrief }),
         ...(command.candidateMediaKeys === undefined ? {} : { candidateMediaKeys: command.candidateMediaKeys }),
         ...(command.quoteWitness === undefined ? {} : { quoteWitness: command.quoteWitness }),
+        ...(command.galleryGoals === undefined ? {} : { galleryGoals: command.galleryGoals }),
       });
-      if (!response || !response.ok || !response.result) {
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'completed' || response.result.action !== command.action
+        || typeof response.result.replay !== 'boolean') {
         throw new Error(response && response.error || 'ERP 托管套图操作失败');
       }
-      await loadProjection({ force: true });
-      await loadBilling({ listingWorkflowId: listing.id });
-      setBusy(false, '');
-      commandResult(command.requestId, true, '');
     } catch (error) {
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
-    } finally {
       setBusy(false, '');
+      return;
     }
+    // The Worker has verified the mutation receipt. A subsequent read-only
+    // refresh cannot change that outcome or delay it past the frame timeout.
+    commandResult(command.requestId, true, '');
+    await refreshHostedAuthority(context);
   }
 
   async function assignHostedSuite(command) {
+    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作', null, undefined, 'NOT_SUBMITTED');
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
     });
@@ -507,6 +580,7 @@
       commandResult(command.requestId, false, '草稿已变化，请刷新后重试');
       return;
     }
+    var context = hostedMediaContext(listing.id);
     setBusy(true, '');
     try {
       var response = await sendRuntimeMessage({
@@ -518,14 +592,13 @@
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || 'ERP 托管结果写入失败');
       }
-      commandResult(command.requestId, true, '');
-      await loadProjection({ force: true });
-      await loadBilling({ listingWorkflowId: listing.id });
     } catch (error) {
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
-    } finally {
       setBusy(false, '');
+      return;
     }
+    commandResult(command.requestId, true, '');
+    await refreshHostedAuthority(context);
   }
 
   async function prepareMediaMutation(command) {
@@ -721,6 +794,28 @@
     } finally { setBusy(false, ''); }
   }
 
+  async function watermarkCommand(command) {
+    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成', null, undefined, 'NOT_SUBMITTED');
+    const request = command.request;
+    const context = hostedMediaContext(request.listingWorkflowId);
+    if (!context || context.shopId !== request.shopId || context.snapshotId !== request.snapshotId || context.supplyGoodsId !== request.supplyGoodsId) {
+      return commandResult(command.requestId, false, '水印草稿上下文已变化', null, undefined, 'NOT_SUBMITTED');
+    }
+    setBusy(true, '');
+    const apply = command.type === 'WATERMARK_APPLY';
+    try {
+      const response = await sendRuntimeMessage({ type: `ss-erp:source-workbench-watermark-${apply ? 'apply' : 'preview'}`,
+        platform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
+        listingWorkflowId: request.listingWorkflowId, request });
+      if (!response?.ok || !response.result) return commandResult(command.requestId, false, response?.error || '水印处理未完成',
+        response?.code, undefined, response?.outcome || (apply ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'));
+      if (!apply) setBusy(false, '');
+      commandResult(command.requestId, true, '', null, response.result);
+      if (apply) await refreshHostedAuthority(context);
+    } catch (error) { commandResult(command.requestId, false, error.message || String(error), null, undefined, apply ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'); }
+    finally { setBusy(false, ''); }
+  }
+
   function showFrame() {
     if (!frame || !trigger) return;
     open = true;
@@ -859,9 +954,10 @@
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
     if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(command.type)) void editorCommand(command);
     if (command.type === 'PUBLISH') void publishListing(command);
+    if (['WATERMARK_PREVIEW', 'WATERMARK_APPLY'].includes(command.type)) void watermarkCommand(command);
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
-    if (command.type === 'LOAD_MEDIA_HISTORY') void loadMediaHistory(command);
-    if (command.type === 'LOAD_BILLING') void loadBilling(command);
+    if (command.type === 'LOAD_MEDIA_HISTORY') void readAfterHostedRefresh(command, loadMediaHistory);
+    if (command.type === 'LOAD_BILLING') void readAfterHostedRefresh(command, loadBilling);
     if (command.type === 'PREPARE_MEDIA_MUTATION') void prepareMediaMutation(command);
     if (command.type === 'EXECUTE_MEDIA_TASK') void executeMediaTask(command);
     if (command.type === 'EXECUTE_HOSTED_SUITE') void executeHostedSuite(command);

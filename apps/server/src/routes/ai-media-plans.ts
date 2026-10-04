@@ -36,7 +36,7 @@ const createSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(128),
   selectedSkuKeys: z.array(z.string().trim().min(1).max(500)).min(1).max(50).optional(),
   candidateMediaKeys: z.array(z.string().trim().min(1).max(500)).max(25).optional(),
-  galleryGoals: z.array(z.enum([...AI_MEDIA_GALLERY_GOALS] as [string, ...string[]])).min(1).max(7).optional(),
+  galleryGoals: z.array(z.enum([...AI_MEDIA_GALLERY_GOALS] as [string, ...string[]])).max(7).optional(),
 }).strict().superRefine((value, context) => {
   if (value.selectedSkuKeys && new Set(value.selectedSkuKeys).size !== value.selectedSkuKeys.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['selectedSkuKeys'], message: 'selectedSkuKeys must be unique' });

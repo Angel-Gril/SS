@@ -716,12 +716,17 @@ const created = await test.client.createPlan({
   assert.deepEqual(selected.calls.post[0].body.galleryGoals, ['scene']);
   galleryGoals.push('detail');
   assert.deepEqual(selected.calls.post[0].body.galleryGoals, ['scene']);
-  for (const invalid of [null, [], ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
+  const heroOnly = [];
+  await selected.client.createPlan({ binding: binding(), idempotencyKey: 'hero-only-plan-1', galleryGoals: heroOnly });
+  assert.deepEqual(selected.calls.post[1].body.galleryGoals, []);
+  heroOnly.push('scene');
+  assert.deepEqual(selected.calls.post[1].body.galleryGoals, []);
+  for (const invalid of [null, ['scene', 'scene'], ['hero'], ['SCENE'], 'scene', ['scene', 1]]) {
     await assert.rejects(selected.client.createPlan({
       binding: binding(), idempotencyKey: 'gallery-plan-1', galleryGoals: invalid,
     }), { code: 'SS_ERP_HOSTED_WORKBENCH_INPUT_INVALID' });
   }
-  assert.equal(selected.calls.post.length, 1);
+  assert.equal(selected.calls.post.length, 2);
 }
 assert.equal(created.contractVersion, api.CONTRACT_VERSION);
 assert.equal(created.replayed, true);

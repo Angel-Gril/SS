@@ -40,7 +40,7 @@ const createBody = z.object({
   idempotencyKey: operationKey,
   creativeBrief: aiImageCreativeBriefSchema.optional(),
   candidateMediaKeys: z.array(mediaKey).min(1).max(25).refine((keys) => new Set(keys).size === keys.length).optional(),
-  galleryGoals: z.array(z.enum(AI_MEDIA_GALLERY_GOALS)).min(1).max(AI_MEDIA_GALLERY_GOALS.length)
+  galleryGoals: z.array(z.enum(AI_MEDIA_GALLERY_GOALS)).max(AI_MEDIA_GALLERY_GOALS.length)
     .refine((goals) => new Set(goals).size === goals.length).optional(),
 }).strict();
 const planParams = z.object({ planId: identifier }).strict();

@@ -1,6 +1,25 @@
 # 旧扩展直接适配 SS ERP
 
-## 当前结果：精铺默认入口已在双区官网公开发布
+## 当前结果：默认入口已公开，原版图片交互继续对齐
+
+### 2026-10-04 水印、来源视频与 AI 主图＋翻译本地闭合
+
+- [x] U3 水印：复用 donor 水印设置交互，服务端生成 `IMAGE_PROCESSED`，绑定当前来源快照、店铺、设备 session、草稿版本和 media slot；预览哈希、幂等 replay、CAS/上传回滚、费用为 0 均通过。应用不会把水印结果伪装为 Provider 图片。
+- [x] U4 来源视频：1688 donor parser 原本已读取视频但适配层丢弃；现在 canonical capture 保留视频证据，工作台按 SKU 同窗预览，拒绝私网/非 HTTPS/任意调用方 URL。Ozon 主图/富内容视频持久化与 compiler 仍未闭合，不宣称正式发布。
+- [x] U5 AI 主图＋翻译：显式 `galleryGoals: []` 贯穿计划/HTTP/扩展三层合同，报价为单张主图；主图必须完成审核后才允许提交翻译，翻译未知结果不盲重试。缺省仍保留原套图目标。
+- 本地证据：服务端定向 `237/237`、水印隔离 PostgreSQL `4/4`、扩展水印 21 项、source-video 5 项、combined 4 项、刷新 8 项，MV3 source-page fixture `ok=true`；没有 Provider/Ozon/生产写入或新费用。准备下一候选 `1.0.413`，尚未签名、推送或部署。
+
+### 2026-10-04 用户截图中的 SKU 图片交互修复（本地完成 2/2）
+
+- [x] U1 对齐原版逐 SKU 图片表和同窗管理。用户 `103348/103406` 截图证明新版仍是下拉框/公共卡片而原版是六列表；浏览器先 RED `0 != 16`。新增 `pages/donor/sku-image-workspace.js`，按原 `image-manager-workspace-view.js::renderSummary` 与 `sku-image-workspace.js` 的表格/排序形式适配：每个当前 canonical SKU 一行，四张缩略图和剩余数量、行选择、中文任务状态；点击行打开同窗来源图片/处理结果，支持上一/下一 SKU、整草稿素材、预览、审核和应用。取消原 SKU 下拉和准备/生成/继续三个重复按钮，统一主操作；可选提示词/视觉 JSON 收入展开区。实际只选一个 SKU 的草稿仍只有一行，不把测试选择解释成采集丢行。
+- [x] U2 区分成功回执与只读刷新。原 bridge 等 `loadProjection → loadBilling` 后才回成功，迟缓刷新会触发 frame 的 90 秒 mutation 超时。现在立即发送 Worker 已核验的成功回执，billing/history 等待同一次 authority refresh；成功后的只读错误提示“操作已确认，状态刷新暂未完成”，显式读取成功清提示，不盲重发审核或生成。未知/不完整 mutation、并发第二写入、迟到响应跨 snapshot 仍拒绝。最小 bridge 回归先 RED 再 `8/8` GREEN。
+- 定向联合 `57/57`（含 Cloud/Local package verifier）通过，修改的运行时/新测试定向 ESLint 通过。隔离 Chrome 加载本地源码，`--sku-images` 验证 16 行→所选 2 行、SKU/整草稿切换、唯一主按钮、驳回不可应用、审核成功后只读失败/显式恢复、焦点与窄屏；`--byok-flow --translation` 验证既有编辑保存、审核/assignment、BYOK 与翻译 fixture；`--usability-only --translation-denied` 验证真实滚轮与服务端拒绝边界。证据在系统临时目录 `ss-erp-precision-ui-evidence-z7hYSH`、`ss-erp-precision-ui-evidence-AjTaaJ`、`ss-erp-precision-ui-evidence-euGeav`，不是发布回执。browser runner 原有三项 lint、bridge 原有六项 lint 已与 HEAD 对照，未冒称全仓 lint 通过。
+- 水印、主图/富内容视频及“AI主图＋翻译”连续流程尚未接齐；视频列明确标记未接入，不提供假的上传/生成。生产翻译、Provider 图像质量及正式发布仍按各 owner 验收。本轮无真实 Provider/Ozon 请求、生产写入或新增费用，未提交、推送、签名或部署。
+
+### 2026-10-04 `1.0.412` 部署与原套图恢复收口
+
+- COM/CN 已运行 `e659d2ecc76212e43380e5492f171be070969978 / 1.0.412`；精确尺寸/原任务恢复与 status/media-history 子任务接线已进入运行版。官网仍公开 `0d695279 / 1.0.405`，没有新官网 CAS。部署原件在私有 `release-e659d2ec-website`，本轮未提交 UI 尚未进入该版本。
+- 原 suite 已 `SUCCEEDED/r11`，两个原 job 均 `SUCCEEDED`，各原 CNY `0.14` 完成一次 `RECONCILED_CHARGE`；不新增 task、attempt 或 Provider POST。原 800×800 PNG 保留实际尺寸，最终为 900×1200；两图明显块状失真，已经逐槽 `REJECTED`，不能应用或宣称质量通过。草稿仍 r2/v2，assignment/Ozon 写入为零。最终原件为私有 `release-08f9b9ce-website/original-suite-readback-1791072676378.json`，不改标为新 UI 验收。
 
 ### 2026-10-04 `1.0.409` 真实三商品对照与原套图恢复
 
@@ -110,6 +129,7 @@
 - 本地 JSON 与直接提示词编译：`prompt-adapter.js`。允许编辑构图、背景、光线和风格；商品主体/SKU 事实仍从来源投影产生。
 - 自定义托管创作方向：服务端 `ai-image-creative-brief.ts` 校验有界 `creativeBrief`，`ai-media-planning.ts` 将其纳入请求指纹、冻结输入及计划 hash，`ai-image-suite-prompts.ts` 将冻结方向用于最终 Provider prompt。初始计划仍按既有来源/设备/草稿 authority 唯一绑定，改方向不能自动创建第二个计划；无字段保持原计划结构。方向不是商品事实、参考素材或权限。Wanx 最终总长度仍限 800 Unicode 字符，超限明确拒绝，不截断。
 - 同窗口套图审核：iframe 只读投影保留精确 workflow/output 与可审核/应用标记，按钮调用现有 `REVIEW_SLOT`，不让套图走通用 workflow 审核。旧输出、未授权槽位及另一店铺的候选不提供操作；assignment 仍由原 store-draft owner 执行。
+- SKU 图片表/同窗管理：`pages/donor/sku-image-workspace.js` 只投影当前所选 SKU、来源图和精确 SKU/product scope 的历史候选；复用 donor 六列表 CSS、缩略图和任务样式。`precision-workbench.js` 装配既有 hosted/BYOK/翻译 owner；计费、审核、assignment 和 publish 权限不进入表格 owner。
 - 同窗口发布：`source-workbench-publish-controller.js` 仅重建服务端当前草稿和已绑定素材的请求，复用既有统一 publisher。原“上传 Ozon”按钮先展示店铺、SKU 和图片顺序，明确确认才提交；`STATUS` 使用只读 `getState`，不调用可能重新派发的 `recover`。未知结果保留原请求且禁止盲重试，页面、编辑或版本变化废弃旧预览。权限仍由设备 `listing:publish`、店铺 grant 和服务端发布 readiness 决定，未新增权限。
 - 每 SKU 包装：`source-listing-sku-packaging.ts` 为测量值/审核投影 owner，`source-listing-workflow.setSkuPackaging` 保留每 SKU 重量、长宽高，写入既有 `attributes.values.packaging.skuValues`。validator 和 Ozon compiler 逐 SKU 核验并取值，旧完整共同包装仍兼容；没有 schema 迁移。原表格独立保存包装，不清除未保存售价。值必须明确、有限且 >0，当前已选 SKU 必须完整覆盖，未核实/缺行不降级为共同值。
 - 快照、身份、店铺、草稿：既有 Worker/device transport、createDraft owner，以及新增 `routes/extension-listing-editor.ts` / `services/extension-listing-editor.ts`。编辑器使用既有 `listing:review/listing:write`、精确店铺/快照/草稿版本、现有 rollout gate 与 source-listing-workflow 的 CAS。未调整 schema、身份或计费模型。

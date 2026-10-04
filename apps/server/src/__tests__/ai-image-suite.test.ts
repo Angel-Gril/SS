@@ -273,6 +273,19 @@ describe('AI image suite preview', () => {
     expect(preview.itemCount).toBe(8);
     expect(preview.slots.every((item) => item.references[0]?.source.contentHash === null)).toBe(true);
     expect(preview.slots.every((item) => item.references[0]?.candidateId === 'main-1')).toBe(true);
+
+    const heroOnly = buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput({
+      ...planningRequest, galleryGoals: [],
+    }, sourceAuthority as never));
+    const heroQuote = createAiImageSuitePreview({
+      ...authority(), planHash: heroOnly.planHash, inputSnapshot: heroOnly.inputSnapshot, planPayload: heroOnly.plan,
+    }, provider({
+      provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
+      pricingVersion: `ai-image-suite-price-cny/v1:${'c'.repeat(32)}`,
+      estimatedCostPerImageCents: 14, maximumCostPerImageCents: 14,
+    }));
+    expect(heroQuote).toMatchObject({ itemCount: 1, estimatedCostCents: 14, maximumCostCents: 14 });
+    expect(heroQuote.slots.map((item) => item.goal)).toEqual(['sku_hero']);
   });
 
   it('maps rejected or otherwise unavailable authority to not approved without claiming', async () => {
