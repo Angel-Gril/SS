@@ -34,7 +34,10 @@ const reviewedPaidDerivedCapabilities = new Map([
     resultMode: 'async',
     maxReferences: 1,
     supportsMask: false,
-    sandboxEvidence: null,
+    allowTextToImage: false,
+    sandboxEvidence: new Set([
+      `${reviewedWanxEndpoint}:IMAGE_TRANSLATE:public_url:async`,
+    ]),
   }],
   ['openai-images:gpt-image-1', {
     operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),

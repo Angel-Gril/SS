@@ -2,6 +2,12 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 最终候选前 Provider 合同校验收口
+
+- 根工作树接续检查时为 clean，HEAD `2a4a90de` 已推送；不存在摘要中所述尚未提交的运行时修改。`lint`、workspace `typecheck`、source/Cloud/Local verifier 均通过。
+- 原 `pnpm preflight` 在 sandbox Provider contract 处真实失败：注册表已记录 exact `qwen-mt-image` 翻译 transport，sandbox 审核表仍期待 `adapter-characterized`。T2 以该失败为 RED；最小修复仅同步 `official DashScope / IMAGE_TRANSLATE / public_url / async` 的精确证据断言，新增拒绝文本/编辑继承、其他端点、transport/result mode 和参考图数量扩大的回归，原 foundation contract GREEN。不修改生产 feature flag、scope 或质量结论。
+- 下一候选固定为 `1.0.416`，必须绑定这次修复后的 clean commit。旧 `1.0.415` 应用与 `1.0.405` 官网 pointer 尚未切换；正式 native offline、fresh normal SUITE、QA04 与双区公开发布仍需在新提交上闭合。本项无 Provider/Ozon 写入或新增费用。
+
 ### 2026-10-04 中文→俄文受限翻译能力评审与官网发布接续
 
 - 对既有两张校准图之外新增密集规格、S/M/L 尺寸表、彩色斜放标签、工具型号单位、透明袋日期五张合成图，每张恰好一次 Provider POST，均完成原 task polling/result GET。新增五张质量评审为 `3 APPROVED / 2 REJECTED`：尺寸表有“胸”中文字残留，密集规格标题不准确；原请求已包含对应完整术语，不重复同输入请求洗证据。合计七图 `5 APPROVED / 2 REJECTED`，任务成功不能冒充质量全部通过。

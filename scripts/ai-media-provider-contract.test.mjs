@@ -157,6 +157,35 @@ for (const [label, changed] of [
     `reviewed official Wanx transport must reject ${label}`);
 }
 const script = path.join(root, 'scripts', 'sandbox', 'ai-media-provider-contract.mjs');
+const reviewedTranslation = {
+  operations: new Set(['IMAGE_TRANSLATE']), inputTransport: 'public_url', resultMode: 'async',
+  maxReferences: 1, supportsMask: false, allowTextToImage: false,
+  sandboxEvidence: new Set([`${wanxEndpoint}:IMAGE_TRANSLATE:public_url:async`]),
+};
+const verifiedTranslation = {
+  provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+  operations: ['IMAGE_TRANSLATE'], inputTransport: 'public_url', resultMode: 'async',
+  maxReferences: 1, supportsMask: false, evidenceLevel: 'sandbox-verified',
+  sandboxEvidence: [{
+    endpointSha256: wanxEndpoint, operation: 'IMAGE_TRANSLATE',
+    inputTransport: 'public_url', resultMode: 'async',
+  }],
+};
+assert.equal(reviewedPaidDerivedCapabilityMatches(verifiedTranslation, reviewedTranslation), true);
+for (const [label, changed] of [
+  ['text inheritance', { operations: ['TEXT_TO_IMAGE', 'IMAGE_TRANSLATE'] }],
+  ['edit inheritance', { operations: ['IMAGE_TRANSLATE', 'FULL_EDIT'] }],
+  ['unreviewed endpoint', { sandboxEvidence: [{
+    ...verifiedTranslation.sandboxEvidence[0], endpointSha256: 'b'.repeat(64),
+  }] }],
+  ['wrong transport', { inputTransport: 'base64' }],
+  ['wrong result mode', { resultMode: 'sync' }],
+  ['extra reference', { maxReferences: 2 }],
+  ['missing exact evidence', { sandboxEvidence: [] }],
+]) {
+  assert.equal(reviewedPaidDerivedCapabilityMatches({ ...verifiedTranslation, ...changed }, reviewedTranslation), false,
+    `reviewed translation transport must reject ${label}`);
+}
 const output = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
 assert.match(output, /PASS AI media provider foundation contract/);
 console.log('PASS AI media provider contract test');
