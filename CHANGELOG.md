@@ -9,6 +9,8 @@
 
 ### Added
 
+- 受限翻译 pilot 及官方扩展工作台计划绑定、审核和草稿幂等回放完成真实验收。
+
 - 托管图片翻译支持经过真实中文→俄文样本评审的受限试点，所有输出先进入候选，审核通过后才能应用；保留密集标题和尺寸表的已知质量限制。
 - 精铺图案水印复用当前账号和店铺模板，支持缩放、原透明通道、六种位置、预览和草稿应用。
 - 主图与富内容视频增加按 SKU 设置、保存、清除及幂等核对；已上传到 Ozon 的官方视频随既有发布流程编译，发布预览包含视频。
@@ -23,6 +25,18 @@
 - 精铺工作台继续直接对齐 `jp20260803` 的类目树、推荐卡片、属性预览和套图主操作；后台类目检索改用完整官方目录与来源商品推荐，不再只对四个名称字段做 `includes()` 后取前 50 项。
 
 ### Fixed
+
+- 发布消费者接受显式翻译 pilot 的三项 operation，保留额外 operation 拒绝边界；扩展计划按钮改用授权 plan-binding owner。
+
+## [1.0.421] - 2026-10-04
+
+### Added
+
+- 公开发布带受限图片翻译 pilot 合同的扩展 Cloud/Local 包；COM 保持 DOTH 逐图审核，CN 保持 dark。
+
+### Fixed
+
+- 修复官网下载接口拒绝已签名翻译 pilot 包的问题。
 
 - 官网下载消费者与发布签名门禁统一接受显式翻译试点合同，修复受限三项 operation 的签名包被下载接口误拒绝为 404；未增加额外 operation 权限。
 - 官方扩展图片工作台的计划按钮直接调用既有设备/草稿 plan-binding 客户端，保留精确上下文、目标选择和幂等身份，修复旧来源页监听器移除后按钮无响应。
@@ -106,7 +120,8 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/fdee810303d1216d2f587d4c09c9a9f59766abed...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/4df9ec387b75c0f26c8a483c42d33940c03a892c...HEAD
+[1.0.421]: https://github.com/Angel-Gril/SS/compare/1.0.405...4df9ec387b75c0f26c8a483c42d33940c03a892c
 [1.0.403]: https://github.com/Angel-Gril/SS/compare/8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4...fdee810303d1216d2f587d4c09c9a9f59766abed
 [1.0.395]: https://github.com/Angel-Gril/SS/commit/3723f5dd1a175537a183bd750f8c168a2f742baf
 [1.0.401]: https://github.com/Angel-Gril/SS/commit/8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4
