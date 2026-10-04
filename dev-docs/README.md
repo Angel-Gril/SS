@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 `848d308a / 1.0.415` 双区部署与中文→俄文翻译校准完成
+
+`848d308ac3ab49679f61f99620c6cb3a27e9933b / 1.0.415` 已完成 COM pilot、CN dark 双区标准部署。两区 API/Worker/Web active，153 migrations、AI suite DB guard、runtime backup、canonical VPS 均通过（各 0 failure / 1 warning，warning 为未配置远端备份）；Cloud/Local 扩展包 581 pass。官网仍旧 pointer `0d695279 / 1.0.405`，未执行官网 CAS、publication canary 或 distribution probe。
+
+在用户授权不限金额后，COM 对两张合成中文校准图执行了恰好各一次 `qwen-mt-image` 中文→俄文 Provider POST：每张 1 submit、3 polls、1 result GET，两个任务均 `SUCCEEDED`；未重试未知结果、未写 Ozon、未读取 Provider 控制台。ERP 冻结报价为 CNY `0.01`/张，供应商实际账单未读取；两张输出均为 `1000×760 JPEG`，人工检查中文残留、布局、数字/M 和商品身份均通过。该结果只证明本次 sandbox transport/lifecycle/样例质量，不晋升生产翻译能力；`qwen-mt-image` 仍需正式能力和更广中文→俄文质量证据后才能打开生产开关。私有证据在 `release-848d308a-website/translation-submit-0/1-*.safe.json` 与 `translation-results/`，不进 Git。
+
 ## 2026-10-04 图案水印、视频发布编译与托管翻译后端继续适配
 
 图案水印已复用账号/店铺模板并完成预览、透明度、缩放、应用及模板漂移保护；主图/富内容视频已接同窗草稿设置、官方媒体地址校验、发布预览与编译。扩展真实托管翻译的单张报价确认、凭据冻结、CNY 预留/结算、审核应用及未知结果恢复已完成本地接线，生产仍关闭，未伪造 `qwen-mt-image` 的中文→俄文能力证据。

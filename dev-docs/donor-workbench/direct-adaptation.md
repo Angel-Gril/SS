@@ -2,6 +2,13 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 `848d308a / 1.0.415` 翻译校准与双区部署收口
+
+- `848d308ac3ab49679f61f99620c6cb3a27e9933b / 1.0.415` 已推送、签名并部署 COM/CN；COM 仍精确 DOTH pilot，CN 保持 AI/BYOK/Ozon dark。两区 runtime backup、153 migrations、DB guard、内部/公网 readiness、canonical VPS 均通过，扩展 verifier 各 `581 pass / 0 failure / 0 warning`。旧版无视频 `videoBindings` 字段兼容修复已随本候选进入。
+- 用户明确授权本轮真实翻译测试不限金额。两个隔离合成校准输入分别恰好一次 POST；Container operation `zh-ru-container-415-a11ca922-1f5f-4c95-8865-f2c9008826b4` 输出 `1000×760 JPEG`，SHA-256 `425bbb2f702e6917ae654c7f2ddf408b45ec13fc115e68e600b3f466e627c181`；Shirt operation `zh-ru-shirt-415-9fd04b2d-ea29-46d7-a9c4-625bb98b924e` 输出同尺寸，SHA-256 `ad4b19d7c00abb3780bd356a8b10e8407077ec82066ebe7355b4380d3d539f2a`。每个任务均 `1 submit / 3 polls / 1 result GET / SUCCEEDED`，没有盲重试，Ozon writes=0。
+- 两张输出人工复核通过：俄文标题/标签可读，中文标签已转换，数字 `30/20/5/M/1` 保持，商品图形、布局和身份保持；没有明显错位或中文残留。ERP 结算合同冻结 CNY `1 minor`/张，供应商实际账单未读取，不能把 ERP quote 当供应商发票。
+- 仍未完成 production promotion：`dashscope-qwen-mt-image` registry 仍 `adapter-characterized`，需要更广真实中文→俄文语料、术语覆盖、俄文可读性/残留/布局/身份评分及正式 capability evidence；当前生产 feature/provider 仍 disabled。未来再次测试必须绑定新的输入、operation ID、批准和费用授权，不能复用本轮原件。
+
 ### 2026-10-04 图案水印、官方视频与托管翻译接线（本地完成 3/3）
 
 - 接续发布：功能提交 `82b142c82d59034645056af08697e9f6bc99f8f3 / 1.0.414` 已推送并生成区域签名候选；签名包 COM/CN 隔离 MV3 默认入口、来源拒绝与 Blob transport 均通过。COM 标准部署已完成，CN 收尾中。最后旧 `1.0.405` client 复核发现总返回空 `videoBindings` 会违背 strict v1 响应；新增四项 RED→GREEN，两个发布 owner 现无视频时省略新增字段，有视频与 previewHash 仍完整绑定。该最小兼容修复需独立 `1.0.415` 候选，不改写已签名 414。真实翻译两张中文校准输入已准备，仅本地文件与 hash；最高 CNY 0.28 费用问题仍待用户回复，尚未发布公网输入或提交 Provider。
