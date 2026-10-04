@@ -2,6 +2,16 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-04 图案水印、官方视频与托管翻译接线（本地完成 3/3）
+
+- [x] U6 图案水印：`source-listing-image-watermark.ts` 与现水印 owner 通过当前账号/店铺模板 ID 读取安全图案，不接受调用方 URL。原 PNG alpha 与设置透明度相乘，支持六位置、缩放、平铺；来源图、模板像素和模板版本进入预览 hash。提交期间模板归属/URL/版本变化在事务末拒绝并回滚清理。通用模板、精确店铺和现服务端兼容的旧店铺名都受归属检查。donor 原弹窗支持文字/图片切换、模板读取、预览和应用；无图案时说明 ERP 图片处理→水印模板维护路径。
+- [x] U7 官方视频：新增 `source-listing-video.ts` / Prisma owner / `source-listing-video-media.ts`，当前设备、店铺、快照、草稿 r/v 与官方 schema 限权。主图/富内容按 SKU 保存、清空和幂等重放，切换 shop/snapshot/SKU/category 撤销旧绑定。compiler 保留 `complex_id`、富内容 `raVideo`，视频不进入 images；当前 schema 不支持、旧 schema、冲突 rich attributes 仍拒绝。既有 publisher 和 previewHash 包含完整视频，前端可在原窗口确认。只接已上传到 Ozon 的官方 CDN/sc-temporary 媒体；未调用旧 Cookie 私有上传，也未把普通 1688 视频直接当可发布素材。
+- [x] U8 付费翻译框架：`ai-image-translation-runtime-contract.ts` 在 exact provider/model/official endpoint/input transport/async 与 sandbox capability 全量成立后才准入。paid command 必须携带当前单张 `priceConfirmation`，runtime/credential revision/currency/单价冻结进 job；CNY reservation、原 worker 原 task GET 恢复、审核与草稿应用、幂等及成功张数结算复用原 owners。已开始的未知请求不能因 flag/config 变化被误标未提交，禁止盲重试；未冻结 legacy job不晋升。Web 尚无报价确认 UI 时返回 `WEB_TRANSLATION_PRICE_CONFIRMATION_UNAVAILABLE`，不显示假可用。当前 registry `qwen-mt-image` 仍 adapter-characterized，不改 flag 或能力证据。
+- 只读生产诊断：COM `556e7ca2` 的 `feature_image_translate=false`、provider disabled、model qwen-mt-image、glossary profiles=0；正单价/额度不等于已准入。没有读取 Provider 控制台或生产密钥内容，没有调用真实 Provider 或 Ozon。
+- 本地验证：水印相关后端 `49/49`、视频链 `156/156`、翻译 owner/Web/审核授权定向回归通过。主 Agent 独立执行隔离 PostgreSQL 全 153 migrations，水印 `9`、视频 `4`、单张 CNY 翻译预留/结算 `3` 合计 `16/16`；schema 已删除。扩展关联 `68/68` 含 Cloud/Local package verifier；workspace typecheck/lint 通过。全后端业务 `6520 passed`，五个 HEAD 已有 Wanx fixture copier 无扩展名依赖失败，经每文件一行最小修复，原 `103/103` 测试独立通过；不拼接成新原生完整 offline 回执。
+- 隔离 Chrome 整页 fixture：`ss-erp-precision-ui-evidence-ngRaO6` 图案模板→预览→应用，`Ovqs8m` 两视频槽保存与读回/来源地址拒绝，`o4pRe6` 显式单张 CNY 0.14/三张总上限 CNY 0.42 的报价确认与原编辑/审核/发布 fixture（这些价格为 fixture，非当前生产价）。一次旧 click runner 的平滑滚动将目标 205 字段错点到 201，保存/校验正确拒绝，未改业务 owner；现在坐标前等待布局并强制核验准确焦点，后续完整 fixture 通过。
+- 当前这些改动尚未提交、签名或部署；运行仍 `556e7ca2 / 1.0.413`，官网 `0d695279 / 1.0.405`。新的中文→俄文质量/真实 Provider 验收仍需要独立费用授权与 exact input/credential/commit 绑定，不能用本地 paid fixture 晋升生产能力。没有新费用、Provider POST 或 Ozon 写入。
+
 ### 2026-10-04 `556e7ca2 / 1.0.413` 签名、双区部署与安装验收完成
 
 - 功能提交 `556e7ca2b8153c8081f49e6c742911aad7f3549c` 已推送到 `feat/ai-media-prompt-registry`。最终定向后端 `237/237`、扩展关联 `96/96`、水印真实隔离 PostgreSQL `4/4`、全 workspace lint/typecheck、Cloud/Local verifier 通过。精铺图片、水印和主图＋翻译的浏览器请求为明确本地 fixture，不冒称实际生产翻译或图像质量验收。

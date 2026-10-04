@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Queue, Worker } from 'bullmq';
-import { getConfig } from '../config/system-config-schema.js';
+import { getStrictConfigSnapshot } from '../config/system-config-schema.js';
 import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
@@ -30,6 +30,8 @@ import {
   type AiImageTranslationProvider,
 } from '../services/ai-image-translation.js';
 import { AiImageJobError, type AiImageJobRecord, type AiImageJobRepository } from '../services/ai-image-jobs.js';
+import { assertAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
+import type { AiImageProviderCredentialRevision, AiImageProviderCurrency } from '../services/ai-image-provider-runtime-contract.js';
 
 const QUEUE_NAME = 'ai-image-translation';
 const POLL_DELAY_MS = 2_000;
@@ -69,24 +71,25 @@ export interface AiImageTranslationProviderRuntimeConfig {
   apiKey: string;
   model: string;
   costPerImageCents: number;
+  currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 export async function getAiImageTranslationProviderRuntimeConfig(): Promise<AiImageTranslationProviderRuntimeConfig> {
-  const [enabled, provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
-    getConfig('feature_image_translate'),
-    getConfig('ai_image_translation_provider'),
-    getConfig('ai_image_translation_base_url'),
-    getConfig('ai_image_translation_api_key'),
-    getConfig('ai_image_translation_model'),
-    getConfig('ai_image_translation_cost_cents'),
-  ]);
+  const { values, revisions } = await getStrictConfigSnapshot([
+    'feature_image_translate', 'ai_image_translation_provider', 'ai_image_translation_base_url',
+    'ai_image_translation_api_key', 'ai_image_translation_model', 'ai_image_translation_cost_cents',
+  ] as const, { includeRevisions: true });
+  const revision = revisions.ai_image_translation_api_key;
   return {
-    enabled,
-    provider,
-    baseUrl,
-    apiKey,
-    model,
-    costPerImageCents: Number(costPerImageCents || 0),
+    enabled: values.feature_image_translate,
+    provider: values.ai_image_translation_provider,
+    baseUrl: values.ai_image_translation_base_url,
+    apiKey: values.ai_image_translation_api_key,
+    model: values.ai_image_translation_model,
+    costPerImageCents: values.ai_image_translation_cost_cents,
+    currency: 'CNY',
+    ...(revision ? { credentialRevision: { recordId: revision.id, revision: revision.revision, updatedAt: revision.updatedAt.toISOString() } } : {}),
   };
 }
 
@@ -189,7 +192,7 @@ async function failRuntimeGate(
     errorMessage: error.message,
     ...(job.providerJobId
       ? { providerJobId: job.providerJobId }
-      : { providerSubmissionRejected: true }),
+      : job.providerDispatchedAt ? { providerSubmissionUncertain: true } : { providerSubmissionRejected: true }),
   });
   throw error;
 }
@@ -303,6 +306,24 @@ async function processClaimedTranslationJob(
         );
       }
     }
+    if (persisted.provider !== 'fake') {
+      const config = persisted.operationConfig;
+      const frozen = config && typeof config === 'object' && !Array.isArray(config)
+        ? config.translationRuntime : undefined;
+      // Accepted historical tasks retain their original GET-only recovery lane.
+      // New dispatches require a frozen credential and explicit currency.
+      if (frozen !== undefined || !persisted.providerJobId) {
+        try {
+          assertAiImageTranslationRuntime(frozen, {
+            ...providerConfig, estimatedCostCents: providerConfig.costPerImageCents,
+          }, persisted.estimatedCostCents);
+        } catch {
+          return await failRuntimeGate(repository, persisted, attemptNumber, new AiImageJobError(
+            'PROVIDER_CONFIG_CHANGED', 'The frozen image translation endpoint, credential revision or price changed',
+          ));
+        }
+      }
+    }
     provider = (overrides.resolveProvider || resolveAiImageTranslationProvider)(
       persisted.provider,
       providerConfig,
@@ -321,7 +342,7 @@ async function processClaimedTranslationJob(
         : 'AI image translation worker setup failed before provider dispatch',
       ...(persisted.providerJobId
         ? { providerJobId: persisted.providerJobId }
-        : { providerSubmissionRejected: true }),
+        : persisted.providerDispatchedAt ? { providerSubmissionUncertain: true } : { providerSubmissionRejected: true }),
     });
     throw error;
   }
@@ -331,6 +352,7 @@ async function processClaimedTranslationJob(
       repository,
       provider,
       uploadBuffer,
+      resolveCapability: overrides.resolveCapability,
     });
     if (result === 'pending') {
       const latest = await repository.getById(jobId);

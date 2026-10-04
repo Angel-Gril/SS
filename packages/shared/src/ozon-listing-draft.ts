@@ -378,6 +378,7 @@ export type OzonListingDraftAuditEventType =
   | 'AI_MEDIA_ASSIGNMENT_ROLLED_BACK'
   | 'BYOK_MEDIA_ASSIGNMENT_BOUND'
   | 'IMAGE_PROCESSING_APPLIED'
+  | 'VIDEO_BINDING_CHANGED'
   | 'ATTRIBUTE_VALUES_CHANGED'
   | 'MANUAL_FACT_CONFIRMED'
   | 'PRICING_CHANGED'
@@ -408,6 +409,18 @@ export interface OzonListingPublishIntent {
   createdAt: string;
 }
 
+/** Reviewed Ozon-hosted media, separate from durable image assignments. */
+export interface OzonListingDraftVideoBinding {
+  skuKey: string | null;
+  role: 'MAIN' | 'RICH_CONTENT';
+  url: string;
+  sourceMediaKey: string | null;
+  sourceCaptureSnapshotId: string;
+  sourceCaptureHash: string;
+  approvedByUserId: string;
+  approvedAt: string;
+}
+
 export interface OzonListingDraft {
   id: string;
   ownerUserId: string;
@@ -429,7 +442,7 @@ export interface OzonListingDraft {
     candidates: OzonListingAiCopyCandidate[];
     applyAudit: OzonListingAiCopyApplyAudit[];
   };
-  media: { assignments: OzonListingDraftMediaAssignment[] };
+  media: { assignments: OzonListingDraftMediaAssignment[]; videoBindings?: OzonListingDraftVideoBinding[] };
   pricing: { value: Record<string, unknown> | null };
   validation: { status: 'NOT_RUN' | 'STALE' | 'VALID' | 'INVALID'; report: Record<string, unknown> | null };
   completedStepHashes: Record<string, string>;

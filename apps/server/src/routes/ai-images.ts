@@ -352,7 +352,8 @@ export interface AiImageOperationReadiness {
   enabled: boolean;
   ready: boolean;
   reasonCode: 'READY' | 'AI_MEDIA_WORKFLOW_DISABLED' | 'AI_MEDIA_OPERATION_DISABLED'
-    | 'SOURCE_LISTING_WEB_MEDIA_DISABLED' | 'PROVIDER_NOT_READY' | 'STORAGE_NOT_READY';
+    | 'SOURCE_LISTING_WEB_MEDIA_DISABLED' | 'PROVIDER_NOT_READY' | 'STORAGE_NOT_READY'
+    | 'WEB_TRANSLATION_PRICE_CONFIRMATION_UNAVAILABLE';
   reason: string;
   testOnly?: boolean;
 }
@@ -536,6 +537,7 @@ export function resolveAiImageTranslationReadiness(
     workflowEnabled?: boolean;
     production?: boolean;
     storageReadiness?: AiImageTranslationStorageReadiness;
+    resolveCapability?: typeof resolveAiImageProviderCapability;
   } = {},
 ): AiImageOperationReadiness {
   if (options.workflowEnabled === false) {
@@ -585,7 +587,7 @@ export function resolveAiImageTranslationReadiness(
       reason: storage?.reason || 'Paid image translation requires an owned OSS/CDN URL reachable over public HTTPS',
     };
   }
-  const capability = resolveAiImageProviderCapability(settings.provider, settings.model);
+  const capability = (options.resolveCapability || resolveAiImageProviderCapability)(settings.provider, settings.model);
   if (settings.provider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
     return {
       enabled: true,
@@ -611,6 +613,15 @@ export function resolveAiImageTranslationReadiness(
       ...(settings.provider === 'fake' ? { testOnly: true } : {}),
     };
   }
+  // The Web caller currently has no price-confirmation contract. Promoting a
+  // Provider for the extension must not advertise a Web path that cannot freeze
+  // the same confirmed credential and per-image quote before reserving costs.
+  if (settings.provider !== 'fake') return {
+    enabled: true,
+    ready: false,
+    reasonCode: 'WEB_TRANSLATION_PRICE_CONFIRMATION_UNAVAILABLE',
+    reason: 'Web image translation requires an explicit frozen-price confirmation; use the extension workbench',
+  };
   return {
     enabled: true,
     ready: true,

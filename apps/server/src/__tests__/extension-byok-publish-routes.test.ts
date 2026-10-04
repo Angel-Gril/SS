@@ -166,6 +166,17 @@ async function build(options: {
 }
 
 describe('extension BYOK publish routes', () => {
+  it('binds video selections to BYOK publish confirmation', async () => {
+    const initial = draft(); initial.media.videoBindings = [{ skuKey: 'sku-1', role: 'MAIN', sourceMediaKey: null,
+      url: 'https://cdn1.ozone.ru/s3/sc-temporary/video.mp4', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64),
+      approvedByUserId: 'owner-1', approvedAt: '2026-10-04T00:00:00Z' }];
+    const f = await build({ currentDraft: initial });
+    const first = (await f.app.inject({ method: 'POST', url: '/preview', payload: previewRequest() })).json().data;
+    expect(first.videoBindings).toEqual(initial.media.videoBindings);
+    const next = f.getCurrent(); next.media.videoBindings[0].url = 'https://cdn1.ozone.ru/s3/sc-temporary/changed.mp4'; f.setCurrent(next);
+    const denied = await f.app.inject({ method: 'POST', url: '/prepare', payload: { ...previewRequest(), previewHash: first.previewHash, idempotencyKey: 'publish-video-001' } });
+    expect(denied.statusCode).toBe(409); expect(f.recordPublishIntent).not.toHaveBeenCalled(); await f.app.close();
+  });
   it('marks authentication failures as non-cacheable before any route handler runs', async () => {
     const app = Fastify();
     await app.register(extensionByokPublishRoutes, {

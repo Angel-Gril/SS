@@ -10,6 +10,7 @@ import type {
 } from '../services/extension-media-workflow-launch.js';
 import { isExtensionMediaContextStaleError } from '../services/extension-media-workflow-launch.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import type { AiImageTranslationPrice } from '../services/ai-image-translation-runtime-contract.js';
 
 interface ExtensionMediaLaunchDevice {
   ownerUserId: string;
@@ -25,7 +26,8 @@ export interface ExtensionMediaLaunchCapability {
   reasonCode: string;
   reason: string;
   revision: string;
-  testOnly: true;
+  testOnly: boolean;
+  price?: AiImageTranslationPrice;
   operation: 'IMAGE_TRANSLATE';
   sourceLanguage: 'zh';
   targetLanguage: 'ru';
@@ -50,6 +52,7 @@ export interface ExtensionMediaOperationCapability {
   targetLanguage?: 'ru';
   maskSemantics?: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
   maxMaskBytes?: number;
+  price?: AiImageTranslationPrice;
 }
 
 export interface ExtensionMediaWorkflowDecision {
@@ -167,6 +170,25 @@ function disabledOperations(reason: string, revision: string): ExtensionMediaOpe
       maxMaskBytes: EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
     },
   };
+}
+
+function publicOperationCapability<T extends ExtensionMediaOperationCapability>(value: T): T {
+  const price = value.price;
+  if (price && (Object.keys(price).sort().join(',') !== 'currency,maximumCostCents,quoteFingerprint,unitCostCents'
+    || !['CNY', 'USD'].includes(price.currency) || !Number.isSafeInteger(price.unitCostCents)
+    || price.unitCostCents < 1 || price.maximumCostCents !== price.unitCostCents
+    || !/^[a-f0-9]{64}$/u.test(price.quoteFingerprint))) {
+    throw new Error('Image translation price projection is invalid');
+  }
+  return {
+    enabled: value.enabled, ready: value.ready, reasonCode: value.reasonCode, reason: value.reason,
+    revision: value.revision, testOnly: value.testOnly, operation: value.operation,
+    ...(value.operation === 'IMAGE_TRANSLATE' ? { sourceLanguage: value.sourceLanguage, targetLanguage: value.targetLanguage,
+      ...(price ? { price: { currency: price.currency, unitCostCents: price.unitCostCents,
+        maximumCostCents: price.maximumCostCents, quoteFingerprint: price.quoteFingerprint } } : {}) } : {}),
+    ...(value.operation === 'IMAGE_TO_IMAGE' ? { maxReferences: value.maxReferences } : {}),
+    ...(value.operation === 'INPAINT' ? { maskSemantics: value.maskSemantics, maxMaskBytes: value.maxMaskBytes } : {}),
+  } as T;
 }
 
 function v2Payload(
@@ -491,6 +513,12 @@ export async function extensionMediaLaunchRoutes(
           operations = disabledOperations('该媒体操作尚未开放', legacy.revision);
           operations.IMAGE_TRANSLATE = legacy;
         }
+        operations = {
+          IMAGE_TO_IMAGE: publicOperationCapability(operations.IMAGE_TO_IMAGE),
+          IMAGE_TRANSLATE: publicOperationCapability(operations.IMAGE_TRANSLATE),
+          FULL_EDIT: publicOperationCapability(operations.FULL_EDIT),
+          INPAINT: publicOperationCapability(operations.INPAINT),
+        };
       } catch {
         return error(reply, 503, 'media_capability_unavailable', '媒体 Provider 配置暂不可用');
       }
@@ -521,10 +549,10 @@ export async function extensionMediaLaunchRoutes(
 
     let capability: ExtensionMediaLaunchCapability;
     try {
-      capability = await options.getCapability({
+      capability = publicOperationCapability(await options.getCapability({
         ownerUserId: device.ownerUserId,
         workflowDecision,
-      });
+      }));
     } catch {
       return error(reply, 503, 'media_capability_unavailable', '媒体 Provider 配置暂不可用');
     }

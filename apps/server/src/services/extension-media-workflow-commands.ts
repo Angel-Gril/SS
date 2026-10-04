@@ -6,7 +6,8 @@ import {
   type AiImageProviderCredentialRevision,
 } from './ai-image-provider-runtime-contract.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
-import { resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import { hasExactAiMediaSandboxEvidence, resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
+import { assertAiImageTranslationRuntime } from './ai-image-translation-runtime-contract.js';
 import { resolveAiImageEditProviderContract } from './ai-image-edit-provider-contract.js';
 import {
   parseExtensionMediaWorkflowCreateCommand,
@@ -132,7 +133,7 @@ export function assertExtensionMediaJobProviderAuthorized(input: {
   production: boolean;
   requireReadiness: boolean;
   requireGlobalDailyBudget: boolean;
-}): { paid: boolean; globalDailyBudgetCents?: number } {
+}, resolveCapability = resolveAiImageProviderCapability): { paid: boolean; globalDailyBudgetCents?: number } {
   const provider = providerText(input.job?.provider);
   if (!provider) {
     providerAuthorizationFail(
@@ -175,6 +176,29 @@ export function assertExtensionMediaJobProviderAuthorized(input: {
       'MEDIA_CAPABILITY_UNAVAILABLE',
       'Paid AI image capability is disabled, unready, or unverified',
     );
+  }
+  if (input.operation === 'IMAGE_TRANSLATE') {
+    if (providerText(input.job?.operation) !== input.operation || input.job?.requestedImageCount !== 1) {
+      providerAuthorizationFail('MEDIA_PROVIDER_CONFIG_CHANGED', 'The frozen image translation operation changed');
+    }
+    const globalDailyBudgetCents = Number(readiness.globalDailyBudgetCents);
+    if (input.requireGlobalDailyBudget && (!Number.isSafeInteger(globalDailyBudgetCents) || globalDailyBudgetCents < 1)) {
+      providerAuthorizationFail('MEDIA_CAPABILITY_UNAVAILABLE', 'Image translation budget is not available');
+    }
+    try {
+      assertAiImageTranslationRuntime(input.job?.operationConfig?.translationRuntime, {
+        enabled: true, provider: providerText(readiness.provider), model: providerText(readiness.model),
+        baseUrl: readiness.baseUrl, currency: readiness.currency, credentialRevision: readiness.credentialRevision,
+        estimatedCostCents: Number(readiness.costPerImageCents),
+      }, Number(input.job?.estimatedCostCents));
+    } catch { providerAuthorizationFail('MEDIA_PROVIDER_CONFIG_CHANGED', 'The frozen image translation runtime changed'); }
+    const model = providerText(input.job?.model);
+    if (provider !== providerText(readiness.provider) || model !== providerText(readiness.model)
+      || !hasExactAiMediaSandboxEvidence({ capability: resolveCapability(provider, model), provider, model,
+        baseUrl: String(readiness.baseUrl || ''), operation: 'IMAGE_TRANSLATE', inputTransport: 'public_url', resultMode: 'async' })) {
+      providerAuthorizationFail('MEDIA_CAPABILITY_UNAVAILABLE', 'Image translation has no exact sandbox capability evidence');
+    }
+    return { paid: true, ...(input.requireGlobalDailyBudget ? { globalDailyBudgetCents } : {}) };
   }
   if (!['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(input.operation)
     || providerText(input.job?.operation) !== input.operation) {

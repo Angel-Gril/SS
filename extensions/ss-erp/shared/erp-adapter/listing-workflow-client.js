@@ -147,10 +147,29 @@
     return validCapability(value)
       && typeof value.ready === 'boolean'
       && text(value.reasonCode, 100)
-      && value.testOnly === true
+      && typeof value.testOnly === 'boolean'
+      && (value.price === undefined || validTranslationPrice(value.price))
       && value.operation === 'IMAGE_TRANSLATE'
       && value.sourceLanguage === 'zh'
       && value.targetLanguage === 'ru';
+  }
+
+  function validTranslationPrice(value) {
+    return exactKeys(value, ['currency', 'unitCostCents', 'maximumCostCents', 'quoteFingerprint'])
+      && ['CNY', 'USD'].includes(value.currency)
+      && Number.isSafeInteger(value.unitCostCents) && value.unitCostCents > 0
+      && value.maximumCostCents === value.unitCostCents
+      && typeof value.quoteFingerprint === 'string' && /^[a-f0-9]{64}$/u.test(value.quoteFingerprint);
+  }
+
+  function translationPriceConfirmation(value) {
+    if (!exactKeys(value, ['currency', 'maximumCostCents', 'quoteFingerprint'])
+      || !['CNY', 'USD'].includes(value.currency)
+      || !Number.isSafeInteger(value.maximumCostCents) || value.maximumCostCents < 1
+      || typeof value.quoteFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(value.quoteFingerprint)) {
+      throw new TypeError('image translation price confirmation is invalid');
+    }
+    return { currency: value.currency, maximumCostCents: value.maximumCostCents, quoteFingerprint: value.quoteFingerprint };
   }
 
   var STANDALONE_MEDIA_OPERATIONS = [
@@ -168,7 +187,7 @@
       'estimatedCostCents', 'maximumCostCents',
     ];
     var operationKeys = operation === 'IMAGE_TRANSLATE'
-      ? ['sourceLanguage', 'targetLanguage']
+      ? ['sourceLanguage', 'targetLanguage', 'price']
       : operation === 'IMAGE_TO_IMAGE'
         ? ['maxReferences']
         : operation === 'INPAINT'
@@ -183,7 +202,8 @@
       && (!Number.isSafeInteger(value.maximumCostCents)
         || value.maximumCostCents < Number(value.estimatedCostCents || 0))) return false;
     if (operation === 'IMAGE_TRANSLATE') {
-      return value.sourceLanguage === 'zh' && value.targetLanguage === 'ru';
+      return value.sourceLanguage === 'zh' && value.targetLanguage === 'ru'
+        && (value.price === undefined || validTranslationPrice(value.price));
     }
     if (operation === 'IMAGE_TO_IMAGE') {
       return Number.isSafeInteger(value.maxReferences)
@@ -1774,6 +1794,8 @@
           sourceMediaKey: sourceMediaKey,
           draftRevision: draftRevision,
           workflowOperationKey: workflowOperationKey,
+          ...(input && input.priceConfirmation !== undefined
+            ? { priceConfirmation: translationPriceConfirmation(input.priceConfirmation) } : {}),
         };
         var idempotencyKey = await freshAttemptKey({
           schemaVersion: command.schemaVersion,
@@ -1786,6 +1808,7 @@
           supplyGoodsId: supplyGoodsId,
           snapshotId: snapshotId,
           workflowOperationKey: workflowOperationKey,
+          ...(command.priceConfirmation ? { priceConfirmation: command.priceConfirmation } : {}),
         }, 'extension-media-create:');
         var envelope = {
           shopId: shopId,

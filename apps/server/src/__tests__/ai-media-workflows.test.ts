@@ -11,6 +11,8 @@ import {
   type CreateAiImageTranslationWorkflowInput,
 } from '../services/ai-media-workflows.js';
 import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 
 const workflow: AiMediaWorkflowRecord = {
   id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
@@ -290,6 +292,28 @@ describe('AI media workflow service', () => {
         domainHint: expect.stringContaining('Translate only visible product marketing copy.'),
       }),
     }));
+  });
+
+  it('requires the exact frozen paid translation runtime and capability before persistence', async () => {
+    const repo = repository();
+    const runtime = buildAiImageTranslationRuntime({
+      enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY', estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    }).runtime;
+    const capability = { ...resolveAiImageProviderCapability(runtime.provider, runtime.model)!, evidenceLevel: 'sandbox-verified' as const,
+      sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const, inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
+    const input = {
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'Keep product identity', terminologies: [],
+      provider: runtime.provider, model: runtime.model, dailyLimit: 20, estimatedCostCents: 14, globalDailyBudgetCents: 100,
+      idempotencyKey: 'paid-translation-1', context: { type: 'collect' as const, id: 'goods-1' }, translationRuntimeContract: runtime,
+    };
+    const service = createAiMediaWorkflowService(repo, { resolveCapability: () => capability });
+    await expect(service.createImageTranslation({ ...input, translationRuntimeContract: undefined })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    await expect(service.createImageTranslation(input)).resolves.toMatchObject({ jobId: 'translation-job-1' });
+    expect(repo.createImageTranslation).toHaveBeenCalledTimes(1);
+    await expect(createAiMediaWorkflowService(repo).createImageTranslation(input)).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
   });
 
   it('rejects image translation before persistence for invalid language or terminology input', async () => {

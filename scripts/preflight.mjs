@@ -333,6 +333,12 @@ const steps = [
     args: ['--test', 'scripts/extension-precision-byok-registration-ui.test.mjs'],
   },
   {
+    name: 'extension video and paid translation contracts',
+    command: 'node',
+    args: ['--test', 'scripts/extension-precision-video-publish.test.mjs', 'scripts/extension-image-translation-price.test.mjs',
+      'scripts/extension-precision-watermark-boundary.test.mjs'],
+  },
+  {
     name: 'extension donor workbench package verifier contract',
     command: 'node',
     args: ['scripts/extension-donor-workbench-package-verifier.test.mjs'],

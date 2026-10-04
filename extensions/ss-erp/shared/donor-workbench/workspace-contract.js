@@ -10,7 +10,7 @@
     'EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE',
     'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY',
     'PUBLISH', 'CREATE_TRANSLATION', 'CHECK_TRANSLATION',
-    'WATERMARK_PREVIEW', 'WATERMARK_APPLY',
+    'WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES', 'VIDEO_READ', 'VIDEO_SAVE',
   ]);
   var MAX_SKUS = 100;
   var MAX_MEDIA = 120;
@@ -649,30 +649,48 @@
 
   function parseFrameCommand(value) {
     var item = record(value);
-    if (item && ['WATERMARK_PREVIEW', 'WATERMARK_APPLY'].includes(item.type)) {
+    if (item && ['WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES'].includes(item.type)) {
       var watermarkRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'request']);
       var watermark = record(item.request);
       var watermarkFields = ['contractVersion', 'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
-        'draftRevision', 'draftVersion', 'items', 'config'];
+        'draftRevision', 'draftVersion'];
+      if (item.type !== 'WATERMARK_TEMPLATES') watermarkFields.push('items', 'config');
       if (item.type === 'WATERMARK_APPLY') watermarkFields.push('idempotencyKey', 'previewHash');
       var config = watermark && record(watermark.config);
       if (!exactKeys(watermark, watermarkFields) || watermark.contractVersion !== 'extension-workbench-watermark/v1'
         || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(function (key) { return text(watermark[key], 200); })
         || !['draftRevision', 'draftVersion'].every(function (key) { return Number.isSafeInteger(watermark[key]) && watermark[key] > 0; })
-        || !Array.isArray(watermark.items) || !watermark.items.length || watermark.items.length > 5
+        || item.type !== 'WATERMARK_TEMPLATES' && (!Array.isArray(watermark.items) || !watermark.items.length || watermark.items.length > 5
         || !watermark.items.every(function (entry) { return record(entry) && Object.keys(entry).every(function (key) {
           return ['skuKey', 'slotKey', 'sourceMediaKey', 'sourceAssetId'].includes(key);
         }) && (entry.skuKey === null || text(entry.skuKey, 500)) && text(entry.slotKey, 200)
           && Boolean(text(entry.sourceMediaKey, 500)) !== Boolean(text(entry.sourceAssetId, 500)); })
-        || !config || Object.keys(config).some(function (key) { return !['type','text','position','opacity','fontSize','fontColor'].includes(key); })
-        || config.type !== 'text' || typeof config.text !== 'string' || !config.text.trim() || config.text.length > 120
+        || !config || Object.keys(config).some(function (key) { return !(config.type === 'image'
+          ? ['type','templateId','position','opacity','scale'] : ['type','text','position','opacity','fontSize','fontColor']).includes(key); })
+        || (config.type === 'image' ? !text(config.templateId, 200) || !Number.isInteger(config.scale) || config.scale < 5 || config.scale > 100
+          : config.type !== 'text' || typeof config.text !== 'string' || !config.text.trim() || config.text.length > 120)
         || !['bottom-right','bottom-left','top-right','top-left','center','tile'].includes(config.position)
-        || !Number.isInteger(config.opacity) || config.opacity < 1 || config.opacity > 100
+        || !Number.isInteger(config.opacity) || config.opacity < 1 || config.opacity > 100)
         || item.type === 'WATERMARK_APPLY' && (!/^[a-f0-9]{64}$/u.test(watermark.previewHash) || !text(watermark.idempotencyKey, 200))) {
         throw new TypeError('invalid watermark request');
       }
       return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: watermarkRequestId,
         request: Object.freeze(JSON.parse(JSON.stringify(watermark))) });
+    }
+    if (item && ['VIDEO_READ', 'VIDEO_SAVE'].includes(item.type)) {
+      var videoRequestId = commandBase(item, ['contractVersion','type','requestId','request']);
+      var request = record(item.request);
+      var fields = item.type === 'VIDEO_READ' ? ['binding'] : ['binding','skuKey','mainUrl','richContentUrl','operationKey'];
+      var binding = request && record(request.binding);
+      if (!exactKeys(request, fields) || !exactKeys(binding, ['snapshotId','supplyGoodsId','shopId','listingWorkflowId','draftRevision','draftVersion'])
+        || !['snapshotId','supplyGoodsId','shopId','listingWorkflowId'].every(function (key) { return text(binding[key], 200); })
+        || !['draftRevision','draftVersion'].every(function (key) { return Number.isSafeInteger(binding[key]) && binding[key] > 0; })
+        || item.type === 'VIDEO_SAVE' && ((request.skuKey !== null && !text(request.skuKey, 500))
+          || !text(request.operationKey, 128) || !['mainUrl','richContentUrl'].every(function (key) {
+            return request[key] === null || typeof request[key] === 'string' && request[key].length <= 4096 && Boolean(httpsUrl(request[key]));
+          }))) throw new TypeError('invalid video draft request');
+      return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: videoRequestId,
+        request: Object.freeze(JSON.parse(JSON.stringify(request))) });
     }
     if (item && item.type === 'OPEN_EMBEDDED_MEDIA') {
       var embeddedRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'preferredSkuKey']);
@@ -697,10 +715,19 @@
         listingWorkflowId: text(item.listingWorkflowId, 200) });
     }
     if (item && item.type === 'CREATE_TRANSLATION') {
-      var translationRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'sourceMediaKey']);
+      var translationFields = ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'sourceMediaKey'];
+      if (item.priceConfirmation !== undefined) {
+        translationFields.push('priceConfirmation');
+        if (!exactKeys(item.priceConfirmation, ['currency','maximumCostCents','quoteFingerprint'])
+          || !['CNY','USD'].includes(item.priceConfirmation.currency) || !Number.isSafeInteger(item.priceConfirmation.maximumCostCents)
+          || item.priceConfirmation.maximumCostCents < 1 || item.priceConfirmation.maximumCostCents > 100_000_000
+          || !/^[a-f0-9]{64}$/u.test(item.priceConfirmation.quoteFingerprint)) throw new TypeError('invalid translation price confirmation');
+      }
+      var translationRequestId = commandBase(item, translationFields);
       if (!text(item.listingWorkflowId, 200) || !text(item.sourceMediaKey, 500)) throw new TypeError('invalid translation command');
       return Object.freeze({ contractVersion: CONTRACT_VERSION, type: item.type, requestId: translationRequestId,
-        listingWorkflowId: text(item.listingWorkflowId, 200), sourceMediaKey: text(item.sourceMediaKey, 500) });
+        listingWorkflowId: text(item.listingWorkflowId, 200), sourceMediaKey: text(item.sourceMediaKey, 500),
+        ...(item.priceConfirmation === undefined ? {} : { priceConfirmation: Object.freeze({ ...item.priceConfirmation }) }) });
     }
     if (!item) throw new TypeError('invalid donor workbench command');
     if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(item.type)) {

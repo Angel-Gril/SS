@@ -290,6 +290,34 @@ async function expectCode(
     .rejects.toMatchObject({ code, statusCode: 422 });
 }
 
+describe('production video authority preflight', () => {
+  it('rejects unsupported video at preflight before publisher preview can be confirmed', async () => {
+    const context = build(); context.draft.media.videoBindings = [{ skuKey: 'sku-0', role: 'MAIN',
+      url: 'https://cdn1.ozone.ru/s3/sc-temporary/clip.mp4', sourceMediaKey: null,
+      sourceCaptureSnapshotId: context.draft.sourceCaptureSnapshotId, sourceCaptureHash: context.draft.sourceCaptureHash,
+      approvedByUserId: context.draft.ownerUserId, approvedAt: context.draft.updatedAt }];
+    await expect(preflightOzonListingProductionAuthorities(context.options, { ownerUserId: context.draft.ownerUserId, draft: context.draft }))
+      .rejects.toMatchObject({ code: 'OZON_LISTING_PRODUCTION_PAYLOAD_INVALID' });
+  });
+  it('compiles official main and rich-video attributes through full frozen production authorities', async () => {
+    const context = build(); context.schema.fields.push(...[21841, 22336].map(attributeId => ({ attributeId,
+      name: 'Видео', description: '', sourceType: 'String', valueType: 'STRING' as const, cardinality: 'SINGLE' as const, required: false,
+      dictionaryId: null, valuePolicy: 'FREE_TEXT' as const, ownership: 'MEDIA' as const, editorMode: 'MEDIA_WORKBENCH' as const, aiSuggestionAllowed: false })));
+    context.report.schemaRevision = schemaRevision(context.schema);
+    context.draft.validation.report = structuredClone(context.report) as unknown as Record<string, unknown>;
+    context.draft.media.videoBindings = (['MAIN', 'RICH_CONTENT'] as const).map(role => ({ skuKey: 'sku-0', role,
+      url: 'https://cdn1.ozone.ru/s3/sc-temporary/clip.mp4', sourceMediaKey: null,
+      sourceCaptureSnapshotId: context.draft.sourceCaptureSnapshotId, sourceCaptureHash: context.draft.sourceCaptureHash,
+      approvedByUserId: context.draft.ownerUserId, approvedAt: context.draft.updatedAt }));
+    const compiled = await createOzonListingProductionCompileAdapter(context.options)({ ownerUserId: context.draft.ownerUserId, draft: context.draft });
+    const items = (compiled.requestPayload as any).items;
+    expect(items[0].attributes).toContainEqual({ id: 21841, complex_id: 100001, values: [{ value: 'https://cdn1.ozone.ru/s3/sc-temporary/clip.mp4' }] });
+    expect(items[0].attributes.find((attribute: any) => attribute.id === 22336)).toMatchObject({ complex_id: 0 });
+    expect(items[1].attributes.some((attribute: any) => [21841, 22336].includes(attribute.id))).toBe(false);
+    expect(compiled.draftStateHash).toBe(hashOzonListingPublishState(context.draft));
+  });
+});
+
 function dictionaryPublishAuthority(
   dictionarySources: Record<string, string>,
   optionalInvalid = false,

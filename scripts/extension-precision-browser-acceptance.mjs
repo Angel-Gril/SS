@@ -115,6 +115,7 @@ function parentHtml(watermarkJpeg) {
   style="position:fixed;inset:0;width:100vw;height:100vh;border:0"></iframe>
   <script>
   const contract=SS_ERP_DONOR_WORKBENCH_CONTRACT;
+  const processFixturePaid=${process.argv.includes('--paid-translation-flow')};
   const product=${JSON.stringify(fixtureProduct())};
   const shops=[{id:'doth',name:'DOTH'},{id:'other-fixture',name:'另一个测试店铺'}];
   let handoff=null,workbench=null,pricing=null,category=null,packaging=[],billing=null,history=null,selectedSkuKeys=[];
@@ -122,6 +123,7 @@ function parentHtml(watermarkJpeg) {
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
   const savedOperations=new Set();
   const watermarkRequests=new Map();
+  let videoBindings=[];
   const attributeValues=new Map();
   let attributeSchema='c'.repeat(64);
   const attributeFields=[
@@ -163,6 +165,21 @@ function parentHtml(watermarkJpeg) {
       blockerCount:0,warningCount:0,blockers:[],warnings:[],updatedAt:'2026-09-30T08:00:00Z'
     }]},media:{items:[]}}};}
     let result;
+    if(command.type==='WATERMARK_TEMPLATES')result={contractVersion:'extension-workbench-watermark/v1',
+      templates:[{id:'image-template',name:'DOTH 图案',position:'center',opacity:60,scale:25,isDefault:true}]};
+    if(command.type==='VIDEO_READ')result={state:'ready',binding:{...command.request.binding},videoBindings};
+    if(command.type==='VIDEO_SAVE'){
+      const request=command.request;
+      if([request.mainUrl,request.richContentUrl].some(url=>url&&!url.startsWith('https://cdn1.ozone.ru/s3/sc-temporary/'))){
+        frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,
+          ok:false,error:'来源视频请先上传至 Ozon，不能直接提交来源地址',outcome:'NOT_SUBMITTED'},location.origin);return;
+      }
+      videoBindings=videoBindings.filter(video=>video.skuKey!==request.skuKey);
+      for(const [role,url]of [['MAIN',request.mainUrl],['RICH_CONTENT',request.richContentUrl]])if(url)videoBindings.push({skuKey:request.skuKey,role,url,
+        sourceMediaKey:null,sourceCaptureSnapshotId:handoff.snapshotId,sourceCaptureHash:'a'.repeat(64),approvedByUserId:'owner-fixture',approvedAt:'2026-10-04T00:00:00Z'});
+      const draft=workbench.status.listing.items[0];draft.revision++;draft.draftVersion++;
+      result={state:'ready',replayed:false,binding:{...request.binding,draftRevision:draft.revision,draftVersion:draft.draftVersion},videoBindings};
+    }
     if(command.type==='WATERMARK_PREVIEW')result={contractVersion:'extension-workbench-watermark/v1',previewHash:'d'.repeat(64),
       items:command.request.items.map(item=>({...item,width:128,height:128,dataUrl:'data:image/jpeg;base64,${watermarkJpeg}'})),erpGenerationChargeMinor:0};
     if(command.type==='WATERMARK_APPLY'){
@@ -189,7 +206,8 @@ function parentHtml(watermarkJpeg) {
     }
     let candidateId;
     let replayed=false;
-    if(command.type==='CHECK_TRANSLATION')result={available:window.__precisionTranslationDenied!==true,reasonCode:window.__precisionTranslationDenied?'MEDIA_PROVIDER_NOT_ALLOWED':'READY'};
+    if(command.type==='CHECK_TRANSLATION')result={available:window.__precisionTranslationDenied!==true,reasonCode:window.__precisionTranslationDenied?'MEDIA_PROVIDER_NOT_ALLOWED':'READY',
+      ...(processFixturePaid?{testOnly:false,price:{currency:'CNY',unitCostCents:14,maximumCostCents:14,quoteFingerprint:'c'.repeat(64)}}:{testOnly:true})};
     if(command.type==='CREATE_TRANSLATION'){
       result={state:'completed',replay:false,operation:'IMAGE_TRANSLATE',workflowId:'translation-fixture-'+command.sourceMediaKey,status:'QUEUED',revision:1};
     }
@@ -455,7 +473,7 @@ function privateRuntimeFixtureScript(pngBytes) {
 async function run() {
   const artifacts = await mkdtemp(path.join(os.tmpdir(), 'ss-erp-precision-ui-evidence-'));
   const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-precision-ui-profile-')));
-  const summary = { ok: false, artifacts, scope: 'LOCAL_BROWSER_FIXTURE', screenshots: [], pageErrors: [], blockedRequests: [], providerRequests: 0, ozonRequests: 0, productionMutations: 0 };
+  const summary = { ok: false, artifacts, scope: 'LOCAL_BROWSER_FIXTURE', screenshots: [], pageErrors: [], blockedRequests: [], dialogs: [], providerRequests: 0, ozonRequests: 0, productionMutations: 0 };
   let cdp;
   let diagnose;
   const require = createRequire(path.join(ROOT, 'apps/server/package.json'));
@@ -490,7 +508,7 @@ async function run() {
       if (message) summary.pageErrors.push(`${observedSession || 'root'}: ${message}`);
     });
     cdp.on('Page.javascriptDialogOpening', (event, observedSession) => {
-      if (observedSession === sessionId) void send('Page.handleJavaScriptDialog', { accept: true });
+      if (observedSession === sessionId) { summary.dialogs.push(event.message); void send('Page.handleJavaScriptDialog', { accept: true }); }
     });
     cdp.on('Fetch.requestPaused', (event, observedSession) => {
       if (observedSession !== sessionId) return;
@@ -540,7 +558,7 @@ async function run() {
     const click = async (selector) => {
       // Navigate the actual SKU dialog before interacting with its controls.
       // All clicks, including navigation, still use trusted CDP mouse input.
-      const location = await workspace('(()=>{const node=document.querySelector(' + JSON.stringify(selector) + ');return {inside:!!node?.closest("#precision-image-manager"),nested:!!node?.closest(".settings-modal,.preview-modal"),open:document.getElementById("precision-image-manager")?.hidden===false,result:!!node?.closest("#precision-image-result-panel"),source:!!node?.closest("#precision-image-source-panel"),creative:!!node?.closest(".precision-creative-options"),detailsOpen:node?.closest(".precision-creative-options")?.open};})()');
+      const location = await workspace('(()=>{const node=document.querySelector(' + JSON.stringify(selector) + ');return {inside:!!node?.closest("#precision-image-manager"),nested:!!node?.closest(".settings-modal,.preview-modal,#watermark-modal"),open:document.getElementById("precision-image-manager")?.hidden===false,result:!!node?.closest("#precision-image-result-panel"),source:!!node?.closest("#precision-image-source-panel"),creative:!!node?.closest(".precision-creative-options"),detailsOpen:node?.closest(".precision-creative-options")?.open};})()');
       if (location.open && !location.inside && !location.nested && selector !== '#precision-image-close') await click('#precision-image-close');
       if (location.inside && !location.open) {
         await click('[data-image-sku-key="sku-1"]');
@@ -549,7 +567,9 @@ async function run() {
       if (location.inside && location.result && await workspace('document.getElementById("precision-image-result-panel").hidden')) await click('#precision-image-results');
       if (location.source && await workspace('document.getElementById("precision-image-source-panel").hidden')) await click('#precision-image-sources');
       if (location.creative && !location.detailsOpen && selector !== '.precision-creative-options summary') await click('.precision-creative-options summary');
-      const point = await workspace('(() => {const node=document.querySelector(' + JSON.stringify(selector) + ');if(!node)throw new Error("missing "+' + JSON.stringify(selector) + ');node.scrollIntoView({block:"center"});const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()');
+      await workspace('document.querySelector(' + JSON.stringify(selector) + ').scrollIntoView({block:"center",inline:"center",behavior:"instant"})');
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      const point = await workspace('(() => {const node=document.querySelector(' + JSON.stringify(selector) + ');if(!node)throw new Error("missing "+' + JSON.stringify(selector) + ');const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()');
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
     };
@@ -600,10 +620,36 @@ async function run() {
     assert.ok(await workspace('document.querySelector(".editor-table-spec").textContent.includes("颜色 1")'));
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
-    if (process.argv.includes('--watermark-flow')) {
+    if (process.argv.includes('--video-flow')) {
+      await click('[data-video-sku="sku-1"][data-video-role=MAIN]');
+      await until(() => workspace('document.getElementById("precision-video-publish-modal").hidden===false&&!document.getElementById("precision-video-save").disabled'), 'video draft settings');
+      await click('#precision-video-main-url'); await send('Input.insertText',{text:'https://source.example/source.mp4'});
+      await click('#precision-video-save');
+      await until(() => workspace('document.getElementById("precision-video-publish-state").textContent.includes("先上传")'), 'source URL rejected as not yet Ozon media');
+      await click('#precision-video-main-url');
+      await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await send('Input.insertText',{text:'https://cdn1.ozone.ru/s3/sc-temporary/main.mp4'});
+      await click('#precision-video-rich-url');await send('Input.insertText',{text:'https://cdn1.ozone.ru/s3/sc-temporary/rich.mp4'});
+      await click('#precision-video-save');
+      await until(() => workspace('document.getElementById("precision-video-publish-state").textContent.includes("已保存")'), 'both video slots saved');
+      await screenshot('video-draft-saved');
+      await click('#precision-video-publish-close');
+      await click('[data-video-sku="sku-1"][data-video-role=RICH_CONTENT]');
+      await until(() => workspace('document.getElementById("precision-video-rich-url").value.includes("rich.mp4")'), 'video readback preserves exact SKU and role');
+      assert.equal(await workspace('document.getElementById("precision-video-main-url").value'), 'https://cdn1.ozone.ru/s3/sc-temporary/main.mp4');
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="PUBLISH")'), false);
+      summary.video = { officialMainAndRichSaved: true, sourceUrlRejected: true, serverPublishFixture: false };
+      assert.deepEqual(summary.pageErrors, []);assert.deepEqual(summary.blockedRequests, []);
+      summary.ok=true;await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));return;
+    }
+    if (process.argv.includes('--watermark-flow') || process.argv.includes('--image-watermark-flow')) {
       await click('#watermark-settings-btn');
       await until(() => workspace('document.getElementById("watermark-modal").hidden===false'), 'original watermarks dialog');
-      await click('#wm-text'); await send('Input.insertText', { text: 'DOTH' });
+      if(process.argv.includes('--image-watermark-flow')){
+        await until(() => workspace('document.querySelectorAll("#wm-image-template option").length>0&&!document.getElementById("wm-mode-image-btn").disabled'), 'owned image template list');
+        await click('#wm-mode-image-btn');
+      } else { await click('#wm-text'); await send('Input.insertText', { text: 'DOTH' }); }
       await click('#wm-preview-btn');
       await until(() => workspace('document.getElementById("wm-apply-btn").disabled===false'), 'server watermark preview decoded and frozen');
       assert.equal(await workspace('document.getElementById("wm-preview-canvas").width'), 128);
@@ -613,6 +659,11 @@ async function run() {
       await until(() => workspace('document.getElementById("wm-status").textContent.includes("已应用")'), 'watermark application readback');
       assert.equal(await workspace('document.getElementById("wm-apply-btn").disabled'), true);
       assert.equal(await evaluate('window.__precisionCommands.filter(command=>command.type==="WATERMARK_APPLY").length'), 1);
+      if(process.argv.includes('--image-watermark-flow')){
+        const applied=await evaluate('window.__precisionCommands.find(command=>command.type==="WATERMARK_APPLY")');
+        assert.equal(applied.request.config.type,'image'); assert.equal(applied.request.config.templateId,'image-template');
+        assert.equal(Object.hasOwn(applied.request.config,'imageUrl'),false);
+      }
       assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE"||command.type==="CREATE_TRANSLATION"||command.type==="PUBLISH")'), false);
       await screenshot('watermark-applied');
       assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
@@ -805,6 +856,7 @@ async function run() {
     async function replaceText(selector, value) {
       await until(() => workspace(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});return node&&!node.disabled&&!node.readOnly;})()`), 'editable control: ' + selector);
       await click(selector);
+      assert.equal(await workspace(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`), true, 'typing targets the exact requested control: ' + selector);
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
       await send('Input.insertText', { text: value });
@@ -1294,6 +1346,12 @@ async function run() {
     summary.copy = { manualCandidate: true, explicitApproval: true, explicitReplayRequests: 1, staleApprovalDenied: true, otherEditsPreserved: true, validationRequests: commands.filter(command=>command.type==='EDITOR_SAVE'&&command.action==='VALIDATE').length, blockerResolved: 'MODEL_REQUIRED' };
     summary.browser = (await cdp.send('Browser.getVersion')).product;
     summary.byokConfiguration={scope:'NATIVE_RUNTIME_STUB_LOCAL_FIXTURE',registered:true,sessionKeyRedacted:true,configurationProviderDispatches:0};
+    if(process.argv.includes('--paid-translation-flow')){
+      const submitted=await evaluate('window.__precisionCommands.filter(command=>command.type==="CREATE_TRANSLATION")');
+      assert.equal(submitted.length,3); assert.ok(submitted.every(command=>command.priceConfirmation.currency==='CNY'&&command.priceConfirmation.maximumCostCents===14&&command.priceConfirmation.quoteFingerprint==='c'.repeat(64)));
+      assert.ok(summary.dialogs.some(message=>message.includes('CNY 0.42')),'explicit batch maximum fee is presented before submit');
+      summary.translation.paidConfirmation={currency:'CNY',perImageMaximum:14,batchMaximum:42};
+    }
     await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
   } finally {
     if (!summary.ok && diagnose) {

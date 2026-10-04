@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
+import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 import {
   AI_GLOBAL_COST_BUDGET_LOCK_KEY,
   lockGlobalAiCostBudgetInTransaction,
@@ -337,5 +339,43 @@ describePostgres('paid image translation global budget PostgreSQL contract', () 
       firstClient!.aiCostReservation.count({ where: ownerWhere }),
     ]);
     expect({ workflows, jobs, reservations }).toEqual({ workflows: 0, jobs: 0, reservations: 0 });
+  });
+
+  it('reserves and settles the same CNY translation once using its frozen per-image quote', async () => {
+    const fixture = await createTranslationFixture(firstClient!, 'cny_frozen');
+    const repository = new PrismaAiMediaWorkflowRepository(firstClient!);
+    const runtime = buildAiImageTranslationRuntime({
+      enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY', estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-test-key', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    }).runtime;
+    const input = { ...paidTranslationInput(fixture, `translation-cny-${fixture.suffix}`, 1_000_000),
+      provider: runtime.provider, model: runtime.model, estimatedCostCents: 14, translationRuntimeContract: runtime };
+    const created = await repository.createImageTranslation(input);
+    const replayed = await repository.createImageTranslation(input);
+    expect(replayed).toMatchObject({ kind: 'existing', jobId: created.jobId });
+    const jobRepository = new PrismaAiImageJobRepository(firstClient!);
+    await jobRepository.markRunning(created.jobId, 1);
+    await jobRepository.recordProviderDispatchStarted(created.jobId, new Date());
+    const providerJobId = `translation-test-task-${fixture.suffix}`;
+    await jobRepository.recordProviderJobId(created.jobId, providerJobId, new Date());
+    const result = { providerJobId, actualCostCents: 999, billedUnits: 1, assets: [{
+      ownerUserId: fixture.ownerUserId, jobId: created.jobId, url: `https://owned.example/${fixture.suffix}.png`,
+      storageBackend: 'oss', storageKey: `${fixture.suffix}.png`, mimeType: 'image/png', sizeBytes: 68,
+      sha256: digest(`translation-result-${fixture.suffix}`),
+    }] };
+    await jobRepository.complete(created.jobId, result);
+    await jobRepository.complete(created.jobId, result);
+    const [job, reservations, settlements] = await Promise.all([
+      firstClient!.aiImageJob.findUniqueOrThrow({ where: { id: created.jobId } }),
+      firstClient!.aiCostReservation.findMany({ where: { jobId: created.jobId } }),
+      firstClient!.aiCostSettlement.findMany({ where: { reservation: { jobId: created.jobId } } }),
+    ]);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 14, billedUnits: 1,
+      operationConfig: expect.objectContaining({ translationRuntime: runtime }) });
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]).toMatchObject({ currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14, status: 'SETTLED' });
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toMatchObject({ actualCostMinor: 14, kind: 'CHARGE' });
   });
 });

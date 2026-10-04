@@ -2,8 +2,29 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createExtensionMediaWorkflowCommandExecutor,
   ExtensionMediaWorkflowCommandError,
+  assertExtensionMediaJobProviderAuthorized,
 } from '../services/extension-media-workflow-commands.js';
 import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+
+it('authorizes translation retries only against their exact frozen price and credential', () => {
+  const settings = { enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY' as const,
+    estimatedCostCents: 14, credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' } };
+  const runtime = buildAiImageTranslationRuntime(settings).runtime;
+  const capability = { ...resolveAiImageProviderCapability(runtime.provider, runtime.model)!, evidenceLevel: 'sandbox-verified' as const,
+    sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const, inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
+  const authorization = { operation: 'IMAGE_TRANSLATE', production: true, requireReadiness: true, requireGlobalDailyBudget: true,
+    job: { provider: runtime.provider, model: runtime.model, operation: 'IMAGE_TRANSLATE', requestedImageCount: 1,
+      estimatedCostCents: 14, operationConfig: { translationRuntime: runtime } },
+    readiness: { ...settings, ready: true, testOnly: false, costPerImageCents: 14, globalDailyBudgetCents: 100 } };
+  expect(assertExtensionMediaJobProviderAuthorized(authorization, () => capability)).toEqual({ paid: true, globalDailyBudgetCents: 100 });
+  expect(() => assertExtensionMediaJobProviderAuthorized(authorization)).toThrow();
+  expect(() => assertExtensionMediaJobProviderAuthorized({ ...authorization, readiness: {
+    ...authorization.readiness, credentialRevision: { ...settings.credentialRevision, revision: 3 },
+  } }, () => capability)).toThrow();
+});
 
 function workflow(overrides: Record<string, unknown> = {}) {
   return {

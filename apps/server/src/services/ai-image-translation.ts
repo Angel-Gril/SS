@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   AiMediaCapabilityError,
   assertAiMediaCapability,
+  resolveAiImageProviderCapability,
 } from './ai-image-provider-capabilities.js';
 import {
   AiImageJobError,
@@ -224,6 +225,7 @@ export async function runAiImageTranslationJob(
   deps: {
     repository: AiImageJobRepository;
     provider: AiImageTranslationProvider;
+    resolveCapability?: typeof resolveAiImageProviderCapability;
     uploadBuffer: (
       buffer: Buffer,
       filename: string,
@@ -288,7 +290,7 @@ export async function runAiImageTranslationJob(
           operation: 'IMAGE_TRANSLATE',
           inputCount: 1,
           hasMask: (job.inputAssets || []).some((asset) => asset.role === 'MASK'),
-        });
+        }, deps.resolveCapability);
       } catch (error) {
         throw capabilityError(error);
       }

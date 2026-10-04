@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canRunAiImageProviderOperation, canUseAiImageJobOperation } from '../services/ai-image-provider-admission.js';
 import { hasExactAiMediaSandboxEvidence, resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { aiImageProviderEndpointSha256, createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 
 const openai = {
   provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1',
@@ -13,6 +14,21 @@ const wanx = {
 };
 
 describe('Normal AI image protocol admission', () => {
+  it('admits an existing frozen translation for review only with exact sandbox evidence', () => {
+    const runtime = buildAiImageTranslationRuntime({
+      enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY', estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    }).runtime;
+    const capability = { ...resolveAiImageProviderCapability(runtime.provider, runtime.model)!, evidenceLevel: 'sandbox-verified' as const,
+      sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const, inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
+    const job = { provider: runtime.provider, model: runtime.model, operation: 'IMAGE_TRANSLATE', operationConfig: { translationRuntime: runtime } };
+    expect(canUseAiImageJobOperation(job, true, () => capability)).toBe(true);
+    expect(canUseAiImageJobOperation(job, true)).toBe(false);
+    expect(canUseAiImageJobOperation({ ...job, operationConfig: {} }, true, () => capability)).toBe(false);
+    expect(canUseAiImageJobOperation({ ...job, operationConfig: { translationRuntime: { ...runtime, baseUrlSha256: 'a'.repeat(64) } } }, true, () => capability)).toBe(false);
+  });
+
   it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)('admits an existing normal %s job by its frozen endpoint', (operation) => {
     const runtime = createAiImageProviderRuntimeContract({ ...openai, costPerImageCents: 14, currency: 'CNY' }, { count: 1, width: 1024, height: 1024 });
     const job = { provider: openai.provider, model: openai.model, operation,

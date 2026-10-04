@@ -12,7 +12,7 @@ const SOURCE = await readFile(
 );
 
 function loadApi() {
-  const context = vm.createContext({ console, crypto: webcrypto, TextEncoder });
+  const context = vm.createContext({ console, crypto: webcrypto, TextEncoder, URL });
   context.globalThis = context;
   context.self = context;
   vm.runInContext(SOURCE, context, { filename: 'workbench-listing-publish-coordinator.js' });
@@ -421,4 +421,19 @@ for (const executionMode of ['ERP_HOSTED', 'BYOK']) {
   );
 }
 
+{
+  const input = request('ERP_HOSTED');
+  const video = { skuKey: 'sku-1', role: 'MAIN', url: 'https://cdnvideo.v.ozone.ru/vod/video-1/ABC/asset.mp4', sourceMediaKey: null,
+    sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: 'c'.repeat(64), approvedByUserId: 'owner', approvedAt: '2026-10-04T00:00:00Z' };
+  const coordinator = api.createCoordinator({ transport: { async post() { return previewResponse(input, { videoBindings: [video] }); } },
+    store: createSessionStore(), crypto: webcrypto, now: Date.now });
+  const view = await coordinator.preview(input);
+  assert.deepEqual(plain(view.videoBindings), [video]);
+  assert.ok(Object.isFrozen(view.videoBindings));
+  for (const altered of [{ ...video, skuKey: 'other' }, { ...video, role: 'FAKE' }, { ...video, url: 'http://127.0.0.1/video.mp4' }]) {
+    const invalid = api.createCoordinator({ transport: { async post() { return previewResponse(input, { videoBindings: [altered] }); } },
+      store: createSessionStore(), crypto: webcrypto, now: Date.now });
+    await assert.rejects(invalid.preview(input), error => error.code === 'SS_ERP_WORKBENCH_PUBLISH_RESPONSE_INVALID');
+  }
+}
 console.log('extension workbench listing publish coordinator tests passed');

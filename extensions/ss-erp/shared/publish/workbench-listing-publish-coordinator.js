@@ -207,6 +207,30 @@
       });
   }
 
+  function normalizeVideoBindings(values, skuKeys) {
+    if (!Array.isArray(values) || values.length > 1002) throw publishError('SS_ERP_WORKBENCH_PUBLISH_RESPONSE_INVALID', 'FAILED_FINAL');
+    var seen = new Set();
+    return Object.freeze(values.map(function (value) {
+      var keys = ['skuKey','role','url','sourceMediaKey','sourceCaptureSnapshotId','sourceCaptureHash','approvedByUserId','approvedAt'];
+      var validUrl = false;
+      try {
+        var url = new URL(value.url);
+        validUrl = url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.search && !url.hash
+          && ((/^(?:cdnvideo\.v\.ozone\.ru|v-\d+\.ozone\.ru)$/u.test(url.hostname) && /^\/vod\/video-\d+\/[A-Z0-9]+\/[^/]+\.mp4$/u.test(url.pathname))
+            || (/^cdn\d*\.ozone\.ru$/u.test(url.hostname) && /^\/s3\/sc-temporary\/.+\.mp4$/u.test(url.pathname)));
+      } catch {}
+      var key = value && JSON.stringify([value.skuKey,value.role]);
+      if (!exactKeys(value, keys) || !validUrl || (value.skuKey !== null && !skuKeys.includes(value.skuKey))
+        || !['MAIN','RICH_CONTENT'].includes(value.role) || seen.has(key)
+        || (value.sourceMediaKey !== null && !canonicalText(value.sourceMediaKey, 500))
+        || !canonicalText(value.sourceCaptureSnapshotId, 200) || !HASH_PATTERN.test(value.sourceCaptureHash || '')
+        || !canonicalText(value.approvedByUserId, 200) || !Number.isFinite(Date.parse(value.approvedAt))) {
+        throw publishError('SS_ERP_WORKBENCH_PUBLISH_RESPONSE_INVALID', 'FAILED_FINAL');
+      }
+      seen.add(key); return Object.freeze({ ...value });
+    }));
+  }
+
   function parsePreviewResponse(response, request) {
     var body = response && response.body;
     var data = body && body.data;
@@ -216,6 +240,7 @@
       'currentDraftRevision', 'currentDraftVersion', 'previewHash',
       'selectedSkuKeys', 'orderedMedia',
     ];
+    if (data && Object.prototype.hasOwnProperty.call(data, 'videoBindings')) keys.push('videoBindings');
     if (!response || response.state !== 'response' || response.status !== 200
       || !exactKeys(body, ['code', 'data']) || body.code !== 1
       || !exactKeys(data, keys)
@@ -243,6 +268,7 @@
     }
     var selectedSkuKeys = normalizeSelectedSkuKeys(data.selectedSkuKeys);
     var orderedMedia = normalizeOrderedMedia(data.orderedMedia, selectedSkuKeys);
+    var videoBindings = data.videoBindings === undefined ? undefined : normalizeVideoBindings(data.videoBindings, selectedSkuKeys);
     if (!sameSelectedMedia(
       selectedMediaFromOrdered(orderedMedia, selectedMedia),
       selectedMedia,
@@ -262,6 +288,7 @@
       previewHash: data.previewHash,
       selectedSkuKeys: selectedSkuKeys,
       orderedMedia: orderedMedia,
+      ...(videoBindings === undefined ? {} : { videoBindings: videoBindings }),
     };
   }
 

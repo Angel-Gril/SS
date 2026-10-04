@@ -1,20 +1,20 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { SourceListingWatermarkError, watermarkApplyRequestSchema, watermarkPreviewRequestSchema,
+import { SourceListingWatermarkError, watermarkApplyRequestSchema, watermarkPreviewRequestSchema, watermarkTemplatesRequestSchema,
   type SourceListingWatermarkActor, type SourceListingWatermarkService } from '../services/source-listing-watermark.js';
 import type { SourceWorkflowFeatureFlagEvaluator } from '../services/source-workflow-feature-flags.js';
 
 export interface ExtensionWorkbenchWatermarkRouteOptions {
   authenticateDevice(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
-  service: Pick<SourceListingWatermarkService, 'preview' | 'apply'>;
+  service: Pick<SourceListingWatermarkService, 'preview' | 'apply' | 'templates'>;
   featureFlags: SourceWorkflowFeatureFlagEvaluator;
 }
 export async function extensionWorkbenchWatermarkRoutes(app: FastifyInstance, options: ExtensionWorkbenchWatermarkRouteOptions) {
-  for (const action of ['preview', 'apply'] as const) {
+  for (const action of ['preview', 'apply', 'templates'] as const) {
     app.post(`/${action}`, { preHandler: [options.authenticateDevice], bodyLimit: 16 * 1024,
       config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
       reply.header('Cache-Control', 'no-store'); reply.header('X-Content-Type-Options', 'nosniff');
       try {
-        const parsed = (action === 'preview' ? watermarkPreviewRequestSchema : watermarkApplyRequestSchema).safeParse(request.body);
+        const parsed = (action === 'templates' ? watermarkTemplatesRequestSchema : action === 'preview' ? watermarkPreviewRequestSchema : watermarkApplyRequestSchema).safeParse(request.body);
         if (!parsed.success) return reply.status(400).send({ code: 0, errorCode: 'watermark_invalid_request', msg: '水印配置或图片选择无效' });
         const actor = (request as FastifyRequest & { device?: SourceListingWatermarkActor }).device;
         if (!actor || typeof actor.ownerUserId !== 'string' || !actor.ownerUserId || actor.actorUserId !== actor.ownerUserId

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 
 const legacy = { provider: 'openai-images', model: 'gpt-image-1', requestedImageCount: 2, width: 1024, height: 1024,
   estimatedCostCents: 28, operationConfig: null };
@@ -8,6 +9,20 @@ const config = { provider: legacy.provider, model: legacy.model, baseUrl: 'https
 const shape = { count: 2, width: 1024, height: 1024 };
 
 describe('confirmed AI image task fees', () => {
+  it('uses the frozen translation price and currency without Provider money or active configuration', () => {
+    const runtime = buildAiImageTranslationRuntime({
+      enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY', estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    }).runtime;
+    const job = { ...legacy, provider: runtime.provider, model: runtime.model,
+      requestedImageCount: 1, estimatedCostCents: 14, operationConfig: { translationRuntime: runtime },
+      costReservation: { currency: 'CNY' } };
+    expect(calculateAiImageTaskCost(job, 1)).toMatchObject({ currency: 'CNY', actualCostCents: 14, billedUnits: 1 });
+    expect(() => getFrozenAiImageTaskPrice({ ...job, estimatedCostCents: 15 })).toThrow();
+    expect(() => getFrozenAiImageTaskPrice({ ...job, operationConfig: { translationRuntime: null } })).toThrow();
+  });
+
   it('calculates a partial successful result with the frozen CNY unit price', () => {
     const task = { ...legacy, operationConfig: createAiImageProviderRuntimeContract({ ...config, currency: 'CNY' }, shape),
       costReservation: { currency: 'CNY' } };

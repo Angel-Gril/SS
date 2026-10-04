@@ -768,6 +768,7 @@ const requiredDonorWorkbenchFiles = [
   'pages/donor/source-video-view.js',
   'pages/donor/combined-image-flow.js',
   'pages/donor/watermark-editor.js',
+  'pages/donor/video-publish-editor.js',
   'pages/donor/hosted-reference-selection.js',
   'pages/donor/translation-flow.js',
   'pages/donor/copy-editor.js',

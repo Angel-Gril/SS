@@ -45,6 +45,22 @@ async function saveDraft(
   });
 }
 
+describe('draft video lifecycle', () => {
+  it.each(['category', 'snapshot', 'shop', 'sku'] as const)('clears video approval when %s authority changes', async change => {
+    const f = await base();
+    const draft = await saveDraft(f.repository, f.draft, next => { next.media.videoBindings = [{ skuKey: null, role: 'MAIN',
+      url: 'https://cdn1.ozone.ru/s3/sc-temporary/video.mp4', sourceMediaKey: null, sourceCaptureHash: next.sourceCaptureHash,
+      sourceCaptureSnapshotId: next.sourceCaptureSnapshotId, approvedByUserId: next.ownerUserId, approvedAt: next.updatedAt }]; });
+    const input = { draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: draft.ownerUserId, expectedRevision: draft.revision };
+    const next = change === 'category' ? await f.service.setCategory({ ...input, category: { categoryId: 10, typeId: 20, catalogRevision: 'new' } })
+      : change === 'snapshot' ? await f.service.replaceSourceSnapshot({ ...input, sourceCaptureSnapshotId: 'new', sourceCaptureHash: 'b'.repeat(64) })
+      : change === 'shop' ? await f.service.changeShop({ ...input, shopId: 'new' })
+      : await f.service.changeSkuSelection({ ...input, selectedSkuKeys: ['sku-blue'] });
+    expect(next.media.videoBindings).toEqual([]);
+    expect(next.validation.status).toBe('STALE'); expect(next.grantRevocation.required).toBe(true);
+  });
+});
+
 function strictPricing(skuKeys: string[]) {
   return {
     contractVersion: 'ozon-listing-pricing/v1',

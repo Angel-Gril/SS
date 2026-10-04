@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 
 const OPTIONS = {
   sourceLanguage: 'zh',
@@ -187,6 +188,22 @@ function translationBudgetHarness(input: {
 }
 
 describe('paid image translation global budget', () => {
+  it('freezes the exact translation credential and CNY unit price in the job and reservation', async () => {
+    const state = translationBudgetHarness();
+    const runtime = buildAiImageTranslationRuntime({
+      enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY', estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    }).runtime;
+    const input = paidTranslationInput('owner-cny', 'translation-cny', { estimatedCostCents: 14, translationRuntimeContract: runtime });
+    await state.repository.createImageTranslation(input);
+    await state.repository.createImageTranslation(input);
+    expect(state.jobs).toHaveLength(1);
+    expect(state.reservations).toHaveLength(1);
+    expect(state.jobs[0]?.operationConfig).toMatchObject({ translationRuntime: runtime });
+    expect(state.reservations[0]).toMatchObject({ currency: 'CNY', estimatedCostMinor: 14, maximumCostMinor: 14 });
+  });
+
   it('treats a zero global budget as a hard stop before creating business state', async () => {
     const state = translationBudgetHarness();
 

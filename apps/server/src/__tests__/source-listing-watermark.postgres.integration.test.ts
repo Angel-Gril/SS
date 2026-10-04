@@ -45,6 +45,8 @@ describePostgres('Prisma deterministic watermark transaction', () => {
     const draft = await workflow.createDraft({ ownerUserId, actorUserId: ownerUserId, shopId, supplyGoodsId: goodsId,
       sourceCaptureSnapshotId: snapshotId, sourceCaptureHash: submission.captureHash, selectedSkuKeys: ['sku-0'] });
     const source = await sharp({ create: { width: 300, height: 400, channels: 3, background: '#ffffff' } }).png().toBuffer();
+    const template = await client.watermarkTemplate.create({ data: { userId: ownerUserId, shopId, name: 'Fixture logo', type: 'image',
+      imageUrl: 'https://media.example/logo.png', position: 'center', opacity: 50, scale: 25 } });
     const uploadBuffer = vi.fn(async (_bytes: Buffer, filename: string) => ({ backend: 'oss' as const, filename, key: `fixture/${filename}`, url: `https://media.example/${filename}` }));
     const deleteUploaded = vi.fn(async () => {});
     let afterUpload: (() => Promise<void>) | null = null;
@@ -56,7 +58,7 @@ describePostgres('Prisma deterministic watermark transaction', () => {
     const actor = { ownerUserId, actorUserId: ownerUserId, sessionId, scopes, allowedShopIds: [shopId] };
     const input = { contractVersion: 'extension-workbench-watermark/v1', snapshotId, supplyGoodsId: goodsId, shopId, listingWorkflowId: draft.id, draftRevision: 1, draftVersion: 1,
       items: [{ skuKey: null, slotKey: 'product-main', sourceMediaKey: 'media-main-0' }], config: { type: 'text', text: 'My Shop', opacity: 60, position: 'center' } };
-    return { ownerUserId, shopId, goodsId, draft, sessionId, actor, input, uploadBuffer, deleteUploaded, makeService,
+    return { ownerUserId, shopId, goodsId, draft, sessionId, actor, input, template, uploadBuffer, deleteUploaded, makeService,
       setAfterUpload: (action: () => Promise<void>) => { afterUpload = action; } };
   }
   it('persists true pixels, deterministic asset kind, audit and CAS once; another instance replays without upload', async () => {
@@ -68,6 +70,43 @@ describePostgres('Prisma deterministic watermark transaction', () => {
     expect(await client.sourceListingWorkflowEvent.count({ where: { workflowId: f.draft.id, eventType: 'IMAGE_PROCESSING_APPLIED' } })).toBe(1);
     const replay = await f.makeService().apply(f.actor, request); expect(replay.replayed).toBe(true); expect(replay.draft).toEqual(result.draft);
     expect(f.uploadBuffer).toHaveBeenCalledTimes(1); expect(await client.aiImageJob.count({ where: { ownerUserId: f.ownerUserId } })).toBe(0);
+  });
+  it('reads the owned scoped logo template and atomically applies its frozen hash', async () => {
+    const f = await fixture(); const service = f.makeService();
+    const { items: _items, config: _config, ...binding } = f.input;
+    const list = await service.templates(f.actor, binding);
+    expect(list.templates).toEqual([expect.objectContaining({ id: f.template.id, name: 'Fixture logo' })]);
+    expect(JSON.stringify(list)).not.toContain('media.example');
+    const input = { ...f.input, config: { type: 'image', templateId: f.template.id, opacity: 50, scale: 25, position: 'center' } };
+    const preview = await service.preview(f.actor, input);
+    const result = await service.apply(f.actor, { ...input, idempotencyKey: 'watermark-image-postgres', previewHash: preview.previewHash });
+    expect(result.assets[0]?.metadata).toMatchObject({ watermarkTemplateId: f.template.id, watermarkSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    expect(await client.mediaAsset.count({ where: { ownerUserId: f.ownerUserId, kind: 'IMAGE_PROCESSED' } })).toBe(1);
+  });
+  it('resolves legacy shop names from the owned shop and preserves general template scope', async () => {
+    const f = await fixture(); const service = f.makeService();
+    await client.watermarkTemplate.update({ where: { id: f.template.id }, data: { shopId: 'Watermark fixture' } });
+    const input = { ...f.input, config: { type: 'image', templateId: f.template.id, opacity: 50, scale: 25, position: 'top-left' } };
+    const preview = await service.preview(f.actor, input);
+    expect((await service.apply(f.actor, { ...input, idempotencyKey: 'watermark-legacy-postgres', previewHash: preview.previewHash })).applied).toBe(1);
+    const { items: _items, config: _config, ...binding } = { ...f.input, draftRevision: 2, draftVersion: 2 };
+    await client.watermarkTemplate.update({ where: { id: f.template.id }, data: { shopId: null } });
+    expect((await service.templates(f.actor, binding)).templates[0]?.id).toBe(f.template.id);
+  });
+  it.each(['account', 'shop', 'template-drift'])('keeps image template %s authority at read and transaction time', async reason => {
+    const f = await fixture(); const service = f.makeService();
+    const input = { ...f.input, config: { type: 'image', templateId: f.template.id, opacity: 50, scale: 25, position: 'center' } };
+    if (reason === 'account' || reason === 'shop') {
+      await client.watermarkTemplate.update({ where: { id: f.template.id }, data: reason === 'account' ? { userId: 'foreign-owner' } : { shopId: 'foreign-shop' } });
+      await expect(service.preview(f.actor, input)).rejects.toMatchObject({ code: 'watermark_template_not_found' });
+    } else {
+      const preview = await service.preview(f.actor, input);
+      f.setAfterUpload(async () => { await client.watermarkTemplate.update({ where: { id: f.template.id }, data: { imageUrl: 'https://media.example/changed.png' } }); });
+      await expect(service.apply(f.actor, { ...input, idempotencyKey: 'watermark-image-postgres', previewHash: preview.previewHash })).rejects.toMatchObject({ code: 'watermark_preview_changed' });
+      expect(f.deleteUploaded).toHaveBeenCalledTimes(1);
+    }
+    expect(await client.mediaAsset.count({ where: { ownerUserId: f.ownerUserId } })).toBe(0);
+    expect(await client.sourceListingDraftVersion.count({ where: { workflowId: f.draft.id } })).toBe(1);
   });
   it.each(['revoke', 'source-drift'])('rechecks %s after upload and rolls back every asset, draft and audit', async reason => {
     const f = await fixture(); const service = f.makeService(); const preview = await service.preview(f.actor, f.input);

@@ -694,7 +694,8 @@
     try {
       const response = await sendRuntimeMessage({ type: 'ss-erp:source-listing-workbench-media-command',
         sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
-        listingWorkflowId: listing.id, sourceMediaKey, action: 'CREATE_TRANSLATION' });
+        listingWorkflowId: listing.id, sourceMediaKey, action: 'CREATE_TRANSLATION',
+        ...(command.priceConfirmation === undefined ? {} : { priceConfirmation: command.priceConfirmation }) });
       if (!response || !response.ok || !response.result) throw new Error(response && response.error || '图片翻译任务创建失败');
       await loadProjection({ force: true });
       // Do not acknowledge before the authoritative refresh releases the bridge:
@@ -731,6 +732,8 @@
       }
       const available = launch?.state === 'ready' && Boolean(context) && capability?.enabled === true && capability.ready === true;
       commandResult(command.requestId, true, '', null, { available,
+        testOnly: capability?.testOnly === true,
+        ...(capability?.price ? { price: capability.price } : {}),
         reasonCode: String(!available && capability?.ready ? 'MEDIA_CREATE_CONTEXT_STALE'
           : capability?.reasonCode || 'MEDIA_READINESS_UNAVAILABLE').slice(0, 100) });
     } catch (error) { commandResult(command.requestId, false, error.message || '图片翻译状态读取失败'); }
@@ -794,6 +797,29 @@
     } finally { setBusy(false, ''); }
   }
 
+  async function videoCommand(command) {
+    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成', null, undefined, 'NOT_SUBMITTED');
+    const binding = command.request.binding;
+    const context = hostedMediaContext(binding.listingWorkflowId);
+    if (!context || context.shopId !== binding.shopId || context.snapshotId !== binding.snapshotId || context.supplyGoodsId !== binding.supplyGoodsId) {
+      return commandResult(command.requestId, false, '视频草稿上下文已变化', null, undefined, 'NOT_SUBMITTED');
+    }
+    const save = command.type === 'VIDEO_SAVE'; setBusy(true, '');
+    try {
+      const response = await sendRuntimeMessage({ type: `ss-erp:source-workbench-video-${save ? 'save' : 'read'}`,
+        platform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
+        listingWorkflowId: binding.listingWorkflowId, request: command.request });
+      if (!response?.ok || response.result?.state !== 'ready') {
+        return commandResult(command.requestId, false, response?.error || '视频草稿处理未完成', response?.code, undefined,
+          response?.outcome || (save ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'));
+      }
+      if (!save) setBusy(false, '');
+      commandResult(command.requestId, true, '', null, response.result);
+      if (save) await refreshHostedAuthority(context);
+    } catch (error) { commandResult(command.requestId, false, error.message || String(error), null, undefined, save ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'); }
+    finally { setBusy(false, ''); }
+  }
+
   async function watermarkCommand(command) {
     if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成', null, undefined, 'NOT_SUBMITTED');
     const request = command.request;
@@ -803,8 +829,9 @@
     }
     setBusy(true, '');
     const apply = command.type === 'WATERMARK_APPLY';
+    const action = command.type === 'WATERMARK_TEMPLATES' ? 'templates' : apply ? 'apply' : 'preview';
     try {
-      const response = await sendRuntimeMessage({ type: `ss-erp:source-workbench-watermark-${apply ? 'apply' : 'preview'}`,
+      const response = await sendRuntimeMessage({ type: `ss-erp:source-workbench-watermark-${action}`,
         platform: currentProjection.source.platform, sourceProductId: currentProjection.source.sourceProductId,
         listingWorkflowId: request.listingWorkflowId, request });
       if (!response?.ok || !response.result) return commandResult(command.requestId, false, response?.error || '水印处理未完成',
@@ -954,7 +981,8 @@
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
     if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(command.type)) void editorCommand(command);
     if (command.type === 'PUBLISH') void publishListing(command);
-    if (['WATERMARK_PREVIEW', 'WATERMARK_APPLY'].includes(command.type)) void watermarkCommand(command);
+    if (['WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES'].includes(command.type)) void watermarkCommand(command);
+    if (['VIDEO_READ', 'VIDEO_SAVE'].includes(command.type)) void videoCommand(command);
     if (command.type === 'OPEN_MEDIA_WORKBENCH') void openMediaWorkbench(command);
     if (command.type === 'LOAD_MEDIA_HISTORY') void readAfterHostedRefresh(command, loadMediaHistory);
     if (command.type === 'LOAD_BILLING') void readAfterHostedRefresh(command, loadBilling);

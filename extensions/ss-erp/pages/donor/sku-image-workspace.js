@@ -158,10 +158,10 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
         if (!row.taskStatusLines.length) tasks.append(make('span', 'image-manager-summary-task-empty', '暂无任务'));
         node.append(make('div', 'image-manager-summary-index', row.index), name, thumbnails, tasks);
         for (const label of ['主图视频', '富内容视频']) {
-          const video = make('div', 'image-manager-summary-video'); video.title = `${label}尚未接入 ERP，当前不能上传或生成视频`;
-          const icon = make('span', 'image-manager-video-icon', '▹'); icon.setAttribute('aria-label', `${label}未接入`);
+          const video = make('div', 'image-manager-summary-video'); video.title = `${label}：查看来源或设置草稿视频`;
+          const icon = make('span', 'image-manager-video-icon', '▹'); icon.setAttribute('aria-label', label);
           video.append(icon); node.append(video);
-          if (label === '主图视频') renderVideoCell?.(video, { skuKey: row.skuRowKey, label: '来源视频' });
+          renderVideoCell?.(video, { skuKey: row.skuRowKey, label, role: label === '主图视频' ? 'MAIN' : 'RICH_CONTENT' });
         }
         summary.append(node);
       }

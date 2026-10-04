@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   OzonListingDraft,
+  OzonListingDraftVideoBinding,
   OzonListingDraftMediaAssignment,
   OzonListingPublishIntent,
 } from 'shared';
@@ -148,6 +149,7 @@ export interface ExtensionByokListingPublishPreview
   previewHash: string;
   selectedSkuKeys: string[];
   orderedMedia: ExtensionByokListingPublishOrderedMedia[];
+  videoBindings: OzonListingDraftVideoBinding[];
 }
 
 export interface ExtensionByokListingPublishPrepared {
@@ -607,8 +609,9 @@ export function createExtensionByokListingPublishService(options: {
     selectedSkuKeys: string[],
     media: ExtensionByokListingPublishOrderedMedia[],
     publishDraftRevision: number,
+    videoBindings: OzonListingDraftVideoBinding[],
   ): ExtensionByokListingPublishPreview {
-    const content = { ...binding, selectedSkuKeys, orderedMedia: media };
+    const content = { ...binding, selectedSkuKeys, orderedMedia: media, videoBindings: structuredClone(videoBindings) };
     return { ...content, previewHash: previewHash(content, publishDraftRevision) };
   }
 
@@ -626,6 +629,7 @@ export function createExtensionByokListingPublishService(options: {
         context.selectedSkuKeys,
         context.orderedMedia,
         context.previewDraftRevision,
+        context.draft.media.videoBindings || [],
       );
     },
 
@@ -650,6 +654,7 @@ export function createExtensionByokListingPublishService(options: {
         context.selectedSkuKeys,
         context.orderedMedia,
         context.previewDraftRevision,
+        context.draft.media.videoBindings || [],
       );
       if (preview.previewHash !== confirmedHash) {
         return fail(

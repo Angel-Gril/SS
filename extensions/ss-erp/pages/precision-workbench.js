@@ -7,13 +7,14 @@ import { createCopyEditor } from './donor/copy-editor.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
-import { createTranslationFlow } from './donor/translation-flow.js';
+import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
 import { buildSkuImageRows, createSkuImageWorkspace, describeSuite } from './donor/sku-image-workspace.js';
 import { createSourceVideoView } from './donor/source-video-view.js';
 import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
 import { createWatermarkEditor } from './donor/watermark-editor.js';
+import { createVideoPublishEditor } from './donor/video-publish-editor.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -80,7 +81,7 @@ function command(type, fields = {}) {
     try { Contract.parseFrameCommand(outgoing); }
     catch { return Promise.reject(Object.assign(new Error('套图输入未通过校验，请重新读取并检查参考图与创作方向'), { outcome: 'NOT_SUBMITTED' })); }
   }
-  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY'].includes(type)
+  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY', 'VIDEO_SAVE'].includes(type)
     || type === 'PUBLISH' && fields.action === 'CONFIRM';
   const promise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -171,8 +172,23 @@ document.querySelector('.toolbar').after(band);
 const sourceVideo = createSourceVideoView({ root: element('ui-scale-root'), getVideos: () => projection.videos,
   getSkuKey: () => selectedSkuKey, onSelectSku: key => { selectedSkuKey = key; }, onMessage: message => status(message, 'warn'),
   getContextKey: () => `${projection.source.sourceProductId}:${projection.handoff?.snapshotId}` });
+const videoEditor = createVideoPublishEditor({ root: element('ui-scale-root'), command,
+  getBinding: () => listing() ? currentEditorBinding() : null, getSkuKey: () => selectedSkuKey,
+  onSelectSku: key => { selectedSkuKey = key; }, getBusy: () => projection.busy || saveBusy || mediaMutationBusy || publishBusy,
+  getSourceVideos: () => (projection.videos || []).filter(item => !item.skuKeys.length || item.skuKeys.includes(selectedSkuKey)),
+  openSourceVideo: source => sourceVideo.open(source), onMessage: message => status(message, 'warn'),
+  onSaved: async () => { await command('REFRESH'); await loadEditor(); invalidatePublishPreview('视频已变化，请重新预览上传。'); status('视频已保存到当前草稿', 'ok'); } });
 const imageWorkspace = createSkuImageWorkspace({ container: element('image-queue'), root: element('ui-scale-root'),
-  renderVideoCell: sourceVideo.renderCell,
+  renderVideoCell: (cell, value) => {
+    cell.replaceChildren();
+    if (value.role === 'MAIN') sourceVideo.renderCell(cell, { skuKey: value.skuKey, label: '来源视频' });
+    const button = make('button', 'ghost precision-video-settings', '设置'); button.type = 'button';
+    button.dataset.videoSku = value.skuKey; button.dataset.videoRole = value.role;
+    button.setAttribute('aria-label', `设置 ${value.skuKey} 的${value.label}`);
+    button.addEventListener('keydown', event => event.stopPropagation());
+    button.addEventListener('click', event => { event.stopPropagation(); if (event.isTrusted && !button.disabled) void videoEditor.open(value.skuKey, value.role, button); });
+    cell.append(button);
+  },
   onSelect: key => { if (selectedSkuKey !== key) { selectedSkuKey = key; byok.invalidate(); } }, onChange: () => renderMedia(),
   onModeChange: mode => { imageMode = mode;
     document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.checked = input.value === mode; });
@@ -339,7 +355,8 @@ async function readTranslationAvailability(force = false) {
     const data = response.data;
     if (!data || typeof data.available !== 'boolean') throw new Error('图片翻译状态暂不可用，请重新读取');
     translationAvailability = { binding, state: 'ready', available: data.available,
-      reason: data.available ? '' : ({ MEDIA_PROVIDER_NOT_ALLOWED: '当前环境尚未开放图片翻译。', MEDIA_CREATE_DISABLED: 'ERP 当前关闭了图片翻译。', AI_MEDIA_OPERATION_DISABLED: 'ERP 当前关闭了图片翻译。', MEDIA_STORAGE_NOT_READY: '图片存储暂不可用，请稍后重新读取。' }[data.reasonCode] || '当前草稿的图片翻译不可用，请核对 ERP 图片设置后重新读取。') };
+      price: normalizeTranslationPrice(data.price),
+      reason: data.available ? '' : ({ MEDIA_PROVIDER_NOT_ALLOWED: '图片翻译模型尚未通过生产验收或配置不完整。', MEDIA_CREATE_DISABLED: 'ERP 当前关闭了图片翻译。', AI_MEDIA_OPERATION_DISABLED: 'ERP 当前关闭了图片翻译。', MEDIA_STORAGE_NOT_READY: '图片存储暂不可用，请稍后重新读取。' }[data.reasonCode] || '当前草稿的图片翻译不可用，请核对 ERP 图片设置后重新读取。') };
   } catch (error) {
     if (translationAvailability !== requestState) return;
     translationAvailability = { binding, state: 'error', available: false, reason: error.message || '图片翻译状态读取失败，请重新读取' };
@@ -478,6 +495,8 @@ function renderPublish() {
       const origin = { SOURCE: '来源图', REVIEWED: '审核图', GENERATED: '生成图', TRANSLATED: '翻译图', EDITED: '修图' }[media.source] || '图片';
       order.append(make('li', '', `${media.scope === 'PRODUCT' ? '商品' : sku?.label || media.skuKey} · ${media.slotKey} · ${origin}`));
     }
+    for (const video of view.videoBindings || []) publishDetails.append(make('p', '',
+      `${video.skuKey ? `SKU ${video.skuKey}` : '所有 SKU'} · ${video.role === 'MAIN' ? '主图视频' : '富内容视频'} · ${video.url}`));
     publishDetails.append(order);
   } else {
     publishDetails.append(make('p', '', shop ? `店铺：${shop.name}` : '请先选择有草稿的店铺'));
@@ -502,6 +521,9 @@ function acceptPublishPreview(view, binding, token) {
     || !/^[a-f0-9]{64}$/u.test(view.previewHash || '') || token !== publishToken()
     || !Array.isArray(view.selectedSkuKeys) || !view.selectedSkuKeys.length || view.selectedSkuKeys.length > 500
     || !Array.isArray(view.selectedMedia) || !Array.isArray(view.orderedMedia) || !view.orderedMedia.length || view.orderedMedia.length > 500
+    || view.videoBindings !== undefined && (!Array.isArray(view.videoBindings) || view.videoBindings.length > 1002
+      || !view.videoBindings.every(video => video && ['MAIN','RICH_CONTENT'].includes(video.role)
+        && (video.skuKey === null || view.selectedSkuKeys.includes(video.skuKey)) && typeof video.url === 'string' && video.url.startsWith('https://')))
     || !view.orderedMedia.every((row) => row && Number.isSafeInteger(row.ordinal) && row.ordinal >= 0
       && ['PRODUCT', 'SKU'].includes(row.scope) && typeof row.slotKey === 'string' && typeof row.assetId === 'string')) {
     throw new Error('ERP 上传预览与当前草稿不一致，请重新读取状态后再预览');
@@ -1226,8 +1248,12 @@ async function startTranslation() {
   if (!translationAvailability.available || translationAvailability.binding !== JSON.stringify(currentEditorBinding())) throw new Error(translationAvailability.reason || '请先核对当前草稿的图片翻译状态');
   const count = eligibleReferenceMedia().filter(item => translationKeys.has(item.key)).length;
   if (!count) throw new Error('请勾选要翻译的来源图片');
-  if (!confirm(`翻译已勾选的 ${count} 张图片中的中文文字为俄文，原图保留。确认提交 ERP 图片翻译？`)) return;
-  const view = await translation.start();
+  const price = translationAvailability.price;
+  const fee = price ? `每张最高 ${price.currency} ${(price.maximumCostCents / 100).toFixed(2)}，本批最高 ${price.currency} ${(count * price.maximumCostCents / 100).toFixed(2)}。` : '';
+  if (!confirm(`翻译已勾选的 ${count} 张图片中的中文文字为俄文，原图保留。${fee}确认提交 ERP 图片翻译？`)) return;
+  const view = await translation.start({ ...(price ? { priceConfirmation: {
+    currency: price.currency, maximumCostCents: price.maximumCostCents, quoteFingerprint: price.quoteFingerprint,
+  } } : {}) });
   status(`${view.queuedCount} 张翻译图片已提交，可重新读取处理状态。`, 'ok');
   await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing().id });
 }

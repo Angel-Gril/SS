@@ -1,5 +1,6 @@
 import {
   resolveAiImageProviderCapability,
+  hasExactAiMediaSandboxEvidence,
   type AiImageProviderCapability,
   type AiMediaInputTransport,
   type AiMediaOperation,
@@ -7,6 +8,7 @@ import {
 } from './ai-image-provider-capabilities.js';
 import { aiImageProviderEndpointSha256, parseAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
 import { AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE, AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
+import { parseAiImageTranslationRuntime } from './ai-image-translation-runtime-contract.js';
 
 interface AiImageProviderAdmissionInput {
   capability: AiImageProviderCapability | null | undefined;
@@ -29,12 +31,23 @@ export function canUseAiImageJobOperation(input: {
   model?: string | null;
   operation?: string;
   operationConfig?: unknown;
-}, production: boolean): boolean {
+}, production: boolean, resolveCapability = resolveAiImageProviderCapability): boolean {
   const provider = String(input.provider || '').trim();
   if (provider === 'fake') return !production;
   const model = String(input.model || '').trim();
   const operation = String(input.operation || '') as AiMediaOperation;
-  const capability = resolveAiImageProviderCapability(provider, model);
+  const capability = resolveCapability(provider, model);
+  if (operation === 'IMAGE_TRANSLATE') {
+    const config = input.operationConfig && typeof input.operationConfig === 'object' && !Array.isArray(input.operationConfig)
+      ? input.operationConfig as Record<string, unknown> : null;
+    try {
+      const runtime = parseAiImageTranslationRuntime(config?.translationRuntime);
+      return runtime.provider === provider && runtime.model === model && hasExactAiMediaSandboxEvidence({
+        capability, provider, model, baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        operation: 'IMAGE_TRANSLATE', inputTransport: 'public_url', resultMode: 'async',
+      });
+    } catch { return false; }
+  }
   if (!capability || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)
     || !capability.operations.includes(operation)) return false;
   const config = input.operationConfig;

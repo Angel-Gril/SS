@@ -133,6 +133,8 @@ import { extensionSourceCaptureRoutes } from './routes/extension-source-captures
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
 import { extensionListingEditorRoutes } from './routes/extension-listing-editor.js';
 import { extensionWorkbenchWatermarkRoutes } from './routes/extension-workbench-watermark.js';
+import { extensionSourceWorkbenchVideoRoutes } from './routes/extension-source-workbench-video.js';
+import { createPrismaSourceListingVideoService } from './services/source-listing-video-prisma.js';
 import { createPrismaSourceListingWatermarkService } from './services/source-listing-watermark-prisma.js';
 import { createExtensionListingEditorService } from './services/extension-listing-editor.js';
 import { createSourceListingAttributeEditorService } from './services/source-listing-attribute-editor.js';
@@ -1729,15 +1731,20 @@ if (isExtensionDeviceAuthEnabled()) {
         'AI image suite frontier enqueue deferred to recovery',
       ),
     });
-  const getExtensionMediaTranslationSettings = async () => ({
-    enabled: await getConfig('feature_image_translate'),
-    provider: await getConfig('ai_image_translation_provider'),
-    model: await getConfig('ai_image_translation_model'),
-    dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
-    estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
-    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
-    categoryGlossaryJson: await getConfig('ai_image_translation_category_glossary_json'),
-  });
+  const getExtensionMediaTranslationSettings = async () => {
+    const snapshot = await getStrictConfigSnapshot(['feature_image_translate', 'ai_image_translation_provider',
+      'ai_image_translation_model', 'ai_image_translation_base_url', 'ai_image_translation_api_key',
+      'ai_user_daily_image_translation_limit', 'ai_image_translation_cost_cents', 'ai_daily_budget_cents',
+      'ai_image_translation_category_glossary_json'], { includeRevisions: true });
+    const values = snapshot.values; const revision = snapshot.revisions?.ai_image_translation_api_key;
+    return { enabled: values.feature_image_translate, provider: values.ai_image_translation_provider,
+      model: values.ai_image_translation_model, baseUrl: values.ai_image_translation_base_url,
+      hasApiKey: Boolean(values.ai_image_translation_api_key.trim()), currency: 'CNY' as const,
+      dailyLimit: values.ai_user_daily_image_translation_limit, estimatedCostCents: values.ai_image_translation_cost_cents,
+      globalDailyBudgetCents: values.ai_daily_budget_cents, categoryGlossaryJson: values.ai_image_translation_category_glossary_json,
+      ...(revision ? { credentialRevision: { recordId: revision.id, revision: revision.revision,
+        updatedAt: revision.updatedAt.toISOString() } } : {}) };
+  };
   const getExtensionMediaTranslationStorageReadiness = async () => {
     try {
       return resolveAiImageTranslationStorageReadiness(await getRuntimeConfigForStorage());
@@ -1915,6 +1922,10 @@ if (isExtensionDeviceAuthEnabled()) {
           provider: settings.provider,
           model: settings.model,
           globalDailyBudgetCents: settings.globalDailyBudgetCents,
+          baseUrl: settings.baseUrl,
+          currency: settings.currency,
+          credentialRevision: settings.credentialRevision,
+          costPerImageCents: settings.estimatedCostCents,
         };
       }
       if (operation === 'IMAGE_TO_IMAGE' || operation === 'FULL_EDIT' || operation === 'INPAINT') {
@@ -2900,6 +2911,17 @@ if (isExtensionDeviceAuthEnabled()) {
       loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
   });
+  await app.register(extensionSourceWorkbenchVideoRoutes, {
+    prefix: '/api/extension-device/source-workbench/video',
+    service: createPrismaSourceListingVideoService({ client: prisma,
+      loadSchema: async ({ ownerUserId, draft }) => {
+        if (!draft.category) throw Object.assign(new Error('请先选择并保存官方类目'), { statusCode: 422, code: 'video_category_required' });
+        return (await sourceListingWorkflowAttributeService.previewSchema({ ownerUserId, draft, category: draft.category })).schema;
+      } }),
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({ config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'], loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId) }),
+  });
   await app.register(extensionMediaLaunchRoutes, {
     prefix: '/api/extension-device/source-workbench',
     featureFlags: sourceWorkflowFeatureFlags,
@@ -2950,26 +2972,12 @@ if (isExtensionDeviceAuthEnabled()) {
       purpose,
     ),
     getCapability: async ({ workflowDecision }) => {
-      const [
-        enabled, provider, model, dailyLimit, estimatedCostCents, categoryGlossaryJson, storage,
-      ] = await Promise.all([
-        getConfig('feature_image_translate'),
-        getConfig('ai_image_translation_provider'),
-        getConfig('ai_image_translation_model'),
-        getConfig('ai_user_daily_image_translation_limit'),
-        getConfig('ai_image_translation_cost_cents'),
-        getConfig('ai_image_translation_category_glossary_json'),
+      const [settings, storage] = await Promise.all([
+        getExtensionMediaTranslationSettings(),
         getRuntimeConfigForStorage().then(resolveAiImageTranslationStorageReadiness),
       ]);
       const readiness = resolveExtensionMediaTranslationReadiness({
-        settings: {
-          enabled,
-          provider,
-          model,
-          dailyLimit,
-          estimatedCostCents,
-          categoryGlossaryJson,
-        },
+        settings,
         production: process.env.NODE_ENV === 'production',
         storageReadiness: storage,
       });
@@ -2979,43 +2987,24 @@ if (isExtensionDeviceAuthEnabled()) {
         reasonCode: readiness.reasonCode,
         reason: readiness.reason,
         revision: String(workflowDecision.revision),
-        testOnly: true as const,
+        testOnly: readiness.testOnly,
+        ...(readiness.price ? { price: readiness.price } : {}),
         operation: 'IMAGE_TRANSLATE' as const,
         sourceLanguage: 'zh' as const,
         targetLanguage: 'ru' as const,
       };
     },
     getCapabilities: async ({ workflowDecision }) => {
-      const [
-        snapshot,
-        translationEnabled,
-        translationProvider,
-        translationModel,
-        translationDailyLimit,
-        translationEstimatedCostCents,
-        translationCategoryGlossaryJson,
-      ] = await Promise.all([
+      const [snapshot, translationSettings] = await Promise.all([
         loadExtensionStandaloneSnapshot(),
-        getConfig('feature_image_translate'),
-        getConfig('ai_image_translation_provider'),
-        getConfig('ai_image_translation_model'),
-        getConfig('ai_user_daily_image_translation_limit'),
-        getConfig('ai_image_translation_cost_cents'),
-        getConfig('ai_image_translation_category_glossary_json'),
+        getExtensionMediaTranslationSettings(),
       ]);
       const imageToImage = resolveExtensionMediaStandaloneReadiness('IMAGE_TO_IMAGE', snapshot.settings, snapshot.options);
       const fullEdit = resolveExtensionMediaStandaloneReadiness('FULL_EDIT', snapshot.settings, snapshot.options);
       const inpaint = resolveExtensionMediaStandaloneReadiness('INPAINT', snapshot.settings, snapshot.options);
       const production = process.env.NODE_ENV === 'production';
       const translation = resolveExtensionMediaTranslationReadiness({
-        settings: {
-          enabled: translationEnabled,
-          provider: translationProvider,
-          model: translationModel,
-          dailyLimit: translationDailyLimit,
-          estimatedCostCents: translationEstimatedCostCents,
-          categoryGlossaryJson: translationCategoryGlossaryJson,
-        },
+        settings: translationSettings,
         production,
         storageReadiness: resolveAiImageTranslationStorageReadiness(snapshot.runtimeConfig),
       });
@@ -3042,7 +3031,8 @@ if (isExtensionDeviceAuthEnabled()) {
           reasonCode: translation.reasonCode,
           reason: translation.reason,
           revision: String(workflowDecision.revision),
-          testOnly: true,
+          testOnly: translation.testOnly,
+          ...(translation.price ? { price: translation.price } : {}),
           operation: 'IMAGE_TRANSLATE' as const,
           sourceLanguage: 'zh' as const,
           targetLanguage: 'ru' as const,

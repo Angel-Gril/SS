@@ -28,6 +28,7 @@ import {
 } from './ozon-publish-attempts.js';
 import { hashOzonListingPublishState } from './source-listing-workflow.js';
 import { SourceListingWorkflowCategoryError } from './source-listing-workflow-category.js';
+import { appendBoundDraftVideoAttributes, SourceListingVideoError } from './source-listing-video-media.js';
 
 export const OZON_LISTING_PRODUCTION_COMPILE_ADAPTER_VERSION =
   'ozon-listing-production-compile-adapter/v1' as const;
@@ -543,6 +544,14 @@ export async function preflightOzonListingProductionAuthorities(
     catalog.authority.snapshot.revision,
     loaded.validation,
   );
+  try {
+    for (const skuKey of input.draft.selectedSkuKeys) appendBoundDraftVideoAttributes(input.draft, skuKey, validation.schema,
+      validation.result.report.normalizedAttributes.filter(attribute => attribute.skuKey === undefined || attribute.skuKey === skuKey)
+        .map(attribute => ({ id: attribute.attributeId, values: [] })), validation.result.report.schemaRevision);
+  } catch (error) {
+    if (error instanceof SourceListingVideoError) fail('OZON_LISTING_PRODUCTION_PAYLOAD_INVALID', error.message);
+    throw error;
+  }
   const images = resolvedImages(
     input.draft,
     ownerUserId,
@@ -572,6 +581,7 @@ export function createOzonListingProductionCompileAdapter(
         capture: capture.capture,
         validationReport: payloadValidationReport,
         resolvedImages: images,
+        attributeSchema: validation.schema,
       });
     } catch (error) {
       fail(

@@ -38,7 +38,7 @@ beforeAll(async () => {
     for (const match of source.matchAll(/(?:from\s+|import\s*\()\s*['"]([^'"]+)['"]/gu)) {
       const specifier = match[1]!;
       if (specifier.startsWith('.')) {
-        const dependency = resolve(dirname(join(sourceRoot, name)), specifier.replace(/\.js$/u, '.ts'));
+        const dependency = resolve(dirname(join(sourceRoot, name)), /\.[^/]+$/u.test(specifier) ? specifier.replace(/\.js$/u, '.ts') : `${specifier}.ts`);
         pending.push(relative(sourceRoot, dependency).split(sep).join('/'));
       } else if (specifier === 'shared' || specifier.startsWith('shared/')) {
         pending.push(`packages/shared/src/${specifier === 'shared' ? 'index' : specifier.slice(7)}.ts`);

@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-10-04 图案水印、视频发布编译与托管翻译后端继续适配
+
+图案水印已复用账号/店铺模板并完成预览、透明度、缩放、应用及模板漂移保护；主图/富内容视频已接同窗草稿设置、官方媒体地址校验、发布预览与编译。扩展真实托管翻译的单张报价确认、凭据冻结、CNY 预留/结算、审核应用及未知结果恢复已完成本地接线，生产仍关闭，未伪造 `qwen-mt-image` 的中文→俄文能力证据。
+
+隔离 PostgreSQL 三套 `16/16`、扩展关联 `68/68`、图案水印/视频/带报价翻译整页 Chrome fixture、workspace lint/typecheck 通过。全后端检查业务 `6520 passed`，五个历史脚本的 fixture copier 因 extensionless TS 路径失败；最小修复后原五套 `103/103` 通过，未跳过原断言。事实与生产翻译限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。本轮没有 Provider/Ozon 写入或新增费用。
+
 ## 2026-10-04 `556e7ca2 / 1.0.413` 图片工作台适配已推送、签名并双区部署
 
 逐 SKU 图片管理、审核刷新提示、水印服务端预览/应用、1688 来源视频保留/预览和 hero-only“AI 主图＋翻译”已进入新运行版。COM 保持 DOTH 原 pilot，CN 保持 direct/RDS dark；153 migrations、数据库 guard、三服务与 `/ready` 通过。两区完整 canonical VPS 均 `0 failure / 1 warning`，warning 为未配置远端备份；签名 COM Cloud 包的隔离 MV3 来源页/Blob transport 验收通过。官网仍公开 `0d695279 / 1.0.405`，未执行 website approval、发布 canary、CAS 或 distribution probe。功能范围、证据与仍未完成的正式 Ozon 视频发布/生产翻译准入只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。本轮无新增 Provider/Ozon 请求或费用。

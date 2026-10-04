@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTranslationFlow } from '../extensions/ss-erp/pages/donor/translation-flow.js';
+import { createTranslationFlow, normalizeTranslationPrice } from '../extensions/ss-erp/pages/donor/translation-flow.js';
 
 const receipt = key => ({ data: { state: 'completed', result: { workflowId: 'translation-' + key, operation: 'IMAGE_TRANSLATE', status: 'QUEUED' } } });
 function fixture(submit = fields => receipt(fields.sourceMediaKey)) {
@@ -17,6 +17,20 @@ test('translation sends only selected media and does not resubmit accepted image
   assert.equal((await f.flow.start()).queuedCount, 2);
   await f.flow.start();
   assert.deepEqual(f.calls, [{ listingWorkflowId: 'draft-1', sourceMediaKey: 'image-1' }, { listingWorkflowId: 'draft-1', sourceMediaKey: 'image-7' }]);
+});
+test('paid translation freezes one server quote for every selected image and omits it for legacy fake mode', async () => {
+  const f = fixture();
+  const price = normalizeTranslationPrice({ currency: 'CNY', unitCostCents: 14, maximumCostCents: 14, quoteFingerprint: 'a'.repeat(64) });
+  const confirmation = { currency: price.currency, maximumCostCents: price.maximumCostCents, quoteFingerprint: price.quoteFingerprint };
+  await f.flow.start({ priceConfirmation: confirmation });
+  assert.equal(f.calls.length, 2);
+  for (const call of f.calls) assert.deepEqual(call.priceConfirmation, confirmation);
+});
+test('malformed, negative or unbounded paid quote never becomes a fee confirmation', () => {
+  assert.equal(normalizeTranslationPrice(null), null);
+  for (const value of [{ currency: 'EUR' }, { currency: 'CNY', unitCostCents: -1, maximumCostCents: 14, quoteFingerprint: 'a'.repeat(64) },
+    { currency: 'CNY', unitCostCents: 14, maximumCostCents: 10, quoteFingerprint: 'a'.repeat(64) },
+    { currency: 'CNY', unitCostCents: 14, maximumCostCents: Number.MAX_SAFE_INTEGER, quoteFingerprint: 'a'.repeat(64) }]) assert.throws(() => normalizeTranslationPrice(value));
 });
 
 test('unknown or malformed submission stops the batch and blocks blind retry', async () => {

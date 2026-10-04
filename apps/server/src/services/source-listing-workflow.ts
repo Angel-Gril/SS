@@ -675,6 +675,7 @@ export function createSourceListingWorkflowService(options: {
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.category = structuredClone(input.category);
+        if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         next.stage = 'ATTRIBUTE_REVIEW';
         next.attributes.values = structuredClone(
           input.retainedAttributeValues ?? draft.attributes.values,
@@ -897,6 +898,7 @@ export function createSourceListingWorkflowService(options: {
         next.draftVersion += 1;
         next.sourceCaptureSnapshotId = required(input.sourceCaptureSnapshotId, 'sourceCaptureSnapshotId');
         next.sourceCaptureHash = required(input.sourceCaptureHash, 'sourceCaptureHash');
+        if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         next.selectedSkuKeys = selectedSkuKeys;
         next.stage = 'CATEGORY_REVIEW';
         for (const key of ['category', 'attributes', 'content', 'media', 'pricing', 'validation'] as const) {
@@ -921,6 +923,7 @@ export function createSourceListingWorkflowService(options: {
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.shopId = required(input.shopId, 'shopId');
+        if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         next.stage = 'CATEGORY_REVIEW';
         for (const key of ['category', 'attributes', 'content', 'pricing', 'validation'] as const) {
           next.freshness[key] = stale('SHOP_CHANGED');
@@ -948,6 +951,7 @@ export function createSourceListingWorkflowService(options: {
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.selectedSkuKeys = selectedSkuKeys;
+        if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         for (const key of ['attributes', 'content', 'media', 'pricing', 'validation'] as const) {
           next.freshness[key] = stale('SKU_SELECTION_CHANGED');
         }

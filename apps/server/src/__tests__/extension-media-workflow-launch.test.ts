@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import {
   createExtensionMediaWorkflowLauncher,
   createExtensionMediaTranslationLauncher,
@@ -75,6 +78,8 @@ function setup(options: {
   categoryGlossaryJson?: string;
   estimatedCostCents?: number;
   promptError?: Error;
+  settings?: Record<string, unknown>;
+  resolveCapability?: typeof resolveAiImageProviderCapability;
 } = {}) {
   const createImageTranslation = vi.fn(async () => {
     if (options.createError) throw options.createError;
@@ -125,15 +130,19 @@ function setup(options: {
       estimatedCostCents: options.estimatedCostCents ?? 0,
       globalDailyBudgetCents: 100,
       categoryGlossaryJson: options.categoryGlossaryJson || '',
+      ...options.settings,
     })),
     getStorageReadiness: vi.fn(async () => ({
       ready: options.storageReady !== false,
       reason: 'storage unavailable',
+      backend: 'oss' as const,
+      publicHttps: true,
     })),
     resolvePrompt,
     enqueue,
     markEnqueueFailed,
     production: options.production ?? false,
+    resolveCapability: options.resolveCapability,
   });
   return {
     launch, createImageTranslation, loadContext, internalizeSource,
@@ -319,6 +328,68 @@ function setupV2(options: {
 }
 
 describe('extension media translation launch', () => {
+  const paidSettings = {
+    enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1', hasApiKey: true,
+    currency: 'CNY' as const, estimatedCostCents: 14, globalDailyBudgetCents: 100,
+    dailyLimit: 20, credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' },
+    categoryGlossaryJson: JSON.stringify({ version: 1, profiles: [{ sourceLanguage: 'zh', targetLanguage: 'ru', terms: [{ src: '收纳盒', tgt: 'Органайзер' }] }] }),
+  };
+  const paidCapability = {
+    ...resolveAiImageProviderCapability('dashscope-qwen-mt-image', 'qwen-mt-image')!,
+    evidenceLevel: 'sandbox-verified' as const,
+    sandboxEvidence: [{ endpointSha256: aiImageProviderEndpointSha256(paidSettings.provider, paidSettings.baseUrl),
+      operation: 'IMAGE_TRANSLATE' as const, inputTransport: 'public_url' as const, resultMode: 'async' as const }],
+  };
+
+  it('creates a paid translation only with exact capability, credential and explicit price confirmation', async () => {
+    const state = setup({ production: true, settings: paidSettings, category: { categoryId: 1, typeId: 2 }, resolveCapability: () => paidCapability });
+    const quote = buildAiImageTranslationRuntime(paidSettings);
+    await expect(state.launch(input({ command: command({ priceConfirmation: {
+      currency: quote.price.currency, maximumCostCents: quote.price.maximumCostCents, quoteFingerprint: quote.price.quoteFingerprint,
+    } }) }))).resolves.toMatchObject({ replayed: false });
+    expect(state.createImageTranslation).toHaveBeenCalledWith(expect.objectContaining({
+      provider: paidSettings.provider, model: paidSettings.model, estimatedCostCents: 14,
+      translationRuntimeContract: quote.runtime,
+    }));
+  });
+
+  it('requires the exact current price before downloading or reserving paid work', async () => {
+    const state = setup({ production: true, settings: paidSettings, category: { categoryId: 1, typeId: 2 }, resolveCapability: () => paidCapability });
+    for (const confirmation of [undefined, { currency: 'CNY', maximumCostCents: 14, quoteFingerprint: 'a'.repeat(64) }]) {
+      await expect(state.launch(input({ command: command(confirmation ? { priceConfirmation: confirmation } : {}) })))
+        .rejects.toMatchObject({ code: 'MEDIA_PRICE_CONFIRMATION_REQUIRED' });
+    }
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+  });
+
+  it('reads back a running paid translation without re-enqueueing or refreshing its frozen credential', async () => {
+    const quote = buildAiImageTranslationRuntime(paidSettings);
+    const state = setup({ production: true, settings: { ...paidSettings, enabled: false }, existing: translationExisting('RUNNING', {
+      provider: paidSettings.provider, model: paidSettings.model, estimatedCostCents: 14,
+      translationRuntimeContract: quote.runtime,
+    }) });
+    await expect(state.launch(input({ command: command({ priceConfirmation: {
+      currency: quote.price.currency, maximumCostCents: 14, quoteFingerprint: quote.price.quoteFingerprint,
+    } }) }))).resolves.toMatchObject({ status: 'RUNNING', replayed: true });
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+  });
+
+  it('blocks queued paid replay after the credential revision changes', async () => {
+    const quote = buildAiImageTranslationRuntime(paidSettings);
+    const state = setup({ production: true, settings: { ...paidSettings,
+      credentialRevision: { ...paidSettings.credentialRevision, revision: 3 } }, resolveCapability: () => paidCapability,
+      existing: translationExisting('QUEUED', { provider: paidSettings.provider, model: paidSettings.model,
+        estimatedCostCents: 14, translationRuntimeContract: quote.runtime }) });
+    await expect(state.launch(input({ command: command({ priceConfirmation: {
+      currency: quote.price.currency, maximumCostCents: 14, quoteFingerprint: quote.price.quoteFingerprint,
+    } }) }))).rejects.toMatchObject({ code: 'MEDIA_PROVIDER_CONFIG_CHANGED' });
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+  });
+
   it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)(
     'freezes the authoritative listing slot for %s and passes it to source internalization', async (operation) => {
       const state = setupV2();

@@ -972,6 +972,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     const references = [{ assetId: sourceAssetId }];
     const estimatedCostCents = Math.max(0, Math.round(input.estimatedCostCents || 0));
     const paid = input.provider !== 'fake';
+    const currency = input.translationRuntimeContract?.currency ?? 'USD';
     const fingerprintForSha = (sourceAssetSha256: string | null | undefined) => aiMediaPayloadHash({
       request: createAiImageTranslationWorkflowFingerprint({ ...input, sourceAssetId, options: input.options }),
       sourceAssetSha256,
@@ -1068,6 +1069,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           await reserveGlobalAiCostBudgetInTransaction(tx, {
             limit: Number(input.globalDailyBudgetCents ?? 0),
             requestedMaximumCostMinor: estimatedCostCents,
+            currency,
           }, { alreadyLocked: true });
         }
         const workflow = await tx.aiMediaWorkflow.create({ data: {
@@ -1115,6 +1117,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           templateSnapshot: input.templateSnapshot || undefined,
           operationConfig: {
             ...input.options,
+            ...(input.translationRuntimeContract ? { translationRuntime: input.translationRuntimeContract } : {}),
             contextType: input.context.type,
             contextId: input.context.id,
             contextSkuKey: input.context.skuKey || null,
@@ -1140,7 +1143,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           provider: input.provider,
           model: input.model,
           operation: 'IMAGE_TRANSLATE',
-          currency: 'USD',
+          currency,
           estimatedCostMinor: estimatedCostCents,
           maximumCostMinor: estimatedCostCents,
         });

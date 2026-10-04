@@ -5,26 +5,34 @@ import { isSourceListingAiMediaTarget, type OzonListingDraft, type OzonListingDr
 import type { OzonListingDraftRepository } from './ozon-listing-draft.js';
 import type { OwnedImageStorageBackend, ImageUploadResult } from './image-storage.js';
 import { loadBoundedImageSource, type BoundedImageSource } from './image-source-loader.js';
-import { downloadPublicImage } from './source-public-image-download.js';
+import { downloadPublicImage, normalizePublicSourceUrl } from './source-public-image-download.js';
+import { renderImageWatermark } from './source-listing-image-watermark.js';
 
 export const WATERMARK_CONTRACT_VERSION = 'extension-workbench-watermark/v1';
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const identifier = (maximum = 200) => z.string().min(1).max(maximum).refine(value => value === value.trim()
   && value === value.normalize('NFKC') && !Array.from(value).some(character => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127));
-const configSchema = z.object({
+const positionSchema = z.enum(['bottom-right', 'bottom-left', 'top-right', 'top-left', 'center', 'tile']);
+const textConfigSchema = z.object({
   type: z.literal('text'), text: z.string().trim().min(1).max(120),
-  position: z.enum(['bottom-right', 'bottom-left', 'top-right', 'top-left', 'center', 'tile']),
+  position: positionSchema,
   opacity: z.number().int().min(1).max(100), fontSize: z.number().int().min(6).max(200).optional(),
   fontColor: z.string().regex(/^#[0-9a-f]{6}$/iu).optional(),
 }).strict();
+const imageConfigSchema = z.object({ type: z.literal('image'), templateId: identifier(), position: positionSchema,
+  opacity: z.number().int().min(1).max(100), scale: z.number().int().min(5).max(100) }).strict();
+const configSchema = z.discriminatedUnion('type', [textConfigSchema, imageConfigSchema]);
 const itemSchema = z.object({
   skuKey: identifier(500).nullable(), slotKey: identifier(),
   sourceMediaKey: identifier(500).optional(), sourceAssetId: identifier(500).optional(),
 }).strict().refine(item => Boolean(item.sourceMediaKey) !== Boolean(item.sourceAssetId));
-export const watermarkPreviewRequestSchema = z.object({
+export const watermarkTemplatesRequestSchema = z.object({
   contractVersion: z.literal(WATERMARK_CONTRACT_VERSION), snapshotId: identifier(), supplyGoodsId: identifier(),
   shopId: identifier(), listingWorkflowId: identifier(), draftRevision: z.number().int().min(1),
-  draftVersion: z.number().int().min(1), items: z.array(itemSchema).min(1).max(5), config: configSchema,
+  draftVersion: z.number().int().min(1),
+}).strict();
+export const watermarkPreviewRequestSchema = watermarkTemplatesRequestSchema.extend({
+  items: z.array(itemSchema).min(1).max(5), config: configSchema,
 }).strict().refine(input => new Set(input.items.map(item => item.slotKey)).size === input.items.length);
 export const watermarkApplyRequestSchema = watermarkPreviewRequestSchema.innerType().extend({
   idempotencyKey: identifier().refine(value => value.length >= 16), previewHash: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -34,6 +42,10 @@ export type SourceListingWatermarkApplyRequest = z.infer<typeof watermarkApplyRe
 export interface SourceListingWatermarkActor {
   ownerUserId: string; actorUserId: string; sessionId: string; scopes: string[]; allowedShopIds: string[];
 }
+export interface SourceListingWatermarkTemplate {
+  id: string; userId: string; shopId: string | null; name: string; type: string; imageUrl: string | null;
+  updatedAt: string; position: string; opacity: number; scale: number | null; isDefault: boolean;
+}
 export interface SourceListingWatermarkAsset {
   id: string; ownerUserId: string; kind: string; sourceCaptureSnapshotId: string | null; sourceMediaKey?: string | null;
   url: string; storageBackend: string; storageKey: string | null; mimeType: string; sizeBytes: number;
@@ -41,7 +53,7 @@ export interface SourceListingWatermarkAsset {
 }
 export interface SourceListingWatermarkCommitInput {
   actor: SourceListingWatermarkActor; binding: SourceListingWatermarkApplyRequest; requestHash: string;
-  next: OzonListingDraft; assets: SourceListingWatermarkAsset[];
+  next: OzonListingDraft; assets: SourceListingWatermarkAsset[]; watermarkTemplate?: SourceListingWatermarkTemplate;
 }
 export interface SourceListingWatermarkResult {
   draft: OzonListingDraft; assets: SourceListingWatermarkAsset[]; applied: number; replayed: boolean;
@@ -53,6 +65,7 @@ interface Dependencies {
     snapshotId: string; captureHash: string; media: SourceCaptureMedia[];
   } | null>;
   loadOwnedAssets(input: { ownerUserId: string; assetIds: string[] }): Promise<SourceListingWatermarkAsset[]>;
+  loadOwnedWatermarkTemplates?(input: { ownerUserId: string; shopId: string; templateId?: string }): Promise<SourceListingWatermarkTemplate[]>;
   getStorage(): Promise<Pick<OwnedImageStorageBackend, 'backendType' | 'namespaceId' | 'uploadBuffer' | 'deleteUploaded'>>;
   commit(input: SourceListingWatermarkCommitInput): Promise<Omit<SourceListingWatermarkResult, 'applied'>>;
   download?: (url: string) => Promise<BoundedImageSource>;
@@ -77,7 +90,7 @@ function authorize(actor: SourceListingWatermarkActor, shopId: string) {
     fail('watermark_forbidden', 403, '设备没有该店铺的图片处理权限');
   }
 }
-export function assertWatermarkDraftContext(draft: OzonListingDraft | null, input: SourceListingWatermarkRequest, ownerUserId: string) {
+export function assertWatermarkDraftContext(draft: OzonListingDraft | null, input: z.infer<typeof watermarkTemplatesRequestSchema>, ownerUserId: string) {
   if (!draft || draft.ownerUserId !== ownerUserId || draft.id !== input.listingWorkflowId) fail('watermark_context_not_found', 404, '店铺草稿不存在');
   if (draft.shopId !== input.shopId || draft.supplyGoodsId !== input.supplyGoodsId || draft.sourceCaptureSnapshotId !== input.snapshotId
     || draft.revision !== input.draftRevision || draft.draftVersion !== input.draftVersion
@@ -98,7 +111,7 @@ function escapeXml(text: string) {
   return text.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;').replace(/'/gu, '&apos;');
 }
 /** Deterministic raster processing: no Provider request, reservation, or billing owner. */
-export async function renderTextWatermark(buffer: Buffer, config: SourceListingWatermarkRequest['config']) {
+export async function renderTextWatermark(buffer: Buffer, config: z.infer<typeof textConfigSchema>) {
   const metadata = await sharp(buffer, { limitInputPixels: 16_777_216, failOn: 'error' }).metadata();
   if (!metadata.width || !metadata.height || !['jpeg', 'png', 'webp'].includes(metadata.format || '')
     || Number(metadata.pages || 1) !== 1 || metadata.width > 4096 || metadata.height > 4096) {
@@ -138,7 +151,14 @@ export function createSourceListingWatermarkService(options: Dependencies) {
     return { ...downloaded, width: metadata.width || 0, height: metadata.height || 0, format: metadata.format || '' };
   });
   const flights = new Map<string, { hash: string; result: Promise<SourceListingWatermarkResult> }>();
-  async function readDraft(actor: SourceListingWatermarkActor, input: SourceListingWatermarkRequest) {
+  function validTemplate(template: SourceListingWatermarkTemplate, actor: SourceListingWatermarkActor, shopId: string) {
+    if (template.userId !== actor.ownerUserId || template.shopId !== null && template.shopId !== shopId
+      || template.type !== 'image' || !template.imageUrl || template.imageUrl.length > 4096 || !identifier().safeParse(template.id).success
+      || !template.name || template.name.length > 120 || !Number.isFinite(Date.parse(template.updatedAt))) return false;
+    try { const url = new URL(template.imageUrl); return url.protocol === 'https:' && !url.hash && normalizePublicSourceUrl(template.imageUrl).href === url.href; }
+    catch { return false; }
+  }
+  async function readDraft(actor: SourceListingWatermarkActor, input: z.infer<typeof watermarkTemplatesRequestSchema>) {
     const draft = await options.repository.getCurrent(input.listingWorkflowId, actor.ownerUserId);
     if (!draft || draft.ownerUserId !== actor.ownerUserId) fail('watermark_context_not_found', 404, '店铺草稿不存在');
     return draft;
@@ -149,6 +169,14 @@ export function createSourceListingWatermarkService(options: Dependencies) {
     const authority = await options.loadCaptureAuthority({ ownerUserId: actor.ownerUserId, snapshotId: input.snapshotId });
     if (!authority || authority.snapshotId !== input.snapshotId || authority.captureHash !== draft.sourceCaptureHash) {
       fail('watermark_context_stale', 409, '来源快照已变化，请重新采集');
+    }
+    let watermarkTemplate: SourceListingWatermarkTemplate | undefined; let watermarkBytes: Buffer | undefined;
+    if (input.config.type === 'image') {
+      const requestedId = input.config.templateId;
+      const templates = await options.loadOwnedWatermarkTemplates?.({ ownerUserId: actor.ownerUserId, shopId: input.shopId, templateId: requestedId }) || [];
+      const matches = templates.filter(template => template.id === requestedId && validTemplate(template, actor, input.shopId));
+      if (matches.length !== 1) fail('watermark_template_not_found', 404, '该店铺的图案水印模板不存在或图片地址无效');
+      watermarkTemplate = matches[0]!;
     }
     const sourceAssetIds = input.items.flatMap(item => item.sourceAssetId ? [item.sourceAssetId] : []);
     const sourceAssets = sourceAssetIds.length ? await options.loadOwnedAssets({ ownerUserId: actor.ownerUserId, assetIds: sourceAssetIds }) : [];
@@ -178,17 +206,28 @@ export function createSourceListingWatermarkService(options: Dependencies) {
       return { item, url: asset.url, expectedSha256: asset.sha256, captured: false };
     });
     const results = [];
+    if (watermarkTemplate) {
+      try {
+        const downloaded = options.download ? await options.download(watermarkTemplate.imageUrl!)
+          : await downloadPublicImage(watermarkTemplate.imageUrl!, { maxBytes: 4 * 1024 * 1024, maxRedirects: 0, timeoutMs: 20_000 });
+        watermarkBytes = downloaded.buffer;
+      } catch { fail('watermark_source_invalid', 422, '图案水印图片无法安全读取，请检查模板'); }
+    }
     for (const source of sources) {
       const downloaded = await (source.captured ? downloadCaptured : download)(source.url);
       if (downloaded.buffer.length > 20 * 1024 * 1024) fail('watermark_source_invalid', 422, '来源图片超过 20 MiB');
       if (source.expectedSha256 && bufferHash(downloaded.buffer) !== source.expectedSha256) fail('watermark_source_invalid', 422, '已保存图片的校验值发生变化');
-      const rendered = await renderTextWatermark(downloaded.buffer, input.config);
+      let rendered;
+      try { rendered = input.config.type === 'text' ? await renderTextWatermark(downloaded.buffer, input.config)
+        : await renderImageWatermark(downloaded.buffer, watermarkBytes!, input.config); }
+      catch { fail('watermark_source_invalid', 422, '水印仅支持尺寸和大小受限的单帧 JPG/PNG/WebP 图片'); }
       results.push({ ...rendered, item: source.item, sourceUrl: source.url });
     }
     const previewHash = digest({ contractVersion: WATERMARK_CONTRACT_VERSION, ownerUserId: actor.ownerUserId,
       sessionId: actor.sessionId, input, sourceCaptureHash: draft.sourceCaptureHash,
+      ...(watermarkTemplate ? { watermarkTemplate: { id: watermarkTemplate.id, updatedAt: watermarkTemplate.updatedAt }, watermarkSha256: bufferHash(watermarkBytes!) } : {}),
       images: results.map(result => ({ sourceSha256: result.sourceSha256, outputSha256: result.sha256 })) });
-    return { draft, results, previewHash };
+    return { draft, results, previewHash, watermarkTemplate, watermarkSha256: watermarkBytes ? bufferHash(watermarkBytes) : null };
   }
   async function replay(actor: SourceListingWatermarkActor, input: SourceListingWatermarkApplyRequest, requestHash: string) {
     const current = await readDraft(actor, input); const receipt = watermarkReceipt(current, input, requestHash);
@@ -200,6 +239,18 @@ export function createSourceListingWatermarkService(options: Dependencies) {
     return { draft, assets: assets.map(publicAsset), applied: assets.length, replayed: true };
   }
   return {
+    async templates(actor: SourceListingWatermarkActor, raw: unknown) {
+      const parsed = watermarkTemplatesRequestSchema.safeParse(raw);
+      if (!parsed.success) fail('watermark_invalid_request', 400, '水印模板上下文无效');
+      const input = parsed.data; authorize(actor, input.shopId);
+      assertWatermarkDraftContext(await readDraft(actor, input), input, actor.ownerUserId);
+      await options.assertActiveBinding({ ownerUserId: actor.ownerUserId, shopId: input.shopId, supplyGoodsId: input.supplyGoodsId, snapshotId: input.snapshotId });
+      const templates = await options.loadOwnedWatermarkTemplates?.({ ownerUserId: actor.ownerUserId, shopId: input.shopId }) || [];
+      return { contractVersion: WATERMARK_CONTRACT_VERSION, templates: templates.filter(template => validTemplate(template, actor, input.shopId))
+        .slice(0, 100).map(template => ({ id: template.id, name: template.name, position: positionSchema.safeParse(template.position).success ? template.position : 'bottom-right',
+          opacity: Number.isInteger(template.opacity) && template.opacity >= 1 && template.opacity <= 100 ? template.opacity : 60,
+          scale: Number.isInteger(template.scale) && template.scale! >= 5 && template.scale! <= 100 ? template.scale! : 25, isDefault: template.isDefault === true })) };
+    },
     async preview(actor: SourceListingWatermarkActor, raw: unknown) {
       const parsed = watermarkPreviewRequestSchema.safeParse(raw);
       if (!parsed.success) fail('watermark_invalid_request', 400, '水印配置或图片选择无效');
@@ -251,7 +302,9 @@ export function createSourceListingWatermarkService(options: Dependencies) {
               sourceMediaKey: image.item.sourceMediaKey || null, sourceAssetId: image.item.sourceAssetId || null, sourceSha256: image.sourceSha256,
               deviceSessionId: actor.sessionId, workflowId: input.listingWorkflowId, shopId: input.shopId,
               previewHash: input.previewHash, requestHash, skuKey: image.item.skuKey, slotKey: image.item.slotKey,
-              config: input.config, erpGenerationChargeMinor: 0, storageNamespaceId: storage.namespaceId } });
+              config: input.config, ...(prepared.watermarkTemplate ? { watermarkTemplateId: prepared.watermarkTemplate.id,
+                watermarkTemplateUpdatedAt: prepared.watermarkTemplate.updatedAt, watermarkSha256: prepared.watermarkSha256 } : {}),
+              erpGenerationChargeMinor: 0, storageNamespaceId: storage.namespaceId } });
         }
         const next = structuredClone(prepared.draft); next.revision += 1; next.draftVersion += 1;
         next.updatedAt = (options.now?.() || new Date()).toISOString();
@@ -267,9 +320,12 @@ export function createSourceListingWatermarkService(options: Dependencies) {
           draftVersion: next.draftVersion, occurredAt: next.updatedAt, details: { contractVersion: WATERMARK_CONTRACT_VERSION,
             operation: 'WATERMARK', idempotencyKey: input.idempotencyKey, requestHash, deviceSessionId: actor.sessionId,
             previewHash: input.previewHash, assetIds: assets.map(asset => asset.id), sourceCaptureSnapshotId: input.snapshotId,
-            sourceCaptureHash: prepared.draft.sourceCaptureHash, items: input.items, config: input.config, erpGenerationChargeMinor: 0 } });
+            sourceCaptureHash: prepared.draft.sourceCaptureHash, items: input.items, config: input.config,
+            ...(prepared.watermarkTemplate ? { watermarkTemplateId: prepared.watermarkTemplate.id,
+              watermarkTemplateUpdatedAt: prepared.watermarkTemplate.updatedAt, watermarkSha256: prepared.watermarkSha256 } : {}),
+            erpGenerationChargeMinor: 0 } });
         commitStarted = true;
-        const committed = await options.commit({ actor, binding: input, requestHash, next, assets });
+        const committed = await options.commit({ actor, binding: input, requestHash, next, assets, watermarkTemplate: prepared.watermarkTemplate });
         if (committed.replayed) for (const uploaded of uploads) await Promise.resolve(storage.deleteUploaded(uploaded)).catch(() => {});
         return { ...committed, assets: committed.assets.map(publicAsset), applied: committed.assets.length };
         } catch (error) {

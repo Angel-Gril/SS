@@ -50,7 +50,7 @@ beforeAll(async () => {
     for (const match of source.matchAll(/(?:from\s+|import\s*\()\s*['"]([^'"]+)['"]/gu)) {
       const specifier = match[1]!;
       if (specifier.startsWith('.')) {
-        pending.push(relative(sourceRoot, resolve(dirname(join(sourceRoot, name)), specifier.replace(/\.js$/u, '.ts'))).split(sep).join('/'));
+        pending.push(relative(sourceRoot, resolve(dirname(join(sourceRoot, name)), /\.[^/]+$/u.test(specifier) ? specifier.replace(/\.js$/u, '.ts') : `${specifier}.ts`)).split(sep).join('/'));
       } else if (specifier === 'shared' || specifier.startsWith('shared/')) {
         pending.push(`packages/shared/src/${specifier === 'shared' ? 'index' : specifier.slice(7)}.ts`);
       } else if (!specifier.startsWith('node:')) {

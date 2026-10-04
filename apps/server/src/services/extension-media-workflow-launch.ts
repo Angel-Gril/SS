@@ -22,6 +22,13 @@ import { isAiImageEditProviderCanvasSupported, resolveAiImageEditProviderContrac
 import type { AiImageEditStorageReadiness } from './ai-image-edit-storage.js';
 import type { AiPromptRenderingProfile } from './ai-image-edit-prompt-contract.js';
 import type { SourceListingAiMediaTarget } from 'shared/ozon-listing-draft';
+import {
+  aiImageTranslationRuntimePrice, assertAiImageTranslationRuntime, buildAiImageTranslationRuntime,
+  parseAiImageTranslationRuntime, resolvePaidAiImageTranslationReadiness,
+  type AiImageTranslationPrice, type AiImageTranslationPriceConfirmation,
+  type AiImageTranslationRuntimeContract,
+} from './ai-image-translation-runtime-contract.js';
+import type { AiImageTranslationStorageReadiness } from './ai-image-translation-storage.js';
 
 /**
  * Creation is deliberately a separate command contract from the B1 cancel/retry
@@ -39,6 +46,7 @@ export interface ExtensionMediaTranslationCreateCommand extends Record<string, u
   sourceMediaKey: string;
   draftRevision: number;
   workflowOperationKey: string;
+  priceConfirmation?: AiImageTranslationPriceConfirmation;
 }
 
 interface ExtensionMediaWorkflowCreateBase extends Record<string, unknown> {
@@ -91,6 +99,10 @@ export interface ExtensionMediaTranslationSettings {
   estimatedCostCents: number;
   globalDailyBudgetCents?: number;
   categoryGlossaryJson: string;
+  baseUrl?: string;
+  hasApiKey?: boolean;
+  currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
 }
 
 export interface ExtensionMediaTranslationReadiness {
@@ -98,7 +110,8 @@ export interface ExtensionMediaTranslationReadiness {
   ready: boolean;
   reasonCode: string;
   reason: string;
-  testOnly: true;
+  testOnly: boolean;
+  price?: AiImageTranslationPrice;
 }
 
 export interface ExtensionMediaTranslationExistingWorkflow {
@@ -116,6 +129,8 @@ export interface ExtensionMediaTranslationExistingWorkflow {
   suiteId?: string | null;
   sourceMediaKey: string | null;
   jobId: string | null;
+  estimatedCostCents?: number | null;
+  translationRuntimeContract?: AiImageTranslationRuntimeContract | null;
 }
 
 export interface ExtensionMediaStandaloneExistingWorkflow
@@ -318,7 +333,7 @@ export function parseExtensionMediaTranslationCreateCommand(
 ): ExtensionMediaTranslationCreateCommand | null {
   if (value?.schemaVersion !== EXTENSION_MEDIA_TRANSLATION_CREATE_VERSION) return null;
   const allowed = new Set([
-    'schemaVersion', 'action', 'sourceMediaKey', 'draftRevision', 'workflowOperationKey',
+    'schemaVersion', 'action', 'sourceMediaKey', 'draftRevision', 'workflowOperationKey', 'priceConfirmation',
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Media creation command contains unknown fields');
@@ -326,21 +341,36 @@ export function parseExtensionMediaTranslationCreateCommand(
   if (value.action !== 'CREATE_TRANSLATION') {
     throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Media creation action is invalid');
   }
+  let priceConfirmation: AiImageTranslationPriceConfirmation | undefined;
+  if (value.priceConfirmation !== undefined) {
+    const confirmation = value.priceConfirmation && typeof value.priceConfirmation === 'object'
+      && !Array.isArray(value.priceConfirmation) ? value.priceConfirmation as Record<string, unknown> : {};
+    if (Object.keys(confirmation).sort().join(',') !== 'currency,maximumCostCents,quoteFingerprint'
+      || !['CNY', 'USD'].includes(String(confirmation.currency))
+      || !Number.isSafeInteger(confirmation.maximumCostCents) || Number(confirmation.maximumCostCents) < 1
+      || !/^[a-f0-9]{64}$/u.test(String(confirmation.quoteFingerprint))) {
+      throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Image translation price confirmation is invalid');
+    }
+    priceConfirmation = { currency: confirmation.currency as AiImageProviderCurrency,
+      maximumCostCents: Number(confirmation.maximumCostCents), quoteFingerprint: String(confirmation.quoteFingerprint) };
+  }
   return {
     schemaVersion: EXTENSION_MEDIA_TRANSLATION_CREATE_VERSION,
     action: 'CREATE_TRANSLATION',
     sourceMediaKey: normalizedIdentifier(value.sourceMediaKey, 'sourceMediaKey', 500),
     draftRevision: positiveInteger(value.draftRevision, 'draftRevision'),
     workflowOperationKey: normalizedIdentifier(value.workflowOperationKey, 'workflowOperationKey', 128),
+    ...(priceConfirmation ? { priceConfirmation } : {}),
   };
 }
 
 export function resolveExtensionMediaTranslationReadiness(input: {
   settings: ExtensionMediaTranslationSettings,
   production: boolean;
-  storageReadiness?: { ready: boolean; reason: string };
-}): ExtensionMediaTranslationReadiness {
+  storageReadiness?: AiImageTranslationStorageReadiness;
+}, resolveCapability = resolveAiImageProviderCapability): ExtensionMediaTranslationReadiness {
   const { settings, production, storageReadiness } = input;
+  if (settings.provider !== 'fake') return resolvePaidAiImageTranslationReadiness(settings, storageReadiness, resolveCapability);
   if (production) return {
     enabled: false,
     ready: false,
@@ -348,18 +378,11 @@ export function resolveExtensionMediaTranslationReadiness(input: {
     reason: 'Fake image translation is disabled in production',
     testOnly: true,
   };
-  if (!settings.enabled || settings.provider === 'disabled') return {
+  if (!settings.enabled) return {
     enabled: false,
     ready: false,
     reasonCode: 'MEDIA_CREATE_DISABLED',
     reason: 'Image translation is disabled',
-    testOnly: true,
-  };
-  if (settings.provider !== 'fake') return {
-    enabled: false,
-    ready: false,
-    reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED',
-    reason: 'Extension image translation currently permits only the fake provider',
     testOnly: true,
   };
   if (typeof settings.model !== 'string' || !settings.model.trim()) return {
@@ -393,16 +416,17 @@ export function resolveExtensionMediaTranslationReadiness(input: {
   };
 }
 
-function assertFakeTranslationSettings(
+function assertTranslationSettings(
   settings: ExtensionMediaTranslationSettings,
   production: boolean,
-  storageReadiness?: { ready: boolean; reason: string },
+  storageReadiness?: AiImageTranslationStorageReadiness,
+  resolveCapability = resolveAiImageProviderCapability,
 ) {
   const readiness = resolveExtensionMediaTranslationReadiness({
     settings,
     production,
     storageReadiness,
-  });
+  }, resolveCapability);
   if (readiness.ready) return;
   throw new ExtensionMediaWorkflowLaunchError(readiness.reasonCode, readiness.reason);
 }
@@ -427,7 +451,8 @@ export function createExtensionMediaTranslationLauncher(options: {
     draftVersion: number;
   }): Promise<{ id: string }>;
   getSettings(): Promise<ExtensionMediaTranslationSettings>;
-  getStorageReadiness?(): Promise<{ ready: boolean; reason: string }>;
+  getStorageReadiness?(): Promise<AiImageTranslationStorageReadiness>;
+  resolveCapability?: typeof resolveAiImageProviderCapability;
   resolvePrompt(input: {
     templateKey: string;
     variables: Record<string, string>;
@@ -488,10 +513,11 @@ export function createExtensionMediaTranslationLauncher(options: {
       }
     };
     const assertReadiness = (readiness: Awaited<ReturnType<typeof loadReadiness>>) => {
-      assertFakeTranslationSettings(
+      assertTranslationSettings(
         readiness.settings,
         options.production ?? process.env.NODE_ENV === 'production',
         readiness.storageReadiness,
+        options.resolveCapability,
       );
     };
     const ensureReadiness = async () => {
@@ -527,7 +553,6 @@ export function createExtensionMediaTranslationLauncher(options: {
     const assertMatchingWorkflow = (candidate: ExtensionMediaTranslationExistingWorkflow) => {
       if (candidate.ownerUserId !== input.ownerUserId
         || candidate.operation !== 'IMAGE_TRANSLATE'
-        || candidate.provider !== 'fake'
         || candidate.contextType !== 'listing-draft'
         || candidate.contextId !== input.listingWorkflowId
         || candidate.contextDraftRevision !== command.draftRevision
@@ -539,6 +564,25 @@ export function createExtensionMediaTranslationLauncher(options: {
           'Image translation intent is bound to another source or draft context',
         );
       }
+      if (candidate.provider !== 'fake') {
+        let frozen: AiImageTranslationRuntimeContract;
+        try {
+          frozen = parseAiImageTranslationRuntime(candidate.translationRuntimeContract);
+          if (frozen.provider !== candidate.provider || frozen.model !== candidate.model
+            || frozen.maximumCostCents !== candidate.estimatedCostCents) throw new Error();
+        } catch {
+          throw new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_CONFIG_CHANGED', 'The frozen image translation runtime is missing or invalid');
+        }
+        assertPriceConfirmation(aiImageTranslationRuntimePrice(frozen));
+      }
+    };
+    const assertPriceConfirmation = (price: AiImageTranslationPrice) => {
+      const confirmation = command.priceConfirmation;
+      if (!confirmation || confirmation.currency !== price.currency
+        || confirmation.maximumCostCents !== price.maximumCostCents
+        || confirmation.quoteFingerprint !== price.quoteFingerprint) {
+        throw new ExtensionMediaWorkflowLaunchError('MEDIA_PRICE_CONFIRMATION_REQUIRED', 'Confirm the current single-image translation price before creating paid work');
+      }
     };
     const resultFor = (candidate: ExtensionMediaTranslationExistingWorkflow) => ({
       workflowId: candidate.id,
@@ -547,6 +591,7 @@ export function createExtensionMediaTranslationLauncher(options: {
       status: candidate.status,
       revision: candidate.revision,
       replayed: true,
+      ...(candidate.translationRuntimeContract ? { price: aiImageTranslationRuntimePrice(parseAiImageTranslationRuntime(candidate.translationRuntimeContract)) } : {}),
     });
     const recoverEnqueueRace = async () => {
       const authoritative = await loadExistingWorkflow();
@@ -571,6 +616,10 @@ export function createExtensionMediaTranslationLauncher(options: {
             'MEDIA_PROVIDER_CONFIG_CHANGED',
             'The frozen image translation provider configuration changed',
           );
+        }
+        if (candidate.provider !== 'fake') {
+          try { assertAiImageTranslationRuntime(candidate.translationRuntimeContract, settings, Number(candidate.estimatedCostCents)); }
+          catch { throw new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_CONFIG_CHANGED', 'The frozen image translation endpoint, credential or price changed'); }
         }
         if (!candidate.jobId) {
           throw new ExtensionMediaWorkflowLaunchError(
@@ -647,6 +696,8 @@ export function createExtensionMediaTranslationLauncher(options: {
       );
     }
     if (requiresPaidGlossary) assertReadiness(readiness);
+    const paidQuote = requiresPaidGlossary ? buildAiImageTranslationRuntime(settings) : null;
+    if (paidQuote) assertPriceConfirmation(paidQuote.price);
 
     let resolved: Awaited<ReturnType<typeof options.resolvePrompt>>;
     try {
@@ -742,6 +793,7 @@ export function createExtensionMediaTranslationLauncher(options: {
       dailyLimit: settings.dailyLimit,
       estimatedCostCents: settings.estimatedCostCents,
       globalDailyBudgetCents: settings.globalDailyBudgetCents,
+      ...(paidQuote ? { translationRuntimeContract: paidQuote.runtime } : {}),
       prompt: '',
       resolvedPrompt: resolved.resolvedPrompt,
       resolvedNegativePrompt: resolved.resolvedNegativePrompt,
@@ -799,6 +851,7 @@ export function createExtensionMediaTranslationLauncher(options: {
       status: created.workflow.status,
       revision: created.workflow.revision,
       replayed: created.replayed,
+      ...(paidQuote ? { price: paidQuote.price } : {}),
     };
   };
 }

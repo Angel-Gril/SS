@@ -21,6 +21,8 @@ import {
 } from '../services/ozon-listing-payload-compiler.js';
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from '../services/source-listing-sku-identity.js';
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from '../services/ozon-v3-import-package-contract.js';
+import { videoSchemaRevision } from '../services/source-listing-video-media.js';
+import type { OzonNormalizedAttributeSchema } from 'shared';
 
 const fixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
@@ -208,6 +210,64 @@ function expectCompileCode(input: ReturnType<typeof buildInput>, code: string) {
     expect.objectContaining({ code }) as OzonListingPayloadCompileError,
   );
 }
+
+describe('bound draft video compilation', () => {
+  const official = 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4';
+  function withVideos() {
+    const input = buildInput();
+    const attributeSchema: OzonNormalizedAttributeSchema = {
+      schemaVersion: 'ozon-attribute-schema/v1', shopId: input.draft.shopId,
+      descriptionCategoryId: input.draft.category!.categoryId, typeId: input.draft.category!.typeId,
+      language: 'DEFAULT', catalogRevision: input.draft.category!.catalogRevision, definitionsHash: 'a'.repeat(64),
+      fields: [21841, 21842, 21843, 21844, 21845, 21846, 22964, 23256, 22336].map(attributeId => ({ attributeId,
+        name: 'Видео', description: '', sourceType: 'String', valueType: 'STRING', cardinality: 'SINGLE', required: false,
+        dictionaryId: null, valuePolicy: 'FREE_TEXT', ownership: 'MEDIA', editorMode: 'MEDIA_WORKBENCH', aiSuggestionAllowed: false })),
+    };
+    input.validationReport.schemaRevision = videoSchemaRevision(attributeSchema);
+    input.draft.validation.report = structuredClone(input.validationReport) as unknown as Record<string, unknown>;
+    input.draft.media.videoBindings = [{ skuKey: 'sku-0', role: 'MAIN', url: official, sourceMediaKey: null,
+      sourceCaptureSnapshotId: input.draft.sourceCaptureSnapshotId, sourceCaptureHash: input.draft.sourceCaptureHash,
+      approvedByUserId: input.draft.ownerUserId, approvedAt: input.draft.updatedAt },
+    { skuKey: 'sku-1', role: 'RICH_CONTENT', url: official, sourceMediaKey: null,
+      sourceCaptureSnapshotId: input.draft.sourceCaptureSnapshotId, sourceCaptureHash: input.draft.sourceCaptureHash,
+      approvedByUserId: input.draft.ownerUserId, approvedAt: input.draft.updatedAt }];
+    return { ...input, attributeSchema };
+  }
+  it('preserves official complex_id and compiles rich video without placing either video in images', () => {
+    const input = withVideos(); const result = compileOzonListingPayload(input);
+    expect(result.payload.items[0]!.attributes).toContainEqual({ id: 21843, complex_id: 100002, values: [{ value: official }] });
+    const rich = result.payload.items[1]!.attributes!.find(attribute => attribute.id === 22336)!;
+    expect(rich.complex_id).toBe(0);
+    expect(JSON.parse(rich.values[0]!.value)).toMatchObject({ content: [{ widgetName: 'raVideo', sources: [{ type: 'video/mp4', src: official }] }] });
+    expect(result.payload.items.every(item => item.images.every(url => !url.endsWith('.mp4')))).toBe(true);
+    const without = withVideos(); without.draft.media.videoBindings = [];
+    expect(compileOzonListingPayload(without).canonicalHash).not.toBe(result.canonicalHash);
+  });
+  it('requires the raw current schema only when a video is bound', () => {
+    const input = withVideos(); const { attributeSchema: _schema, ...missing } = input;
+    expect(() => compileOzonListingPayload(missing)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+    const noVideos = buildInput(); expect(() => compileOzonListingPayload(noVideos)).not.toThrow();
+  });
+  it.each(['sourceCaptureHash', 'sourceCaptureSnapshotId', 'approvedByUserId', 'skuKey', 'url'])('rejects forged or stale video %s', key => {
+    const input = withVideos(); Object.assign(input.draft.media.videoBindings![0]!, { [key]: 'forged' });
+    expect(() => compileOzonListingPayload(input)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+  });
+  it('rejects duplicate video targets and obsolete or unsupported schema', () => {
+    const input = withVideos(); input.draft.media.videoBindings!.push(structuredClone(input.draft.media.videoBindings![0]!));
+    expect(() => compileOzonListingPayload(input)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+    const obsolete = withVideos(); obsolete.attributeSchema.definitionsHash = 'b'.repeat(64);
+    expect(() => compileOzonListingPayload(obsolete)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+    const unsupported = withVideos(); unsupported.attributeSchema.fields = [];
+    expect(() => compileOzonListingPayload(unsupported)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+  });
+  it('rejects conflicting rich-content instead of discarding existing content', () => {
+    const input = withVideos(); input.validationReport.normalizedAttributes.push({ key: '22336', attributeId: 22336,
+      values: [{ value: '{"version":0.3,"content":[]}' }], source: 'MANUAL', reviewed: true, evidence: ['review'] });
+    input.validationReport.fieldDecisions.push({ key: '22336', attributeId: 22336, valuePolicy: 'FREE_TEXT', readinessImpact: 'OZON_IMPORT', accepted: true, issueCodes: [] });
+    input.draft.validation.report = structuredClone(input.validationReport) as unknown as Record<string, unknown>;
+    expect(() => compileOzonListingPayload(input)).toThrowError(expect.objectContaining({ code: 'OZON_LISTING_COMPILE_VIDEOS_INVALID' }));
+  });
+});
 
 function rebindCaptureAuthority(input: ReturnType<typeof buildInput>) {
   input.draft.sourceCaptureHash = hashCapture(input.capture);

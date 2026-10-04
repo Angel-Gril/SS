@@ -17,6 +17,7 @@ import {
   sourceProductCapturePayloadBytes,
   validateSourceProductCaptureV2Submission,
   type OzonListingDraft,
+  type OzonNormalizedAttributeSchema,
   type OzonListingSkuPackagingItem,
   type OzonListingSkuPricingV1,
   type OzonListingVatRate,
@@ -32,6 +33,7 @@ import {
 } from './source-listing-sku-identity.js';
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from './ozon-v3-import-package-contract.js';
 import { hasSourceListingSkuPackaging, projectSourceListingSkuPackaging } from './source-listing-sku-packaging.js';
+import { appendBoundDraftVideoAttributes, SourceListingVideoError } from './source-listing-video-media.js';
 
 export const OZON_LISTING_PAYLOAD_COMPILER_VERSION = 'ozon-listing-payload-compiler/v1' as const;
 export const OZON_LISTING_RESOLVED_IMAGES_CONTRACT_VERSION = 'ozon-listing-resolved-images/v1' as const;
@@ -56,6 +58,7 @@ export type OzonListingPayloadCompileErrorCode =
   | 'OZON_LISTING_COMPILE_PRICING_INVALID'
   | 'OZON_LISTING_COMPILE_PACKAGE_INVALID'
   | 'OZON_LISTING_COMPILE_IMAGES_INVALID'
+  | 'OZON_LISTING_COMPILE_VIDEOS_INVALID'
   | 'OZON_LISTING_COMPILE_ATTRIBUTE_UNSUPPORTED'
   | 'OZON_LISTING_COMPILE_OFFER_ID_INVALID';
 
@@ -123,6 +126,7 @@ export interface CompileOzonListingPayloadInput {
   capture: SourceProductCaptureV2;
   validationReport: OzonAttributeValidationReport | unknown;
   resolvedImages: OzonListingResolvedImagesV1;
+  attributeSchema?: OzonNormalizedAttributeSchema;
 }
 
 const issueSchema = z.object({
@@ -810,6 +814,13 @@ export function compileOzonListingPayload(input: CompileOzonListingPayloadInput)
   const packages = new Map(skuKeys.map((skuKey) => [skuKey, packageFacts(draft, capture, report, skuKey)]));
   const packageContract = packages.get(skuKeys[0]!)!.contract;
   const attributes = attributesBySku(report, skuKeys);
+  try {
+    for (const skuKey of skuKeys) attributes.set(skuKey, appendBoundDraftVideoAttributes(draft, skuKey,
+      input.attributeSchema, attributes.get(skuKey)!, report.schemaRevision));
+  } catch (error) {
+    if (error instanceof SourceListingVideoError) fail('OZON_LISTING_COMPILE_VIDEOS_INVALID', error.message);
+    throw error;
+  }
   const images = imagesBySku(draft, skuKeys, input.resolvedImages);
 
   const seenOfferIds = new Set<string>();

@@ -5,6 +5,7 @@ import {
   AiMediaCapabilityError,
   assertAiMediaCapability,
   resolveAiImageProviderCapability,
+  hasExactAiMediaSandboxEvidence,
   type AiMediaOperation,
 } from './ai-image-provider-capabilities.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
@@ -20,6 +21,10 @@ import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
 import { assertWanxHostedEditPrompt, isWanxHostedEdit } from './ai-image-edit-provider-contract.js';
 import { assertWanxImageToImageInput, WANX_IMAGE_TO_IMAGE_PROMPT_PROFILE } from './ai-image-wanx-image-to-image.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
+import {
+  parseAiImageTranslationRuntime,
+  type AiImageTranslationRuntimeContract,
+} from './ai-image-translation-runtime-contract.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
 export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
@@ -156,6 +161,7 @@ export interface CreateAiImageTranslationWorkflowInput {
   dailyLimit: number;
   estimatedCostCents: number;
   globalDailyBudgetCents?: number;
+  translationRuntimeContract?: AiImageTranslationRuntimeContract | null;
   prompt?: string | null;
   resolvedPrompt?: string | null;
   resolvedNegativePrompt?: string | null;
@@ -603,6 +609,7 @@ export function createAiImageTranslationWorkflowFingerprint(input: Omit<
     templateReleaseId: input.templateReleaseId || null,
     templateChecksum: input.templateChecksum || null,
     templateSnapshot: input.templateSnapshot || null,
+    ...(input.translationRuntimeContract ? { translationRuntimeContract: input.translationRuntimeContract } : {}),
     context: input.context,
   });
 }
@@ -722,19 +729,30 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
           'A verified positive image translation cost is required before paid dispatch',
         );
       }
-      const options = normalizeAiImageTranslationOptions(input);
+      const translationOptions = normalizeAiImageTranslationOptions(input);
       try {
         const capability = assertAiMediaCapability({
           provider: input.provider,
           model: input.model,
           operation: 'IMAGE_TRANSLATE',
           inputCount: 1,
-        });
-        if (input.provider !== 'fake' && capability.evidenceLevel !== 'sandbox-verified') {
+        }, options.resolveCapability);
+        if (input.provider !== 'fake') {
+          let runtime: AiImageTranslationRuntimeContract;
+          try { runtime = parseAiImageTranslationRuntime(input.translationRuntimeContract); }
+          catch { throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'Paid image translation requires a frozen endpoint, credential and price'); }
+          if (runtime.provider !== input.provider || runtime.model !== input.model
+            || runtime.maximumCostCents !== input.estimatedCostCents
+            || !hasExactAiMediaSandboxEvidence({ capability, provider: input.provider, model: input.model,
+              baseUrl: 'https://dashscope.aliyuncs.com/api/v1', operation: 'IMAGE_TRANSLATE',
+              inputTransport: 'public_url', resultMode: 'async' })) {
           throw new AiMediaWorkflowError(
             'PROVIDER_NOT_READY',
             'Image translation provider has not passed its sandbox capability gate',
           );
+          }
+        } else if (input.estimatedCostCents !== 0 || input.translationRuntimeContract != null) {
+          throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'Fake image translation must have zero cost and no paid runtime');
         }
       } catch (error) {
         if (error instanceof AiMediaCapabilityError) {
@@ -747,7 +765,7 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       }
       let result;
       try {
-        result = await repository.createImageTranslation({ ...input, options });
+        result = await repository.createImageTranslation({ ...input, options: translationOptions });
       } catch (error: any) {
         if (error?.code === 'IMAGE_TRANSLATION_QUOTA_EXCEEDED') {
           throw new AiMediaWorkflowError('IMAGE_TRANSLATION_QUOTA_EXCEEDED', error.message);

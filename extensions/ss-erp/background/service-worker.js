@@ -6585,7 +6585,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (['ss-erp:source-workbench-watermark-preview', 'ss-erp:source-workbench-watermark-apply'].includes(message.type)) {
+  if (['ss-erp:source-workbench-video-read', 'ss-erp:source-workbench-video-save'].includes(message.type)) {
+    const save = message.type.endsWith('-save'); let submitted = false;
+    resolveCurrentSourceWorkbenchAuthority(message, sender).then(async ({ handoff, listing }) => {
+      const request = message.request; const binding = request?.binding;
+      if (Object.keys(message).some(key => !['type','platform','sourceProductId','listingWorkflowId','request'].includes(key))
+        || !binding || binding.snapshotId !== handoff.snapshotId || binding.supplyGoodsId !== handoff.supplyGoodsId
+        || binding.shopId !== listing.shopId || binding.listingWorkflowId !== listing.listingWorkflowId) {
+        throw Object.assign(new Error('视频请求不属于当前草稿'), { outcome: 'NOT_SUBMITTED' });
+      }
+      submitted = save;
+      const response = await getByokDeviceTransport().post(`/api/extension-device/source-workbench/video/${save ? 'save' : 'read'}`,
+        request, { requiredScope: save ? 'listing:write' : 'listing:review' });
+      if (response?.state !== 'response' || response.body?.code !== 1 || response.body.data?.state !== 'ready') {
+        throw Object.assign(new Error(response?.body?.msg || '视频草稿处理未完成'), {
+          outcome: response?.state === 'response' ? 'NOT_SUBMITTED' : save ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED' });
+      }
+      return response.body.data;
+    }).then(result => sendResponse({ ok: true, result })).catch(error => sendResponse({ ok: false,
+      error: error.message || String(error), code: error.code || null, outcome: error.outcome || (submitted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED') }));
+    return true;
+  }
+
+  if (['ss-erp:source-workbench-watermark-preview', 'ss-erp:source-workbench-watermark-apply', 'ss-erp:source-workbench-watermark-templates'].includes(message.type)) {
     const apply = message.type.endsWith('-apply');
     let submitted = false;
     resolveCurrentSourceWorkbenchAuthority(message, sender).then(async ({ handoff, listing }) => {
@@ -6597,7 +6619,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         throw Object.assign(new Error('水印请求不属于当前草稿'), { outcome: 'NOT_SUBMITTED' });
       }
       submitted = apply;
-      const response = await getByokDeviceTransport().post(`/api/extension-device/workbench-watermark/${apply ? 'apply' : 'preview'}`,
+      const action = message.type.endsWith('-templates') ? 'templates' : apply ? 'apply' : 'preview';
+      const response = await getByokDeviceTransport().post(`/api/extension-device/workbench-watermark/${action}`,
         input, { requiredScope: 'media:execute' });
       if (response?.state !== 'response' || response.body?.code !== 1 || !response.body.data) {
         throw Object.assign(new Error(response?.body?.msg || '水印处理未完成'), {
@@ -6901,6 +6924,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           draftVersion: listing.draftVersion,
           sourceMediaKey: requestedSourceMediaKey,
           workflowOperationKey: intent.workflowOperationKey,
+          ...(message.priceConfirmation === undefined ? {} : { priceConfirmation: message.priceConfirmation }),
         });
         await clearSourceTranslationIntent(intent.identity);
         return { handoff, result, launch };

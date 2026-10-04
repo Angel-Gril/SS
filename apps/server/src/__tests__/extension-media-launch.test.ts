@@ -124,6 +124,21 @@ const previewBody = {
 };
 
 describe('extension media launch route', () => {
+  it('publishes a paid translation quote while filtering private readiness configuration', async () => {
+    const state = await setup();
+    const price = { currency: 'CNY', unitCostCents: 14, maximumCostCents: 14, quoteFingerprint: 'a'.repeat(64) };
+    try {
+      state.getCapability.mockResolvedValue({ ...(await state.getCapability()), testOnly: false, price,
+        apiKey: 'forbidden', baseUrl: 'https://private-config.example', credentialRevision: { recordId: 'secret-binding' } } as any);
+      const response = await state.app.inject({ method: 'GET', url });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.capability).toMatchObject({ testOnly: false, price });
+      expect(response.body).not.toContain('forbidden');
+      expect(response.body).not.toContain('private-config');
+      expect(response.body).not.toContain('secret-binding');
+    } finally { await state.app.close(); }
+  });
+
   it('returns only normalized source preview bytes for the exact live draft and SKU', async () => {
     const state = await setup();
     try {
@@ -451,15 +466,7 @@ describe('extension media launch route', () => {
     expect(capabilitiesStart).toBeGreaterThan(registrationStart);
     expect(capabilitiesEnd).toBeGreaterThan(capabilitiesStart);
     const block = source.slice(capabilitiesStart, capabilitiesEnd);
-    for (const key of [
-      'feature_image_translate',
-      'ai_image_translation_provider',
-      'ai_image_translation_model',
-      'ai_user_daily_image_translation_limit',
-      'ai_image_translation_cost_cents',
-    ]) {
-      expect(block.match(new RegExp(`getConfig\\('${key}'\\)`, 'gu'))).toHaveLength(1);
-    }
+    expect(block.match(/getExtensionMediaTranslationSettings\(\)/gu)).toHaveLength(1);
     expect(block.match(/loadExtensionStandaloneSnapshot\(\)/gu)).toHaveLength(1);
     expect(block).not.toMatch(/getRuntimeConfigForStorage\(\)/u);
     expect(block).not.toMatch(/getExtensionStandaloneReadiness/u);

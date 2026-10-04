@@ -21,6 +21,16 @@ export function createPrismaSourceListingWatermarkService(options: { client: Pri
     if (!rows.length) throw new SourceListingWatermarkError('watermark_context_stale', 409, '当前来源快照或店铺已变化，请刷新');
   }
   return createSourceListingWatermarkService({ repository, loadCaptureAuthority: captures.loadCaptureAuthority, assertActiveBinding,
+    loadOwnedWatermarkTemplates: async input => {
+      const shop = await client.shop.findFirst({ where: { id: input.shopId, userId: input.ownerUserId, status: 'ACTIVE', platform: 'OZON' }, select: { name: true } });
+      if (!shop) return [];
+      const rows = await client.watermarkTemplate.findMany({ where: { userId: input.ownerUserId, type: 'image',
+        ...(input.templateId ? { id: input.templateId } : {}),
+        OR: [{ shopId: null }, { shopId: input.shopId }, ...(shop.name ? [{ shopId: shop.name }] : [])] },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }], take: 100 });
+      // Legacy name bindings are resolved using the current server-owned shop, never caller input.
+      return rows.map(row => ({ ...row, shopId: row.shopId === null ? null : input.shopId, updatedAt: row.updatedAt.toISOString() }));
+    },
     loadOwnedAssets: async input => {
       const rows = await client.mediaAsset.findMany({ where: { ownerUserId: input.ownerUserId, id: { in: input.assetIds } } });
       return rows as unknown as SourceListingWatermarkAsset[];
@@ -55,6 +65,21 @@ export function createPrismaSourceListingWatermarkService(options: { client: Pri
         return { draft, assets: assets as unknown as SourceListingWatermarkAsset[], replayed: true };
       }
       assertWatermarkDraftContext(current, input.binding, input.actor.ownerUserId);
+      if (input.binding.config.type === 'image') {
+        const rows = await sql.$queryRawUnsafe<Array<{ id: string; userId: string; shopId: string | null; imageUrl: string | null; updatedAt: Date }>>(`
+          SELECT template."id", template."user_id" AS "userId", template."shop_id" AS "shopId",
+            template."image_url" AS "imageUrl", template."updated_at" AS "updatedAt"
+          FROM "watermark_templates" template JOIN "shops" shop ON shop."id" = $3 AND shop."user_id" = $1
+          WHERE template."id" = $2 AND template."user_id" = $1 AND template."type" = 'image'
+            AND (template."shop_id" IS NULL OR template."shop_id" = shop."id" OR template."shop_id" = shop."name")
+          FOR UPDATE OF template`, input.actor.ownerUserId, input.binding.config.templateId, input.binding.shopId);
+        const template = rows[0]; const frozen = input.watermarkTemplate;
+        if (rows.length !== 1 || !template || !frozen || template.id !== frozen.id || template.userId !== frozen.userId
+          || template.imageUrl !== frozen.imageUrl || template.updatedAt.toISOString() !== frozen.updatedAt
+          || (template.shopId === null ? null : input.binding.shopId) !== frozen.shopId) {
+          throw new SourceListingWatermarkError('watermark_preview_changed', 409, '图案水印模板已变化，请重新预览');
+        }
+      }
       for (const asset of input.assets) await tx.mediaAsset.create({ data: { ...asset, kind: 'IMAGE_PROCESSED',
         sourceMediaKey: asset.sourceMediaKey || null, sourceUrl: asset.sourceUrl || null, metadata: asset.metadata as Prisma.InputJsonValue } });
       const draft = await applySourceListingDraftCasInTransaction(sql, { draftId: current.id, ownerUserId: input.actor.ownerUserId,

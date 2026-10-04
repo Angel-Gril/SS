@@ -1,5 +1,13 @@
 // Selection and progress only. The existing ERP command owner validates every
 // source, draft, device, permission, quota and translation provider decision.
+export function normalizeTranslationPrice(value) {
+  if (value == null) return null;
+  if (!['CNY', 'USD'].includes(value.currency) || !Number.isSafeInteger(value.unitCostCents) || value.unitCostCents < 1
+    || !Number.isSafeInteger(value.maximumCostCents) || value.maximumCostCents < value.unitCostCents || value.maximumCostCents > 100_000_000
+    || !/^[a-f0-9]{64}$/u.test(value.quoteFingerprint)) throw new Error('图片翻译报价无效，请重新读取');
+  return Object.freeze({ currency: value.currency, unitCostCents: value.unitCostCents,
+    maximumCostCents: value.maximumCostCents, quoteFingerprint: value.quoteFingerprint });
+}
 export function createTranslationFlow({ getContext, getSelectedMedia, submit, onState = () => {} }) {
   let binding = '', busy = false, unknown = false, error = '';
   let items = new Map();
@@ -13,7 +21,7 @@ export function createTranslationFlow({ getContext, getSelectedMedia, submit, on
     if (busy) return;
     binding = ''; unknown = false; error = ''; items = new Map(); emit();
   }
-  async function start() {
+  async function start(options = {}) {
     if (busy) return state();
     const context = getContext();
     if (!context?.listingWorkflowId) throw new Error('请先创建当前店铺草稿');
@@ -31,7 +39,8 @@ export function createTranslationFlow({ getContext, getSelectedMedia, submit, on
         if (identity() !== current) throw Object.assign(new Error('商品或草稿已变化，后续图片未提交'), { outcome: 'NOT_SUBMITTED' });
         items.set(item.key, { sourceMediaKey: item.key, status: 'SUBMITTING' }); emit();
         try {
-          const response = await submit({ listingWorkflowId: context.listingWorkflowId, sourceMediaKey: item.key });
+          const response = await submit({ listingWorkflowId: context.listingWorkflowId, sourceMediaKey: item.key,
+            ...(options.priceConfirmation ? { priceConfirmation: Object.freeze({ ...options.priceConfirmation }) } : {}) });
           const data = response?.data;
           const result = data?.result ?? data;
           if (data?.state !== 'completed' || !result?.workflowId || !['QUEUED', 'RUNNING', 'SUCCEEDED'].includes(result.status)) {

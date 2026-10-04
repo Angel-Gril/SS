@@ -4,6 +4,7 @@ import type { AiImageTranslationProvider } from '../services/ai-image-translatio
 import { AiImageJobError, type AiImageJobRecord, type AiImageJobRepository } from '../services/ai-image-jobs.js';
 import { AiCostLedgerError } from '../services/ai-cost-ledger.js';
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
+import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 import {
   AI_IMAGE_TRANSLATION_QUEUE_JOB_OPTIONS,
   aiImageTranslationPollJobId,
@@ -73,6 +74,82 @@ const runtimeConfig = async () => ({
 });
 
 describe('AI image translation worker recovery', () => {
+  it('rejects a credential rotation before dispatching a frozen paid translation', async () => {
+    const settings = { enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY' as const, estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' } };
+    const runtime = buildAiImageTranslationRuntime(settings).runtime;
+    const original = job('QUEUED', null);
+    const state = repositoryState({ ...original, provider: runtime.provider, model: runtime.model,
+      estimatedCostCents: 14, operationConfig: { ...original.operationConfig, translationRuntime: runtime } });
+    const provider: AiImageTranslationProvider = { name: runtime.provider, submit: vi.fn(), poll: vi.fn() };
+    const capability = { provider: runtime.provider, model: runtime.model, operations: ['IMAGE_TRANSLATE' as const],
+      maxReferences: 1, supportsMask: false, inputTransport: 'public_url' as const, resultMode: 'async' as const,
+      evidenceLevel: 'sandbox-verified' as const, evidence: 'fixture exact proof',
+      sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const,
+        inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({ ...settings, apiKey: 'test-only-key', costPerImageCents: 14,
+        credentialRevision: { ...settings.credentialRevision, revision: 3 } }),
+      resolveCapability: () => capability, resolveProvider: () => provider, uploadBuffer: vi.fn(), schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'PROVIDER_CONFIG_CHANGED' });
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unknown prior dispatch uncertain when a runtime gate changes', async () => {
+    const original = job('RUNNING', null);
+    const state = repositoryState({ ...original, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      providerDispatchedAt: new Date(), estimatedCostCents: 14 });
+    const provider: AiImageTranslationProvider = { name: 'dashscope-qwen-mt-image', submit: vi.fn(), poll: vi.fn() };
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({ enabled: false, provider: 'disabled', baseUrl: '', apiKey: '', model: '', costPerImageCents: 0 }),
+      resolveProvider: () => provider, uploadBuffer: vi.fn(), schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_OPERATION_DISABLED' });
+    expect(state.repository.markFailed).toHaveBeenCalledWith('translation-job-1', expect.objectContaining({ providerSubmissionUncertain: true }));
+    expect(vi.mocked(state.repository.markFailed).mock.calls[0]?.[1]).not.toHaveProperty('providerSubmissionRejected');
+    expect(provider.submit).not.toHaveBeenCalled();
+  });
+
+  it('dispatches one exact paid fixture, then restores the accepted task with GET-only polling', async () => {
+    const settings = { enabled: true, provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image',
+      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', currency: 'CNY' as const, estimatedCostCents: 14,
+      credentialRevision: { recordId: 'translation-key-1', revision: 2, updatedAt: '2026-10-04T00:00:00.000Z' } };
+    const runtime = buildAiImageTranslationRuntime(settings).runtime;
+    const original = job('QUEUED', null);
+    const state = repositoryState({ ...original, provider: runtime.provider, model: runtime.model,
+      estimatedCostCents: 14, operationConfig: { ...original.operationConfig, translationRuntime: runtime } });
+    let polls = 0;
+    const provider: AiImageTranslationProvider = { name: runtime.provider,
+      submit: vi.fn(async (_request, onAccepted) => {
+        const providerAcceptedAt = new Date();
+        await onAccepted('paid-translation-task', providerAcceptedAt);
+        return { providerJobId: 'paid-translation-task', providerAcceptedAt };
+      }),
+      poll: vi.fn(async () => ++polls === 1 ? { status: 'PENDING' as const, providerStatus: 'RUNNING' } : {
+        status: 'SUCCEEDED' as const, providerStatus: 'SUCCEEDED' as const, image: { buffer: png, mimeType: 'image/png' }, actualCostCents: 999,
+      }),
+    };
+    const capability = { provider: runtime.provider, model: runtime.model, operations: ['IMAGE_TRANSLATE' as const],
+      maxReferences: 1, supportsMask: false, inputTransport: 'public_url' as const, resultMode: 'async' as const,
+      evidenceLevel: 'sandbox-verified' as const, evidence: 'fixture exact proof',
+      sandboxEvidence: [{ endpointSha256: runtime.baseUrlSha256, operation: 'IMAGE_TRANSLATE' as const,
+        inputTransport: 'public_url' as const, resultMode: 'async' as const }] };
+    const overrides = {
+      repository: state.repository, getProviderConfig: async () => ({ ...settings, apiKey: 'test-only-key', costPerImageCents: 14 }),
+      resolveCapability: () => capability, resolveProvider: () => provider,
+      uploadBuffer: vi.fn(async () => ({ url: 'https://owned.example/result.png', backend: 'oss' })), schedulePoll: vi.fn(),
+    };
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, overrides)).resolves.toBe('pending');
+    expect(state.current()).toMatchObject({ status: 'RUNNING', providerJobId: 'paid-translation-task' });
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 2, overrides)).resolves.toBe('completed');
+    expect(provider.submit).toHaveBeenCalledTimes(1);
+    expect(provider.poll).toHaveBeenCalledTimes(2);
+    expect(state.repository.complete).toHaveBeenCalledTimes(1);
+  });
+
   it('uses custom queue IDs accepted by BullMQ for dispatch and polling', () => {
     class ValidatingJob extends Job {
       validate() {

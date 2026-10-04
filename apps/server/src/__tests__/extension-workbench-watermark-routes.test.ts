@@ -10,14 +10,29 @@ const request = { contractVersion: 'extension-workbench-watermark/v1', snapshotI
 async function fixture(overrides: { scope?: string[]; enabled?: boolean; revisionMismatch?: boolean } = {}) {
   const app = Fastify(); const preview = vi.fn(async () => ({ previewHash: 'a'.repeat(64), items: [] })) as never;
   const apply = vi.fn(async () => ({})) as never;
-  await app.register(extensionWorkbenchWatermarkRoutes, { service: { preview, apply },
+  const templates = vi.fn(async () => ({ contractVersion: 'extension-workbench-watermark/v1', templates: [] })) as never;
+  await app.register(extensionWorkbenchWatermarkRoutes, { service: { preview, apply, templates },
     authenticateDevice: async req => { (req as any).device = { ownerUserId: 'owner', actorUserId: 'owner', sessionId: 'session',
       scopes: overrides.scope || ['listing:write', 'media:execute'], allowedShopIds: ['shop'] }; },
     featureFlags: { evaluate: async feature => ({ enabled: overrides.enabled !== false, legacyAllowed: false,
       listingStage: 'v2_only', captureStage: null, reason: 'pilot_match', revision: overrides.revisionMismatch && feature === 'SOURCE_LISTING_WORKFLOW' ? 'other' : 'r1' }) } as SourceWorkflowFeatureFlagEvaluator });
-  return { app, preview, apply };
+  return { app, preview, apply, templates };
 }
 describe('extension workbench watermark routes', () => {
+  it('lists image templates using the same exact device/draft binding and no-store policy', async () => {
+    const f = await fixture(); const { items: _items, config: _config, ...binding } = request;
+    const response = await f.app.inject({ method: 'POST', url: '/templates', payload: binding });
+    expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('no-store');
+    expect(f.templates).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'owner', sessionId: 'session' }), binding);
+    await f.app.close();
+  });
+  it('accepts a template ID, not a caller image URL, for image watermark preview', async () => {
+    const f = await fixture(); const input = { ...request, config: { type: 'image', templateId: 'logo', position: 'center', opacity: 50, scale: 25 } };
+    const response = await f.app.inject({ method: 'POST', url: '/preview', payload: input });
+    expect(response.statusCode).toBe(200); expect(f.preview).toHaveBeenCalledWith(expect.anything(), input);
+    const rejected = await f.app.inject({ method: 'POST', url: '/preview', payload: { ...input, config: { ...input.config, imageUrl: 'https://foreign.example/logo.png' } } });
+    expect(rejected.statusCode).toBe(400); expect(f.preview).toHaveBeenCalledTimes(1); await f.app.close();
+  });
   it('passes only server-established device identity through no-store bounded routes', async () => {
     const f = await fixture(); const response = await f.app.inject({ method: 'POST', url: '/preview', payload: request });
     expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('no-store');

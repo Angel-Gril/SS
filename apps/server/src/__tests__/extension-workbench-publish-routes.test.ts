@@ -166,6 +166,8 @@ async function build(options: {
   return {
     app,
     service,
+    getCurrent: () => structuredClone(current),
+    setCurrent: (next: ReturnType<typeof draft>) => { current = structuredClone(next); },
     authorizePublish,
     assertReusableByokAssets,
     preflightPublishAuthority,
@@ -176,6 +178,19 @@ async function build(options: {
 }
 
 describe('extension workbench publish routes', () => {
+  it('includes video selections in confirmation and rejects a changed video preview hash', async () => {
+    const initial = draft(); initial.media.videoBindings = [{ skuKey: 'sku-1', role: 'MAIN', sourceMediaKey: null,
+      url: 'https://cdn1.ozone.ru/s3/sc-temporary/video.mp4', sourceCaptureSnapshotId: 'snapshot', sourceCaptureHash: 'a'.repeat(64),
+      approvedByUserId: 'owner-1', approvedAt: '2026-10-04T00:00:00Z' }];
+    const f = await build({ currentDraft: initial });
+    const first = (await f.app.inject({ method: 'POST', url: '/preview', payload: previewRequest() })).json().data;
+    expect(first.videoBindings).toEqual(initial.media.videoBindings);
+    const changed = f.getCurrent(); changed.media.videoBindings[0].url = 'https://cdn1.ozone.ru/s3/sc-temporary/changed.mp4'; f.setCurrent(changed);
+    const second = (await f.app.inject({ method: 'POST', url: '/preview', payload: previewRequest() })).json().data;
+    expect(second.previewHash).not.toBe(first.previewHash);
+    const denied = await f.app.inject({ method: 'POST', url: '/prepare', payload: { ...previewRequest(), previewHash: first.previewHash, idempotencyKey: 'publish-video-001' } });
+    expect(denied.statusCode).toBe(409); expect(f.recordPublishIntent).not.toHaveBeenCalled(); await f.app.close();
+  });
   it('registers one device-scoped unified publish route in the server composition root', () => {
     const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     expect(source.match(/app\.register\(extensionWorkbenchPublishRoutes/gu)).toHaveLength(1);

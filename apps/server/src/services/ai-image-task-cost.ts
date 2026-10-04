@@ -1,6 +1,7 @@
 import { AiImageJobError } from './ai-image-job-error.js';
 import type { AiImageJobRecord } from './ai-image-jobs.js';
 import { parseAiImageProviderRuntimeContract, type AiImageProviderCurrency } from './ai-image-provider-runtime-contract.js';
+import { parseAiImageTranslationRuntime } from './ai-image-translation-runtime-contract.js';
 
 type FrozenTask = Pick<AiImageJobRecord, 'provider' | 'model' | 'requestedImageCount' | 'width' | 'height'
   | 'estimatedCostCents' | 'operationConfig'> & { costReservation?: { currency?: string } | null };
@@ -28,7 +29,18 @@ export function getFrozenAiImageTaskPrice(job: FrozenTask): FrozenAiImageTaskPri
   const rawRuntime = nestedRuntime ? config!.providerRuntime : config;
   let currency: AiImageProviderCurrency = 'USD';
   let unitCostCents = job.provider === 'fake' ? 0 : maximumCostCents / requestedImageCount;
-  if (nestedRuntime || directRuntime) {
+  if (config && Object.hasOwn(config, 'translationRuntime')) {
+    if (nestedRuntime || directRuntime) invalid('The task has conflicting frozen runtime prices');
+    let runtime;
+    try { runtime = parseAiImageTranslationRuntime(config.translationRuntime); }
+    catch { invalid('The task has an invalid frozen translation price'); }
+    if (runtime.provider !== job.provider || runtime.model !== job.model
+      || runtime.imageCount !== requestedImageCount || runtime.maximumCostCents !== maximumCostCents) {
+      invalid('The translation task no longer matches its frozen price');
+    }
+    currency = runtime.currency;
+    unitCostCents = runtime.unitCostCents;
+  } else if (nestedRuntime || directRuntime) {
     let runtime;
     try { runtime = parseAiImageProviderRuntimeContract(rawRuntime); }
     catch { invalid('The task has an invalid frozen runtime price'); }
