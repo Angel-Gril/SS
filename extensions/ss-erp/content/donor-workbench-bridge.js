@@ -720,11 +720,18 @@
 
   async function editorCommand(command) {
     if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
-    const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
-    if (!listing || !currentProjection.handoff || command.binding.shopId !== listing.shopId
-      || command.binding.snapshotId !== currentProjection.handoff.snapshotId
-      || command.binding.supplyGoodsId !== currentProjection.handoff.supplyGoodsId) {
-      return commandResult(command.requestId, false, '草稿编辑上下文已变化');
+    let listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+    const matches = () => Boolean(listing && currentProjection.handoff
+      && command.binding?.shopId === listing.shopId
+      && command.binding?.snapshotId === currentProjection.handoff.snapshotId
+      && command.binding?.supplyGoodsId === currentProjection.handoff.supplyGoodsId);
+    if (!matches()) {
+      const refreshed = await loadProjection({ force: true });
+      listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
+      if (!refreshed || !matches()) {
+        const reason = currentProjection.error || (!listing ? '设备会话已失效或当前草稿尚未读取' : '来源快照或店铺已变化');
+        return commandResult(command.requestId, false, `${reason}，请点击“重新读取”后再编辑`, null, undefined, 'NOT_SUBMITTED', 'EDITOR_CONTEXT_REFRESH_REQUIRED');
+      }
     }
     setBusy(true, '');
     try {

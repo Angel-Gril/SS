@@ -10,6 +10,7 @@ const bridgeCssPath = `${root}/content/donor-workbench-bridge.css`;
 const pagePath = `${root}/pages/source-workbench-shell.html`;
 const pageCssPath = `${root}/pages/source-workbench-shell.css`;
 const pageScriptPath = `${root}/pages/source-workbench-shell.js`;
+const bridge = fs.readFileSync(bridgePath, 'utf8');
 
 for (const path of [contractPath, bridgePath, bridgeCssPath, pagePath, pageCssPath, pageScriptPath]) {
   assert.equal(fs.existsSync(path), true, `${path} must exist`);
@@ -21,6 +22,12 @@ const sourceEntry = manifest.content_scripts.find((entry) => (
 assert.ok(sourceEntry, 'source product content-script entry must exist');
 assert.ok(sourceEntry.js.includes('shared/donor-workbench/workspace-contract.js'));
 assert.ok(sourceEntry.js.includes('content/donor-workbench-bridge.js'));
+assert.match(bridge, /const refreshed = await loadProjection\(\{ force: true \}\)/u,
+  'editor context failures must trigger one authoritative read before reporting a stale context');
+assert.match(bridge, /EDITOR_CONTEXT_REFRESH_REQUIRED/u,
+  'unreadable editor context must identify a refresh requirement instead of a generic mutation failure');
+assert.match(fs.readFileSync(`${root}/pages/precision-workbench.js`, 'utf8'), /editorLoadKey = ''/u,
+  'failed editor reads must remain retryable after the next projection');
 assert.ok(sourceEntry.js.includes('content/donor/adapter-1688.js'));
 assert.ok(sourceEntry.js.includes('shared/collectors/donor-1688-capture.js'));
 assert.equal(sourceEntry.js.includes('content/source-listing-workbench.js'), false,
@@ -455,7 +462,6 @@ for (const invalid of [
   assert.throws(() => contract.parseFrameCommand(invalid));
 }
 
-const bridge = fs.readFileSync(bridgePath, 'utf8');
 assert.match(bridge, /var precisionEnabled = true/u);
 assert.doesNotMatch(bridge, /ss-erp:donor-workbench-preview-enabled/u);
 assert.doesNotMatch(bridge, /ss-erp:precision-workbench-preview-enabled/u);

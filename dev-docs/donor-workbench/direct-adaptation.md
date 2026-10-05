@@ -2,6 +2,12 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 草稿上下文刷新问题已修复，准备 `1.0.428`
+
+- 根因是首次 `EDITOR_READ` 失败后页面保留旧 `editorLoadKey`，导致后续权威 projection 不再触发编辑器重读；桥接层在 listing/handoff 暂时缺失时直接返回通用“草稿编辑上下文已变化”。
+- `donor-workbench-bridge.js` 现在在 editor command 首次不匹配时执行一次 `loadProjection({ force: true })`，刷新后仍不匹配才拒绝，并返回 `EDITOR_CONTEXT_REFRESH_REQUIRED` 及设备/快照/草稿读取原因。`precision-workbench.js` 在 editor read 失败时清除 `editorLoadKey`，允许下一次状态回执重试。
+- shell 合同、Cloud 包 verifier、JS syntax 和 `git diff --check` 已通过；本轮没有 Provider/Ozon 写入或费用。目标候选为 `1.0.428`，提交、签名、双区部署及官网门禁尚未执行。
+
 ### 2026-10-05 `1.0.427` 双区官网公开发布完成
 
 - `3fdc5c430bd1d04990ba3894c2225449a855a867 / 1.0.427` 已完成签名、COM/CN 部署、最终正式 QA04、双区 REL-04 canary、website approval、CAS、DNS 分发探针和匿名 Cloud/Local 完整下载校验。COM approval SHA `9a5a11476f9772b016ceb824b5be69d5ad4fcb7066e4dc7f94093396819ac7ff`、CN approval SHA `0be7726fb10fe65159b1e64de9d588b1c567e63cfb60967bc4ba021002f874ef`；COM/CN distribution receipt SHA `5159d0f3746bb04089eec821df576c686c13460ff40789ae7a14dd234f26dbb8` / `82443958df030ea9490e3bb022026c83b6438d122b324d3a45a27a0c9f8afe88`。两区 `/api/extensions/latest` 实读均返回 1.0.427 和该 commit。

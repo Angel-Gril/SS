@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 草稿上下文刷新修复准备发布
+
+来源页精铺工作台在首次状态读取失败时会把 `editorLoadKey` 留在旧草稿版本，桥接层又直接把缺少 listing 当成上下文变化，造成空表格和红色“草稿编辑上下文已变化”。已在扩展桥接和 precision editor owner 修复：编辑请求先做一次权威只读刷新，编辑读取失败清除加载锁并允许后续 projection 重试；合同测试通过。当前改动尚未提交，线上仍为 `1.0.427`，准备生成 `1.0.428` 候选。
+
 ## 2026-10-05 `3fdc5c43 / 1.0.427` 双区官网公开发布完成
 
 COM/CN 应用和官网 latest 均已切换到 `3fdc5c430bd1d04990ba3894c2225449a855a867 / 1.0.427`。完整 offline、正式 QA04、双区 canonical VPS/canary、website approval、CAS、匿名 Cloud/Local 下载和 final publication verifier 均通过；COM/CN `/ready` 正常，AI 商品分析在 COM 以 `qwen-vl-max` 开启，CN 继续 dark。真实商品分析返回 `product-preparation-analysis/v1` 候选，原未知操作未重试；人工修订后的俄文文案已在隔离草稿保存并审核。没有 Ozon 写入；套图新 Provider 费用仅来自先前 `1.0.425` fresh suite，未新增一轮套图费用。准确证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

@@ -744,10 +744,24 @@ async function loadEditor() {
   editorLoading = true;
   editorReadTask=(async()=>{try {
     const binding = currentEditorBinding();
-    const response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
+    let response;
+    try {
+      response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
+    } catch (error) {
+      if (!String(error?.message || '').includes('编辑上下文') && error?.code !== 'EDITOR_CONTEXT_REFRESH_REQUIRED') throw error;
+      const refreshed = await command('REFRESH');
+      if (!refreshed?.ok) throw error;
+      const current = currentEditorBinding();
+      response = await command('EDITOR_READ', { listingWorkflowId: current.listingWorkflowId, binding: current });
+    }
     acceptEditor(response.data?.editor);
     editorState.textContent = editor.fieldIssues?.length ? editor.fieldIssues.map((item) => item.message).join(' ')
       : '修改后请分别保存价格与货号、包装参数。';
+  } catch (error) {
+    // A failed read must not poison editorLoadKey; the next authoritative projection
+    // should be allowed to retry after a device/session or source refresh.
+    editorLoadKey = '';
+    throw error;
   } finally { editorLoading = false; }})();
   try{return await editorReadTask;}finally{editorReadTask=null;}
 }
