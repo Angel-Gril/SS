@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 `d376bb1a / 1.0.422` 已提交、推送、签名并双区部署
+
+精铺工作台适配候选已提交并推送到 `feat/ai-media-prompt-registry`，commit 为 `d376bb1a49f071f9c9b4eca1615c33539e61c7c2`。COM/CN Cloud/Local 候选均为 `1.0.422`，外部 Ed25519 签名和隔离 MV3 验收通过；COM/CN 已完成标准部署、备份恢复和 canonical VPS 验收。两区 `/ready` 均返回 `db=ok、redis=ok`，当前指针分别绑定该 commit，COM 继续 DOTH hosted pilot，CN 继续 direct/RDS dark。官网 publication pointer 尚未切换，仍保持旧公开版本；没有新增 Provider/Ozon 写入或发布费用。
+
 ## 2026-10-05 精铺自动属性、物流定价、连续准备、SKU复制与多平台采集已本地验收，仍未提交
 
 用户现已授权提交、推送、签名和双区部署 `1.0.422` 候选。发布前复制行 provenance 缺失拒绝及内部 plan 绑定回归、最终完整 preflight、Server/Web 构建和真实 PostgreSQL 11 项均通过，正在准备提交和区域签名部署；当前应用和官网仍为 `1.0.421`。官网 pointer 切换保持独立门禁，准确发布范围只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

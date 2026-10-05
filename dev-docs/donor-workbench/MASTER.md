@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-05 `1.0.422` 双区部署完成，官网 pointer 保持旧版
+
+最终本地验证后，`d376bb1a49f071f9c9b4eca1615c33539e61c7c2` 已提交、推送、签名并部署到 COM/CN。Cloud/Local 包、签名、备份恢复和 canonical VPS evidence 均绑定同一 commit/version；COM 保持 DOTH 受限 hosted pilot，CN 保持 direct/RDS dark。官网 approval、CAS、distribution probe 和公开 pointer 切换尚未执行，公开下载仍为 `1.0.421`。本轮没有新增 Provider/Ozon 请求或费用。
+
 Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp20260803` donor UI while preserving SS ERP server authority for identity, shops, drafts, media, billing, review, idempotency and publishing.
 
 ## Documents

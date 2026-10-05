@@ -2,6 +2,12 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.422` 已提交、推送、签名并双区部署
+
+- `d376bb1a49f071f9c9b4eca1615c33539e61c7c2` 已提交并推送；COM/CN `1.0.422` Cloud/Local 候选完成签名、隔离 MV3 安装验收和标准部署。COM/CN 当前 release 均为该 commit，`/ready` 返回 db/redis ok，canonical VPS evidence 通过；备份恢复分别读回 COM 144 张表、CN 143 张表。部署输出与签名原件保存在 operator-private release 目录，不进入 Git。
+- COM 保持原 DOTH owner/shop/设备范围及 `IMAGE_TO_IMAGE/SUITE/IMAGE_TRANSLATE` 受限 pilot，CN 保持 direct/RDS、AI/BYOK/Ozon dark。没有 Provider/Ozon 新请求或费用。
+- 官网 approval、CAS、distribution probe 和公开 pointer 切换尚未执行，官网仍服务 `4df9ec38 / 1.0.421`。这次用户授权覆盖了提交、推送、签名和部署，不自动扩大到官网公开切换或真实 Ozon/Provider 写入。
+
 ### 2026-10-05 `1.0.422` 发布准备（已授权提交、推送、签名、双区部署）
 
 - 用户已明确授权本轮提交、推送、签名和 COM/CN 部署，撤销此前“全部完成前不提交”的发布等待。目标候选版本为 `1.0.422`，通过原发布脚本生成，不改写源 manifest 的历史 `1.0.264`。候选必须绑定最终 clean commit，COM 维持既有 DOTH 三 operation pilot，CN 维持 direct/RDS dark；新视觉配置默认关闭。
