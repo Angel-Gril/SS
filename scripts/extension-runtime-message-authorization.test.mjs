@@ -63,6 +63,33 @@ function precisionFrameSender(overrides = {}) {
   });
 }
 
+test('final policy keeps private product analysis and checkpoints on their precision handler', () => {
+  const { api, policy } = loadApi();
+  const types = [
+    'ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
+    'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',
+    'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear',
+  ];
+  const sourceUrl = 'https://detail.1688.com/offer/990499606077.html';
+  for (const type of types) {
+    assert.equal(policy.isKnownRuntimeMessageType(type), true, type);
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, precisionFrameSender(), extensionId), true, type);
+    assert.equal(api.isNewRuntimeMessageType(type), false, `${type} must reach the separate preparation handler`);
+    for (const sender of [
+      precisionFrameSender({ frameId: 0 }), precisionFrameSender({ documentId: '' }),
+      precisionFrameSender({ id: 'foreign-extension' }), precisionFrameSender({ origin: 'https://detail.1688.com' }),
+      precisionFrameSender({ url: `chrome-extension://${extensionId}/pages/precision-workbench.html?fake=1` }),
+      precisionFrameSender({ url: `chrome-extension://${extensionId}/pages/settings.html` }),
+      precisionFrameSender({ url: `chrome-extension://${extensionId}/pages/ai-provider-settings.html` }),
+      { id: extensionId, url: sourceUrl, origin: new URL(sourceUrl).origin, frameId: 0,
+        tab: { id: 12, url: sourceUrl }, documentId: 'source-document-1' },
+      extensionSender('/pages/precision-workbench.html'), extensionSender('/pages/ai-image-workbench.html'),
+    ]) assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false, type);
+  }
+  assert.equal(policy.isKnownRuntimeMessageType('ss-erp:product-analysis-admin'), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender('ss-erp:preparation-checkpoint-admin', precisionFrameSender(), extensionId), false);
+});
+
 test('precision registration is a closed iframe-only command and grants no workbench or legacy authority', async () => {
   const { api } = loadApi();
   const type = api.MESSAGE_TYPES.PRECISION_FRAME?.PUBLIC_UI_REGISTER;

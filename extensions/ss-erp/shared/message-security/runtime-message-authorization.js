@@ -31,6 +31,14 @@
   var LEGACY_WORKBENCH_TYPES = new Set([
     'ss-erp:source-listing-workbench-ai-image-suite-relay',
   ]);
+  // These messages keep their dedicated private handler, which claims the
+  // registered precision document and checks its current source/draft binding.
+  // Do not include them in NEW_TYPES: the generic BYOK dispatcher does not own them.
+  var PRIVATE_PREPARATION_TYPES = new Set([
+    'ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
+    'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',
+    'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear',
+  ]);
 
   var MESSAGE_TYPES = Object.freeze({
     PRECISION_FRAME: Object.freeze({ PUBLIC_UI_REGISTER: 'ss-erp:precision-frame-ui-register' }),
@@ -440,6 +448,9 @@
       return Boolean(descriptor && surface === descriptor.surface);
     }
     if (surface === SENDER_SURFACES.WORKBENCH && LEGACY_WORKBENCH_TYPES.has(normalized)) {
+      return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
+    }
+    if (surface === SENDER_SURFACES.PRECISION_FRAME && PRIVATE_PREPARATION_TYPES.has(normalized)) {
       return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
     }
     // A future workbench/settings page must not inherit the broad legacy extension

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 官网发布与 AI 分析启用接续
+
+用户已授权新版公开发布并保持 AI 分析开启。`1.0.425` 完整原生 offline、fresh suite/审核/assignment/replay、正式 QA04、双区 VPS/canary/approval 已通过，但真实精铺 iframe 被最终消息策略拒绝分析恢复消息，官网尚未 CAS。最小扩展 owner 修复 RED→GREEN/97 项关联回归通过，准备 `1.0.426` 替代候选；COM 托管 `qwen-vl-plus` 配置已开启，原两图分析 UNKNOWN 保留且未重试，独立单图校准通过报告 schema。当前证据及范围仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-05 `089eb83a / 1.0.425` 连续 AI 工作台已签名并双区部署
 
 本轮提交、推送、COM/CN 独立 Cloud/Local 签名候选、隔离 MV3 安装、目标备份恢复和完整 canonical VPS 验收均完成。两区应用运行 `089eb83ae7620aa8aaabb54e3fd2e7f801bbdf2e / 1.0.425`，服务和数据库/Redis 正常；官网仍公开 `46e17e00 / 1.0.424`，新商品分析与 BYOK 开关保持关闭。没有新增 Provider/Ozon 请求或费用；准确边界、失败原件与证据仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

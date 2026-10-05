@@ -2,6 +2,15 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 公开发布与 AI 分析启用，425 消息接线修正为 426 候选
+
+- 用户已明确授权官网公开切换与 AI 分析开启，既有不限金额测试授权继续有效；不执行 Ozon 写入、不读取 Provider 控制台。COM 通过带 revision 的系统配置 API 开启 `feature_extension_product_vision`，明确 DashScope compatible-mode / `qwen-vl-plus`，沿用已授权同 Provider 凭据，DOTH 返回 `READY`、每日 10 次；BYOK、生图 pilot 和 CN direct/RDS dark 未扩大。
+- 425 完整原生 offline（原生全后端 `6960 passed`、独立 PostgreSQL、构建和双包）、同提交 fresh suite `cmuv9jrfj00125ozo63z4exwu`、审核前 UI/数据库、原 START/CONTINUE、两图 preview/review、r1/v1→r2/v2 assignment/replay、队列与 pending 清零、正式 QA04、双区新 canonical VPS/canary/website approval 均通过；没有执行 CAS 或 distribution probe，官网仍 `46e17e00 / 1.0.424`。两次套图 Provider submit 各成功结算 CNY0.14，输出保留收纳盒/把手/纹理但有白边且场景变化小，未宣称创意质量一致。
+- 原生 QA04 SHA `ffde02952b7a5be0b9ce59517a9b41b528edd2780096e1ea5fddcc6b4a3afa00`；COM/CN canary `a6e64349ca94847eec35d3ad62cbaf4a065add4598d55bb8fa02da0de9b1d9bb` / `a25e124a9d1adc677d6de0b97652f84573880f9cc74ea1aac77d3d9e0c3d9f40`。私有原件在 `release-089eb83a-website`，失败日志和原输入保留；Windows CRLF checkout 已从原 Git 字节校正，正式 producer 未改；QA04 时间顺序通过新的只读恢复核对闭合，未改旧原件。
+- 专用 profile 初次仍运行旧缓存 Worker，正常重载后真实 sender 全部字段正确，却仍被最终 `runtime-message-authorization` 的 precision surface 拒绝。legacy policy 和独立 preparation handler 已有正确合同；唯一缺口为覆盖层没有显式桥接八项 preparation 消息。最小 owner 修复只允许精确 precision iframe 并复核 legacy sender，保持 `isNewRuntimeMessageType=false` 让原独立 handler 执行；其他来源、settings/foreign、失效 binding 仍拒绝。
+- 真实 Worker listener 加载两层策略的 32 项测试原先 3 项目标失败，修复后全部通过；关联共 97 项通过。425 签名候选不覆写，修复需要新的 426 候选与对应 offline/VPS/canary/approval；服务端/shared/依赖未改时由原 QA04 producer 判断是否可沿用 425 suite，不新增生图来替代已有原件。
+- 首次新两图商品分析通过现有 source-page→owner 发送一次，23 秒后服务端持久操作为 `UNKNOWN`，原编号与每日额度保留，未自动重试。独立一图 transport/schema 校准恰好一次 Provider POST 成功，`product-preparation-analysis/v1` 严格 schema 通过（2611 input / 1088 output tokens）；这是诊断校准，不冒充原 UNKNOWN 恢复或成功草稿 receipt。完整同窗候选和真实模型审核仍待新候选验收；分析 Provider 费用未读取、不冒称 suite 图片计费。
+
 ### 2026-10-05 `1.0.425` 已提交、推送、签名并双区部署
 
 - 连续商品 AI 准备、同窗候选编辑/审核、BYOK 独立分析模型、阶段恢复和透明 iframe 已提交到 `feat/ai-media-prompt-registry` 并推送，部署绑定 `089eb83ae7620aa8aaabb54e3fd2e7f801bbdf2e / 1.0.425`。完整本地 `pnpm preflight` 已通过；服务端 typecheck 现显式使用 8 GiB 堆，旧 shell 回归已同步为保留来源页滚动、去除重复遮罩的合同。变更日志按 Keep a Changelog 保留在 `Unreleased`，不将应用部署标为官网公开发布日期。
