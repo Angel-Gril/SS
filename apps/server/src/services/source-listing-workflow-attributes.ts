@@ -433,7 +433,7 @@ function sourceContextForSku(
   };
 }
 
-function composeSkuAttributeValue(
+export function composeSkuAttributeValue(
   base: OzonListingDraftAttributeValue,
   skuValues: Record<string, OzonListingDraftAttributeValue>,
   skuKeys: string[],

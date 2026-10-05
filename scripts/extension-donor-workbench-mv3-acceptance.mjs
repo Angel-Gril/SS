@@ -584,6 +584,16 @@ async function run() {
     summary.installedFrame = await frameObservation();
     assertPrecisionFrameObservation(summary.installedFrame, { extensionId: summary.extensionId, sourceUrl: PRODUCT_URL });
     summary.defaultUiOpenVerified = true;
+    summary.transparentShell = await evaluate(`(() => {
+      const frame = document.querySelector('#ss-erp-donor-workbench-frame'), style = getComputedStyle(frame);
+      return { background: style.backgroundColor, boxShadow: style.boxShadow,
+        sourceOverflow: document.documentElement.style.overflow,
+        fullViewport: Math.abs(frame.getBoundingClientRect().width-innerWidth)<2 && Math.abs(frame.getBoundingClientRect().height-innerHeight)<2 };
+    })()`);
+    assert.equal(summary.transparentShell.background, 'rgba(0, 0, 0, 0)');
+    assert.equal(summary.transparentShell.boxShadow, 'none');
+    assert.notEqual(summary.transparentShell.sourceOverflow, 'hidden');
+    assert.equal(summary.transparentShell.fullViewport, true);
 
     const iframeTarget = await until(async () => {
       const targets = (await cdp.send('Target.getTargets')).targetInfos || [];

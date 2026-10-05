@@ -14,16 +14,18 @@ export function createPrecisionPrivateRuntime(options = {}) {
   const permissions = options.permissions || globals.chrome?.permissions;
   const settingsApi = globals.SS_ERP_BYOK_PROVIDER_SETTINGS_CLIENT;
   const mediaApi = globals.SS_ERP_BYOK_WORKBENCH_CLIENT;
+  const analysisApi = globals.SS_ERP_BYOK_PRODUCT_ANALYSIS_PAGE_CLIENT;
   if (!nativeRuntime?.sendMessage || !settingsApi?.createClient || !mediaApi?.createClient) throw new Error('SS_ERP_PRECISION_PRIVATE_RUNTIME_UNAVAILABLE');
   const settingsTypes = new Set(Object.values(settingsApi.MESSAGE_TYPES));
   const mediaTypes = new Set(Object.values(mediaApi.MESSAGE_TYPES));
+  const analysisTypes = new Set(Object.values(analysisApi?.MESSAGE_TYPES || {}));
   let registered = false, mediaReady = false;
   const proxy = {
     get lastError() { return nativeRuntime.lastError; },
     onMessage: nativeRuntime.onMessage,
     sendMessage(message, callback) {
       if (!registered) { callback({ ok: false, errorCode: 'SS_ERP_PRECISION_UI_REGISTRATION_REQUIRED' }); return; }
-      if (!settingsTypes.has(message?.type) && !mediaTypes.has(message?.type)) { callback({ ok: false, errorCode: 'SS_ERP_PRECISION_PRIVATE_MESSAGE_INVALID' }); return; }
+      if (!settingsTypes.has(message?.type) && !mediaTypes.has(message?.type) && !analysisTypes.has(message?.type)) { callback({ ok: false, errorCode: 'SS_ERP_PRECISION_PRIVATE_MESSAGE_INVALID' }); return; }
       if (mediaTypes.has(message.type) && !mediaReady) { callback({ ok: false, errorCode: 'SS_ERP_PRECISION_MEDIA_SESSION_REQUIRED' }); return; }
       nativeRuntime.sendMessage(message, (response) => {
         if (!publicResponse(response)) { callback({ ok: false, errorCode: 'SS_ERP_PRECISION_PRIVATE_RESPONSE_INVALID' }); return; }
@@ -33,8 +35,12 @@ export function createPrecisionPrivateRuntime(options = {}) {
   };
   const settings = settingsApi.createClient({ runtime: proxy, permissions });
   const media = mediaApi.createClient({ runtime: proxy, BroadcastChannel: globals.BroadcastChannel, URL: globals.URL });
+  const analysis = analysisApi?.createClient({ runtime: proxy, permissions });
   return Object.freeze({
     settings, media,
+    ...(analysis ? { analyzeProduct: analysis.analyzeProduct, readProductAnalysis: analysis.readProductAnalysis,
+      getProductAnalysisReadiness: analysis.getReadiness, checkpoint: analysis.checkpoint,
+      prepareProductAnalysisPermission: analysis.prepareProductAnalysisPermission, authorizeProductAnalysis: analysis.authorizeProductAnalysis } : {}),
     state: () => Object.freeze({ registered, mediaReady, available: true }),
     registerUi() {
       return new Promise((resolve, reject) => {
@@ -51,6 +57,6 @@ export function createPrecisionPrivateRuntime(options = {}) {
         });
       });
     },
-    invalidate() { registered = mediaReady = false; settings.invalidatePreparedPermissions(); },
+    invalidate() { registered = mediaReady = false; settings.invalidatePreparedPermissions(); analysis?.invalidatePreparedPermissions(); },
   });
 }

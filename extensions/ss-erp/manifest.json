@@ -189,6 +189,7 @@
         "https://2.taobao.com/*"
       ],
       "js": [
+        "shared/donor-workbench/product-preparation-client.js",
         "shared/donor-workbench/workspace-contract.js",
         "content/donor/adapter-1688.js",
         "shared/collectors/donor-1688-capture.js",

@@ -16,7 +16,7 @@
     "test:sms-quota:redis": "node --import ./scripts/enable-sms-quota-redis-tests.mjs ./node_modules/vitest/vitest.mjs run src/__tests__/sms-send-quota.redis.integration.test.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
     "lint": "eslint src/",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

@@ -2,6 +2,19 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 连续商品 AI 流程适配（当前开发，未发布）
+
+用户已明确要求继续开发上轮差异分析中的连续流程；本轮目标为同窗采集/SKU、类目确认、图片筛选与商品视觉分析、可编辑属性/俄文文案候选、图片处理及明确审核。复用用户自有 donor 的交互和当前 ERP owner，不修改 donor 目录，不自动发布 Ozon，不改变 COM/CN 生产配置。
+
+- [x] U21 服务端商品分析候选：按设备/店铺/来源快照/草稿版本/官方类目冻结输入，沿用安全图片下载、视觉 transport、额度和持久操作回执；支持原请求只读查询，禁止未知 POST 自动重试。视觉观察不能成为材质、重量、尺寸、认证或库存事实。
+- [x] U22 连续阶段和恢复：一次分析回执提供筛图、SKU 视觉报告和文案/属性候选；同窗显示真实阶段，明确确认筛图/属性及文案保存，刷新后从已核对阶段恢复。
+- [x] U23 自带 API 文字/视觉：使用 Worker 的当前会话密钥和安全来源图片；独立分析模型、独立默认关闭准入，保留原图片模型、权限、ingest 和 publisher 合同。
+- [x] U24 外层与设置：恢复 donor 透明全屏 iframe，去掉额外整页阴影和来源页滚动锁；简洁设置与高级诊断分开。
+
+唯一新报告合同为 `product-preparation-analysis/v1`，所有输出保持 `CANDIDATE`；属性应用必须读取原回执并通过现有属性 owner，文案经用户编辑保存后仍待独立审核。稳定合同、幂等、准入与恢复采用 T2 RED→GREEN；蒙版/滚动和阶段交互采用原路径隔离 Chrome T3，定向验证后才扩大受影响回归。当前 Git 基线为 `054a3f61`；本节只记录开发范围，既有 `1.0.424` 公开发布证据不证明新流程已验收。
+
+本地开发验收已完成：服务端定向/关联 Vitest `230 passed`，本机隔离 PostgreSQL `19 passed / 0 skipped`（153 migrations，隔离 schema 已清理），服务端 TypeScript 8 GiB 检查无诊断；Cloud/Local MV3 verifier 分别 `619/615 pass`、0 failure/0 warning。隔离 Chrome 连续流程与自带 API 模型/来源授权 fixture 通过，最近证据在 `C:\Users\550W\AppData\Local\Temp\ss-erp-precision-ui-evidence-QN40Xy`；Provider/Ozon/生产写入均为 0。独立图片读取 owner 使用 `/preparation/image`，不依赖旧 hosted media 开关；生产视觉、BYOK 分析和真实费用仍保持关闭。
+
 ### 2026-10-05 `1.0.424` 双区官网公开发布完成
 
 - COM/CN 当前应用、官网 latest 和四个匿名下载 ZIP 均为 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。Git 已推送；完整原生 offline、签名 MV3 来源页/默认入口/Blob、备份恢复、两区 canonical VPS、正式 QA04、COM受限pilot/CN no-shop dark canary、新 website approval、CAS 和 distribution/final publication verifier 全部通过。COM DOTH `IMAGE_TO_IMAGE/SUITE/IMAGE_TRANSLATE`、CN direct/RDS dark、视觉默认关闭保持。

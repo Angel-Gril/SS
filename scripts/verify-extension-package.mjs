@@ -732,6 +732,15 @@ const requiredUnifiedPublishModules = [
 ];
 
 const requiredDonorWorkbenchFiles = [
+  'shared/donor-workbench/product-preparation-client.js',
+  'shared/donor-workbench/preparation-runtime-handler.js',
+  'shared/donor-workbench/preparation-image-client.js',
+  'shared/byok/product-analysis-contract.js',
+  'shared/byok/product-analysis-checkpoint.js',
+  'shared/byok/product-analysis-client.js',
+  'shared/byok/product-analysis-page-client.js',
+  'pages/donor/preparation-analysis-session.js',
+  'pages/donor/preparation-analysis-view.js',
   'shared/donor-workbench/workspace-contract.js',
   'shared/donor-workbench/prompt-adapter.js',
   'shared/donor-workbench/prompt-handoff.js',

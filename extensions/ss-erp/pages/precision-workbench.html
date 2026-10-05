@@ -20,7 +20,7 @@
                         <option value="en" data-i18n="panel_languageEnglish">English</option>
                         <option value="ru" data-i18n="panel_languageRussian">Русский</option>
                     </select> <button id="store-switch-btn"
-                        class="ghost store-switch-btn" type="button" data-i18n="panel_actionSwitchStore">切换店铺</button> <button id="settings-btn" class="ghost" type="button" data-i18n="panel_actionBasicInfo">基础信息</button> <button
+                        class="ghost store-switch-btn" type="button" data-i18n="panel_actionSwitchStore">切换店铺</button> <button id="settings-btn" class="ghost" type="button">设置</button> <button
                         id="category-select-btn" class="ghost" type="button" data-i18n="panel_actionSelectCategory">选择类目</button>
                     <button id="start-btn" class="primary" type="button" data-i18n="panel_actionStart">开始执行</button></div>
                 <div class="toolbar-actions"> <button
@@ -141,8 +141,8 @@
                     <section class="process-pane process-pane--ai">
                         <div class="process-pane-head">
                             <div>
-                                <h4 data-i18n="panel_aiStreamTitle">AI 生成流</h4>
-                                <p data-i18n="panel_aiStreamTip">按阶段和事件展示，查看时更容易定位
+                                <h4>处理阶段与 AI 候选</h4>
+                                <p>按真实步骤和回执展示；模型分析结果须检查后确认
                             </div>
                         </div>
                         <div id="ai-output" class="process-pane-body process-stream" aria-live="polite"></div>
@@ -205,7 +205,7 @@
     </div>
   <div id="basic-modal" class="settings-modal" hidden>
     <div class="settings-dialog">
-      <div class="settings-head"><div><div class="settings-title">基础信息</div><div class="settings-tip">当前商品与 ERP 草稿</div></div><button class="ghost" data-close-modal="basic-modal">关闭</button></div>
+      <div class="settings-head"><div><div class="settings-title">设置</div><div class="settings-tip">当前商品、店铺与 AI 连接</div></div><button class="ghost" data-close-modal="basic-modal">关闭</button></div>
       <div class="settings-body" id="basic-info"></div>
     </div>
   </div>
@@ -217,6 +217,7 @@
     </div>
   </div>
 </div>
+<script src="../shared/donor-workbench/product-preparation-client.js"></script>
 <script src="../shared/donor-workbench/workspace-contract.js"></script>
 <script src="../shared/donor-workbench/prompt-adapter.js"></script>
 <script src="../shared/donor-workbench/precision-workflow.js"></script>
@@ -227,6 +228,7 @@
 <script src="../shared/byok/permission-readiness-bridge.js"></script>
 <script src="../shared/byok/provider-settings-client.js"></script>
 <script src="../shared/byok/workbench-client.js"></script>
+<script src="../shared/byok/product-analysis-page-client.js"></script>
 <script src="../shared/donor-workbench/precision-byok-flow.js"></script>
 <script src="../shared/donor-workbench/precision-byok-edit-flow.js"></script>
 <script type="module" src="precision-workbench.js"></script>

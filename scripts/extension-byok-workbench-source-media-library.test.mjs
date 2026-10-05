@@ -37,6 +37,9 @@ const sourceInputs = [
 const calls = [];
 let bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 let tamperSha = false;
+let declaredLength = null;
+let bodyReads = 0;
+let streamingBytes = null;
 
 function launch() {
   return {
@@ -70,7 +73,7 @@ const transport = {
     const actualSha = await sha256(bytes);
     const headers = new Map([
       ['content-type', 'image/png'],
-      ['content-length', String(bytes.byteLength)],
+      ['content-length', String(declaredLength ?? bytes.byteLength)],
       ['x-ss-erp-content-sha256', tamperSha ? '0'.repeat(64) : actualSha],
       ['x-ss-erp-image-width', '64'],
       ['x-ss-erp-image-height', '64'],
@@ -81,7 +84,12 @@ const transport = {
         ok: true,
         status: 200,
         headers: { get(name) { return headers.get(String(name).toLowerCase()) || null; } },
+        ...(streamingBytes ? {body:{getReader(){let complete=false;return {
+          async read(){if(complete)return {done:true};complete=true;return {done:false,value:streamingBytes};},
+          async cancel(){},releaseLock(){},
+        };}}} : {}),
         async arrayBuffer() {
+          bodyReads += 1;
           return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
         },
       },
@@ -146,6 +154,48 @@ await assert.rejects(
   (error) => error?.code === 'SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID',
 );
 tamperSha = false;
+
+const previewCount = calls.filter((row) => row[0] === 'preview').length;
+const backgroundMedia = await library.readForBackground(launchContext, 'source-main-1', 'THUMBNAIL');
+assert.deepEqual(Object.keys(backgroundMedia).sort(), ['blob', 'byteLength', 'height', 'mimeType', 'sha256', 'width']);
+assert.equal(backgroundMedia.blob.size, bytes.byteLength);
+assert.equal(backgroundMedia.width, 64);
+assert.equal(calls.filter((row) => row[0] === 'preview').length, previewCount,
+  'Worker analysis bytes must not be posted onto a page preview channel');
+await assert.rejects(library.readForBackground(launchContext, 'source-blue-1', 'THUMBNAIL'),
+  (error) => error?.code === 'SS_ERP_SOURCE_MEDIA_LIBRARY_STALE');
+declaredLength = 10 * 1024 * 1024 + 1;
+const previousBodyReads = bodyReads;
+await assert.rejects(library.readForBackground(launchContext, 'source-main-1', 'THUMBNAIL'),
+  (error) => error?.code === 'SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
+assert.equal(bodyReads, previousBodyReads, 'oversized source declaration must fail before allocating bytes');
+declaredLength = null;
+
+const structuredKey = 'media:image|product_main|0|https://cdn.example/product.png';
+sourceInputs.push({ sourceMediaKey: structuredKey, role: 'product_main', scope: 'PRODUCT', skuKeys: [] });
+const publicAlias = 'media-key-sha256:' + await sha256(new TextEncoder().encode(structuredKey));
+await library.readForBackground(launchContext, publicAlias, 'THUMBNAIL');
+assert.equal(calls.filter((row) => row[0] === 'raw').at(-1)[2].sourceMediaKey, structuredKey,
+  'the alias is resolved solely from the currently authorized catalog before the ERP byte owner call');
+await assert.rejects(library.readForBackground(launchContext, 'media-key-sha256:' + 'f'.repeat(64), 'THUMBNAIL'),
+  (error) => error?.code === 'SS_ERP_SOURCE_MEDIA_LIBRARY_STALE');
+sourceInputs.pop();
+
+streamingBytes = new Uint8Array(10 * 1024 * 1024 + 1);
+const readsBeforeOversizedStream = bodyReads;
+await assert.rejects(library.readForBackground(launchContext, 'source-main-1', 'THUMBNAIL'),
+  (error) => error?.code === 'SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
+assert.equal(bodyReads,readsBeforeOversizedStream,'a raw response stream cannot fall back to unbounded arrayBuffer allocation');
+streamingBytes=null;
+
+const immutableLibrary = api.createLibrary({listingClient,previewBroker,crypto:webcrypto,Blob,
+  transport:{async postRaw(path,body,options){const result=await transport.postRaw(path,body,options);
+    return Object.freeze({state:'raw_response',response:Object.freeze({ok:result.response.ok,status:result.response.status,
+      headers:result.response.headers,arrayBuffer:result.response.arrayBuffer})});}}});
+const immutableBytes=await immutableLibrary.readForBackground(launchContext,'source-main-1','THUMBNAIL');
+assert.equal(immutableBytes.byteLength,bytes.byteLength,
+  'the actual immutable device-transport response without body supports background byte inspection');
+assert.equal(immutableBytes.sha256,await sha256(bytes));
 
 bytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
 await assert.rejects(

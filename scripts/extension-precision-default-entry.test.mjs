@@ -73,6 +73,19 @@ test('fresh installs and retired preview settings open only the precision workbe
   }
 });
 
+test('opening and closing the precision workbench preserves marketplace scrolling', () => {
+  const state = harness();
+  state.documentRoot.style.overflow = 'auto';
+  state.trigger.click();
+  assert.equal(state.frame.hidden, false);
+  assert.equal(state.documentRoot.style.overflow, 'auto');
+  state.listeners.get('message')({ source: state.frame.contentWindow,
+    origin: new URL(state.frame.src).origin,
+    data: { contractVersion: 'ss-erp-donor-workbench/v1', type: 'CLOSE', requestId: 'close-scroll-test' } });
+  assert.equal(state.frame.hidden, true);
+  assert.equal(state.documentRoot.style.overflow, 'auto');
+});
+
 test('source product entries are bounded to the supported marketplace product paths', () => {
   for (const url of ['https://item.taobao.com/item.htm?id=123', 'https://detail.tmall.com/item.htm?id=456',
     'https://mobile.yangkeduo.com/goods.html?goods_id=789']) assert.ok(harness(url).trigger, url);

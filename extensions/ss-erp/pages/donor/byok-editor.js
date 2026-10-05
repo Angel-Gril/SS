@@ -1,6 +1,6 @@
 const operationLabels = { TEXT_TO_IMAGE: '单图生成', IMAGE_TO_IMAGE: '参考图生成', FULL_EDIT: '全图修图', INPAINT: '圈选重绘' };
 
-export function createByokEditor({ root, container, runtime, getShopId, getBinding, openSession, getBusy = () => false, onBound, onModeChange, report }) {
+export function createByokEditor({ root, container, runtime, getShopId, getBinding, openSession, getBusy = () => false, onBound, onModeChange }) {
   const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const settings = runtime?.settings;
   const available = typeof runtime?.registerUi === 'function' && typeof settings?.listProfiles === 'function';
@@ -356,6 +356,10 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   render();
   return {
     panel, configure, reconnect, render, readMediaState, initialize,
+    async openSettings() {
+      if (!registered && !await initialize()) throw new Error('请重新连接扩展后配置自带 API');
+      await act(async () => { modal.hidden = false; await refresh(); state.textContent = '接口和密钥在当前扩展会话配置；图片模型与商品分析模型分别选择。'; });
+    },
     setMode(value) { mode = value; onModeChange(value); render(); },
     isBusy: () => busy || initializing || Boolean(flow?.state().busy),
     invalidate() { flow?.invalidate(); generationError = ''; render(); },

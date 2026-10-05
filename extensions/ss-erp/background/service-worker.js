@@ -42,6 +42,10 @@ try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch 
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
 try { importScripts('../shared/donor-workbench/prompt-handoff.js'); } catch (e) { console.warn('[SS ERP] donor prompt handoff load error:', e); }
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
+try { importScripts('../shared/donor-workbench/product-preparation-client.js'); } catch { console.warn('[SS ERP] preparation client unavailable'); }
+try { importScripts('../shared/byok/product-analysis-contract.js', '../shared/byok/product-analysis-checkpoint.js',
+  '../shared/byok/product-analysis-client.js', '../shared/donor-workbench/preparation-runtime-handler.js'); } catch { console.warn('[SS ERP] preparation runtime unavailable'); }
+try { importScripts('../shared/donor-workbench/preparation-image-client.js'); } catch { console.warn('[SS ERP] preparation image client unavailable'); }
 try { importScripts('../shared/byok/workbench-source-media-library.js'); } catch (e) { console.warn('[SS ERP] BYOK source media library load error:', e); }
 try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
 let precisionSourceAdmission = null;
@@ -2157,6 +2161,77 @@ function getByokWorkbenchSourceMediaLibrary() {
     Blob: globalThis.Blob,
   });
   return byokWorkbenchSourceMediaLibrary;
+}
+
+let productAnalysisClient = null;
+let preparationCheckpoint = null;
+let preparationRuntimeHandler = null;
+async function assertProductPreparationBinding({ binding, owner, skuKey, readiness, allowPrevious = false }) {
+  const device = await readExtensionDeviceStatus(true);
+  if (device.state !== 'paired' || device.ownerUserId !== owner.ownerUserId || device.sessionId !== owner.deviceSessionId
+    || !['listing:review', 'listing:write'].every(scope => device.scopes.includes(scope))) throw new Error('Preparation device authority changed');
+  const currentSender = { id: chrome.runtime.id, url: chrome.runtime.getURL('pages/precision-workbench.html'),
+    origin: 'chrome-extension://' + chrome.runtime.id, tab: { id: owner.tabId }, frameId: owner.frameId, documentId: owner.documentId };
+  const claim = await getPrecisionFrameRegistry().claimFrame(currentSender, { mediaRequired: false });
+  if (claim.source.ownerUserId !== owner.ownerUserId || claim.source.deviceSessionId !== owner.deviceSessionId
+    || claim.source.sourcePlatform !== owner.sourcePlatform || claim.source.sourceProductId !== owner.sourceProductId) throw new Error('Preparation source authority changed');
+  const handoff = await readPersistedSourceWorkflowHandoff(owner.sourcePlatform, owner.sourceProductId);
+  if (!handoff || handoff.snapshotId !== binding.snapshotId || handoff.supplyGoodsId !== binding.supplyGoodsId) throw new Error('Preparation snapshot changed');
+  const listingClient = getSourceListingWorkflowClient();
+  const status = await listingClient.getStatus({ snapshotId: binding.snapshotId, supplyGoodsId: binding.supplyGoodsId });
+  const listing = currentSourceListingContext(status, binding.listingWorkflowId);
+  if (!listing || listing.shopId !== binding.shopId) throw new Error('Preparation listing changed');
+  const currentBinding = { ...binding, draftRevision: listing.revision, draftVersion: listing.draftVersion };
+  const editor = await listingClient.readDraftEditor(currentBinding);
+  if (editor?.state !== 'ready' || editor.editor.binding.listingWorkflowId !== binding.listingWorkflowId
+    || editor.editor.binding.shopId !== binding.shopId
+    || (!allowPrevious && (editor.editor.binding.draftRevision !== binding.draftRevision || editor.editor.binding.draftVersion !== binding.draftVersion))
+    || allowPrevious && (editor.editor.binding.draftRevision < binding.draftRevision || editor.editor.binding.draftVersion < binding.draftVersion)
+    || skuKey && ![...editor.editor.selectedSkuKeys, ...(editor.editor.offerRows?.rows || []).map(row => row.rowKey)].includes(skuKey)) throw new Error('Preparation draft changed');
+  if (readiness) {
+    const response = await getByokDeviceTransport().post('/api/extension-device/byok/product-analysis-readiness', {
+      binding, providerOrigin: readiness.context.providerOrigin, model: readiness.context.model,
+    }, { requiredScope: 'media:execute' });
+    if (response?.body?.code !== 1 || !response.body.data?.analysis?.ready || response.body.data.policyRevision !== readiness.policyRevision) throw new Error('Preparation policy changed');
+  }
+  return editor.editor;
+}
+function getProductAnalysisClient() {
+  if (productAnalysisClient) return productAnalysisClient;
+  productAnalysisClient = globalThis.SS_ERP_BYOK_PRODUCT_ANALYSIS_CLIENT.createClient({
+    profileStore: getByokProfileStore(), permissionBroker: getByokPermissionBroker(),
+    providerSemaphore: getByokWorkbenchProviderSemaphore(), sessionStorage: chrome.storage.session,
+    crypto: globalThis.crypto, fetchImpl: globalThis.fetch.bind(globalThis),
+    assertCurrent: input => assertProductPreparationBinding({ ...input, allowPrevious: !input.skuKey && !input.readiness }),
+    sourceLibrary: { readForBackground: async ({ binding, skuKey, owner, categoryRevision, providerContext }, key, purpose) => {
+      await assertProductPreparationBinding({ binding, owner, skuKey });
+      return globalThis.SS_ERP_PREPARATION_IMAGE_CLIENT.createClient({ transport: getByokDeviceTransport() })
+        .readForBackground({ binding, skuKey, categoryRevision, providerContext }, key, purpose);
+    } },
+    getPreparationContext: async (input) => (await getSourceListingWorkflowClient().readProductPreparationContext(input)).context,
+    getReadiness: async (input) => {
+      const response = await getByokDeviceTransport().post('/api/extension-device/byok/product-analysis-readiness', {
+        binding: input.binding, providerOrigin: input.providerOrigin, model: input.model,
+      }, { requiredScope: 'media:execute' });
+      if (response?.state !== 'response' || response.body?.code !== 1) throw new Error('Analysis policy unavailable');
+      return response.body.data;
+    },
+    persistCandidate: async input => (await getSourceListingWorkflowClient().ingestProductPreparationCandidate(input)).analysis,
+    readCandidate: async input => (await getSourceListingWorkflowClient().readProductPreparation(input)).analysis,
+  });
+  return productAnalysisClient;
+}
+function getPreparationCheckpoint() {
+  preparationCheckpoint ||= globalThis.SS_ERP_BYOK_PRODUCT_ANALYSIS_CHECKPOINT.createStore({ sessionStorage: chrome.storage.session });
+  return preparationCheckpoint;
+}
+function getPreparationRuntimeHandler() {
+  preparationRuntimeHandler ||= globalThis.SS_ERP_PREPARATION_RUNTIME_HANDLER.createHandler({
+    runtimeId: chrome.runtime.id, claimFrame: sender => getPrecisionFrameRegistry().claimFrame(sender, { mediaRequired: false }),
+    assertBinding: assertProductPreparationBinding, getClient: getProductAnalysisClient, getCheckpoint: getPreparationCheckpoint,
+    getPermissionBroker: getByokPermissionBroker, getProfileStore: getByokProfileStore,
+  });
+  return preparationRuntimeHandler;
 }
 
 function getByokWorkbenchMediaBroker() {
@@ -6501,6 +6576,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+  if (globalThis.SS_ERP_PREPARATION_RUNTIME_HANDLER?.TYPES.includes(message.type)) {
+    void getPreparationRuntimeHandler().handle(message, sender).then(sendResponse);
+    return true;
+  }
   if (message.type === SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE) {
     Promise.resolve().then(async () => {
       if (!self.SS_ERP_CONFIG || typeof self.SS_ERP_CONFIG.getConfig !== 'function') {
@@ -6637,7 +6716,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'ss-erp:source-listing-workbench-editor-copy-capability', 'ss-erp:source-listing-workbench-editor-copy-generate',
     'ss-erp:source-listing-workbench-editor-attribute-suggestions','ss-erp:source-listing-workbench-editor-logistics-scopes',
     'ss-erp:source-listing-workbench-editor-logistics-services','ss-erp:source-listing-workbench-editor-logistics-quote',
-    'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze'].includes(message.type)) {
+    'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze',
+    ...['capability','context','analyze','read','apply'].map(action => 'ss-erp:source-workbench-preparation-' + action)].includes(message.type)) {
     let mutationAttempted = false;
     Promise.resolve().then(async () => {
       const platform = sourceWorkflowPlatform(message.platform);
@@ -6654,8 +6734,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId, shopId: listing.shopId,
         listingWorkflowId: listing.listingWorkflowId, draftRevision: requested.draftRevision, draftVersion: requested.draftVersion,
       };
-      if (message.type.endsWith('-save') || message.type.endsWith('-copy-generate') || message.type.endsWith('-vision-analyze')) mutationAttempted = true;
-      const result = message.type.endsWith('-save')
+      if (message.type.endsWith('-save') || message.type.endsWith('-copy-generate') || message.type.endsWith('-vision-analyze')
+        || message.type.endsWith('-preparation-analyze') || message.type.endsWith('-preparation-apply')) mutationAttempted = true;
+      const preparationInput = { binding, skuKey: message.skuKey, sourceMediaKeys: message.sourceMediaKeys, categoryRevision: message.categoryRevision,
+        ...(message.operationKey === undefined ? {} : { operationKey: message.operationKey }),
+        ...(message.executionMode === undefined ? {} : { executionMode: message.executionMode }),
+        ...(message.providerContext === undefined ? {} : { providerContext: message.providerContext }) };
+      const result = message.type.endsWith('-preparation-capability') ? await client.readProductPreparationCapability(binding)
+        : message.type.endsWith('-preparation-context') ? await client.readProductPreparationContext(preparationInput)
+        : message.type.endsWith('-preparation-analyze') ? await client.analyzeProductPreparation(preparationInput)
+        : message.type.endsWith('-preparation-read') ? await client.readProductPreparation(preparationInput)
+        : message.type.endsWith('-preparation-apply') ? await client.applyProductPreparation({ binding, analysisInput: message.analysisInput,
+          action: message.action, operationKey: message.operationKey, selectedAttributeIds: message.selectedAttributeIds })
+        : message.type.endsWith('-save')
         ? await client.saveDraftEditor({ binding, action: message.action, operationKey: message.operationKey, value: message.value })
         : message.type.endsWith('-copy-capability') ? await client.readDraftCopyCapability(binding)
         : message.type.endsWith('-copy-generate') ? await client.generateDraftCopy({ binding, operationKey: message.operationKey, fields: message.fields,

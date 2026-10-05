@@ -83,7 +83,12 @@ function normalizeUsage(value: unknown): AiTextUsage | null {
 export function createProductVisionTransport(options: {
   fetch?: typeof fetch;
   lookup?: SourceAddressResolver;
+  maxOutputTokens?: number;
 } = {}) {
+  const maxOutputTokens = options.maxOutputTokens ?? 1200;
+  if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 4096) {
+    throw new ProductVisionTransportError('PRODUCT_VISION_CONFIG_INVALID', 'NOT_SENT');
+  }
   const fetchImpl = options.fetch || (undiciFetch as unknown as typeof fetch);
   const lookup = options.lookup || (async (hostname: string) => dnsLookup(hostname, { all: true, verbatim: true }));
   return async (params: {
@@ -104,7 +109,7 @@ export function createProductVisionTransport(options: {
     const body = JSON.stringify({
       model: config.model,
       temperature: 0,
-      max_tokens: 1200,
+      max_tokens: maxOutputTokens,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },

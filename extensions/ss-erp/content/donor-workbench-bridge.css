@@ -36,15 +36,11 @@
 
 #ss-erp-donor-workbench-frame {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(1440px, calc(100vw - 16px));
-  height: min(960px, calc(100vh - 16px));
-  border: 1px solid rgba(255, 255, 255, .72);
-  border-radius: 22px;
-  background: #f7f8fa;
-  box-shadow: 0 26px 90px rgba(14, 32, 61, .28), 0 0 0 9999px rgba(15, 23, 42, .42);
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  background: transparent;
   pointer-events: auto;
 }
 

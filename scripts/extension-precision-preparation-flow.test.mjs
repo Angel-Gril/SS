@@ -10,6 +10,33 @@ const load = () => {
   );
   return context.SS_ERP_PRECISION_PREPARATION_FLOW;
 };
+test('completed receipt steps resume without another mutation only while the validated context remains current', async () => {
+  const api = load(); let context = 'r1', reviewed = false, mutations = 0;
+  const flow = api.create({ getSource: () => 'source', selectShop: async () => {},
+    steps: [
+      { id: 'analysis', isCurrent: receipt => receipt?.context === context,
+        run: async () => { mutations++; return { completed: true, receipt: { context, operationKey: 'original-operation' } }; } },
+      { id: 'review', run: async () => ({ completed: reviewed }) },
+    ] });
+  await flow.start(['doth']);
+  assert.equal(flow.state().status, 'WAITING_INPUT');
+  reviewed = true; await flow.continue();
+  assert.equal(mutations, 1);
+  assert.equal(flow.state().steps.find(step => step.id === 'analysis').status, 'COMPLETE');
+  context = 'r2'; await flow.start(['doth']);
+  assert.equal(mutations, 2, 'a changed validated context cannot reuse the old receipt');
+});
+test('failed review keeps completed analysis visible and does not invent streaming progress', async () => {
+  const api = load(); const states = []; let calls = 0;
+  const flow = api.create({getSource: () => 'source', selectShop: async () => {}, onState: state => states.push(state),
+    steps: [{id: 'analysis', label: '商品 AI 分析', isCurrent: receipt => receipt?.receiptId === 'receipt',
+      run: async () => {calls++;return {completed: true, receipt: {receiptId: 'receipt'}};}},
+      {id: 'review', label: '检查候选',run: async () => ({completed: false,message: '检查可编辑候选'})}]});
+  await flow.start(['doth']); await flow.continue();
+  assert.equal(calls, 1);
+  assert.equal(flow.state().steps.find(step => step.id === 'review').status, 'WAITING_INPUT');
+  assert.ok(states.every(state => !('percent' in state)), 'no fabricated provider percent');
+});
 test('changing the current shop while a step waits never records preparation for the wrong shop', async () => {
   const api=load(); let currentShop='a',release,next=0;
   const flow=api.create({getSource:()=> 'source',getCurrentShop:()=>currentShop,selectShop:async shop=>{currentShop=shop;},

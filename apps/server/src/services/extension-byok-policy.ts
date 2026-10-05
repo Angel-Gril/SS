@@ -26,6 +26,8 @@ export interface ExtensionByokPolicySnapshot {
   allowedOrigins: string[];
   allowedOperations: ExtensionByokOperation[];
   maxConcurrency: number;
+  analysisEnabled?: boolean;
+  allowedAnalysisModels?: string[];
 }
 
 export type ExtensionByokReadinessReason =
@@ -47,6 +49,24 @@ export interface ExtensionByokPolicyContext {
   deviceSessionId: string;
   providerOrigin: string;
   operation: ExtensionByokOperation;
+}
+
+export interface ExtensionByokProductAnalysisContext {
+  ownerUserId: string;
+  shopId: string;
+  deviceSessionId: string;
+  providerOrigin: string;
+  model: string;
+}
+
+export interface ExtensionByokProductAnalysisReadiness {
+  contractVersion: 'extension-byok-product-analysis-readiness/v1';
+  policyRevision: number | null;
+  mode: ExtensionByokRolloutMode;
+  context: ExtensionByokProductAnalysisContext;
+  maxConcurrency: number;
+  analysis: { enabled: boolean; ready: boolean;
+    reasonCode: ExtensionByokReadinessReason | 'ANALYSIS_DISABLED' | 'MODEL_NOT_ALLOWED' };
 }
 
 interface ExtensionByokCapabilityDecision {
@@ -208,7 +228,13 @@ function boolean(value: unknown): boolean {
 }
 
 export function parseExtensionByokPolicy(value: unknown): ExtensionByokPolicySnapshot {
-  const parsed = exactObject(value, [
+  const raw = parseJsonPolicy(value);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalidPolicy();
+  const optional = raw as Record<string, unknown>;
+  const hasAnalysis = Object.prototype.hasOwnProperty.call(optional, 'analysisEnabled');
+  if (hasAnalysis !== Object.prototype.hasOwnProperty.call(optional, 'allowedAnalysisModels')) return invalidPolicy();
+  const parsed = exactObject(Object.fromEntries(Object.entries(optional)
+    .filter(([key]) => !['analysisEnabled', 'allowedAnalysisModels'].includes(key))), [
     'allowedOperations',
     'allowedOrigins',
     'contractVersion',
@@ -245,6 +271,17 @@ export function parseExtensionByokPolicy(value: unknown): ExtensionByokPolicySna
     allowedOperations: operationList(parsed.allowedOperations),
     maxConcurrency: Number(parsed.maxConcurrency),
   };
+  if (hasAnalysis) {
+    snapshot.analysisEnabled = boolean(optional.analysisEnabled);
+    if (!Array.isArray(optional.allowedAnalysisModels) || optional.allowedAnalysisModels.length > 100) return invalidPolicy();
+    snapshot.allowedAnalysisModels = optional.allowedAnalysisModels.map((value) => {
+      const model = identifier(value);
+      if (model.length > 200 || Array.from(model).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return invalidPolicy();
+      return model;
+    });
+    if (new Set(snapshot.allowedAnalysisModels).size !== snapshot.allowedAnalysisModels.length) return invalidPolicy();
+    if (snapshot.analysisEnabled && !snapshot.allowedAnalysisModels.length) return invalidPolicy();
+  }
   if (snapshot.mode === 'pilot'
     && (!snapshot.ownerUserIds.length
       || !snapshot.shopIds.length
@@ -252,7 +289,8 @@ export function parseExtensionByokPolicy(value: unknown): ExtensionByokPolicySna
     return invalidPolicy();
   }
   if (snapshot.mode !== 'off'
-    && (!snapshot.allowedOrigins.length || !snapshot.allowedOperations.length)) {
+    && (!snapshot.allowedOrigins.length || !snapshot.allowedOperations.length
+      && !(snapshot.analysisEnabled && snapshot.allowedAnalysisModels?.length))) {
     return invalidPolicy();
   }
   return snapshot;
@@ -307,6 +345,16 @@ function deniedReason(
   policy: ExtensionByokPolicySnapshot,
   context: ExtensionByokPolicyContext,
 ): ExtensionByokReadinessReason | null {
+  const scopeReason = deniedScopeReason(policy, context);
+  if (scopeReason) return scopeReason;
+  if (!policy.allowedOperations.includes(context.operation)) return 'OPERATION_NOT_ALLOWED';
+  return null;
+}
+
+function deniedScopeReason(
+  policy: ExtensionByokPolicySnapshot,
+  context: Omit<ExtensionByokPolicyContext, 'operation'>,
+): ExtensionByokReadinessReason | null {
   if (policy.mode === 'off') return 'POLICY_DISABLED';
   if (policy.mode === 'pilot') {
     if (!policy.ownerUserIds.includes(context.ownerUserId)) return 'OWNER_NOT_ALLOWED';
@@ -314,7 +362,6 @@ function deniedReason(
     if (!policy.deviceSessionIds.includes(context.deviceSessionId)) return 'DEVICE_NOT_ALLOWED';
   }
   if (!policy.allowedOrigins.includes(context.providerOrigin)) return 'ORIGIN_NOT_ALLOWED';
-  if (!policy.allowedOperations.includes(context.operation)) return 'OPERATION_NOT_ALLOWED';
   return null;
 }
 
@@ -322,6 +369,28 @@ export function createExtensionByokPolicyEvaluator(options: {
   loadPolicy(): Promise<unknown>;
 }) {
   return {
+    async evaluateProductAnalysis(input: ExtensionByokProductAnalysisContext): Promise<ExtensionByokProductAnalysisReadiness> {
+      let context: ExtensionByokProductAnalysisContext;
+      let policy: ExtensionByokPolicySnapshot | null = null;
+      try {
+        context = { ownerUserId: identifier(input?.ownerUserId), shopId: identifier(input?.shopId),
+          deviceSessionId: identifier(input?.deviceSessionId), providerOrigin: canonicalizeExtensionByokProviderOrigin(input?.providerOrigin),
+          model: identifier(input?.model) };
+        if (context.model.length > 200 || Array.from(context.model).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return invalidPolicy();
+        policy = parseExtensionByokPolicy(await options.loadPolicy());
+      } catch {
+        context = { ownerUserId: '', shopId: '', deviceSessionId: '', providerOrigin: '', model: '' };
+      }
+      const reason = !policy ? 'POLICY_UNAVAILABLE' : deniedScopeReason(policy, context)
+        || (!policy.analysisEnabled ? 'ANALYSIS_DISABLED' : !policy.allowedAnalysisModels?.includes(context.model)
+          ? 'MODEL_NOT_ALLOWED' : !policy.generationEnabled ? 'GENERATION_DISABLED' : 'READY');
+      return assertAiImageWorkbenchPublicPayload({
+        contractVersion: 'extension-byok-product-analysis-readiness/v1' as const,
+        policyRevision: policy?.revision ?? null, mode: policy?.mode ?? 'off', context,
+        maxConcurrency: policy?.maxConcurrency ?? 1,
+        analysis: { enabled: policy?.analysisEnabled === true, ready: reason === 'READY', reasonCode: reason },
+      });
+    },
     async evaluate(input: ExtensionByokPolicyContext): Promise<ExtensionByokReadinessDecision> {
       const context = safeContext(input);
       if (!context) return unavailableDecision(input);

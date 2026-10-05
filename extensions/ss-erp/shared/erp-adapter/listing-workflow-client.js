@@ -1534,6 +1534,7 @@
           || data.available !== (data.reasonCode === 'AVAILABLE') || !text(data.providerFeeNotice, 500)) throw new Error('invalid copy capability response');
         return { state: 'ready', capability: data };
       },
+      ...(global.SS_ERP_PRODUCT_PREPARATION_CLIENT ? global.SS_ERP_PRODUCT_PREPARATION_CLIENT.createClient({ transport }) : {}),
       async readProductVisionCapability(input) {
         var binding = normalizedSuiteBinding(input);
         var response = await transport.post('/api/extension-device/source-workbench/vision/capability', { binding }, { requiredScope: 'listing:review' });

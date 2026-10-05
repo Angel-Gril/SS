@@ -13,7 +13,6 @@
   var extensionOrigin = new URL(chrome.runtime.getURL('/')).origin;
   var currentProduct = null;
   var currentProjection = Contract.createProjection({ platform: sourcePlatform() });
-  var pageOverflow = '';
   var open = false;
   var frameLoadTimer = 0;
   var precisionEnabled = true;
@@ -735,7 +734,8 @@
         : command.type === 'EDITOR_COPY_CAPABILITY' ? 'copy-capability' : command.type === 'EDITOR_COPY_GENERATE' ? 'copy-generate'
         : command.type === 'EDITOR_ATTRIBUTES' ? 'attributes' : command.type === 'EDITOR_DICTIONARY' ? 'dictionary' : 'read';
       const response = await sendRuntimeMessage({
-        type: command.type === 'VISION_CAPABILITY' ? 'ss-erp:source-workbench-vision-capability'
+        type: command.type.startsWith('PREPARATION_') ? 'ss-erp:source-workbench-preparation-' + command.type.slice(12).toLowerCase()
+          : command.type === 'VISION_CAPABILITY' ? 'ss-erp:source-workbench-vision-capability'
           : command.type === 'VISION_ANALYZE' ? 'ss-erp:source-workbench-vision-analyze' : 'ss-erp:source-listing-workbench-editor-' + type,
         sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
         listingWorkflowId: listing.id, binding: command.binding,
@@ -743,6 +743,14 @@
         ...(command.type === 'EDITOR_COPY_GENERATE' ? { operationKey: command.operationKey, fields: command.fields,
           ...(command.userInstructions === undefined ? {} : { userInstructions: command.userInstructions }) } : {}),
         ...(command.type === 'VISION_ANALYZE' ? { operationKey: command.operationKey, skuKey: command.skuKey, sourceMediaKeys: command.sourceMediaKeys } : {}),
+        ...(['PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ'].includes(command.type) ? {
+          skuKey: command.skuKey, sourceMediaKeys: command.sourceMediaKeys, categoryRevision: command.categoryRevision,
+          ...(command.operationKey === undefined ? {} : { operationKey: command.operationKey }),
+          ...(command.executionMode === undefined ? {} : { executionMode: command.executionMode }),
+          ...(command.providerContext === undefined ? {} : { providerContext: command.providerContext }),
+        } : {}),
+        ...(command.type === 'PREPARATION_APPLY' ? { action: command.action, operationKey: command.operationKey,
+          analysisInput: command.analysisInput, selectedAttributeIds: command.selectedAttributeIds } : {}),
         ...(['LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(command.type)?{selection:command.selection}:{}),
         ...(command.type==='LOGISTICS_QUOTE'?{releaseId:command.releaseId,effectiveChecksum:command.effectiveChecksum,stableServiceKey:command.stableServiceKey,items:command.items}:{}),
         ...(command.type === 'EDITOR_CATALOG' ? { query: command.query,...(command.preview===undefined?{}:{preview:command.preview}) } : {}),
@@ -750,11 +758,11 @@
           query: command.query, limit: command.limit } : {}),
       });
       if (!response || !response.ok || !response.result) throw Object.assign(new Error(response && response.error || 'ERP 草稿编辑未完成'), {
-        outcome: response && response.outcome || (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE'].includes(command.type) ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
+        outcome: response && response.outcome || (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'PREPARATION_ANALYZE', 'PREPARATION_APPLY'].includes(command.type) ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
         code: response && response.code || null,
       });
-      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE'].includes(command.type)) await loadProjection({ force: true });
       commandResult(command.requestId, true, '', null, response.result);
+      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true });
     } catch (error) {
       commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code);
     } finally {
@@ -838,8 +846,6 @@
     frame.hidden = false;
     trigger.hidden = true;
     setLegacySurfaceHidden(true);
-    pageOverflow = document.documentElement.style.overflow;
-    document.documentElement.style.overflow = 'hidden';
     publishProjection();
     void loadProjection({ force: true });
     globalThis.clearTimeout(frameLoadTimer);
@@ -860,14 +866,12 @@
   }
 
   function hideFrame() {
-    var wasOpen = open;
     globalThis.clearTimeout(frameLoadTimer);
     frameLoadTimer = 0;
     open = false;
     if (frame) frame.hidden = true;
     if (trigger) trigger.hidden = false;
     setLegacySurfaceHidden(false);
-    if (wasOpen) document.documentElement.style.overflow = pageOverflow;
   }
 
   function setLegacySurfaceHidden(hidden) {
@@ -968,7 +972,7 @@
       return;
     }
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
-    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_ATTRIBUTE_SUGGESTIONS', 'EDITOR_DICTIONARY', 'EDITOR_COPY_CAPABILITY', 'EDITOR_COPY_GENERATE', 'VISION_CAPABILITY', 'VISION_ANALYZE','LOGISTICS_SCOPES','LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(command.type)) void editorCommand(command);
+    if (['PREPARATION_CAPABILITY', 'PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ', 'PREPARATION_APPLY','EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_ATTRIBUTE_SUGGESTIONS', 'EDITOR_DICTIONARY', 'EDITOR_COPY_CAPABILITY', 'EDITOR_COPY_GENERATE', 'VISION_CAPABILITY', 'VISION_ANALYZE','LOGISTICS_SCOPES','LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(command.type)) void editorCommand(command);
     if (command.type === 'PUBLISH') void publishListing(command);
     if (['WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES'].includes(command.type)) void watermarkCommand(command);
     if (['VIDEO_READ', 'VIDEO_SAVE'].includes(command.type)) void videoCommand(command);

@@ -29,7 +29,7 @@
   function text(value, maximum) {
     if (typeof value !== 'string' || !value || value.length > maximum
       || value !== value.normalize('NFKC').trim()
-      || /[\u0000-\u001f\u007f]/u.test(value)) {
+      || Array.from(value).some(function (character) { var code = character.charCodeAt(0); return code < 32 || code === 127; })) {
       throw libraryError('SS_ERP_SOURCE_MEDIA_LIBRARY_INVALID');
     }
     return value;
@@ -75,6 +75,25 @@
     }
     return mimeType === 'image/jpeg' && bytes.length >= 3
       && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+  }
+
+  async function boundedImageBytes(response, declaredLength) {
+    if (!response.body || typeof response.body.getReader !== 'function') return response.arrayBuffer();
+    var reader = response.body.getReader(), chunks = [], total = 0;
+    try {
+      while (true) {
+        var next = await reader.read();
+        if (next.done) break;
+        if (!(next.value instanceof Uint8Array) || (total += next.value.byteLength) > declaredLength || total > MAX_PREVIEW_BYTES) {
+          try { await reader.cancel(); } catch {}
+          throw libraryError('SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
+        }
+        chunks.push(next.value);
+      }
+    } finally { reader.releaseLock(); }
+    var bytes = new Uint8Array(total), offset = 0;
+    chunks.forEach(function (chunk) { bytes.set(chunk, offset); offset += chunk.byteLength; });
+    return bytes.buffer;
   }
 
   function roleLabel(role) {
@@ -164,7 +183,7 @@
       });
     }
 
-    async function open(contextValue, sourceMediaKeyValue, purposeValue) {
+    async function readForBackground(contextValue, sourceMediaKeyValue, purposeValue) {
       var binding = context(contextValue);
       var sourceMediaKey = text(sourceMediaKeyValue, 500);
       var purpose = purposeValue;
@@ -172,9 +191,20 @@
         throw libraryError('SS_ERP_SOURCE_MEDIA_LIBRARY_INVALID');
       }
       var catalog = await loadCatalog(contextValue);
-      if (!catalog.items.some(function (item) { return item.sourceMediaKey === sourceMediaKey; })) {
+      var matches = await Promise.all(catalog.items.map(async function (item) {
+        if (item.sourceMediaKey === sourceMediaKey) return item.sourceMediaKey;
+        // Match the server's existing URL-free public alias; never resolve an
+        // arbitrary URL or a key from a different source/SKU catalog.
+        if (/^media-key-sha256:[a-f0-9]{64}$/u.test(sourceMediaKey)
+          && /^media:[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+\|\d+\|https:\/\/[^\s|]+$/u.test(item.sourceMediaKey)
+          && 'media-key-sha256:' + await sha256(item.sourceMediaKey) === sourceMediaKey) return item.sourceMediaKey;
+        return null;
+      }));
+      matches = matches.filter(function (item) { return item !== null; });
+      if (matches.length !== 1) {
         throw libraryError('SS_ERP_SOURCE_MEDIA_LIBRARY_STALE');
       }
+      sourceMediaKey = matches[0];
       var result = await transport.postRaw(PREVIEW_PATH, {
         snapshotId: binding.sourceCaptureSnapshotId,
         supplyGoodsId: binding.supplyGoodsId,
@@ -204,7 +234,11 @@
         throw libraryError('SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
       }
       var declaredLength = Number(rawLength);
-      var buffer = await response.arrayBuffer();
+      if (declaredLength > MAX_PREVIEW_BYTES) {
+        try { await response.body?.cancel(); } catch {}
+        throw libraryError('SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
+      }
+      var buffer = await boundedImageBytes(response, declaredLength);
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== declaredLength
         || buffer.byteLength < 1 || buffer.byteLength > MAX_PREVIEW_BYTES) {
         throw libraryError('SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
@@ -218,17 +252,23 @@
       if (blob.size !== declaredLength || blob.type !== mimeType) {
         throw libraryError('SS_ERP_SOURCE_MEDIA_PREVIEW_INVALID');
       }
+      return Object.freeze({ blob: blob, mimeType: mimeType, byteLength: declaredLength,
+        sha256: actualSha256, width: width, height: height });
+    }
+
+    async function open(contextValue, sourceMediaKeyValue, purposeValue) {
+      var image = await readForBackground(contextValue, sourceMediaKeyValue, purposeValue);
       return previewBroker.open({
-        resultId: 'br_' + actualSha256.slice(0, 48),
+        resultId: 'br_' + image.sha256.slice(0, 48),
         reviewState: 'CANDIDATE_READY',
-        blob: blob,
-        mimeType: mimeType,
-        byteLength: declaredLength,
-        sha256: actualSha256,
+        blob: image.blob,
+        mimeType: image.mimeType,
+        byteLength: image.byteLength,
+        sha256: image.sha256,
       });
     }
 
-    return Object.freeze({ loadCatalog: loadCatalog, open: open });
+    return Object.freeze({ loadCatalog: loadCatalog, open: open, readForBackground: readForBackground });
   }
 
   global.SS_ERP_BYOK_WORKBENCH_SOURCE_MEDIA_LIBRARY = Object.freeze({

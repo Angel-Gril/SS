@@ -13,6 +13,17 @@ import {
 } from '../services/extension-byok-policy.js';
 
 describe('extension BYOK administrator controls', () => {
+  it('persists an explicit analysis model opt-in without changing image permissions', async () => {
+    const adminPolicy = { contractVersion: EXTENSION_BYOK_ADMIN_POLICY_VERSION, revision: 1, mode: 'pilot',
+      ownerUserIds: ['owner'], shopIds: ['shop'], deviceSessionIds: ['device'],
+      allowedOrigins: ['https://models.example.com'], allowedOperations: ['IMAGE_TO_IMAGE'], maxConcurrency: 1,
+      analysisEnabled: true, allowedAnalysisModels: ['vision-model'] };
+    const parsed = parseExtensionByokAdminPolicy(adminPolicy);
+    expect(parsed).toMatchObject({ analysisEnabled: true, allowedAnalysisModels: ['vision-model'] });
+    const composed = composeExtensionByokPolicyFromAdminControls({ generationEnabled: true, ingestEnabled: false,
+      publishEnabled: false, adminPolicy });
+    expect(composed).toMatchObject({ analysisEnabled: true, allowedAnalysisModels: ['vision-model'], allowedOperations: ['IMAGE_TO_IMAGE'] });
+  });
   it('uses a closed, default-off admin policy', () => {
     const policy = parseExtensionByokAdminPolicy(DEFAULT_EXTENSION_BYOK_ADMIN_POLICY_JSON);
     expect(policy).toEqual({

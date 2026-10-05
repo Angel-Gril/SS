@@ -143,6 +143,11 @@ import { createProductVisionTransport } from './services/product-vision-transpor
 import { createProductVisionWorkbenchService } from './services/product-vision-workbench.js';
 import { createPrismaProductVisionOperationStore } from './services/product-vision-operation-store.js';
 import { extensionProductVisionRoutes } from './routes/extension-product-vision.js';
+import { extensionProductPreparationRoutes } from './routes/extension-product-preparation.js';
+import { createProductPreparationWorkbenchService } from './services/product-preparation-workbench.js';
+import { createPrismaProductPreparationOperationStore } from './services/product-preparation-operation-store.js';
+import { preparationAttributeEligible } from './services/product-preparation-report.js';
+import { extensionByokProductAnalysisReadinessRoutes } from './routes/extension-byok-product-analysis-readiness.js';
 import { createExtensionListingLogisticsPricingService } from './services/extension-listing-logistics-pricing.js';
 import { extensionListingLogisticsPricingRoutes } from './routes/extension-listing-logistics-pricing.js';
 import { createSourceListingAttributeEditorService } from './services/source-listing-attribute-editor.js';
@@ -2929,6 +2934,52 @@ if (isExtensionDeviceAuthEnabled()) {
         return snapshot ? { ...snapshot, payload: snapshot.payload as unknown as SourceProductCaptureV2 } : null;
       },
     }),
+  });
+  await app.register(extensionProductPreparationRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({ config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'], loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId) }),
+    service: createProductPreparationWorkbenchService({ workflow: sourceListingWorkflowService,
+      ownership: sourceListingWorkflowContext, evaluateCapability: getProductVisionCapability,
+      usageStore: createPrismaAiUsageStore(prisma),
+      operationStore: createPrismaProductPreparationOperationStore({ client: prisma as never }),
+      analyzeTransport: createProductVisionTransport({ maxOutputTokens: 4096 }),
+      loadOwnedSnapshot: async ({ ownerUserId, snapshotId }) => {
+        const snapshot = await prisma.sourceCaptureSnapshot.findFirst({ where: { id: snapshotId, subject: { ownerUserId } },
+          select: { id: true, captureHash: true, payloadBytes: true, payload: true } });
+        return snapshot ? { ...snapshot, payload: snapshot.payload as unknown as SourceProductCaptureV2 } : null;
+      },
+      loadAttributeContext: async ({ ownerUserId, draft }) => {
+        if (!draft.category) throw new Error('Product analysis requires a confirmed category');
+        const context = await sourceListingWorkflowAttributeService.previewSchema({ ownerUserId, draft, category: draft.category });
+        const dictionaries: Record<string, Array<{ id: number; value: string }>> = {};
+        for (const field of context.schema.fields.filter(preparationAttributeEligible).slice(0, 40)) {
+          if (field.dictionaryId && field.valuePolicy !== 'FREE_TEXT') {
+            dictionaries[String(field.attributeId)] = (await sourceListingWorkflowAttributeService.searchDictionary({
+              ownerUserId, draft, attributeId: field.attributeId, limit: 30,
+            })).values;
+          }
+        }
+        return { ...context, dictionaries };
+      },
+      validateByokReadiness: async ({ identity, binding, providerContext }) => {
+        if (!identity.deviceSessionId) return { available: false };
+        const readiness = await extensionByokPolicyEvaluator.evaluateProductAnalysis({ ownerUserId: identity.ownerUserId,
+          shopId: binding.shopId, deviceSessionId: identity.deviceSessionId, providerOrigin: providerContext.providerOrigin, model: providerContext.model });
+        return { available: readiness.analysis.ready && readiness.policyRevision === providerContext.policyRevision };
+      },
+    }),
+  });
+  await app.register(extensionByokProductAnalysisReadinessRoutes, {
+    prefix: '/api/extension-device/byok', featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({ config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review', 'media:execute'], loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId) }),
+    loadDraft: async ({ workflowId, ownerUserId }) => {
+      try { return await sourceListingWorkflowService.getDraft({ draftId: workflowId, ownerUserId }); }
+      catch { return null; }
+    },
+    getReadiness: input => extensionByokPolicyEvaluator.evaluateProductAnalysis(input),
   });
   await app.register(extensionWorkbenchWatermarkRoutes, {
     prefix: '/api/extension-device/workbench-watermark',

@@ -25,6 +25,8 @@ interface ByokAdminPolicyDraft {
   allowedOrigins: string[];
   allowedOperations: ByokOperation[];
   maxConcurrency: number;
+  analysisEnabled?: boolean;
+  allowedAnalysisModels?: string[];
 }
 
 const BYOK_ADMIN_KEYS = [
@@ -73,6 +75,8 @@ function parseByokAdminPolicy(value: string): ByokAdminPolicyDraft | null {
       'revision',
       'shopIds',
     ];
+    const hasAnalysis = Object.prototype.hasOwnProperty.call(parsed, 'analysisEnabled');
+    if (hasAnalysis) expectedKeys.push('analysisEnabled', 'allowedAnalysisModels');
     const ownerUserIds = parseStringList(parsed.ownerUserIds);
     const shopIds = parseStringList(parsed.shopIds);
     const deviceSessionIds = parseStringList(parsed.deviceSessionIds);
@@ -91,6 +95,7 @@ function parseByokAdminPolicy(value: string): ByokAdminPolicyDraft | null {
       || !deviceSessionIds
       || !allowedOrigins
       || !allowedOperations
+      || hasAnalysis && (typeof parsed.analysisEnabled !== 'boolean' || !parseStringList(parsed.allowedAnalysisModels))
       || allowedOperations.some((operation) => !BYOK_OPERATIONS.some((item) => item.value === operation))) {
       return null;
     }
@@ -104,6 +109,8 @@ function parseByokAdminPolicy(value: string): ByokAdminPolicyDraft | null {
       allowedOrigins,
       allowedOperations: allowedOperations as ByokOperation[],
       maxConcurrency: Number(parsed.maxConcurrency),
+      ...(hasAnalysis ? { analysisEnabled: parsed.analysisEnabled as boolean,
+        allowedAnalysisModels: parsed.allowedAnalysisModels as string[] } : {}),
     };
   } catch {
     return null;
@@ -299,6 +306,22 @@ export function ExtensionAiAdminControls({
               <p className="text-xs text-muted-foreground">
                 每行一个精确公开 HTTPS origin；不允许路径、查询、通配符、localhost、私网或 metadata 地址。
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="extension-byok-analysis-enabled">商品 AI 分析</Label>
+              <label className="flex items-center gap-2 text-sm">
+                <input id="extension-byok-analysis-enabled" type="checkbox" checked={policy.analysisEnabled === true}
+                  onChange={(event) => updatePolicy({ analysisEnabled: event.target.checked,
+                    allowedAnalysisModels: policy.allowedAnalysisModels ?? [] })} />
+                <span>允许已授权设备使用自己的 API 分析商品图片与文案</span>
+              </label>
+              <Label htmlFor="extension-byok-analysis-models">允许的分析模型</Label>
+              <textarea id="extension-byok-analysis-models" rows={2} value={(policy.allowedAnalysisModels ?? []).join('\n')}
+                onChange={(event) => updatePolicy({ analysisEnabled: policy.analysisEnabled === true,
+                  allowedAnalysisModels: lines(event.target.value) })}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm" />
+              <p className="text-xs text-muted-foreground">默认关闭；沿用上述账号、店铺、设备与接口来源范围，不授予图片应用或上架权限。</p>
             </div>
 
             <div className="space-y-2">

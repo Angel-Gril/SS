@@ -6,9 +6,12 @@
       index = 0,
       epoch = 0,
       running = false;
+    var receipts = new Map(), stepStates = new Map();
     var state = { status: 'IDLE', shopId: '', stepId: '', message: '', completedShopIds: [] };
     function snapshot() {
-      return Object.assign({}, state, { completedShopIds: state.completedShopIds.slice() });
+      return Object.assign({}, state, { completedShopIds: state.completedShopIds.slice(),
+        steps: options.steps.map(function (step) { return { id: step.id, label: step.label || step.id,
+          status: stepStates.get(state.shopId + ':' + step.id) || 'PENDING' }; }) });
     }
     function publish(fields) {
       state = Object.assign({}, state, fields);
@@ -47,6 +50,15 @@
           }
           if (!currentShop(expected)) return snapshot();
           for (var step of options.steps) {
+            var stepKey = shops[index] + ':' + step.id;
+            if (receipts.has(stepKey) && typeof step.isCurrent === 'function'
+              && await step.isCurrent(receipts.get(stepKey), shops[index])) {
+              if (!currentShop(expected)) return snapshot();
+              stepStates.set(stepKey, 'COMPLETE');
+              continue;
+            }
+            receipts.delete(stepKey);
+            stepStates.set(stepKey, 'RUNNING');
             publish({
               status: 'RUNNING',
               shopId: shops[index],
@@ -58,17 +70,23 @@
               result = await step.run(shops[index]);
             } catch (error) {
               if (!currentShop(expected)) return snapshot();
+              stepStates.set(stepKey, error.outcome === 'UNKNOWN_OUTCOME' ? 'RECOVERY_REQUIRED' : 'WAITING_INPUT');
               return publish({
                 status: error.outcome === 'UNKNOWN_OUTCOME' ? 'RECOVERY_REQUIRED' : 'WAITING_INPUT',
                 message: error.message || '当前步骤未完成，请处理后继续。',
               });
             }
             if (!currentShop(expected)) return snapshot();
-            if (!result || !result.completed)
+            if (!result || !result.completed) {
+              stepStates.set(stepKey, 'WAITING_INPUT');
               return publish({
                 status: 'WAITING_INPUT',
                 message: result?.message || step.label || step.id,
               });
+            }
+            stepStates.set(stepKey, 'COMPLETE');
+            if (result.receipt !== undefined) receipts.set(stepKey, result.receipt);
+            publish({ message: result.message || (step.label || step.id) + '已完成' });
           }
           if (!currentShop(expected)) return snapshot();
           state.completedShopIds.push(shops[index]);
@@ -96,7 +114,9 @@
         )
           throw new Error('请选择不同的已授权店铺');
         epoch += 1;
-        source = options.getSource();
+        var nextSource = options.getSource();
+        if (nextSource !== source) { receipts.clear(); stepStates.clear(); }
+        source = nextSource;
         shops = selectedShops.slice();
         index = 0;
         state.completedShopIds = [];

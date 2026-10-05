@@ -200,6 +200,14 @@
       '/api/extension-device/source-workbench/editor/copy-generate',
       '/api/extension-device/source-workbench/vision/capability',
       '/api/extension-device/source-workbench/vision/analyze',
+      '/api/extension-device/source-workbench/preparation/capability',
+      '/api/extension-device/source-workbench/preparation/context',
+      '/api/extension-device/source-workbench/preparation/analyze',
+      '/api/extension-device/source-workbench/preparation/read',
+      '/api/extension-device/source-workbench/preparation/apply',
+      '/api/extension-device/source-workbench/preparation/byok-candidates',
+      '/api/extension-device/source-workbench/preparation/image',
+      '/api/extension-device/byok/product-analysis-readiness',
       '/api/extension-device/workbench-watermark/preview',
       '/api/extension-device/workbench-watermark/apply',
       '/api/extension-device/workbench-watermark/templates',
@@ -594,7 +602,8 @@
         } else if (method === 'POST') {
           if (bodyMode === 'hosted-preview'
             && path !== HOSTED_PREVIEW_CONSUME_PATH
-            && path !== SOURCE_MEDIA_PREVIEW_PATH) {
+            && path !== SOURCE_MEDIA_PREVIEW_PATH
+            && path !== '/api/extension-device/source-workbench/preparation/image') {
             throw new TypeError('hosted preview response path is invalid');
           }
           if (!bodyValue || typeof bodyValue !== 'object' || Array.isArray(bodyValue)) {
@@ -636,6 +645,7 @@
         }
         var timeoutId;
         var timeoutMs = ['/api/extension-device/source-workbench/vision/analyze',
+          '/api/extension-device/source-workbench/preparation/analyze',
           '/api/extension-device/source-workbench/editor/copy-generate'].includes(path)
           ? PRODUCT_ANALYSIS_REQUEST_TIMEOUT_MS : MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
           ? maskRequestTimeoutMs
@@ -677,7 +687,7 @@
           var baseUrl = requiredText(operation.baseUrl, 'baseUrl').replace(/\/+$/, '');
           var headers = {
             Accept: bodyMode === 'hosted-preview'
-              ? path === SOURCE_MEDIA_PREVIEW_PATH
+              ? path === SOURCE_MEDIA_PREVIEW_PATH || path === '/api/extension-device/source-workbench/preparation/image'
                 ? 'image/png, image/jpeg'
                 : 'image/png'
               : 'application/json',

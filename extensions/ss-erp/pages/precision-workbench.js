@@ -18,6 +18,7 @@ import { createSourceVideoView } from './donor/source-video-view.js';
 import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
 import { createWatermarkEditor } from './donor/watermark-editor.js';
 import { createVideoPublishEditor } from './donor/video-publish-editor.js';
+import { createPreparationAnalysisView, renderPreparationProcess } from './donor/preparation-analysis-view.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -85,13 +86,13 @@ function command(type, fields = {}) {
     try { Contract.parseFrameCommand(outgoing); }
     catch { return Promise.reject(Object.assign(new Error('套图输入未通过校验，请重新读取并检查参考图与创作方向'), { outcome: 'NOT_SUBMITTED' })); }
   }
-  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY', 'VIDEO_SAVE'].includes(type)
+  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'PREPARATION_ANALYZE', 'PREPARATION_APPLY', 'CREATE_TRANSLATION', 'WATERMARK_APPLY', 'VIDEO_SAVE'].includes(type)
     || type === 'PUBLISH' && fields.action === 'CONFIRM';
   const promise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(requestId);
       reject(Object.assign(new Error('ERP 响应超时，请重新读取状态'), { outcome: mutation ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED' }));
-    }, ['VISION_ANALYZE', 'EDITOR_COPY_GENERATE'].includes(type) ? 220000 : 90000);
+    }, ['VISION_ANALYZE', 'PREPARATION_ANALYZE', 'EDITOR_COPY_GENERATE'].includes(type) ? 220000 : 90000);
     pending.set(requestId, { resolve, reject, timer, type, mutation });
   });
   parent.postMessage(outgoing, parentOrigin || '*');
@@ -100,6 +101,8 @@ function command(type, fields = {}) {
 
 const session = Workflow.createSession({ getProjection: () => projection, send: command });
 let preparation;
+let preparationAnalysis;
+let preparationSchemaContext='',preparationSchemaRevision=null;
 function listing() { return session.currentDraft(selectedShopId); }
 function status(message, variant = '') {
   element('status-text').textContent = message;
@@ -425,7 +428,7 @@ const attributes = createOfficialAttributeEditor({
   }, getBinding: currentEditorBinding,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), onSave: (value) => saveEditor('ATTRIBUTES', value),
   onDirty: markListingEdited, onReset: () => { for (const key of unsavedListingFields) if (key.startsWith('official-')) unsavedListingFields.delete(key); },
-  onChanged: (rebuild) => { if (rebuild) { editorSignature = ''; renderEditor(); } }, report, status,
+  onChanged: (rebuild) => { if (rebuild) { editorSignature = ''; renderEditor(); } preparationAnalysis?.sync(); }, report, status,
 });
 let attributeSuggestionReviewed='';
 const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
@@ -671,6 +674,43 @@ function currentEditorBinding() {
   return { snapshotId: projection.handoff.snapshotId, supplyGoodsId: projection.handoff.supplyGoodsId,
     shopId: draft.shopId, listingWorkflowId: draft.id, draftRevision: draft.revision, draftVersion: draft.draftVersion };
 }
+function applyAnalysisVisual(description) {
+  const brief=Prompt.compileVisualCreativeBrief(description);
+  visualJson.value=JSON.stringify(description,null,2);promptText.value=brief?.prompt||'';
+  userPromptEdited=true;visualJsonError='';renderPromptState();
+  status('商品视觉 JSON 已用于可编辑创作方向，尚未发起生图。','ok');
+}
+preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root'),runtime:privateRuntime,command,
+  getBinding:()=>currentEditorForPublish()?currentEditorBinding():null,getSkuKey:()=>selectedSkuKey,
+  getCategoryRevision:()=>{
+    const data=currentEditorForPublish(),context=JSON.stringify([editorIdentity(data),data?.category,data?.selectedSkuKeys]);
+    if(context!==preparationSchemaContext){preparationSchemaContext=context;preparationSchemaRevision=null;}
+    const schema=attributes.currentSchemaRevision();if(schema)preparationSchemaRevision=schema;
+    return{catalogRevision:data?.category?.catalogRevision,schemaRevision:preparationSchemaRevision};
+  },
+  getMedia:()=>eligibleReferenceMedia().filter(item=>!item.skuKeys.length||item.skuKeys.includes(selectedSkuKey)),
+  getAttributeNames:()=>new Map(Object.values(attributes.templateMeta()?.fieldMeta||{}).filter(field=>field.attributeId).map(field=>[field.attributeId,field.editorLabel])),
+  getBusy:()=>projection.busy||saveBusy||mediaMutationBusy||planSubmissionBusy||Boolean(lastSave),
+  getRecoveryBusy:()=>projection.busy||saveBusy||mediaMutationBusy||planSubmissionBusy,
+  getCopyCandidates:()=>currentEditorForPublish()?.copy?.pendingCandidates||[],
+  onCuration(keys,analyzedKeys){for(const key of analyzedKeys)referenceKeys.delete(key);for(const key of keys.slice(0,5))referenceKeys.add(key);referenceSelectionInitialized=true;mediaSignature='';renderMedia();},
+  onVisual:applyAnalysisVisual,
+  onAttributes:async request=>{
+    const response=await command('PREPARATION_APPLY',{...request,listingWorkflowId:request.binding.listingWorkflowId});
+    const saved=response.data?.application||response.data;
+    if(!saved?.binding||saved.binding.shopId!==request.binding.shopId||saved.binding.listingWorkflowId!==request.binding.listingWorkflowId)throw Object.assign(new Error('AI 属性保存回执不完整，请核对原保存'),{outcome:'UNKNOWN_OUTCOME'});
+    await command('REFRESH');await loadEditor();await attributes.load(true);
+    attributeSuggestionReviewed=attributeSuggestionContext();
+    status('已按 AI 候选依据保存选中属性，请补齐未确认事实。','ok');
+  },
+  saveCopy:async(value,replayRequest,beforeDispatch)=>{
+    if(replayRequest){lastSave=replayRequest;return saveEditor('COPY_CANDIDATE',value,true);}
+    return saveEditor('COPY_CANDIDATE',value,false,beforeDispatch);
+  },approveCopy:candidateId=>saveEditor('COPY_APPROVE',{candidateId}),
+  onCompleted:step=>{
+    if(step==='analysis'&&preparation?.state().status==='RECOVERY_REQUIRED')preparation.markRecovered();
+    if(['analysis','analysis-review'].includes(step)&&['WAITING_INPUT','RECOVERY_REQUIRED'].includes(preparation?.state().status))queueMicrotask(()=>{void continuePreparation().catch(report);});
+  },onMessage:status,report});
 function editorIdentity(data) {
   return data?.binding ? JSON.stringify(['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].map((key) => data.binding[key])) : '';
 }
@@ -711,7 +751,7 @@ async function loadEditor() {
   } finally { editorLoading = false; }})();
   try{return await editorReadTask;}finally{editorReadTask=null;}
 }
-async function saveEditor(action, value, replay = false) {
+async function saveEditor(action, value, replay = false, beforeDispatch = null) {
   if (saveBusy) return;
   if (!editor) throw new Error('请先读取 ERP 草稿详情');
   if (lastSave && !replay) throw new Error('上次保存结果尚待核对，请先核对原操作');
@@ -727,8 +767,11 @@ async function saveEditor(action, value, replay = false) {
   let readbackWarning = '';
   render();
   try {
-    if (!replay) lastSave = { listingWorkflowId: editor.binding.listingWorkflowId, binding: { ...editor.binding }, action,
-      value, operationKey: 'precision-editor:' + crypto.randomUUID() };
+    if (!replay) {
+      const request={listingWorkflowId:editor.binding.listingWorkflowId,binding:{...editor.binding},action,value,operationKey:'precision-editor:'+crypto.randomUUID()};
+      if(beforeDispatch)await beforeDispatch(request);
+      lastSave=request;
+    }
     const response = action === 'COPY_GENERATE'
       ? await command('EDITOR_COPY_GENERATE', { binding: lastSave.binding, listingWorkflowId: lastSave.listingWorkflowId,
         operationKey: lastSave.operationKey, ...lastSave.value })
@@ -1202,6 +1245,7 @@ function render() {
   attributeSuggestions.sync();
   suggestionsOpen.disabled=!currentEditorForPublish()?.category||projection.busy||saveBusy||Boolean(lastSave)||[...unsavedListingFields].some(key=>key.startsWith('official-'));
   copyEditor.sync();
+  preparationAnalysis?.sync();
   visionTool.sync();
   pricingTool.sync();
   categoryPicker.syncBinding();
@@ -1282,22 +1326,42 @@ async function ensureCurrentDraft(){
   render();
   return draft;
 }
-const preparationBar=make('div','precision-preparation-bar'),preparationState=make('span','','商品准备：选择类目、确认属性和价格，再处理图片。');preparationState.id='precision-preparation-state';
+const preparationBar=make('div','precision-preparation-bar'),preparationState=make('span','','商品准备：采集与 SKU → 类目 → AI 筛图与分析 → 属性/俄文候选 → 图片审核。');preparationState.id='precision-preparation-state';
 const preparationContinue=make('button','ghost','继续处理'),preparationStop=make('button','ghost','停止后续步骤'),prepareShops=make('button','ghost','多店连续准备');
 const preparationRecover=make('button','ghost','核对建草稿结果');preparationRecover.id='precision-preparation-recover';preparationRecover.disabled=true;
 preparationContinue.id='precision-preparation-continue';preparationStop.id='precision-preparation-stop';prepareShops.id='precision-preparation-shops';
-preparationBar.append(preparationState,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
+const analysisOpen=make('button','ghost','商品 AI 分析');analysisOpen.id='precision-preparation-analysis-open';
+analysisOpen.addEventListener('click',event=>{if(event.isTrusted&&!analysisOpen.disabled)void(async()=>{await loadEditor();await attributes.load(true);await preparationAnalysis.open();})().catch(report);});
+preparationBar.append(preparationState,analysisOpen,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
+const processStages=make('div','precision-preparation-process');processStages.id='precision-preparation-process';element('ai-output').before(processStages);
 preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
  getSource:()=>JSON.stringify([projection.source.platform,projection.source.sourceProductId,projection.handoff?.snapshotId]),getCurrentShop:()=>selectedShopId,
  selectShop:async shopId=>{if(!projection.shops.some(shop=>shop.id===shopId))throw Error('店铺授权已变化');selectedShopId=shopId;render();await ensureCurrentDraft();},
- onState:value=>{preparationState.textContent=`${projection.shops.find(shop=>shop.id===value.shopId)?.name||'当前商品'}：${value.message}`;preparationContinue.disabled=value.status==='RUNNING'||value.status==='RECOVERY_REQUIRED';preparationStop.disabled=value.status!=='RUNNING'&&value.status!=='WAITING_INPUT';},
+ onState:value=>{preparationState.textContent=`${projection.shops.find(shop=>shop.id===value.shopId)?.name||'当前商品'}：${value.message}`;preparationContinue.disabled=value.status==='RUNNING'||value.status==='RECOVERY_REQUIRED';preparationStop.disabled=value.status!=='RUNNING'&&value.status!=='WAITING_INPUT';
+   renderPreparationProcess(processStages,value);element('process-title').textContent=value.message;
+   element('process-detail').textContent='按当前处理阶段展示。图片筛选、商品观察和文案由本次分析生成，请检查后确认。';
+   element('process-status-badge').textContent=({RUNNING:'处理中',COMPLETE:'已完成',WAITING_INPUT:'等待确认',RECOVERY_REQUIRED:'核对原请求',STOPPED:'已停止',CONTEXT_CHANGED:'上下文已变化'})[value.status]||'待开始';},
  steps:[
   {id:'draft',label:'读取当前草稿',run:async()=>{await loadEditor();if(!currentEditorForPublish())return{completed:false,message:'请读取当前草稿后继续'};if(lastSave)throw Object.assign(Error('先核对原保存请求'),{outcome:'UNKNOWN_OUTCOME'});return{completed:true};}},
   {id:'category',label:'确认官方类目',run:async()=>{if(currentEditorForPublish()?.category)return{completed:true};await categoryPicker.open();return{completed:false,message:'在当前窗口选择官方类目，保存后继续处理'};}},
+  {id:'analysis',label:'AI 筛图、商品视觉与候选生成',isCurrent:()=>preparationAnalysis.current(),run:async()=>{
+    await attributes.load(true);
+    const result=await preparationAnalysis.run();
+    if(result?.receipt)return{completed:true,receipt:{operationKey:result.receipt.operationKey},message:'AI 分析已完成，请检查筛图、视觉、属性与俄文候选'};
+    if(result?.unavailable){log(result.message);return{completed:true,message:result.message};}
+    return{completed:false,message:'商品 AI 分析等待费用确认，可在同窗候选中继续'};
+  }},
+  {id:'analysis-review',label:'确认图片筛选与视觉候选',run:async()=>{
+    if(!preparationAnalysis.current())return{completed:true};
+    if(preparationAnalysis.state().review.curationConfirmed)return{completed:true};
+    await preparationAnalysis.open();return{completed:false,message:'检查筛图、商品观察和可编辑候选；确认筛图后继续'};
+  }},
   {id:'attributes',label:'匹配商品属性',run:async()=>{await attributes.load(true);if(attributeSuggestionReviewed!==attributeSuggestionContext()){await attributeSuggestions.open();return{completed:false,message:'检查自动匹配属性并确认应用，未匹配字段在原表格补充后继续'};}return{completed:true};}},
   {id:'packaging',label:'确认包装',run:async()=>{if(currentEditorForPublish()?.packaging.length===editorSkuKeys().length)return{completed:true};element('product-editor').scrollIntoView({block:'start'});return{completed:false,message:'填写当前 SKU 实测包装并保存，随后继续'};}},
   {id:'pricing',label:'计算售价',run:async()=>{const data=currentEditorForPublish();if(data?.pricing?.items.length===data.selectedSkuKeys.length&&data.freshness?.pricing==='CURRENT')return{completed:true};pricingTool.open();return{completed:false,message:'按店铺物流计算并预览售价，保存价格后继续'};}},
-  {id:'copy',label:'生成俄文文案',run:async()=>{if(currentEditorForPublish()?.copy.titleRu&&editor.freshness?.content==='CURRENT')return{completed:true};await copyEditor.open();return{completed:false,message:'生成或编辑俄文文案，预览并明确审核后继续'};}},
+  {id:'copy',label:'确认俄文文案',run:async()=>{if(currentEditorForPublish()?.copy.titleRu&&editor.freshness?.content==='CURRENT')return{completed:true};
+    if(preparationAnalysis.current()){await preparationAnalysis.open();return{completed:false,message:'编辑同一分析返回的俄文候选，保存为待审核文案并明确审核后继续'};}
+    await copyEditor.open();return{completed:false,message:'生成或编辑俄文文案，预览并明确审核后继续'};}},
   {id:'media',label:'处理商品图片',run:async()=>{const data=currentEditorForPublish();if(data?.mediaAssignments?.length&&data.freshness?.media==='CURRENT')return{completed:true};imageWorkspace.open(selectedSkuKey);renderMedia();return{completed:false,message:'在图片窗口处理、审核并应用素材，确认费用后才会生图'};}},
   {id:'validation',label:'校验上架信息',run:async()=>{if(unsavedListingFields.size)return{completed:false,message:'还有编辑尚未保存，请保存后继续'};await attributes.load(true);await saveEditor('VALIDATE',{schemaRevision:attributes.currentSchemaRevision()});return{completed:serverPublishReady(),message:editor.blockers?.map(item=>item.message).join('；')||'检查上架信息后继续'};}},
  ]});
@@ -1326,6 +1390,8 @@ trusted('settings-btn', () => {
   const values = [['商品标题', projection.source.title], ['来源平台', projection.source.platform], ['来源类目', projection.source.categoryName || '未提供'],
     ['当前店铺', projection.shops.find(shop => shop.id === selectedShopId)?.name || '未选择'], ['已选 SKU', String(draftSkuChoices().length)], ['来源图片', String(projection.media.length)], ['店铺草稿', draft ? '已创建' : '尚未创建']];
   info.replaceChildren(...values.map(([label, value]) => { const row = make('div', 'field'); row.append(make('label', '', label), make('div', '', value)); return row; }));
+  const diagnostics=make('details','precision-preparation-diagnostics');diagnostics.append(make('summary','','高级诊断'),make('pre','',JSON.stringify({draft: draft?{id:draft.id,revision:draft.revision,draftVersion:draft.draftVersion}:null,policy:projection.billing?.policyRevision||'由 ERP 核验'},null,2)));
+  info.append(diagnostics);void preparationAnalysis.settings(info,()=>byok.openSettings()).catch(report);
   openModal('basic-modal');
 });
 trusted('category-select-btn', async () => {

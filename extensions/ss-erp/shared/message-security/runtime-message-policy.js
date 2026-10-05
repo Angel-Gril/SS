@@ -104,6 +104,11 @@
   ]);
 
   var SOURCE_PRODUCT_MUTATION_TYPES = setOf([
+    'ss-erp:source-workbench-preparation-capability',
+    'ss-erp:source-workbench-preparation-context',
+    'ss-erp:source-workbench-preparation-analyze',
+    'ss-erp:source-workbench-preparation-read',
+    'ss-erp:source-workbench-preparation-apply',
     'ss-erp:precision-source-attestation',
     'ss-erp:source-listing-workbench-draft-create',
     'ss-erp:source-listing-workbench-editor-save',
@@ -286,6 +291,9 @@
   }
 
   var KNOWN_TYPES = union(
+    setOf(['ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
+      'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',
+      'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear']),
     SETTINGS_ONLY_TYPES,
     CONFIG_IMPORT_TYPES,
     ERP_BRIDGE_TYPES,
@@ -416,7 +424,14 @@
   function isAllowedRuntimeMessageSender(type, sender, runtimeId) {
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
+    if (messageType.startsWith('ss-erp:product-analysis-') || messageType.startsWith('ss-erp:preparation-checkpoint-')) {
+      return sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
+        && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)
+        && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId);
+    }
     var kind = senderKind(sender, runtimeId);
+    if (messageType.startsWith('ss-erp:source-workbench-preparation-')
+      && (sender?.frameId !== 0 || typeof sender?.documentId !== 'string' || !sender.documentId)) return false;
     if (['ss-erp:source-listing-workbench-editor-save', 'ss-erp:source-listing-workbench-publish', 'ss-erp:precision-source-attestation',
       'ss-erp:source-listing-workbench-editor-copy-capability', 'ss-erp:source-listing-workbench-editor-copy-generate',
       'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze',

@@ -23,6 +23,8 @@ export interface ExtensionByokAdminPolicy {
   allowedOrigins: string[];
   allowedOperations: ExtensionByokOperation[];
   maxConcurrency: number;
+  analysisEnabled?: boolean;
+  allowedAnalysisModels?: string[];
 }
 
 const DEFAULT_EXTENSION_BYOK_ADMIN_POLICY: ExtensionByokAdminPolicy = {
@@ -135,7 +137,13 @@ function operationList(value: unknown): ExtensionByokOperation[] {
 }
 
 export function parseExtensionByokAdminPolicy(value: unknown): ExtensionByokAdminPolicy {
-  const parsed = exactObject(value, [
+  const raw = parseJson(value);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalidAdminPolicy();
+  const optional = raw as Record<string, unknown>;
+  const hasAnalysis = Object.prototype.hasOwnProperty.call(optional, 'analysisEnabled');
+  if (hasAnalysis !== Object.prototype.hasOwnProperty.call(optional, 'allowedAnalysisModels')) return invalidAdminPolicy();
+  const parsed = exactObject(Object.fromEntries(Object.entries(optional)
+    .filter(([key]) => !['analysisEnabled', 'allowedAnalysisModels'].includes(key))), [
     'allowedOperations',
     'allowedOrigins',
     'contractVersion',
@@ -167,12 +175,21 @@ export function parseExtensionByokAdminPolicy(value: unknown): ExtensionByokAdmi
     allowedOperations: operationList(parsed.allowedOperations),
     maxConcurrency: Number(parsed.maxConcurrency),
   };
+  if (hasAnalysis) {
+    if (typeof optional.analysisEnabled !== 'boolean' || !Array.isArray(optional.allowedAnalysisModels)
+      || optional.allowedAnalysisModels.length > 100) return invalidAdminPolicy();
+    policy.analysisEnabled = optional.analysisEnabled;
+    policy.allowedAnalysisModels = identifierList(optional.allowedAnalysisModels);
+    if (policy.allowedAnalysisModels.some(model => model.length > 200)
+      || policy.analysisEnabled && !policy.allowedAnalysisModels.length) return invalidAdminPolicy();
+  }
   if (policy.mode === 'pilot'
     && (!policy.ownerUserIds.length || !policy.shopIds.length || !policy.deviceSessionIds.length)) {
     return invalidAdminPolicy();
   }
   if (policy.mode !== 'off'
-    && (!policy.allowedOrigins.length || !policy.allowedOperations.length)) {
+    && (!policy.allowedOrigins.length || !policy.allowedOperations.length
+      && !(policy.analysisEnabled && policy.allowedAnalysisModels?.length))) {
     return invalidAdminPolicy();
   }
   return policy;

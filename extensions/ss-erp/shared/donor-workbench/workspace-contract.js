@@ -3,6 +3,7 @@
 
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
   var COMMAND_TYPES = new Set([
+    'PREPARATION_CAPABILITY', 'PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ', 'PREPARATION_APPLY',
     'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
     'OPEN_EMBEDDED_MEDIA',
     'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK', 'LOAD_BILLING',
@@ -733,12 +734,19 @@
         ...(item.priceConfirmation === undefined ? {} : { priceConfirmation: Object.freeze({ ...item.priceConfirmation }) }) });
     }
     if (!item) throw new TypeError('invalid donor workbench command');
-    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_ATTRIBUTE_SUGGESTIONS', 'EDITOR_DICTIONARY', 'EDITOR_COPY_CAPABILITY', 'EDITOR_COPY_GENERATE', 'VISION_CAPABILITY', 'VISION_ANALYZE','LOGISTICS_SCOPES','LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(item.type)) {
+    if (['PREPARATION_CAPABILITY', 'PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ', 'PREPARATION_APPLY','EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_ATTRIBUTE_SUGGESTIONS', 'EDITOR_DICTIONARY', 'EDITOR_COPY_CAPABILITY', 'EDITOR_COPY_GENERATE', 'VISION_CAPABILITY', 'VISION_ANALYZE','LOGISTICS_SCOPES','LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(item.type)) {
       var editorFields = ['contractVersion', 'type', 'requestId', 'listingWorkflowId', 'binding'];
       if (item.type === 'EDITOR_CATALOG') { editorFields.push('query'); if(item.preview!==undefined)editorFields.push('preview'); }
       if (item.type === 'EDITOR_DICTIONARY') editorFields.push('schemaRevision', 'attributeId', 'query', 'limit');
       if (item.type === 'EDITOR_SAVE') editorFields.push('action', 'operationKey', 'value');
       if (item.type === 'VISION_ANALYZE') editorFields.push('skuKey', 'sourceMediaKeys', 'operationKey');
+      if (['PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ'].includes(item.type)) {
+        editorFields.push('skuKey', 'sourceMediaKeys', 'categoryRevision');
+        if (item.type !== 'PREPARATION_CONTEXT') editorFields.push('operationKey');
+        if (item.executionMode !== undefined) editorFields.push('executionMode');
+        if (item.providerContext !== undefined) editorFields.push('providerContext');
+      }
+      if (item.type === 'PREPARATION_APPLY') editorFields.push('analysisInput', 'operationKey', 'action', 'selectedAttributeIds');
       if(['LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(item.type))editorFields.push('selection');
       if(item.type==='LOGISTICS_QUOTE')editorFields.push('releaseId','effectiveChecksum','stableServiceKey','items');
       if (item.type === 'EDITOR_COPY_GENERATE') {
@@ -753,6 +761,23 @@
         || !Number.isSafeInteger(editorBinding.draftRevision) || editorBinding.draftRevision < 1
         || !Number.isSafeInteger(editorBinding.draftVersion) || editorBinding.draftVersion < 1) throw new TypeError('invalid editor binding');
       if (item.type === 'EDITOR_CATALOG' && (typeof item.query !== 'string' || item.query.length > 100)) throw new TypeError('invalid category query');
+      if (item.type.startsWith('PREPARATION_') && item.type !== 'PREPARATION_CAPABILITY') {
+        var preparationApi = globalThis.SS_ERP_PRODUCT_PREPARATION_CLIENT;
+        if (!preparationApi) throw new TypeError('preparation contract unavailable');
+        if (item.type === 'PREPARATION_APPLY') {
+          preparationApi.normalizeRequest(item.analysisInput);
+          if (item.action !== 'ATTRIBUTES' || !text(item.operationKey, 128) || item.operationKey.length < 8
+            || !Array.isArray(item.selectedAttributeIds) || !item.selectedAttributeIds.length || item.selectedAttributeIds.length > 100
+            || new Set(item.selectedAttributeIds).size !== item.selectedAttributeIds.length
+            || !item.selectedAttributeIds.every(function (value) { return Number.isSafeInteger(value) && value > 0; })) throw new TypeError('invalid preparation application');
+        } else {
+          var preparationInput = { binding: item.binding, skuKey: item.skuKey, sourceMediaKeys: item.sourceMediaKeys, categoryRevision: item.categoryRevision };
+          if (item.operationKey !== undefined) preparationInput.operationKey = item.operationKey;
+          if (item.executionMode !== undefined) preparationInput.executionMode = item.executionMode;
+          if (item.providerContext !== undefined) preparationInput.providerContext = item.providerContext;
+          preparationApi.normalizeRequest(preparationInput, item.type === 'PREPARATION_CONTEXT');
+        }
+      }
       if(['LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(item.type)&&(!exactKeys(item.selection,['assignmentId','companyId','warehouseId','originCountryUid','originCityUid','destinationCountryUid','destinationLocationUid'])
         ||!Object.values(item.selection).every(function(value){return text(value,200);})))throw new TypeError('invalid logistics scope');
       if(item.type==='LOGISTICS_QUOTE'&&(!text(item.releaseId,200)||!/^[a-f0-9]{64}$/u.test(item.effectiveChecksum)||!text(item.stableServiceKey,1000)

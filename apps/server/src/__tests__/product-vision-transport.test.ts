@@ -40,6 +40,13 @@ afterEach(() => {
 });
 
 describe('product vision transport', () => {
+  it('allows bounded richer product reports while retaining the original vision output limit', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => response());
+    const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, maxOutputTokens: 4096 });
+    await analyze({ config, prompt: 'Generate product preparation candidates.', images });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)).max_tokens).toBe(4096);
+    expect(() => createProductVisionTransport({ maxOutputTokens: 4097 })).toThrow();
+  });
   it('sends normalized JPEG bytes in one constrained multimodal POST and returns safe usage', async () => {
     const { fetchImpl, analyze } = fixture();
     await expect(analyze({ config, prompt: 'Describe only visible product details.', images }))

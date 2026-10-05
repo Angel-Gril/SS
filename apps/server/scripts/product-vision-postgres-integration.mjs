@@ -21,6 +21,7 @@ const evidenceDir = mkdtempSync(join(tmpdir(), 'ss-erp-product-vision-pg-'));
 const receiptPath = join(evidenceDir, 'summary.safe.json');
 const logPath = join(evidenceDir, 'test.safe.log');
 const migrations = readdirSync(join(serverRoot, 'prisma', 'migrations'), { withFileTypes: true }).filter(entry => entry.isDirectory()).length;
+const includePreparation = process.argv.includes('--preparation');
 const receipt = { contractVersion: 'product-vision-postgres-local/v1', localOnly: true, schema, migrationCount: migrations,
   testsPassed: 0, testsSkipped: 0, migrationsApplied: false, cleanupComplete: false, providerPosts: 0, ozonWrites: 0, passed: false };
 receipt.sourceSha256 = Object.fromEntries(['src/services/product-vision-workbench.ts', 'src/services/product-vision-operation-store.ts',
@@ -28,6 +29,13 @@ receipt.sourceSha256 = Object.fromEntries(['src/services/product-vision-workbenc
   'src/services/source-listing-sku-copies.ts', 'src/__tests__/source-listing-sku-copy.postgres.integration.test.ts',
   'src/__tests__/product-vision-workbench.postgres.integration.test.ts', 'scripts/product-vision-postgres-integration.mjs'].map(file => [file,
   createHash('sha256').update(readFileSync(join(serverRoot, file))).digest('hex')]));
+if (includePreparation) {
+  receipt.preparationIncluded = true;
+  for (const file of ['src/services/product-preparation-workbench.ts', 'src/services/product-preparation-operation-store.ts',
+    'src/services/product-preparation-report.ts', 'src/__tests__/product-preparation-workbench.postgres.integration.test.ts']) {
+    receipt.sourceSha256[file] = createHash('sha256').update(readFileSync(join(serverRoot, file))).digest('hex');
+  }
+}
 let created = false;
 function run(args, extraEnv = {}) {
   const cli = args[1] === 'prisma' ? join(serverRoot, 'node_modules', 'prisma', 'build', 'index.js') : join(serverRoot, 'node_modules', 'vitest', 'vitest.mjs');
@@ -53,11 +61,12 @@ try {
     receipt.migrationCount = rows[0].count;
   } finally { await migrated.$disconnect(); }
   const output = run(['exec', 'vitest', 'run', '--no-file-parallelism', 'src/__tests__/product-vision-workbench.postgres.integration.test.ts',
-    'src/__tests__/source-listing-sku-copy.postgres.integration.test.ts'], {
+    'src/__tests__/source-listing-sku-copy.postgres.integration.test.ts',
+    ...(includePreparation ? ['src/__tests__/product-preparation-workbench.postgres.integration.test.ts'] : [])], {
     DATABASE_URL: testUrl.toString(), PRODUCT_VISION_TEST_DATABASE_URL: testUrl.toString(), RUN_PRODUCT_VISION_POSTGRES_TESTS: '1', PRODUCT_VISION_POSTGRES_TARGET_RUNNER: '1',
   });
   const match = output.match(/Tests\s+(\d+) passed \((\d+)\)/u);
-  if (!match || Number(match[1]) < 11 || match[1] !== match[2] || /\d+ skipped/u.test(output)) throw new Error('Actual product vision and SKU copy PostgreSQL tests did not all run');
+  if (!match || Number(match[1]) < (includePreparation ? 18 : 11) || match[1] !== match[2] || /\d+ skipped/u.test(output)) throw new Error('Actual product vision, preparation and SKU copy PostgreSQL tests did not all run');
   receipt.testsPassed = Number(match[1]); receipt.passed = true;
   receipt.testOutputSha256 = createHash('sha256').update(output).digest('hex');
 } catch (error) {

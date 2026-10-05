@@ -110,7 +110,7 @@ function fixtureProduct() {
   };
 }
 function parentHtml(watermarkJpeg) {
-  return `<!doctype html><html><head><script src="/shared/donor-workbench/workspace-contract.js"></script></head>
+  return `<!doctype html><html><head><script src="/shared/donor-workbench/product-preparation-client.js"></script><script src="/shared/donor-workbench/workspace-contract.js"></script></head>
   <body style="margin:0"><iframe id="workspace" src="/pages/precision-workbench.html" referrerpolicy="no-referrer"
   style="position:fixed;inset:0;width:100vw;height:100vh;border:0"></iframe>
   <script>
@@ -123,6 +123,8 @@ function parentHtml(watermarkJpeg) {
   let readyForPublish=false,assignedMedia=false,publishPreviews=0,publishStatusPolls=0,publishCommitted=false;
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
   const savedOperations=new Set();
+  const preparationAnalyses=new Map();
+  window.__precisionCheckpoints=new Map();
   const watermarkRequests=new Map();
   let videoBindings=[];
   const attributeValues=new Map();
@@ -167,6 +169,28 @@ function parentHtml(watermarkJpeg) {
       blockerCount:0,warningCount:0,blockers:[],warnings:[],updatedAt:'2026-09-30T08:00:00Z'
     }]},media:{items:[]}}};}
     let result;
+    if(command.type==='PREPARATION_CAPABILITY')result={state:'ready',capability:{available:${process.argv.includes('--preparation-analysis')},
+      reasonCode:'${process.argv.includes('--preparation-analysis')?'READY':'VISION_OFF'}',providerFeeNotice:'商品分析使用一个模型请求，可能产生模型费用。'}};
+    if(command.type==='PREPARATION_ANALYZE'){
+      const analysis={binding:command.binding,skuKey:command.skuKey,sourceMediaKeys:command.sourceMediaKeys,operationKey:command.operationKey,
+        category:{categoryId:category.categoryId,typeId:category.typeId,...command.categoryRevision},replayed:false,
+        report:{contractVersion:'product-preparation-analysis/v1',reviewState:'CANDIDATE',
+          curation:command.sourceMediaKeys.map((sourceMediaKey,index)=>({sourceMediaKey,decision:index?'REVIEW':'KEEP',reason:index?'检查图中文字':'展示商品轮廓'})),
+          visualDescription:{composition:'商品居中',background:'浅灰背景',lighting:'柔光',style:'写实',observations:{colors:[],shapes:['来源商品轮廓'],visibleComponents:[],visibleText:[]}},
+          productSummary:{observations:['图片中可见商品轮廓'],uncertainties:['材质和包装尺寸需要核对']},
+          skuObservations:[{skuKey:command.skuKey,observations:['按当前采集 SKU 保留款式'],titleRu:'Товар'}],
+          suggestedAttributes:[{attributeId:201,value:'Простой дизайн',evidence:{sourceMediaKeys:command.sourceMediaKeys,observation:'图片中外形简洁'},manualReview:'REQUIRED'}],
+          copy:{titleRu:'Товар для дома',descriptionRu:'Описание товара по выбранным изображениям.',tagsRu:['товар','дом']}}};
+      preparationAnalyses.set(command.operationKey,analysis);result={state:'ready',analysis};
+      if(window.__precisionLosePreparationReply){window.__precisionLosePreparationReply=false;
+        frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'商品分析响应暂未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);return;}
+    }
+    if(command.type==='PREPARATION_READ')result={state:'ready',analysis:preparationAnalyses.get(command.operationKey)||null};
+    if(command.type==='PREPARATION_APPLY'){
+      const draft=workbench.status.listing.items[0];
+      if(!savedOperations.has(command.operationKey)){savedOperations.add(command.operationKey);draft.revision++;draft.draftVersion++;}
+      result={state:'ready',application:{binding:{...command.binding,draftRevision:draft.revision,draftVersion:draft.draftVersion},selectedAttributeIds:command.selectedAttributeIds,replayed:false}};
+    }
     if(command.type==='WATERMARK_TEMPLATES')result={contractVersion:'extension-workbench-watermark/v1',
       templates:[{id:'image-template',name:'DOTH 图案',position:'center',opacity:60,scale:25,isDefault:true}]};
     if(command.type==='VIDEO_READ')result={state:'ready',binding:{...command.request.binding},videoBindings};
@@ -459,6 +483,12 @@ function privateRuntimeFixtureScript(pngBytes) {
       parent.__precisionPrivateCalls?.push({type,payload:safePayload});
       let data;
       if(type==='ss-erp:precision-frame-ui-register')data={state:parent.__precisionByokSession?'MEDIA_READY':'UI_REGISTERED',registered:true};
+      else if(type==='ss-erp:product-analysis-readiness')data={available:parent.__precisionAnalysisPermission===true,permissionRequired:parent.__precisionAnalysisPermission!==true,profileId:payload.profileId,analysisModel:payload.analysisModel,providerFeeNotice:'自带 API 分析由你的 API 服务计费。'};
+      else if(type==='ss-erp:product-analysis-permission-prepare')data={permissionTicket:'analysis-permission-'+crypto.randomUUID(),providerOrigin:'https://provider.ss-erp-fixture.invalid',pattern:'https://provider.ss-erp-fixture.invalid/*',expiresAt:Date.now()+60000};
+      else if(type==='ss-erp:product-analysis-permission-commit'){parent.__precisionAnalysisPermission=true;data={granted:true};}
+      else if(type==='ss-erp:preparation-checkpoint-read')data=parent.__precisionCheckpoints.get(JSON.stringify([payload.binding.snapshotId,payload.binding.shopId,payload.binding.listingWorkflowId]))||null;
+      else if(type==='ss-erp:preparation-checkpoint-write'){parent.__precisionCheckpoints.set(JSON.stringify([payload.binding.snapshotId,payload.binding.shopId,payload.binding.listingWorkflowId]),JSON.parse(JSON.stringify(payload.checkpoint)));data={saved:true};}
+      else if(type==='ss-erp:preparation-checkpoint-clear'){parent.__precisionCheckpoints.delete(JSON.stringify([payload.binding.snapshotId,payload.binding.shopId,payload.binding.listingWorkflowId]));data={cleared:true};}
       else if(type==='ss-erp:byok-provider-profiles-list')data={profiles:[...profiles.values()].map(value=>value.profile)};
       else if(type==='ss-erp:byok-provider-profile-save'){
         const profile=SS_ERP_BYOK_PROFILE_SCHEMA.publicProfile(payload.profile),old=profiles.get(profile.id);
@@ -532,7 +562,7 @@ function privateRuntimeFixtureScript(pngBytes) {
     try {
       if (!window.chrome || typeof window.chrome !== 'object') throw new Error('chrome object unavailable');
       window.chrome.runtime = runtime;
-      window.chrome.permissions = {};
+      window.chrome.permissions = {request:(input,callback)=>{parent.__precisionPrivateCalls?.push({type:'permissions.request',payload:input,trusted:navigator.userActivation.isActive});callback(true);}};
     } catch (_error) {
       try {
         Object.defineProperty(window, 'chrome', {
@@ -757,6 +787,74 @@ async function run() {
       assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false);
       await screenshot('empty-attributes-manual');summary.emptyAttributes={explicitManual:true,noMutation:true,continues:true};summary.ok=true;
       assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if(process.argv.includes('--preparation-analysis')){
+      await evaluate('window.__precisionLosePreparationReply=true');
+      await until(()=>workspace('document.querySelectorAll(".category-auto-card").length>0'),'AI preparation category recommendations');
+      await click('.category-auto-card');await until(()=>workspace('!document.querySelector("[data-category-confirm]").disabled'),'AI preparation category ready');await click('[data-category-confirm]');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("核对原操作")'),'unknown analysis blocks the preparation queue');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="PREPARATION_ANALYZE").length'),1);
+      await click('#precision-preparation-analysis-open');await until(()=>workspace('!document.getElementById("precision-preparation-analysis-recover").disabled'),'same-window original analysis recovery');
+      await screenshot('unknown-analysis-recovery');
+      await click('#precision-preparation-analysis-recover');
+      await until(()=>workspace('document.querySelectorAll("[data-analysis-phase]").length===4&&!document.getElementById("precision-preparation-copy-title").disabled'),'one receipt projects curation visual and editable copy');
+      assert.equal(await workspace('document.getElementById("precision-preparation-copy-title").value'),'Товар для дома');
+      assert.equal(await workspace('document.getElementById("precision-preparation-copy-approve").disabled'),true,'unpersisted model output is not approved');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="PREPARATION_ANALYZE").length'),1);
+      const original=await evaluate('window.__precisionCommands.find(c=>c.type==="PREPARATION_ANALYZE")');
+      const recovery=await evaluate('window.__precisionCommands.find(c=>c.type==="PREPARATION_READ")');assert.equal(recovery.operationKey,original.operationKey);
+      await screenshot('continuous-ai-candidates');
+      await click('#precision-preparation-attributes input');await click('#precision-preparation-attributes-apply');
+      await until(()=>evaluate('window.__precisionCommands.filter(c=>c.type==="PREPARATION_APPLY").length===1'),'explicit AI attribute evidence application');
+      await until(()=>workspace('document.getElementById("precision-preparation-analysis-state").textContent.includes("本次分析生成")'),'attribute authority readback complete');
+      await click('#precision-preparation-copy-title');await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.insertText',{text:'Мой проверенный товар'});
+      await evaluate('window.__precisionLoseNextCopyReply=true');await click('#precision-preparation-copy-save');
+      await until(()=>workspace('!document.getElementById("precision-preparation-save-recover").hidden&&!document.getElementById("editor-replay-btn").hidden'),'unknown candidate save keeps durable original request');
+      await evaluate('document.getElementById("workspace").contentWindow.location.reload()');
+      await until(()=>workspace('!!document.getElementById("precision-preparation-analysis-open")'),'workbench iframe restored');
+      await until(()=>workspace('document.getElementById("editor-save-btn")?.disabled===false'),'restored draft authority readback');
+      await click('#precision-preparation-analysis-open');
+      await until(()=>workspace('document.getElementById("precision-preparation-save-recover")?.hidden===false&&document.getElementById("precision-preparation-save-recover")?.disabled===false'),'candidate checkpoint restored after iframe reload');
+      assert.equal(await workspace('document.getElementById("precision-preparation-copy-title").value'),'Мой проверенный товар');
+      await click('#precision-preparation-save-recover');
+      await until(()=>workspace('!document.getElementById("precision-preparation-copy-approve").disabled'),'exact idempotent saved copy recovered');
+      await click('#precision-preparation-copy-approve');
+      await until(()=>evaluate('window.__precisionCommands.some(c=>c.type==="EDITOR_SAVE"&&c.action==="COPY_APPROVE")'),'explicit same-window copy review');
+      await until(()=>workspace('!document.getElementById("precision-preparation-visual-apply").disabled'),'copy review authority refreshed');
+      await click('#precision-preparation-analysis-modal details summary');
+      await click('#precision-preparation-visual-json');
+      await click('#precision-preparation-visual-apply');
+      await until(()=>workspace('document.getElementById("precision-prompt-text").value.includes("浅灰背景")'),'visual candidate compiles editable direction');
+      await click('#precision-preparation-curation-confirm');
+      await until(()=>workspace('document.getElementById("precision-preparation-analysis-modal").hidden'),'curation review returns same workbench');
+      await click('#settings-btn');await until(()=>workspace('!!document.getElementById("precision-preparation-mode")'),'simplified AI settings');
+      assert.equal(await workspace('document.querySelector(".precision-preparation-diagnostics").open'),false,'internal diagnostics collapsed');
+      await screenshot('simplified-ai-settings');
+      const setSelect=async(id,value)=>workspace('(()=>{const input=document.getElementById('+JSON.stringify(id)+');input.value='+JSON.stringify(value)+';input.dispatchEvent(new window.Event("change",{bubbles:true}));})()');
+      const replace=async(selector,text)=>{await click(selector);await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.insertText',{text});};
+      await setSelect('precision-preparation-mode','BYOK');await click('#precision-preparation-configure-api');
+      await until(()=>workspace('!document.getElementById("precision-byok-config-modal").hidden'),'unified settings opens existing private API profile editor');
+      await replace('#precision-byok-name','商品分析测试接口');await replace('#precision-byok-endpoint','https://provider.ss-erp-fixture.invalid/v1');await replace('#precision-byok-model','image-model-fixture');
+      await click('#precision-byok-save-profile');await until(()=>workspace('!document.getElementById("precision-byok-set-key").disabled'),'profile saved in existing owner');
+      await replace('#precision-byok-key','ss-erp-fixture-private-secret-sentinel');await click('#precision-byok-set-key');
+      await until(()=>workspace('document.getElementById("precision-byok-config-state").textContent.includes("密钥已加载")'),'private session key loaded');
+      await click('#precision-byok-config-close');await click('[data-close-modal="basic-modal"]');await click('#settings-btn');
+      await until(()=>workspace('document.querySelectorAll("#precision-preparation-analysis-profile option").length===1'),'unified named API profiles refreshed');
+      await setSelect('precision-preparation-analysis-model','qwen-vl-max');
+      await until(()=>workspace('document.getElementById("precision-preparation-analysis-permission")?.hidden===false&&document.getElementById("precision-preparation-analysis-permission")?.disabled===false'),'cached exact analysis origin permission ticket prepared');
+      await click('#precision-preparation-analysis-permission');
+      await until(()=>workspace('document.getElementById("precision-preparation-analysis-readiness").textContent.includes("由你的 API 服务计费")'),'trusted origin authorization restores analysis readiness');
+      assert.ok(await evaluate('window.__precisionPrivateCalls.some(call=>call.type==="permissions.request"&&call.trusted===true&&call.payload.origins[0]==="https://provider.ss-erp-fixture.invalid/*")'),'Chrome permission requested synchronously from trusted activation');
+      assert.ok(await evaluate('window.__precisionPrivateCalls.some(call=>call.type==="ss-erp:product-analysis-permission-commit"&&call.payload.analysisModel==="qwen-vl-max")'),'analysis model permission uses separate explicitly selected model');
+      assert.equal(JSON.stringify(await evaluate('window.__precisionCommands')).includes('ss-erp-fixture-private-secret-sentinel'),false,'private key never crosses source-page messages');
+      await screenshot('byok-analysis-settings');
+      const requests=await evaluate('window.__precisionCommands');
+      const copySaves=requests.filter(c=>c.type==='EDITOR_SAVE'&&c.action==='COPY_CANDIDATE');assert.equal(copySaves.length,2);assert.equal(copySaves[0].operationKey,copySaves[1].operationKey);
+      assert.equal(requests.filter(c=>c.type==='PREPARATION_ANALYZE').length,1,'reload and review never resend model analysis');
+      assert.equal(requests.some(c=>c.type==='PUBLISH'),false);assert.equal(requests.some(c=>c.type==='EXECUTE_HOSTED_SUITE'),false);
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      summary.preparationAnalysis={oneModelReceipt:true,readOnlyUnknownRecovery:true,editableRussianCandidates:true,explicitAIAttributeEvidence:true,durableReloadRecovery:true,exactCopyReplay:true,sameWindowReview:true,localCuration:true,collapsedDiagnostics:true,byokAnalysisModelSelection:true,trustedOriginPermission:true,privateKeySeparation:true,automaticPublish:false};summary.ok=true;
       await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
     }
     if(!process.argv.includes('--complete-preparation-flow')){
