@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
   createSourceProductCaptureV2Submission,
@@ -153,6 +154,7 @@ function graphRow(overrides: Record<string, unknown> = {}) {
     planVersionSourceHash: captureFixture.captureHash,
     planVersionSelectedSkuHash: persistedBinding.selectedSkuHash,
     planVersionCandidateMediaHash: persistedBinding.candidateMediaHash,
+    planVersionInputSnapshot: { candidates: [{ id: 'media-main-0' }] },
     suiteId: 'suite-1',
     suiteOwnerUserId: 'owner-1',
     suitePlanId: 'plan-1',
@@ -604,6 +606,28 @@ describe('Prisma extension hosted AI image authority loader', () => {
     const { loader, query } = fixture([[]]);
     await expect(loader.loadCandidateAuthority(candidateInput())).resolves.toBeNull();
     expect(query).toHaveBeenCalledOnce();
+  });
+
+  it('previews a frozen reference subset sealed to the complete authorized media set', async () => {
+    const selectedHash = createHash('sha256').update(JSON.stringify(['media-selected'])).digest('hex');
+    const snapshot = { candidates: [{ id: 'media-selected' }], referenceSelection: {
+      authorityCandidateMediaHash: persistedBinding.candidateMediaHash,
+    } };
+    const { loader } = fixture([[bindingRow()], [graphRow({
+      planVersionCandidateMediaHash: selectedHash, planVersionInputSnapshot: snapshot,
+    })]]);
+    await expect(loader.loadCandidateAuthority(candidateInput())).resolves.toMatchObject({ output: { id: 'asset-1' } });
+    for (const changed of [
+      { ...snapshot, referenceSelection: { authorityCandidateMediaHash: 'f'.repeat(64) } },
+      { ...snapshot, candidates: [{ id: 'different-selected' }] },
+      { ...snapshot, referenceSelection: null },
+      { ...snapshot, referenceSelection: { ...snapshot.referenceSelection, callerApproved: true } },
+    ]) {
+      const { loader: rejected } = fixture([[bindingRow()], [graphRow({
+        planVersionCandidateMediaHash: selectedHash, planVersionInputSnapshot: changed,
+      })]]);
+      await expect(rejected.loadCandidateAuthority(candidateInput())).resolves.toBeNull();
+    }
   });
 
   it.each([

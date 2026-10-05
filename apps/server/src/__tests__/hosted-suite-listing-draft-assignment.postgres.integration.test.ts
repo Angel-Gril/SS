@@ -78,6 +78,7 @@ interface HostedAssignmentFixture {
 async function seedHostedAssignmentFixture(
   client: PrismaClient,
   label: string,
+  selectedReferenceSubset = false,
 ): Promise<HostedAssignmentFixture> {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const prefix = `hosted_assign_${label}_${suffix}`;
@@ -102,6 +103,7 @@ async function seedHostedAssignmentFixture(
   const skuKeys = ['sku-1', 'sku-2'] as const;
   const slotKeys = ['sku:sku-1:hero', 'sku:sku-2:hero'] as const;
   const candidateMediaKeys = ['candidate-1', 'candidate-2'];
+  const selectedMediaKeys = selectedReferenceSubset ? candidateMediaKeys.slice(0, 1) : candidateMediaKeys;
   const captureHash = digest(`${prefix}:capture`);
   const sourceProfileHash = digest(`${prefix}:profile`);
   const sourceSha256 = digest(SOURCE_BYTES);
@@ -277,7 +279,10 @@ async function seedHostedAssignmentFixture(
     source: { subjectId, snapshotId },
     context: { type: 'collect', id: goodsId },
     skus: skuKeys.map((skuKey) => ({ skuKey })),
-    candidates: candidateMediaKeys.map((id) => ({ id })),
+    candidates: selectedMediaKeys.map((id) => ({ id })),
+    ...(selectedReferenceSubset ? { referenceSelection: {
+      authorityCandidateMediaHash: digest(JSON.stringify(candidateMediaKeys)),
+    } } : {}),
   };
   const planPayload = {
     compatibilityGroups: [],
@@ -359,7 +364,7 @@ async function seedHostedAssignmentFixture(
           sourceProfileHash,
           sourceSchemaVersion: 'source-product-capture-v2',
           selectedSkuHash: digest(JSON.stringify(skuKeys)),
-          inputAssetSetHash: digest(JSON.stringify(candidateMediaKeys)),
+          inputAssetSetHash: digest(JSON.stringify(selectedMediaKeys)),
           inputFingerprint,
           planSchemaVersion: 'hosted-assignment-integration',
           plannerVersion: 'hosted-assignment-integration',
@@ -882,6 +887,28 @@ describePostgres('hosted suite listing-draft assignment PostgreSQL atomicity', (
     expect(await persistedState(client, fixture)).toEqual(afterCommit);
   }, 30_000);
 
+  it('previews and atomically assigns a sealed reference subset then replays without changing the media binding', async () => {
+    const fixture = await seedHostedAssignmentFixture(client, 'reference_subset', true);
+    const loader = createPrismaExtensionHostedAiImageAuthorityLoader(client);
+    for (const binding of fixture.candidateBindings) {
+      await expect(loader.loadCandidateAuthority({ ownerUserId: fixture.ownerUserId,
+        deviceSessionId: fixture.input.deviceSessionId, binding })).resolves.not.toBeNull();
+    }
+    const bindingBefore = await client.extensionHostedAiImagePlanBinding.findFirstOrThrow({
+      where: { planId: fixture.input.planId, ownerUserId: fixture.ownerUserId },
+    });
+    const service = assignmentService(client);
+    await expect(service.assign(fixture.input)).resolves.toMatchObject({ replayed: false, assignments: [
+      { assignmentOrdinal: 0 }, { assignmentOrdinal: 1 },
+    ] });
+    const after = await persistedState(client, fixture);
+    await expect(service.assign(fixture.input)).resolves.toMatchObject({ replayed: true });
+    expect(await persistedState(client, fixture)).toEqual(after);
+    expect(await client.extensionHostedAiImagePlanBinding.findFirstOrThrow({
+      where: { planId: fixture.input.planId, ownerUserId: fixture.ownerUserId },
+    })).toEqual(bindingBefore);
+  }, 30_000);
+
   it('uses the savepoint to undo the ledger, draft, and first job when the second job fence fails', async () => {
     const fixture = await seedHostedAssignmentFixture(client, 'job_fence');
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
@@ -906,7 +933,7 @@ describePostgres('hosted suite listing-draft assignment PostgreSQL atomicity', (
     try {
       await expect(assignmentService(client, true).assign(fixture.input)).rejects.toMatchObject({
         code: 'HOSTED_LISTING_ASSIGNMENT_CAS_CONFLICT',
-      });
+  });
       expect(await persistedState(client, fixture)).toMatchObject({
         ledgerCount: 0,
         draftVersionCount: 1,

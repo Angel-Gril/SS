@@ -2,7 +2,7 @@
 
 ## 2026-10-05 官网最新版切换接续
 
-官网公开切换已获授权。正式 PostgreSQL 验收发现旧 hosted-plan 夹具缺新版草稿 authority，正在最小同步测试接线；应用仍 `d376bb1a / 1.0.422`，官网仍 `4df9ec38 / 1.0.421`。新签名候选将为 `1.0.423`，不得改标旧 QA04、签名或 canary。范围与原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+官网公开切换已获授权。`59a8454e / 1.0.423` 已完成双区部署、完整原生 offline 和两区 canonical VPS；同 commit 两图 suite 成功，但预览/assignment 对“冻结参考子集”与“完整素材授权”摘要的比较仍有缺口，修复候选为 `1.0.424`。官网仍 `4df9ec38 / 1.0.421`，未执行新 CAS。范围与原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-05 `d376bb1a / 1.0.422` 已提交、推送、签名并双区部署
 

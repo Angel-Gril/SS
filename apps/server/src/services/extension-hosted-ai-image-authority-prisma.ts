@@ -21,6 +21,7 @@ import {
 } from './ai-image-suite-output-normalizer.js';
 import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
 import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
+import { frozenHostedPlanReferenceSelectionMatches } from './hosted-plan-reference-selection.js';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_IDENTIFIER_LENGTH = 1_024;
@@ -169,6 +170,7 @@ SELECT
   version."source_capture_hash" AS "planVersionSourceHash",
   version."selected_sku_hash" AS "planVersionSelectedSkuHash",
   version."input_asset_set_hash" AS "planVersionCandidateMediaHash",
+  version."input_snapshot_json" AS "planVersionInputSnapshot",
   suite."id" AS "suiteId",
   suite."owner_user_id" AS "suiteOwnerUserId",
   suite."plan_id" AS "suitePlanId",
@@ -694,7 +696,8 @@ function candidateAuthorityFromRow(
     || row.planVersionSnapshotId !== stored.snapshotId
     || row.planVersionSourceHash !== sourceCaptureHash
     || row.planVersionSelectedSkuHash !== stored.selectedSkuHash
-    || row.planVersionCandidateMediaHash !== stored.candidateMediaHash
+    || !frozenHostedPlanReferenceSelectionMatches(row.planVersionInputSnapshot, stored.candidateMediaHash,
+      String(row.planVersionCandidateMediaHash))
     || suiteId !== binding.suiteId
     || row.suiteOwnerUserId !== stored.ownerUserId
     || row.suitePlanId !== planId

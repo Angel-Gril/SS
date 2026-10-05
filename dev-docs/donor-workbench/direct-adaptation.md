@@ -2,6 +2,13 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.423` 双区与 fresh suite；参考图子集预览缺口修正
+
+- `59a8454e553d0bd49320e010beb67010fe9ad717 / 1.0.423` 已推送、区域签名并双区部署；完整原生 offline 和两区 canonical VPS 均 PASS。官网下载仍 `1.0.421`，未执行 CAS。
+- 同 commit 收纳盒两图 suite 已 `SUCCEEDED`，恰好两次 Provider submit、两笔各 CNY 0.14 结算；生成 UI、START/CONTINUE 原件和审核前数据库（两槽 PENDING、空 assignment）已保存。预览返回 `409 hosted_candidate_preview_not_available`，只读 loader 证实 plan 的所选参考图 hash 与原完整授权 catalog hash 不同；尚未批准或应用，Ozon=0。
+- T2 两个 owner 先实测 RED→GREEN；新增统一冻结参考选择校验，预览核对 plan input asset hash 与原 catalog seal，assignment 核对同一 seal，缺失、篡改或额外字段继续拒绝。原 binding/hash 不改写。定向139项、真实 PostgreSQL210项（含单参考图 preview→assignment→原幂等 replay）、8GB typecheck及相关 lint 全通过；修复候选为 `1.0.424`。PG先前失败原件保留，schema实际列名 `input_snapshot_json` 已核对修正，不修改schema。
+- 私有原件在 `release-59a8454e-website`。原 suite 结果保留并可在修复后恢复；最终发布 QA04 需要新执行提交原件，既有不限测试金额授权仍有效，不读取 Provider 控制台、不发布 Ozon。
+
 ### 2026-10-05 官网升级接续：正式 PostgreSQL 夹具接线修复
 
 - 用户已明确授权官网最新版公开切换，此前测试费用授权仍有效；不得执行 Ozon 发布或读取 Provider 控制台。`d376bb1a / 1.0.422` 已部署，但尚无该提交的正式 QA04/REL-04/website approval，不能直接 CAS。

@@ -557,6 +557,25 @@ describe('Prisma hosted suite listing draft atomic batch repository', () => {
     });
   });
 
+  it('accepts an immutable reference subset without rewriting the complete media binding', async () => {
+    const authority = { ...bindingValues(), candidateMediaHash: hash(['candidate-media-1', 'candidate-media-2']) };
+    const { bindingHash: _bindingHash, authorityHash: _authorityHash, planId, deviceSessionId, ...scope } = authority;
+    const authorityHash = hash(scope), bindingHash = hash({ planId, deviceSessionId, ...scope, authorityHash });
+    const snapshot = { ...planInputSnapshot(), referenceSelection: { authorityCandidateMediaHash: scope.candidateMediaHash } };
+    const rows = [0, 1].map(index => authorityRow(index, { bindingCandidateMediaHash: scope.candidateMediaHash,
+      bindingAuthorityHash: authorityHash, bindingHash, planVersionInputSnapshot: snapshot }));
+    const { repository } = fixture({ authorityRows: [rows] });
+    await expect(repository.transaction(tx => tx.loadAuthority(command()))).resolves.toMatchObject({
+      plan: { listingBinding: { listingWorkflowId: 'listing-workflow-1' } },
+    });
+    for (const selection of [null, { authorityCandidateMediaHash: 'f'.repeat(64) },
+      { authorityCandidateMediaHash: scope.candidateMediaHash, callerApproved: true }]) {
+      const { repository: rejected } = fixture({ authorityRows: [rows.map(row => ({ ...row,
+        planVersionInputSnapshot: { ...snapshot, referenceSelection: selection } }))] });
+      await expect(rejected.transaction(tx => tx.loadAuthority(command()))).resolves.toBeNull();
+    }
+  });
+
   it('rejects forged binding hashes before exposing authority', async () => {
     const forged = authorityRow(0, { bindingAuthorityHash: 'f'.repeat(64) });
     const { repository } = fixture({ authorityRows: [[forged, authorityRow(1)]] });

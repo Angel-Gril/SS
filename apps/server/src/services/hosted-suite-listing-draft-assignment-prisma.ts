@@ -14,6 +14,7 @@ import {
   type HostedSuiteListingDraftOutputAuthority,
 } from './hosted-suite-listing-draft-assignment.js';
 import { OzonListingDraftRepositoryError } from './ozon-listing-draft.js';
+import { frozenHostedPlanReferenceSelectionMatches } from './hosted-plan-reference-selection.js';
 import {
   applySourceListingDraftCasInTransaction,
   lockCurrentSourceListingDraft,
@@ -480,7 +481,7 @@ function exactBindingFromRow(
     || frozen.contextType !== 'collect'
     || frozen.contextId !== authority.supplyGoodsId
     || authority.selectedSkuHash !== hash(frozen.skuKeys)
-    || authority.candidateMediaHash !== hash(frozen.candidateMediaKeys)
+    || !frozenHostedPlanReferenceSelectionMatches(row.planVersionInputSnapshot, authority.candidateMediaHash)
     || text(row.bindingAuthorityHash) !== authorityHash
     || text(row.bindingHash) !== hash(value)) return null;
   return {
