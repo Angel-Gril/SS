@@ -238,7 +238,7 @@ const steps = [
     name:'precision attribute/logistics preparation contracts',command:'node',
     args:['--test','scripts/extension-preparation-adapters.test.mjs','scripts/extension-precision-preparation-flow.test.mjs',
       'scripts/extension-attribute-suggestions-session.test.mjs','scripts/extension-logistics-pricing-client.test.mjs',
-      'scripts/extension-precision-editor-save.test.mjs','scripts/extension-precision-workflow-recovery.test.mjs'],
+      'scripts/extension-precision-editor-save.test.mjs','scripts/extension-precision-editor-readback.test.mjs','scripts/extension-precision-workflow-recovery.test.mjs'],
   },
   {
     name: 'donor native marketplace capture contracts', command: 'node',

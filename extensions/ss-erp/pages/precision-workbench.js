@@ -725,17 +725,20 @@ function fieldSavedByAction(action, field) {
   if (action === 'PRICING') return ['价格，CNY', '折扣前价格，CNY', '__skuPrefix', 'skuPrefix', 'currency'].includes(field);
   return false;
 }
+function editorBindingKey(binding) {
+  return JSON.stringify(['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId', 'draftRevision', 'draftVersion'].map(key => binding[key]));
+}
 function acceptEditor(data, savedAction = null) {
   const current = currentEditorBinding();
   if (!data || data.contractVersion !== 'extension-listing-editor/v1' || !data.binding
     || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every((key) => data.binding[key] === current[key])
-    || data.binding.draftRevision !== current.draftRevision || data.binding.draftVersion !== current.draftVersion
+    || !savedAction && (data.binding.draftRevision !== current.draftRevision || data.binding.draftVersion !== current.draftVersion)
     || !Array.isArray(data.selectedSkuKeys) || data.selectedSkuKeys.length < 1 || data.selectedSkuKeys.length > 100) throw new Error('ERP 草稿详情不完整');
   if (editorIdentity(editor) !== editorIdentity(data)) unsavedListingFields.clear();
   else for (const field of unsavedListingFields) if (fieldSavedByAction(savedAction, field)) unsavedListingFields.delete(field);
   editor = data;
   selectedDraftSkuKeys = new Set(editor.selectedSkuKeys);
-  editorLoadKey = `${data.binding.listingWorkflowId}:${data.binding.draftRevision}:${data.binding.draftVersion}`;
+  editorLoadKey = editorBindingKey(data.binding);
   editorReadFailureKey = '';
   if (!unsavedListingFields.has('currency')) currency.value = editor.pricing?.items[0]?.currencyCode || 'CNY';
   editorSignature = '';
@@ -744,19 +747,23 @@ function acceptEditor(data, savedAction = null) {
 async function loadEditor() {
   if(editorReadTask)return editorReadTask;
   if (saveBusy || !listing()) return;
-  editorLoading = true;
   const initialBinding = currentEditorBinding();
-  const initialKey = `${initialBinding.listingWorkflowId}:${initialBinding.draftRevision}:${initialBinding.draftVersion}`;
+  let attemptedKey = editorBindingKey(initialBinding);
+  editorLoadKey = attemptedKey;
+  editorLoading = true;
   editorReadTask=(async()=>{try {
     const binding = initialBinding;
     let response;
     try {
       response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
     } catch (error) {
-      if (!String(error?.message || '').includes('编辑上下文') && error?.code !== 'EDITOR_CONTEXT_REFRESH_REQUIRED') throw error;
+      if (error?.code !== 'EDITOR_CONTEXT_REFRESH_REQUIRED') throw error;
       const refreshed = await command('REFRESH');
       if (!refreshed?.ok) throw error;
       const current = currentEditorBinding();
+      if (!['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(key => current[key] === initialBinding[key])) throw error;
+      attemptedKey = editorBindingKey(current);
+      editorLoadKey = attemptedKey;
       response = await command('EDITOR_READ', { listingWorkflowId: current.listingWorkflowId, binding: current });
     }
     acceptEditor(response.data?.editor);
@@ -765,7 +772,7 @@ async function loadEditor() {
   } catch (error) {
     // Stop render-driven retries for this exact binding. The explicit refresh button
     // clears this key; a new draft/revision naturally produces a different key.
-    editorReadFailureKey = initialKey;
+    editorReadFailureKey = attemptedKey;
     throw error;
   } finally { editorLoading = false; }})();
   try{return await editorReadTask;}finally{editorReadTask=null;}
@@ -1252,7 +1259,7 @@ function render() {
   element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
   element('process-source-summary').replaceChildren(make('div', '', `${projection.skus.length} 个 SKU · ${projection.media.length} 张素材`));
   const draft = listing();
-  const binding = draft ? `${draft.id}:${draft.revision}:${draft.draftVersion}` : '';
+  const binding = draft && projection.handoff ? editorBindingKey(currentEditorBinding()) : '';
   if (binding && binding !== mediaStateBinding && !projection.busy) {
     mediaStateBinding = binding;
     void refreshMediaState().catch(report);

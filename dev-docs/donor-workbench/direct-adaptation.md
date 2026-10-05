@@ -4,6 +4,7 @@
 
 ### 2026-10-06 草稿上下文刷新问题已修复，准备 `1.0.428`
 
+- 发布前实际函数验证发现原 428 修复的失败 key 清空会引入紧密重读循环，且只读版本 fence 初版误挡正常保存回执；两份已签 428 中间候选保留但未部署/公开，不能以静态 verifier 代替时序验收。最终候选改为 `1.0.429`：完整六字段 binding key、同 key 失败停止自动读取、显式刷新后等编辑器回执再提示成功、只读回执精确 r/v、已确认保存回执允许版本推进；仅结构化 `EDITOR_CONTEXT_REFRESH_REQUIRED` 可触发一次刷新，来源/店铺/草稿身份变化不自动改绑。新实际函数测试在原代码四目标 RED→10项GREEN，关联59项通过并纳入 preflight；Provider/Ozon=0。
 - 根因是首次 `EDITOR_READ` 失败后页面保留旧 `editorLoadKey`，导致后续权威 projection 不再触发编辑器重读；桥接层在 listing/handoff 暂时缺失时直接返回通用“草稿编辑上下文已变化”。
 - `donor-workbench-bridge.js` 现在在 editor command 首次不匹配时执行一次 `loadProjection({ force: true })`，刷新后仍不匹配才拒绝，并返回 `EDITOR_CONTEXT_REFRESH_REQUIRED` 及设备/快照/草稿读取原因。`precision-workbench.js` 在 editor read 失败时清除 `editorLoadKey`，允许下一次状态回执重试。
 - shell 合同、Cloud 包 verifier、JS syntax 和 `git diff --check` 已通过；本轮没有 Provider/Ozon 写入或费用。目标候选为 `1.0.428`，提交、签名、双区部署及官网门禁尚未执行。
