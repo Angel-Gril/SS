@@ -2,6 +2,23 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.425` 已提交、推送、签名并双区部署
+
+- 连续商品 AI 准备、同窗候选编辑/审核、BYOK 独立分析模型、阶段恢复和透明 iframe 已提交到 `feat/ai-media-prompt-registry` 并推送，部署绑定 `089eb83ae7620aa8aaabb54e3fd2e7f801bbdf2e / 1.0.425`。完整本地 `pnpm preflight` 已通过；服务端 typecheck 现显式使用 8 GiB 堆，旧 shell 回归已同步为保留来源页滚动、去除重复遮罩的合同。变更日志按 Keep a Changelog 保留在 `Unreleased`，不将应用部署标为官网公开发布日期。
+- COM/CN 的 Cloud/Local 候选分别从同一干净提交的 Git 原始字节构建，正式区域包 verifier 为 Cloud `626`、Local `616` pass，0 failure/0 warning。原 active Ed25519 key `ss-erp-extension-release-2026-09-05-01` 签名并独立验签；实际签名 ZIP 解包后的隔离 MV3 来源页、默认入口、16 SKU 投影、来源拒绝和透明外壳通过。私有浏览器适配只调整仓库/解包目录、正式 Cloud 名称及执行入口，断言和网络拦截保持；这仍是 synthetic 商品安装验收，不是真实模型质量或线上商品全链路证明。
+- 两区标准部署已成功，current、API/Worker/Web 全部运行上述提交；153 migrations 无待执行项、suite DB guard、服务启动与本机/公网 `/ready` 通过，`db=ok、redis=ok`。COM 保持原 DOTH `IMAGE_TO_IMAGE/SUITE/IMAGE_TRANSLATE` 精确 pilot，CN 保持 direct/RDS dark，认证仍为既有 `compat`。`feature_extension_product_vision` 和 BYOK generation/ingest/publish 均读取为 `false`；新接口匿名参数探针返回 `401`，没有扩大生产功能或设备授权范围。
+- 目标绑定部署备份及部署后 runtime 备份/恢复均完成，COM/CN 分别验证 `144/143` 张 public 表并清理临时库；部署目录 `/var/backups/ss-erp` 与日常目录 `/var/backups/ss-erp-runtime` 保持分离。两区正式 canonical VPS evidence 都为 `PASS / FULL / 0 failure / 1 warning`，warning 仅为既有远端备份未配置。
+- 官网 latest 仍为 `46e17e00 / 1.0.424`。本轮未生成新正式 QA04、publication canary、website approval，未执行 CAS 或 distribution probe。部署不代表官网公开分发，也不代表生产商品分析已启用；Provider POST、Ozon 写入和新增测试费用均为 `0`，未读取 Provider 控制台。
+
+| 证据 SHA-256 | COM | CN |
+| --- | --- | --- |
+| Cloud ZIP | `ed7e91b910b21c72a23b8dbd43103bc14e3f238826cc89ef935d0f170e4c859c` | `ba5a713148fd7b9ad4b1f5e02f84ab308a055e9591365a660418fb336561a49b` |
+| Local ZIP | `4fb488aa4376b86c5dc9d34e6ae8942fff49d8be50ef28977182b9c0bd77da20` | `50633c4118d5e5f6f55221d2865254f714b730b08e94a374a4c92fe11f8921b8` |
+| Detached signature | `dd065d291cea3797d8389010370114d8c8baf58f486ac899f1e3852c7085d946` | `e5afbd7ffe3f955586ae5a9f29325aaf2ece98027d3863f810325b2da460a804` |
+| Canonical VPS | `b4803561e2661b6badaa4f6d8700b0eaa61c9d566d606c0e1f2488ab62607379` | `b193f3876c3360ebef951a04af7eed543c6f729154901e53d9c10f8ce5121d69` |
+
+原件只保留在 `C:\Users\550W\AppData\Local\SS-ERP\private\release-089eb83a-deploy425` 及独立区域 candidate/signature 目录。准备阶段的 origin、签名权限、Windows CRLF gate、既有失败目录与验收参数错误均保留失败日志；原运行版本未在失败尝试中切换。本轮新建的错误 gate 和未激活 release 目录已清理并由 Git 原始 LF 字节重新构建，不移除旧 serving release、签名原件或备份。当前文档同步提交不重签或重部署应用。
+
 ### 2026-10-05 连续商品 AI 流程适配（当前开发，未发布）
 
 用户已明确要求继续开发上轮差异分析中的连续流程；本轮目标为同窗采集/SKU、类目确认、图片筛选与商品视觉分析、可编辑属性/俄文文案候选、图片处理及明确审核。复用用户自有 donor 的交互和当前 ERP owner，不修改 donor 目录，不自动发布 Ozon，不改变 COM/CN 生产配置。

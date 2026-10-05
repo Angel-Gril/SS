@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 `089eb83a / 1.0.425` 连续 AI 工作台已签名并双区部署
+
+本轮提交、推送、COM/CN 独立 Cloud/Local 签名候选、隔离 MV3 安装、目标备份恢复和完整 canonical VPS 验收均完成。两区应用运行 `089eb83ae7620aa8aaabb54e3fd2e7f801bbdf2e / 1.0.425`，服务和数据库/Redis 正常；官网仍公开 `46e17e00 / 1.0.424`，新商品分析与 BYOK 开关保持关闭。没有新增 Provider/Ozon 请求或费用；准确边界、失败原件与证据仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-05 `46e17e00 / 1.0.424` 双区官网公开发布完成
 
 COM/CN 应用、官网 latest 和四个 Cloud/Local ZIP 均绑定 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。最终原生 offline、签名 MV3、fresh suite/审核/草稿 assignment/replay、正式 QA04、双区 canonical VPS/REL-04/website approval/CAS、匿名完整下载及 final publication verifier 均通过。COM 保持原 DOTH 三 operation pilot，CN 保持 direct/RDS dark。两轮 suite 共四次 Provider submit、ERP 结算 CNY 0.56，无 Ozon 写入或 Provider 控制台访问；首轮423结果保留，未冒充424执行。准确证据、质量限制与清理状态只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)，公开变更见根 `CHANGELOG.md`。

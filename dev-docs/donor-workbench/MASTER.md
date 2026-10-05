@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-05 `1.0.425` 连续 AI 工作台双区部署完成
+
+应用部署绑定 `089eb83a / 1.0.425`，区域签名、隔离 MV3、备份恢复和完整 canonical VPS 通过；官网继续分发 `46e17e00 / 1.0.424`。新商品分析及 BYOK 默认关闭，生产模型质量未晋升。当前事实及证据只维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-05 `1.0.424` 双区官网公开发布完成
 
 COM/CN 应用与官网 Cloud/Local 下载已公开 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。正式 QA04、最终 fresh suite 的预览/审核/草稿 assignment/replay、新区域 VPS/canary、website approval/CAS、匿名完整下载与最终 publication verifier 均通过。原 DOTH 受限 hosted pilot/CN direct dark 保持；无 Ozon 写入。本轮两套图合计 ERP CNY0.56，真实输出创意变化小且带白边，不宣称所有 donor 功能或创作质量一致。当前事实及原件只维护在[直接适配 owner](./direct-adaptation.md)。下面的历史状态保留各轮当时边界。
@@ -34,9 +38,11 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `46e17e00 / 1.0.424`.
-The final-commit QA04, two-region website gates, CAS, full downloads and post-publication
-VPS verification passed; temporary test device and account credentials were cleaned up.
+COM/CN applications run `089eb83a / 1.0.425`; public Cloud/Local downloads remain
+`46e17e00 / 1.0.424`. Regional signing, isolated signed-package MV3 acceptance,
+backup/restore and full canonical VPS verification passed for 425. Website gates
+and public pointer switching have not run for 425. The prior 424 public acceptance
+and temporary credential cleanup remain historical evidence for that release.
 Direct-adaptation tasks U9–U20 now ship with server-owned SKU duplication/removal,
 copy-aware pricing/packaging/attributes/media/compiler seams and bounded native Taobao,
 Tmall and PDD collectors. Production vision remains off. Copy-row real Ozon publishing,
