@@ -2,7 +2,7 @@
 
 ## 2026-10-05 官网发布与 AI 分析启用接续
 
-用户已授权新版公开发布并保持 AI 分析开启。`1.0.425` 完整原生 offline、fresh suite/审核/assignment/replay、正式 QA04、双区 VPS/canary/approval 已通过，但真实精铺 iframe 被最终消息策略拒绝分析恢复消息，官网尚未 CAS。最小扩展 owner 修复 RED→GREEN/97 项关联回归通过，准备 `1.0.426` 替代候选；COM 托管 `qwen-vl-plus` 配置已开启，原两图分析 UNKNOWN 保留且未重试，独立单图校准通过报告 schema。当前证据及范围仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+用户已授权新版公开发布并保持 AI 分析开启。`1.0.425` 完整原生 offline、fresh suite/审核/assignment/replay、正式 QA04、双区 VPS/canary/approval 已通过，官网尚未 CAS。最小消息策略修复进入426后，真实checkpoint注册生命周期又需收口；最终准备 `1.0.427` 替代候选，两处扩展 owner 均 RED→GREEN，未改服务端计费/权限源码。COM 托管 `qwen-vl-plus` 配置已开启，原两图分析 UNKNOWN 保留且未重试，独立单图校准通过报告 schema。当前证据及范围仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-05 `089eb83a / 1.0.425` 连续 AI 工作台已签名并双区部署
 

@@ -73,7 +73,57 @@ test('product analysis and checkpoint stay inside registered private runtime wit
   assert.equal((await f.adapter.readProductAnalysis({})).status, 'UNKNOWN_OUTCOME');
   assert.deepEqual(await f.adapter.checkpoint.read({ binding: {} }), checkpoint);
   f.adapter.invalidate();
-  await assert.rejects(f.adapter.checkpoint.clear({ binding: {} }), /REGISTRATION_REQUIRED/);
+  await f.adapter.checkpoint.clear({ binding: {} });
+  assert.deepEqual(f.calls.slice(-2).map(call=>call.type), ['ss-erp:precision-frame-ui-register', 'ss-erp:preparation-checkpoint-clear']);
+});
+
+test('every analysis checkpoint operation rechecks normal precision registration after invalidation', async () => {
+  const f=await fixture({'ss-erp:precision-frame-ui-register':{ok:true,data:{state:'UI_REGISTERED',registered:true}}});
+  for(const method of ['read','write','clear']){
+    f.adapter.invalidate();
+    const input={binding:{shopId:'shop'},...(method==='write'?{checkpoint:{version:1}}:{})};
+    await f.adapter.checkpoint[method](input);
+    assert.deepEqual(f.calls.slice(-2).map(call=>call.type),['ss-erp:precision-frame-ui-register',`ss-erp:preparation-checkpoint-${method}`]);
+    assert.deepEqual(f.calls.at(-1).payload,input);
+    assert.equal(f.adapter.state().mediaReady,false);
+    await assert.rejects(f.adapter.media.getPublicState(),/MEDIA_SESSION_REQUIRED/);
+  }
+});
+
+test('failed current frame registration blocks checkpoints and hosted analysis before any model request', async () => {
+  const f=await fixture({'ss-erp:precision-frame-ui-register':{ok:false,errorCode:'SS_ERP_PRECISION_FRAME_AUTHORIZATION_DENIED'}});
+  const {createPreparationAnalysisSession}=await import('data:text/javascript;base64,'+Buffer.from(
+    readFileSync('extensions/ss-erp/pages/donor/preparation-analysis-session.js','utf8')).toString('base64'));
+  const binding={snapshotId:'s',supplyGoodsId:'g',shopId:'shop',listingWorkflowId:'d',draftRevision:1,draftVersion:1};
+  let models=0;
+  const session=createPreparationAnalysisSession({getContext:()=>({binding,skuKey:'sku',sourceMediaKeys:['image'],
+    categoryRevision:{catalogRevision:'catalog',schemaRevision:'a'.repeat(64)},mode:'ERP_HOSTED'}),createOperationKey:()=> 'operation',
+    persist:value=>f.adapter.checkpoint.write({binding,checkpoint:value}),analyze:async()=>{models++;},read:async()=>null});
+  await assert.rejects(session.analyze(),/REGISTRATION_FAILED/);
+  assert.equal(models,0);assert.equal(session.state().operation,null);
+  assert.equal(f.calls.every(call=>call.type==='ss-erp:precision-frame-ui-register'),true);
+});
+
+test('actual analysis session saves its original operation across runtime invalidation without resending unknown models', async () => {
+  const responses={'ss-erp:precision-frame-ui-register':{ok:true,data:{state:'UI_REGISTERED',registered:true}}};
+  const f=await fixture(responses);
+  const {createPreparationAnalysisSession}=await import('data:text/javascript;base64,'+Buffer.from(
+    readFileSync('extensions/ss-erp/pages/donor/preparation-analysis-session.js','utf8')).toString('base64'));
+  const binding={snapshotId:'s',supplyGoodsId:'g',shopId:'shop',listingWorkflowId:'d',draftRevision:1,draftVersion:1};
+  const context={binding,skuKey:'sku',sourceMediaKeys:['image'],categoryRevision:{catalogRevision:'catalog',schemaRevision:'a'.repeat(64)},mode:'ERP_HOSTED'};
+  let models=0;
+  const create=()=>createPreparationAnalysisSession({getContext:()=>context,createOperationKey:()=> 'operation',
+    onState:()=>f.adapter.invalidate(),
+    persist:value=>f.adapter.checkpoint.write({binding,checkpoint:value}),
+    analyze:async()=>{models++;assert.equal(f.calls.at(-1).payload.checkpoint.operation.operationKey,'operation');
+      f.adapter.invalidate();throw Object.assign(Error('timeout'),{outcome:'UNKNOWN_OUTCOME'});},read:async()=>null});
+  const session=create();
+  await assert.rejects(session.analyze(),/timeout/);assert.equal(models,1);
+  const retained=f.calls.findLast(call=>call.type==='ss-erp:preparation-checkpoint-write').payload.checkpoint;
+  assert.equal(retained.operation.operationKey,'operation');assert.equal(session.state().status,'RECOVERY_REQUIRED');
+  responses['ss-erp:preparation-checkpoint-read']={ok:true,data:retained};
+  f.adapter.invalidate();const next=create();assert.equal(next.restore(await f.adapter.checkpoint.read({binding})),true);
+  await next.recover();await assert.rejects(next.analyze(),/核对/);assert.equal(models,1);
 });
 
 test('a key goes only through private runtime and response secrets are refused', async () => {

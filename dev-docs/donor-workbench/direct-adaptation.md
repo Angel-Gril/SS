@@ -4,6 +4,7 @@
 
 ### 2026-10-05 公开发布与 AI 分析启用，425 消息接线修正为 426 候选
 
+- 426 最小 wrapper 修复已签名并部署接续；真实分析窗口 `READY`，选择单图并确认后 checkpoint 写入因页面临时注册布尔失效而拒绝，服务端只读证明没有新 `precision-preparation` 操作。源码复核不支持“BYOK invalidate直接清共享注册”的推断；唯一显式共享 invalidate 位于 pagehide，当前已证实的问题是 checkpoint 依赖较早的一次注册。最终 427 适配在每次 checkpoint read/write/clear 前调用原 `registerUi`，原私有 handler 仍核对 frame/device/source/draft，注册失败则零模型调用、不自动重发。实际 adapter+session 测试原4目标失败→15项GREEN，关联68项及两文件lint通过；426原签名不覆写，最终427需新候选和发布门禁。
 - 用户已明确授权官网公开切换与 AI 分析开启，既有不限金额测试授权继续有效；不执行 Ozon 写入、不读取 Provider 控制台。COM 通过带 revision 的系统配置 API 开启 `feature_extension_product_vision`，明确 DashScope compatible-mode / `qwen-vl-plus`，沿用已授权同 Provider 凭据，DOTH 返回 `READY`、每日 10 次；BYOK、生图 pilot 和 CN direct/RDS dark 未扩大。
 - 425 完整原生 offline（原生全后端 `6960 passed`、独立 PostgreSQL、构建和双包）、同提交 fresh suite `cmuv9jrfj00125ozo63z4exwu`、审核前 UI/数据库、原 START/CONTINUE、两图 preview/review、r1/v1→r2/v2 assignment/replay、队列与 pending 清零、正式 QA04、双区新 canonical VPS/canary/website approval 均通过；没有执行 CAS 或 distribution probe，官网仍 `46e17e00 / 1.0.424`。两次套图 Provider submit 各成功结算 CNY0.14，输出保留收纳盒/把手/纹理但有白边且场景变化小，未宣称创意质量一致。
 - 原生 QA04 SHA `ffde02952b7a5be0b9ce59517a9b41b528edd2780096e1ea5fddcc6b4a3afa00`；COM/CN canary `a6e64349ca94847eec35d3ad62cbaf4a065add4598d55bb8fa02da0de9b1d9bb` / `a25e124a9d1adc677d6de0b97652f84573880f9cc74ea1aac77d3d9e0c3d9f40`。私有原件在 `release-089eb83a-website`，失败日志和原输入保留；Windows CRLF checkout 已从原 Git 字节校正，正式 producer 未改；QA04 时间顺序通过新的只读恢复核对闭合，未改旧原件。

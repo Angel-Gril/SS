@@ -36,27 +36,38 @@ export function createPrecisionPrivateRuntime(options = {}) {
   const settings = settingsApi.createClient({ runtime: proxy, permissions });
   const media = mediaApi.createClient({ runtime: proxy, BroadcastChannel: globals.BroadcastChannel, URL: globals.URL });
   const analysis = analysisApi?.createClient({ runtime: proxy, permissions });
+  function registerUi() {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('SS_ERP_PRECISION_UI_REGISTRATION_TIMEOUT')), 15000);
+      nativeRuntime.sendMessage({ type: REGISTER_UI, payload: {} }, (response) => {
+        clearTimeout(timer);
+        const data = response?.data;
+        if (nativeRuntime.lastError || response?.ok !== true || !data || data.registered !== true
+          || !['UI_REGISTERED', 'MEDIA_READY'].includes(data.state) || !publicResponse(response)) {
+          registered = mediaReady = false; reject(new Error('SS_ERP_PRECISION_UI_REGISTRATION_FAILED')); return;
+        }
+        registered = true; mediaReady = data.state === 'MEDIA_READY';
+        resolve(Object.freeze({ state: data.state, registered: true }));
+      });
+    });
+  }
+  async function checkpointRequest(method, input) {
+    // Analysis persistence cannot rely on a previous UI registration surviving
+    // settings or media lifecycle changes. Reclaim the actual document normally;
+    // the private Worker still checks the exact source, device and draft binding.
+    await registerUi();
+    return analysis.checkpoint[method](input);
+  }
   return Object.freeze({
     settings, media,
     ...(analysis ? { analyzeProduct: analysis.analyzeProduct, readProductAnalysis: analysis.readProductAnalysis,
-      getProductAnalysisReadiness: analysis.getReadiness, checkpoint: analysis.checkpoint,
+      getProductAnalysisReadiness: analysis.getReadiness, checkpoint: Object.freeze({
+        read: input => checkpointRequest('read', input), write: input => checkpointRequest('write', input),
+        clear: input => checkpointRequest('clear', input),
+      }),
       prepareProductAnalysisPermission: analysis.prepareProductAnalysisPermission, authorizeProductAnalysis: analysis.authorizeProductAnalysis } : {}),
     state: () => Object.freeze({ registered, mediaReady, available: true }),
-    registerUi() {
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('SS_ERP_PRECISION_UI_REGISTRATION_TIMEOUT')), 15000);
-        nativeRuntime.sendMessage({ type: REGISTER_UI, payload: {} }, (response) => {
-          clearTimeout(timer);
-          const data = response?.data;
-          if (nativeRuntime.lastError || response?.ok !== true || !data || data.registered !== true
-            || !['UI_REGISTERED', 'MEDIA_READY'].includes(data.state) || !publicResponse(response)) {
-            registered = mediaReady = false; reject(new Error('SS_ERP_PRECISION_UI_REGISTRATION_FAILED')); return;
-          }
-          registered = true; mediaReady = data.state === 'MEDIA_READY';
-          resolve(Object.freeze({ state: data.state, registered: true }));
-        });
-      });
-    },
+    registerUi,
     invalidate() { registered = mediaReady = false; settings.invalidatePreparedPermissions(); analysis?.invalidatePreparedPermissions(); },
   });
 }
