@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 `3fdc5c43 / 1.0.427` 双区官网公开发布完成
+
+COM/CN 应用和官网 latest 均已切换到 `3fdc5c430bd1d04990ba3894c2225449a855a867 / 1.0.427`。完整 offline、正式 QA04、双区 canonical VPS/canary、website approval、CAS、匿名 Cloud/Local 下载和 final publication verifier 均通过；COM/CN `/ready` 正常，AI 商品分析在 COM 以 `qwen-vl-max` 开启，CN 继续 dark。真实商品分析返回 `product-preparation-analysis/v1` 候选，原未知操作未重试；人工修订后的俄文文案已在隔离草稿保存并审核。没有 Ozon 写入；套图新 Provider 费用仅来自先前 `1.0.425` fresh suite，未新增一轮套图费用。准确证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-05 官网发布与 AI 分析启用接续
 
 用户已授权新版公开发布并保持 AI 分析开启。`1.0.425` 完整原生 offline、fresh suite/审核/assignment/replay、正式 QA04、双区 VPS/canary/approval 已通过，官网尚未 CAS。最小消息策略修复进入426后，真实checkpoint注册生命周期又需收口；最终准备 `1.0.427` 替代候选，两处扩展 owner 均 RED→GREEN，未改服务端计费/权限源码。COM 托管 `qwen-vl-plus` 配置已开启，原两图分析 UNKNOWN 保留且未重试，独立单图校准通过报告 schema。当前证据及范围仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

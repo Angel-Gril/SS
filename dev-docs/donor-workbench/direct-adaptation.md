@@ -2,6 +2,13 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.427` 双区官网公开发布完成
+
+- `3fdc5c430bd1d04990ba3894c2225449a855a867 / 1.0.427` 已完成签名、COM/CN 部署、最终正式 QA04、双区 REL-04 canary、website approval、CAS、DNS 分发探针和匿名 Cloud/Local 完整下载校验。COM approval SHA `9a5a11476f9772b016ceb824b5be69d5ad4fcb7066e4dc7f94093396819ac7ff`、CN approval SHA `0be7726fb10fe65159b1e64de9d588b1c567e63cfb60967bc4ba021002f874ef`；COM/CN distribution receipt SHA `5159d0f3746bb04089eec821df576c686c13460ff40789ae7a14dd234f26dbb8` / `82443958df030ea9490e3bb022026c83b6438d122b324d3a45a27a0c9f8afe88`。两区 `/api/extensions/latest` 实读均返回 1.0.427 和该 commit。
+- Cloud ZIP SHA 为 COM `474850f44b2dd6e22edbb470a30a5c96948ccfbb0f9bdbee02a244c47bd63341`、CN `092fe415c015e4ec33a17fd9ae33e4ad00a80cfdad81c600b4fa877963c8064f`；Local ZIP 为 COM/CN `a8be288b258cf1240ea49151b97e44c981eb6ddba71a15c30f438ac7ab0785c0`。发布后 COM/CN 服务、数据库、Redis 均健康，canonical VPS 最终回执 PASS；备份目录 `/var/backups/ss-erp` 与 runtime 目录保持分离。
+- COM 商品分析通过同窗真实流程返回严格 `product-preparation-analysis/v1`，筛图为 `KEEP`，一项官方颜色属性候选和俄文候选均标记为待确认；原先两次 UNKNOWN 操作保留且没有自动重试。随后手工去除模型输出中的未经确认材质/耐用性内容，保存并审核了独立文案候选；草稿没有提交 Ozon。COM 商品分析 Provider POST=1（此次单图候选），此前校准 POST 只用于 transport/schema 验证，费用未读取。
+- 测试设备和临时账号 session 已按当前运行范围撤销/清理；清理回执只覆盖本轮创建的 session。官网公开下载现为 1.0.427；没有新增 Ozon 写入。
+
 ### 2026-10-05 公开发布与 AI 分析启用，425 消息接线修正为 426 候选
 
 - 426 最小 wrapper 修复已签名并部署接续；真实分析窗口 `READY`，选择单图并确认后 checkpoint 写入因页面临时注册布尔失效而拒绝，服务端只读证明没有新 `precision-preparation` 操作。源码复核不支持“BYOK invalidate直接清共享注册”的推断；唯一显式共享 invalidate 位于 pagehide，当前已证实的问题是 checkpoint 依赖较早的一次注册。最终 427 适配在每次 checkpoint read/write/clear 前调用原 `registerUi`，原私有 handler 仍核对 frame/device/source/draft，注册失败则零模型调用、不自动重发。实际 adapter+session 测试原4目标失败→15项GREEN，关联68项及两文件lint通过；426原签名不覆写，最终427需新候选和发布门禁。

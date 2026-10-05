@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-05 `1.0.427` 双区官网公开发布完成
+
+COM/CN 当前应用与公开 Cloud/Local 下载均为 `3fdc5c43 / 1.0.427`。正式 QA04、双区 VPS/canary、website approval、CAS、匿名下载和 final publication verifier 通过；COM 托管商品分析开启，CN 继续 dark。事实和完整原件只维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-05 公开发布与商品分析接线收口
 
 425 原生 QA04/双区公开前门禁已通过，官网尚未切换；真实精铺分析恢复消息在最终策略被拒绝，最小修复准备新 426 候选。COM 托管商品分析配置已显式开启，CN dark 保持；原 UNKNOWN 分析未重试，独立一图校准 schema 通过。准确范围和原件只维护在[直接适配 owner](./direct-adaptation.md)。
