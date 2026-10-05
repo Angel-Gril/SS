@@ -2,6 +2,16 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 `566f146b / 1.0.429` 草稿读取修复双区公开发布完成
+
+- 用户授权继续修复、提交、推送和部署，沿用此前明确官网公开授权；最终提交 `566f146b9dc494bb581f6cf1d97b2b1757ac7b05 / 1.0.429` 已双区签名、标准部署并公开。两份428中间签名原件保留，均未部署或覆盖。源码只改扩展读取/刷新 owner 和测试；未修改 server/shared/依赖、设备权限、金额或 Provider 配置。
+- 实际 `acceptEditor/loadEditor/saveEditor` 行为测试在中间代码四项目标 RED→10项GREEN，定向与关联通过并进入 `preflight`。同一binding读取失败只尝试一次、显式刷新恢复、迟到旧读回拒绝、确认保存可推进版本、原UNKNOWN写入不重发。真实隔离Chrome回归 `ss-erp-precision-ui-evidence-smMgov` 验证1次失败读取→真实点击刷新→表格可编辑，零保存请求；完整编辑浏览器 `ss-erp-precision-ui-evidence-RnvFt6` 和两个区域实际签名ZIP的MV3验收均通过。浏览器早期物理点击被类目弹窗遮挡，失败原件保留；修正脚本使用真实关闭按钮后成功，没有修改产品源码绕过弹窗。
+- 最终固定提交完整原生offline（服务端6960通过、隔离PostgreSQL210事务回归和迁移升级、lint/typecheck/build/Cloud/Local）与正式QA04通过。QA04 SHA `5841d6275730b53fed2d0472c025bfb28abf08a8c8191c558e3630c3c67edd9b`；原producer确认与425执行提交server/shared/依赖完全一致，明确沿用原suite执行commit而非重标证据，本轮没有新增Provider请求或费用。
+- COM/CN部署绑定备份恢复144/143张表，临时恢复库已清理，部署和runtime备份目录保持分离。公开前VPS、REL04 canary、website approval和CAS均通过；COM canary SHA `3aafc116d3102b31fc8ed6efc036d4276514172e03692250fde084c9a5058155`、CN `a358fc6cc7d454f6534a8800eb2b5e8446898ed368726951d47d6de5d8839919`。COM初次VPS因与runtime backup并行读到旧backup状态而失败，后顺序重验通过，失败日志保留。
+- 官网approval SHA COM `3eb834bad5cd658e4807f36d28313287a2e2ae63576e1047ac970fcc474c7d1c`、CN `cdb79f0cf3c7c8406dbe3578a5673dc6c411b4329cb9793d5d0740c5e9a1373f`；匿名完整Cloud/Local下载及final publication verifier通过，distribution SHA COM `f5840827c747ac150dd7e7247042a92d6a410c72e064f82ccc5067b0b360ff74`、CN `44086f71eed438fc81d115bbecbfcd552bb29ccac1c404a16436323f31bdf5aa`。Cloud ZIP SHA分别`83ff6106f209460922fab67b92841e0e8a68dd7d0458848939ebe68ae576d238`、`714112bb2fdc1205c9ad655bc85e595f973f02bfd31071bbaad6e9a905d1508d`；Local两区为`0ccb0193a53cc0665410c9a15766afa35173535ed7580716130f0968bd4ebb53`。
+- 发布后完整canonical VPS均PASS、0failure/1既有远端备份未配置warning，SHA COM `43e6f0f2792466eef8f4e24a4c48f2b4d34d188c1590a59ac77e195f70d569be`、CN `367f68fda143fc571e2a1eb0aa515ecf0e44f986e4b9cf57cc86e01711018b64`；三服务、db/Redis健康。配置读回COM商品分析true/`qwen-vl-max`、CN false，BYOK generation/ingest/publish均保持false。临时账号session由原owner创建并仅清理本轮key，COM/CN分别移除1/2个Redis key，远端6份及本机4份凭据文件清理；无测试设备新增或用户浏览器接管。
+- 私有发布原件只保留在 `release-566f146b-deploy429`、`release-566f146b-website` 与区域candidate/signature目录，不进入Git。未证明任意真实来源图片均可加载、未知Provider分析可恢复或donor功能质量100%一致；本轮仅闭合草稿读取行为与最终公开分发。文档同步提交不重新部署或签名。
+
 ### 2026-10-06 草稿上下文刷新问题已修复，准备 `1.0.428`
 
 - 发布前实际函数验证发现原 428 修复的失败 key 清空会引入紧密重读循环，且只读版本 fence 初版误挡正常保存回执；两份已签 428 中间候选保留但未部署/公开，不能以静态 verifier 代替时序验收。最终候选改为 `1.0.429`：完整六字段 binding key、同 key 失败停止自动读取、显式刷新后等编辑器回执再提示成功、只读回执精确 r/v、已确认保存回执允许版本推进；仅结构化 `EDITOR_CONTEXT_REFRESH_REQUIRED` 可触发一次刷新，来源/店铺/草稿身份变化不自动改绑。新实际函数测试在原代码四目标 RED→10项GREEN，关联59项通过并纳入 preflight；Provider/Ozon=0。

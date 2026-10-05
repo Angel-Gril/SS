@@ -7,9 +7,11 @@
 
 ## [Unreleased]
 
+## [1.0.429] - 2026-10-06
+
 ### Fixed
 
-- 修复来源页精铺工作台首次草稿读取失败后保留旧 `editorLoadKey` 的问题；编辑器现在会重新读取权威草稿状态，失败后仍可重试。
+- 精铺草稿上下文暂时不可读时先核对最新状态；点击“重新读取”后等待编辑器恢复再提示成功。
 - 草稿上下文暂时不可读时显示设备会话、来源快照或草稿读取原因，避免把读取失败误报为草稿已变化。
 - 同一草稿读取失败后停止自动循环，明确刷新可恢复；迟到的旧读取不覆盖新草稿，已确认保存回执正常推进版本。
 
@@ -167,7 +169,9 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/46e17e00622753a8f37ff501697a3cc8d2324baa...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/566f146b9dc494bb581f6cf1d97b2b1757ac7b05...HEAD
+[1.0.429]: https://github.com/Angel-Gril/SS/compare/3fdc5c430bd1d04990ba3894c2225449a855a867...566f146b9dc494bb581f6cf1d97b2b1757ac7b05
+[1.0.427]: https://github.com/Angel-Gril/SS/compare/46e17e00622753a8f37ff501697a3cc8d2324baa...3fdc5c430bd1d04990ba3894c2225449a855a867
 [1.0.424]: https://github.com/Angel-Gril/SS/compare/4df9ec387b75c0f26c8a483c42d33940c03a892c...46e17e00622753a8f37ff501697a3cc8d2324baa
 [1.0.421]: https://github.com/Angel-Gril/SS/compare/0d695279369e8fcb4cf71563c4d8a8510b580481...4df9ec387b75c0f26c8a483c42d33940c03a892c
 [1.0.403]: https://github.com/Angel-Gril/SS/compare/8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4...fdee810303d1216d2f587d4c09c9a9f59766abed

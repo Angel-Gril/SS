@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 `566f146b / 1.0.429` 草稿读取修复双区公开发布完成
+
+COM/CN 应用、官网 latest 和 Cloud/Local 下载已更新到 `566f146b9dc494bb581f6cf1d97b2b1757ac7b05 / 1.0.429`。实际函数 RED→GREEN、读取失败一次后明确刷新恢复的真实 Chrome、签名 MV3、最终完整 offline/QA04、双区备份恢复/VPS/canary/approval/CAS/匿名完整下载和发布后 VPS 均通过。COM 商品分析保持 `qwen-vl-max` 开启、CN 保持 dark；本轮无 Provider/Ozon 请求或新增费用，临时账号凭据已清理。证据和限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)，公开日志遵循根 `CHANGELOG.md`。
+
 ## 2026-10-06 草稿上下文刷新修复准备发布
 
 来源页精铺工作台首次读取失败后的旧状态与草稿上下文提示正在收口。发布前实际函数验证发现428中间修复会触发重读循环并误挡保存回执，最终改为429：同binding失败停止自动重读、显式刷新恢复、迟到读取拒绝、保存回执正常推进版本。10项真实函数回归及59项关联验证通过；两份428签名保留但未部署/公开，线上仍为 `1.0.427`。准确证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

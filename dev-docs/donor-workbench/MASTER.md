@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-06 `1.0.429` 草稿读取修复已双区公开
+
+应用、官网和 Cloud/Local 下载均绑定 `566f146b / 1.0.429`，完整发布门禁与读取失败→明确刷新恢复的浏览器验收通过；COM 托管分析继续开启、CN dark，Provider/Ozon/新费用均零。准确事实只维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-05 `1.0.427` 双区官网公开发布完成
 
 COM/CN 当前应用与公开 Cloud/Local 下载均为 `3fdc5c43 / 1.0.427`。正式 QA04、双区 VPS/canary、website approval、CAS、匿名下载和 final publication verifier 通过；COM 托管商品分析开启，CN 继续 dark。事实和完整原件只维护在[直接适配 owner](./direct-adaptation.md)。
@@ -46,14 +50,14 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications run `089eb83a / 1.0.425`; public Cloud/Local downloads remain
-`46e17e00 / 1.0.424`. Regional signing, isolated signed-package MV3 acceptance,
-backup/restore and full canonical VPS verification passed for 425. Website gates
-and public pointer switching have not run for 425. The prior 424 public acceptance
-and temporary credential cleanup remain historical evidence for that release.
+COM/CN applications and public Cloud/Local downloads serve `566f146b / 1.0.429`.
+Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
+formal QA04, regional canaries, website approval, CAS and complete anonymous downloads
+passed. Same-binding read failures stop automatically; explicit refresh recovers the
+editor, stale reads are rejected and acknowledged saves can advance their revision.
 Direct-adaptation tasks U9–U20 now ship with server-owned SKU duplication/removal,
 copy-aware pricing/packaging/attributes/media/compiler seams and bounded native Taobao,
-Tmall and PDD collectors. Production vision remains off. Copy-row real Ozon publishing,
+Tmall and PDD collectors. COM hosted product analysis is enabled; CN remains dark. Copy-row real Ozon publishing,
 other donor platforms' deep collectors and broad creative-quality parity remain unaccepted.
 Current acceptance, evidence and remaining tasks live only in
 [direct-adaptation.md](./direct-adaptation.md).
