@@ -2,6 +2,12 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 官网升级接续：正式 PostgreSQL 夹具接线修复
+
+- 用户已明确授权官网最新版公开切换，此前测试费用授权仍有效；不得执行 Ozon 发布或读取 Provider 控制台。`d376bb1a / 1.0.422` 已部署，但尚无该提交的正式 QA04/REL-04/website approval，不能直接 CAS。
+- 正式 offline 在独立 checkout 暴露本机 Prisma Client、LF 与数据库连接配置缺口；完整 preflight、server/Web build 已通过，失败原件保留。真实隔离 PostgreSQL `208/209`，唯一失败为旧 hosted-plan 夹具未提供新版 `loadListingDraft`，生产装配已提供该 owner。T1 原失败边界已实测，夹具改用既有草稿服务并保持原计划幂等、变更拒绝和零费用断言。
+- 已使用签名 1.0.422 专用 profile 正常配对并从真实 1688 收纳盒取得新快照、空图片 r1/v1 隔离草稿。旧已应用图片草稿保持原状。Provider/Ozon=0；修正后需形成新候选 `1.0.423`，完成同 commit 原生 offline、真实 suite/审核/assignment/replay，再走双区发布门禁。
+
 ### 2026-10-05 `1.0.422` 已提交、推送、签名并双区部署
 
 - `d376bb1a49f071f9c9b4eca1615c33539e61c7c2` 已提交并推送；COM/CN `1.0.422` Cloud/Local 候选完成签名、隔离 MV3 安装验收和标准部署。COM/CN 当前 release 均为该 commit，`/ready` 返回 db/redis ok，canonical VPS evidence 通过；备份恢复分别读回 COM 144 张表、CN 143 张表。部署输出与签名原件保存在 operator-private release 目录，不进入 Git。

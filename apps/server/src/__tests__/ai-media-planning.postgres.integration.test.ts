@@ -15,6 +15,8 @@ import {
   type CreateRuleBasedAiMediaPlanningInput,
 } from '../services/ai-media-planning.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
+import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-draft.js';
+import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 import {
   createExtensionHostedAiImagePlanService,
   type ExtensionHostedAiImagePlanBindingRecord,
@@ -180,15 +182,22 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
   });
 
   it('creates one hosted hero-and-scene plan and rejects target changes without new plans or costs', async () => {
+    const drafts = createSourceListingWorkflowService({ repository: new InMemoryOzonListingDraftRepository() });
+    const draft = await drafts.createDraft({
+      ownerUserId, actorUserId: ownerUserId, shopId: `hosted_shop_${suffix}`, supplyGoodsId: goodsId,
+      sourceCaptureSnapshotId: snapshotId, sourceCaptureHash: captureHash, selectedSkuKeys: [selectedSkuKey],
+    });
     const binding = {
-      snapshotId, supplyGoodsId: goodsId, shopId: `hosted_shop_${suffix}`,
-      listingWorkflowId: `hosted_listing_${suffix}`, draftRevision: 11, draftVersion: 7,
+      snapshotId, supplyGoodsId: goodsId, shopId: draft.shopId,
+      listingWorkflowId: draft.id, draftRevision: draft.revision, draftVersion: draft.draftVersion,
     };
     const identity = { ownerUserId, actorUserId: ownerUserId, deviceSessionId: `hosted_device_${suffix}` };
     let bound: ExtensionHostedAiImagePlanBindingRecord | null = null;
     let bindCalls = 0;
     const hosted = createExtensionHostedAiImagePlanService({
-      planning: service,
+      planning: createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), {
+        sourcePreparation: false, loadListingDraft: drafts.getDraft,
+      }),
       bindings: {
         async bind(record) { bindCalls += 1; bound = record; return { kind: 'bound', record }; },
         async get() { return bound; },

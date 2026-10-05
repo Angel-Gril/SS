@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 官网最新版切换接续
+
+官网公开切换已获授权。正式 PostgreSQL 验收发现旧 hosted-plan 夹具缺新版草稿 authority，正在最小同步测试接线；应用仍 `d376bb1a / 1.0.422`，官网仍 `4df9ec38 / 1.0.421`。新签名候选将为 `1.0.423`，不得改标旧 QA04、签名或 canary。范围与原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-05 `d376bb1a / 1.0.422` 已提交、推送、签名并双区部署
 
 精铺工作台适配候选已提交并推送到 `feat/ai-media-prompt-registry`，commit 为 `d376bb1a49f071f9c9b4eca1615c33539e61c7c2`。COM/CN Cloud/Local 候选均为 `1.0.422`，外部 Ed25519 签名和隔离 MV3 验收通过；COM/CN 已完成标准部署、备份恢复和 canonical VPS 验收。两区 `/ready` 均返回 `db=ok、redis=ok`，当前指针分别绑定该 commit，COM 继续 DOTH hosted pilot，CN 继续 direct/RDS dark。官网 publication pointer 尚未切换，仍保持旧公开版本；没有新增 Provider/Ozon 写入或发布费用。
