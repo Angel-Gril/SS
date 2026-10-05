@@ -137,6 +137,14 @@ import { extensionSourceWorkbenchVideoRoutes } from './routes/extension-source-w
 import { createPrismaSourceListingVideoService } from './services/source-listing-video-prisma.js';
 import { createPrismaSourceListingWatermarkService } from './services/source-listing-watermark-prisma.js';
 import { createExtensionListingEditorService } from './services/extension-listing-editor.js';
+import { getAiListingCopyCapability } from './services/ai-listing-copy-capability.js';
+import { getProductVisionCapability } from './services/product-vision-runtime-config.js';
+import { createProductVisionTransport } from './services/product-vision-transport.js';
+import { createProductVisionWorkbenchService } from './services/product-vision-workbench.js';
+import { createPrismaProductVisionOperationStore } from './services/product-vision-operation-store.js';
+import { extensionProductVisionRoutes } from './routes/extension-product-vision.js';
+import { createExtensionListingLogisticsPricingService } from './services/extension-listing-logistics-pricing.js';
+import { extensionListingLogisticsPricingRoutes } from './routes/extension-listing-logistics-pricing.js';
 import { createSourceListingAttributeEditorService } from './services/source-listing-attribute-editor.js';
 import { createSourceListingCopyEditorService } from './services/source-listing-copy-editor.js';
 import {
@@ -1188,7 +1196,9 @@ if (isExtensionDeviceAuthEnabled()) {
     };
   };
   const extensionHostedAiImagePlanningService =
-    createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(prisma));
+    createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(prisma), {
+      loadListingDraft: ({ ownerUserId, draftId }) => sourceListingWorkflowService.getDraft({ ownerUserId, draftId }),
+    });
   const extensionHostedAiImagePlanService = createExtensionHostedAiImagePlanService({
     planning: extensionHostedAiImagePlanningService,
     bindings: extensionHostedAiImagePlanBindings,
@@ -2883,6 +2893,8 @@ if (isExtensionDeviceAuthEnabled()) {
       copyEditor: createSourceListingCopyEditorService({ workflow: sourceListingWorkflowService,
         validateAttributes: createSourceListingAttributeEditorService({ workflow: sourceListingWorkflowService,
           attributes: sourceListingWorkflowAttributeService }).validateAttributes }),
+      aiCopyWorkflow: sourceListingAiCopyService,
+      evaluateAiCopyCapability: getAiListingCopyCapability,
       loadCatalog: async ({ ownerUserId, shopId }) => {
         const catalog = await loadAuthoritativeOzonCategoryCatalog({
           shopId,
@@ -2899,6 +2911,23 @@ if (isExtensionDeviceAuthEnabled()) {
       config: extensionDeviceAuthConfig,
       requiredScopes: ['listing:review'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+  await app.register(extensionProductVisionRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({ config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'], loadAuthorization: sessionId => extensionDeviceRepository.loadAuthorization(sessionId) }),
+    service: createProductVisionWorkbenchService({ workflow: sourceListingWorkflowService,
+      ownership: sourceListingWorkflowContext, evaluateCapability: getProductVisionCapability,
+      usageStore: createPrismaAiUsageStore(prisma),
+      operationStore: createPrismaProductVisionOperationStore({ client: prisma as never }),
+      analyzeTransport: createProductVisionTransport(),
+      loadOwnedSnapshot: async ({ ownerUserId, snapshotId }) => {
+        const snapshot = await prisma.sourceCaptureSnapshot.findFirst({ where: { id: snapshotId, subject: { ownerUserId } },
+          select: { id: true, captureHash: true, payloadBytes: true, payload: true } });
+        return snapshot ? { ...snapshot, payload: snapshot.payload as unknown as SourceProductCaptureV2 } : null;
+      },
     }),
   });
   await app.register(extensionWorkbenchWatermarkRoutes, {
@@ -3189,6 +3218,17 @@ if (isLogisticsDistributionEnabled()) {
     service: officialInputUnitContractService,
   });
   const logisticsDeviceRepository = createPrismaLogisticsRuleDeviceRepository({ client: prisma });
+  await app.register(extensionListingLogisticsPricingRoutes,{
+    prefix:'/api/extension-device/source-workbench',featureFlags:sourceWorkflowFeatureFlags,
+    authenticateDevice:authenticateExtensionDevice({config:logisticsAuthConfig,requiredScopes:['listing:review'],loadAuthorization:sessionId=>extensionDeviceRepository.loadAuthorization(sessionId)}),
+    service:createExtensionListingLogisticsPricingService({workflow:sourceListingWorkflowService,ownership:sourceListingWorkflowContext,
+      repository:logisticsDeviceRepository,deploymentId:logisticsAuthConfig.deploymentId,
+      loadPricingHints:async({now})=>{
+        const rate=await prisma.exchangeRate.findFirst({where:{fromCurrency:'RUB',toCurrency:'CNY',date:{gte:new Date(now.getTime()-7*86400000),lte:now}},orderBy:{date:'desc'}});
+        return{commission:null,fx:rate?{rate:Number(rate.rate),source:rate.source,fetchedAt:rate.fetchedAt.toISOString()}:null};
+      },
+    }),
+  });
   await app.register(logisticsRuleRoutes, {
     prefix: '/api/logistics-rules',
     repository: logisticsDeviceRepository,

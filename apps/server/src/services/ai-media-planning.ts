@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import type { OzonListingDraft } from 'shared';
+import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 import { aiImageCreativeBriefSchema, type AiImageCreativeBrief } from './ai-image-creative-brief.js';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
@@ -76,6 +78,8 @@ export interface CreateRuleBasedAiMediaPlanningInput {
   creativeBrief?: AiImageCreativeBrief;
   /** Internal seal supplied by the device plan owner, never from an HTTP planner caller. */
   referenceSelectionScopeHash?: string;
+  /** Internal device owner binding; public HTTP planners never accept this field. */
+  listingDraftContext?: { id: string; revision: number; draftVersion: number };
 }
 
 export type CreateCurrentRuleBasedAiMediaPlanningInput = Omit<
@@ -682,6 +686,15 @@ function normalizeCreateInput(
       throw new TypeError('AI media planning galleryGoals must be unique');
     }
   }
+  let listingDraftContext: CreateRuleBasedAiMediaPlanningInput['listingDraftContext'];
+  if (input.listingDraftContext !== undefined) {
+    const value = input.listingDraftContext;
+    if (!value || Object.keys(value).sort().join(',') !== 'draftVersion,id,revision'
+      || !Number.isSafeInteger(value.revision) || value.revision < 1 || !Number.isSafeInteger(value.draftVersion) || value.draftVersion < 1) {
+      throw new TypeError('Internal listing draft context is invalid');
+    }
+    listingDraftContext = { id: required(value.id, 'listingDraftContext.id', 200), revision: value.revision, draftVersion: value.draftVersion };
+  }
   return jsonClone({
     ownerUserId,
     actorUserId,
@@ -690,6 +703,7 @@ function normalizeCreateInput(
     context: { type: 'collect' as const, id: contextId },
     idempotencyKey,
     selectedSkuKeys,
+    ...(listingDraftContext ? { listingDraftContext } : {}),
     ...(candidateMediaKeys === undefined ? {} : { candidateMediaKeys }),
     ...(galleryGoals === undefined ? {} : { galleryGoals }),
     ...(input.creativeBrief === undefined ? {} : { creativeBrief: aiImageCreativeBriefSchema.parse(input.creativeBrief) }),
@@ -1028,6 +1042,7 @@ function inputError(error: unknown): never {
 export interface AiMediaPlanningServiceOptions {
   /** Internal legacy replay only. HTTP and extension callers cannot choose this option. */
   sourcePreparation?: AiMediaPlanningSourceDependencies | false;
+  loadListingDraft?(input: { ownerUserId: string; draftId: string }): Promise<OzonListingDraft>;
 }
 
 export function createAiMediaPlanningService(
@@ -1042,7 +1057,7 @@ export function createAiMediaPlanningService(
       } catch (error) {
         return inputError(error);
       }
-      const authority = await repository.loadRulePlanningAuthority(normalized);
+      let authority = await repository.loadRulePlanningAuthority(normalized);
       if (!authority) {
         throw new AiMediaPlanningError(
           'AI_MEDIA_PLANNING_CONTEXT_CHANGED',
@@ -1051,6 +1066,19 @@ export function createAiMediaPlanningService(
         );
       }
       try {
+        if (normalized.listingDraftContext) {
+          if (!options.loadListingDraft) throw new AiMediaPlanningError('AI_MEDIA_PLANNING_CONTEXT_CHANGED', 'Internal listing draft authority is unavailable', 409);
+          const context = normalized.listingDraftContext;
+          const draft = await options.loadListingDraft({ ownerUserId: normalized.ownerUserId, draftId: context.id });
+          if (draft.id !== context.id || draft.ownerUserId !== normalized.ownerUserId || draft.revision !== context.revision
+            || draft.draftVersion !== context.draftVersion || draft.sourceCaptureSnapshotId !== normalized.sourceCaptureSnapshotId
+            || draft.sourceCaptureHash !== authority.sourceCaptureHash || draft.supplyGoodsId !== normalized.context.id
+            || draft.stage === 'PUBLISHED' || ['CANCELLED', 'PERMANENT_FAILURE'].includes(draft.runState)
+            || JSON.stringify(sourceListingEditorSkuKeysForDraft(draft).sort()) !== JSON.stringify(normalized.selectedSkuKeys)) {
+            throw new AiMediaPlanningError('AI_MEDIA_PLANNING_CONTEXT_CHANGED', 'Internal listing draft authority changed', 409);
+          }
+          authority = { ...authority, capture: projectSourceCaptureForDraft(authority.capture, draft) };
+        }
         const resolved = resolveRuleBasedAiMediaPlanningInput(normalized, authority);
         const prepared = options.sourcePreparation === false ? undefined : await prepareAiMediaPlanningSources(
           repository,

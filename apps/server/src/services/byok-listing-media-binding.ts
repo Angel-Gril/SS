@@ -151,7 +151,7 @@ function normalizedAssignments(draft: OzonListingDraft): OzonListingDraftMediaAs
     || draft.media.assignments.length > 500) {
     return fail('BYOK_LISTING_BINDING_DRAFT_STALE', 409, 'Listing media state is invalid');
   }
-  const selected = new Set(draft.selectedSkuKeys);
+  const selected = new Set(sourceListingEditorSkuKeysForDraft(draft));
   const assignments = draft.media.assignments.map((value) => normalizedAssignment(value, selected));
   const assets = new Set<string>();
   const slots = new Set<string>();
@@ -184,7 +184,7 @@ function assertDraftAuthority(
     || draft.draftVersion !== binding.draftVersion
     || draft.sourceCaptureSnapshotId !== command.authority.sourceCaptureSnapshotId
     || !Array.isArray(draft.selectedSkuKeys)
-    || !draft.selectedSkuKeys.includes(command.skuKey)
+    || !sourceListingEditorSkuKeysForDraft(draft).includes(command.skuKey)
     || draft.stage === 'PUBLISHED'
     || draft.runState === 'CANCELLED'
     || draft.runState === 'PERMANENT_FAILURE') {
@@ -413,3 +413,4 @@ export async function bindByokGeneratedAssetToListingDraft(
   }
   return { ...planned, draft: persisted };
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

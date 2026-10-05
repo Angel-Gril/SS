@@ -69,6 +69,7 @@ export const SystemConfigSchema = {
   feature_ai_media_full_edit: z.boolean().default(false),
   feature_ai_media_inpaint: z.boolean().default(false),
   feature_ai_listing_copy_generation: z.boolean().default(false),
+  feature_extension_product_vision: z.boolean().default(false),
   ai_media_workflow_v2_rollout_policy: z.string().max(100000).default('{"revision":0,"tenantIds":[]}'),
   feature_source_listing_web_media: z.boolean().default(false),
   feature_source_listing_extension_workbench: z.boolean().default(false),
@@ -83,11 +84,16 @@ export const SystemConfigSchema = {
   ai_model: z.string().default(''),
   ai_product_title_model: z.string().default(''),
   ai_product_description_model: z.string().default(''),
+  ai_product_vision_model: z.string().max(200).default(''),
+  ai_product_vision_provider: z.enum(['disabled', 'custom']).default('disabled'),
+  ai_product_vision_base_url: z.string().max(4096).default(''),
+  ai_product_vision_api_key: z.string().max(4096).default(''),
   ai_provider_label: z.string().default(''),
   ai_timeout_ms: z.number().int().min(1000).max(120000).default(30000),
   ai_daily_budget_cents: z.number().int().min(0).max(10000000).default(0),
   ai_user_daily_category_translation_limit: z.number().int().min(0).max(100000).default(1000),
   ai_user_daily_product_generation_limit: z.number().int().min(0).max(100000).default(20),
+  ai_user_daily_product_vision_limit: z.number().int().min(0).max(100000).default(10),
   ai_category_translation_enabled: z.boolean().default(false),
   ai_product_generation_enabled: z.boolean().default(false),
   ai_image_generation_enabled: z.boolean().default(false),
@@ -442,6 +448,10 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'feature',
     description: 'AI 文案生成独立总开关；仍需 AI 媒体租户策略和文本 Provider 配置同时就绪',
   },
+  feature_extension_product_vision: {
+    label: '精铺看图分析', group: 'feature',
+    description: '读取当前草稿来源图片，生成可编辑视觉描述；独立默认关闭，受 AI 租户策略、指定视觉模型和每日次数限制，不确认商品事实或自动上架',
+  },
   ai_media_workflow_v2_rollout_policy: {
     label: 'AI 媒体工作流租户策略',
     group: 'feature',
@@ -515,6 +525,19 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'ai',
     description: '按任务报价币种分别执行的全局每日预算（最小货币单位）：UTC 当日已结算费用 + 全部历史未决预留上限 + 新任务上限；不同币种不混加，0 禁止新付费任务',
   },
+  ai_product_vision_model: {
+    label: '商品视觉分析模型', group: 'ai',
+    description: '明确支持图片输入的 OpenAI-compatible 模型；为空时看图分析不可用，不继承普通文字模型',
+  },
+  ai_product_vision_provider: {
+    label: '看图分析服务', group: 'ai', description: '独立 disabled/custom 配置；不改变商品文字或图片生成服务',
+  },
+  ai_product_vision_base_url: {
+    label: '看图分析 Base URL', group: 'ai', description: '支持多模态的 HTTPS OpenAI-compatible 地址，不继承普通文字服务地址',
+  },
+  ai_product_vision_api_key: {
+    label: '看图分析 API Key', group: 'ai', description: '只用于独立看图服务，不转发文字或生图服务的密钥', sensitive: true, encrypted: true,
+  },
   ai_user_daily_category_translation_limit: {
     label: '用户每日类目翻译额度',
     group: 'ai',
@@ -540,6 +563,10 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'ai',
     description:
       '允许进入文生图任务前置检查；真实 Provider 还必须通过精确能力、成本和配置冻结门禁',
+  },
+  ai_user_daily_product_vision_limit: {
+    label: '用户每日看图分析次数', group: 'ai',
+    description: '每次最多五张来源图片；新请求原子占用次数，未知 Provider 结果保留占用，幂等回放不再次调用模型',
   },
   ai_category_translation_prompt: {
     label: '类目翻译提示词',

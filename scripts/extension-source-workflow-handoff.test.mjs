@@ -95,31 +95,18 @@ assert.doesNotMatch(
   'open handler must never accept a caller-provided external URL or path',
 );
 
-for (const [label, source] of [['popup', popup], ['source panel', sourcePanel]]) {
-  assert.match(source, /打开 ERP 继续/, `${label} should expose an explicit continue CTA`);
-  assert.match(
-    source,
-    /type:\s*['"]ss-erp:open-source-workflow-handoff['"][\s\S]{0,120}snapshotId:/,
-    `${label} CTA should invoke the controlled service-worker open message with its expected snapshot`,
-  );
-  assert.match(source, /\.handoff/, `${label} should enable its CTA only from a successful V2 handoff response`);
-  assert.doesNotMatch(
-    source,
-    /已打开 ERP[，,]可继续处理上架信息/u,
-    `${label} must not report a reachable ERP page after only creating a browser tab`,
-  );
-  assert.match(
-    source,
-    /已创建 ERP 标签页，请确认页面加载后继续创建草稿/u,
-    `${label} should describe the exact handoff outcome without claiming page readiness`,
-  );
+// The legacy Worker handoff remains explicitly callable for compatibility.
+// Current public entries use precision; the independent costing panel has no
+// collection/media handoff. These entry contracts replaced the old panel UI.
+for (const [label, source] of [['popup', popup], ['costing panel', sourcePanel]]) {
+  assert.doesNotMatch(source, /ss-erp:open-source-workflow-handoff|打开 ERP 继续/, `${label} must not offer the retired ERP handoff`);
 }
-assert.match(popup, /sourceWorkflowHandoffBtn\.hidden\s*=\s*!handoff/, 'popup CTA should remain hidden without a V2 handoff');
-assert.match(sourcePanel, /open-source-workflow[^\n]*hidden/, 'source panel CTA should be hidden by default');
-const popupCollect = popup.match(/function collectSourcePage[\s\S]*?\n\s{2}function quoteSourcePage/)?.[0] || '';
-const panelCollect = sourcePanel.match(/async function collectToErp[\s\S]*?\n\s{2}async function collectForMediaWorkflow/)?.[0] || '';
+assert.doesNotMatch(sourcePanel, /collect-source-to-erp|async function collectToErp/, 'costing stays separate from the precision collection workflow');
+const popupCollect = popup.match(/function openPrecisionWorkbench[\s\S]*?\n\s{2}function quoteSourcePage/)?.[0] || '';
+assert.ok(popupCollect, 'the public popup has an executable precision entry');
 assert.doesNotMatch(popupCollect, /openSourceWorkflowHandoff\(/, 'popup should not auto-open ERP after capture');
-assert.doesNotMatch(panelCollect, /openSourceWorkflow\(/, 'source panel should not auto-open ERP after capture');
+assert.match(popupCollect, /chrome\.tabs\.sendMessage/, 'popup opens the existing source-page iframe');
+assert.doesNotMatch(popupCollect, /chrome\.tabs\.create|collect-source-to-erp/, 'opening the UI does not create a tab or submit collection');
 assert.match(
   serviceWorker,
   /const items = rawItems\.map\(normalizeSourceProductForErpCollect\)[\s\S]{0,1800}sendResponse\(\{ ok: true, data, saved, errorCount: errors\.length }\)/,

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS } from 'shared';
+import { SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS, SOURCE_LISTING_SKU_KEY_MAX_LENGTH } from 'shared';
 import type { SourceWorkflowFeatureContext } from '../services/source-workflow-feature-flags.js';
 import type { ExtensionListingEditorIdentity, ExtensionListingEditorService } from '../services/extension-listing-editor.js';
 
@@ -8,11 +8,26 @@ const identifier = z.string().trim().min(1).max(200);
 const binding = z.object({ snapshotId: identifier, supplyGoodsId: identifier, shopId: identifier,
   listingWorkflowId: identifier, draftRevision: z.number().int().positive(), draftVersion: z.number().int().positive() }).strict();
 const readBody = z.object({ binding }).strict();
+const copyGenerateBody = z.object({ binding, operationKey: z.string().trim().min(8).max(128),
+  fields: z.array(z.enum(['title', 'description'])).min(1).max(2).refine((fields) => new Set(fields).size === fields.length),
+  userInstructions: z.string().trim().max(2000).optional(),
+}).strict();
 const dictionaryBody = z.object({ binding, schemaRevision: z.string().regex(/^[a-f0-9]{64}$/u),
   attributeId: z.number().int().positive(), query: z.string().trim().max(200), limit: z.number().int().min(1).max(100) }).strict();
 const category = z.object({ categoryId: z.number().int().positive(), typeId: z.number().int().positive(), catalogRevision: identifier }).strict();
 const catalogBody = z.object({ binding, query: z.string().trim().max(100), preview: category.optional() }).strict();
 const saveBody = z.discriminatedUnion('action', [
+  z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('SKU_DUPLICATE'), value: z.object({
+    sourceSkuKey: z.string().trim().min(1).max(SOURCE_LISTING_SKU_KEY_MAX_LENGTH),
+  }).strict() }).strict(),
+  z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('SKU_COPY_REMOVE'), value: z.object({
+    rowKey: z.string().trim().regex(/^listing-copy:[a-f0-9]{64}$/u),
+  }).strict() }).strict(),
+  z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('SKU_SELECTION'), value: z.object({
+    selectedSkuKeys: z.array(z.string().transform((key) => key.normalize('NFKC').trim())
+      .pipe(z.string().min(1).max(SOURCE_LISTING_SKU_KEY_MAX_LENGTH))).min(1).max(SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS)
+      .refine((keys) => new Set(keys).size === keys.length),
+  }).strict() }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('PRICING'), value: z.record(z.unknown()) }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('CATEGORY'), value: category }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('PACKAGING'), value: z.object({
@@ -21,6 +36,12 @@ const saveBody = z.discriminatedUnion('action', [
   }).strict() }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('ATTRIBUTES'), value: z.object({
     schemaRevision: z.string().regex(/^[a-f0-9]{64}$/u), changes: z.array(z.unknown()).min(1).max(500),
+  }).strict() }).strict(),
+  z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('ATTRIBUTE_SUGGESTIONS'), value: z.object({
+    schemaRevision: z.string().regex(/^[a-f0-9]{64}$/u), candidates: z.array(z.object({
+      attributeId: z.number().int().positive(), candidateId: identifier, candidateHash: z.string().regex(/^[a-f0-9]{64}$/u),
+      schemaRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+    }).strict()).min(1).max(500).refine((items) => new Set(items.map((item) => item.attributeId)).size === items.length),
   }).strict() }).strict(),
   z.object({ binding, operationKey: z.string().trim().min(8).max(128), action: z.literal('COPY_CANDIDATE'), value: z.object({
     titleRu: z.string().max(500).optional(), descriptionRu: z.string().max(10_000).nullable().optional(),
@@ -57,7 +78,7 @@ export async function extensionListingEditorRoutes(app: FastifyInstance, options
     }
     return { ownerUserId: device.ownerUserId, actorUserId: device.actorUserId, allowedShopIds: device.allowedShopIds };
   }
-  for (const action of ['read', 'catalog', 'attributes', 'dictionary', 'save'] as const) {
+  for (const action of ['read', 'catalog', 'attributes', 'attribute-suggestions', 'dictionary', 'save', 'copy-capability', 'copy-generate'] as const) {
     app.post(`/editor/${action}`, { preHandler: [options.authenticateDevice], bodyLimit: 64 * 1024 }, async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       try {
@@ -73,10 +94,22 @@ export async function extensionListingEditorRoutes(app: FastifyInstance, options
           const parsed = readBody.parse(request.body);
           return { code: 1, data: await options.service.attributes(await authorize(request, parsed.binding.shopId, false), parsed.binding) };
         }
+        if (action === 'attribute-suggestions') {
+          const parsed = readBody.parse(request.body);
+          return { code: 1, data: await options.service.attributeSuggestions(await authorize(request, parsed.binding.shopId, false), parsed.binding) };
+        }
         if (action === 'dictionary') {
           const parsed = dictionaryBody.parse(request.body);
           const { binding: context, ...query } = parsed;
           return { code: 1, data: await options.service.dictionary(await authorize(request, context.shopId, false), context, query) };
+        }
+        if (action === 'copy-capability') {
+          const parsed = readBody.parse(request.body);
+          return { code: 1, data: await options.service.copyCapability(await authorize(request, parsed.binding.shopId, false), parsed.binding) };
+        }
+        if (action === 'copy-generate') {
+          const parsed = copyGenerateBody.parse(request.body);
+          return { code: 1, ...await options.service.generateCopy(await authorize(request, parsed.binding.shopId, true), parsed) };
         }
         const parsed = saveBody.parse(request.body);
         const result = await options.service.save(await authorize(request, parsed.binding.shopId, true), parsed);
@@ -84,7 +117,8 @@ export async function extensionListingEditorRoutes(app: FastifyInstance, options
       } catch (error: any) {
         if (error instanceof z.ZodError) return reply.status(400).send({ code: 0, errorCode: 'invalid_request', msg: '草稿编辑参数错误' });
         const statusCode = Number(error?.statusCode);
-        if ([400, 401, 403, 404, 409, 422].includes(statusCode)) {
+        if ([400, 401, 403, 404, 409, 422].includes(statusCode)
+          || action === 'copy-generate' && [502, 503].includes(statusCode)) {
           return reply.status(statusCode).send({ code: 0, errorCode: String(error.code || 'editor_failed').toLowerCase(), msg: error.message });
         }
         request.log.error({ err: error }, 'extension listing editor failed');

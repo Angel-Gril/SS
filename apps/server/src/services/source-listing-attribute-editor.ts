@@ -1,4 +1,4 @@
-import { OZON_LISTING_ATTRIBUTE_MAX_VALUES, type OzonListingDraft, type OzonListingDraftCategory, type OzonNormalizedAttributeSchema } from 'shared';
+import { OZON_LISTING_ATTRIBUTE_MAX_VALUES, type OzonListingDraft, type OzonListingDraftAttributeValue, type OzonListingDraftCategory, type OzonNormalizedAttributeSchema } from 'shared';
 import type { SourceListingWorkflowService } from './source-listing-workflow.js';
 import { SourceListingWorkflowError } from './source-listing-workflow.js';
 import {
@@ -7,6 +7,9 @@ import {
   type SourceListingAttributeWorkspace,
 } from './source-listing-workflow-attributes.js';
 import { normalizeSourceListingManualAttributeChanges } from './source-listing-manual-attribute-changes.js';
+import { normalizeSourceListingAttributeSuggestionChanges } from './source-listing-attribute-suggestion-changes.js';
+import type { OzonAttributeSuggestionEvidence } from './ozon-attribute-suggestions.js';
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 export interface SourceListingAttributeEditorContext {
   draftId: string;
@@ -31,7 +34,7 @@ function projectWorkspace(workspace: SourceListingAttributeWorkspace, draft: Ozo
     fields: projectSchemaFields(workspace.schema),
     values: workspace.schema.fields.flatMap((field) => {
       const root = workspace.values[String(field.attributeId)];
-      return (field.ownership === 'SKU' ? draft.selectedSkuKeys : [null]).map((skuKey) => {
+      return (field.ownership === 'SKU' ? sourceListingEditorSkuKeysForDraft(draft) : [null]).map((skuKey) => {
         const value = skuKey === null ? root : root?.skuValues?.[skuKey];
         const matches = value?.dictionaryMatches?.map((item) => item.dictionaryValueId);
         const ids = matches?.length ? matches
@@ -42,9 +45,40 @@ function projectWorkspace(workspace: SourceListingAttributeWorkspace, draft: Ozo
     }),
   };
 }
+function projectSuggestions(workspace: SourceListingAttributeWorkspace, draft: OzonListingDraft) {
+  const suggestions = Object.values(workspace.suggestions).sort((left, right) => left.attributeId - right.attributeId).flatMap((candidate) => {
+    const field = workspace.schema.fields.find((item) => item.attributeId === candidate.attributeId);
+    if (!field || !['EDITOR', 'SKU'].includes(field.ownership)) return [];
+    const rows = (field.ownership === 'SKU' ? sourceListingEditorSkuKeysForDraft(draft) : [null]).flatMap((skuKey) => {
+      const leaf = skuKey === null ? candidate : candidate.skuValues?.[skuKey];
+      if (!leaf) return [];
+      const matches = leaf.dictionaryMatches || [];
+      const rawValues = Array.isArray(leaf.value) ? leaf.value : [leaf.value];
+      const canonical = matches.length === rawValues.length ? matches.map((match) => match.canonicalValue) : null;
+      const evidence = (leaf as OzonListingDraftAttributeValue & { evidenceDetails?: OzonAttributeSuggestionEvidence[] }).evidenceDetails || [];
+      return [{ skuKey, value: canonical ? field.cardinality === 'SINGLE' ? canonical[0] : canonical : structuredClone(leaf.value),
+        sourceValue: structuredClone(leaf.value), source: leaf.source, reviewed: false as const,
+        dictionaryValueIds: matches.map((match) => match.dictionaryValueId),
+        evidence: evidence.map((item) => ({ id: item.id, source: item.source, path: item.path,
+          value: structuredClone(item.value), isEstimated: item.isEstimated, confidence: item.confidence })),
+        unresolvedValues: structuredClone(leaf.unresolvedValues || []),
+      }];
+    });
+    return rows.length ? [{ attributeId: candidate.attributeId, attributeName: candidate.attributeName,
+      candidateId: candidate.candidateId, candidateHash: candidate.candidateHash, schemaRevision: candidate.schemaRevision,
+      reviewed: false as const, rows }] : [];
+  });
+  const result = { state: 'ready' as const, workspace: projectWorkspace(workspace, draft), suggestions,
+    blockedSuggestions: workspace.blockedSuggestions.map((item) => ({ attributeId: item.attributeId, attributeName: item.attributeName,
+      skuKey: item.skuKey ?? null, reasonCode: item.reasonCode, message: item.message, unsupportedValues: structuredClone(item.unsupportedValues) })) };
+  if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 512 * 1024) {
+    throw new SourceListingWorkflowAttributeError('OZON_ATTRIBUTE_SUGGESTION_UNAVAILABLE', 503, 'Attribute candidate response exceeds the extension limit');
+  }
+  return result;
+}
 export function createSourceListingAttributeEditorService(options: {
-  workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setManualAttributeChanges'>;
-  attributes: Pick<SourceListingWorkflowAttributeService, 'getWorkspace' | 'searchDictionary' | 'prepareManualValues' | 'validateAuthoritative' | 'previewSchema'>;
+  workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setManualAttributeChanges' | 'setSuggestedAttributeChanges'>;
+  attributes: Pick<SourceListingWorkflowAttributeService, 'getWorkspace' | 'searchDictionary' | 'prepareManualValues' | 'prepareSuggestedValues' | 'validateAuthoritative' | 'previewSchema'>;
 }) {
   async function bound(input: SourceListingAttributeEditorContext) {
     const draft = await options.workflow.getDraft({ draftId: input.draftId, ownerUserId: input.ownerUserId });
@@ -68,6 +102,11 @@ export function createSourceListingAttributeEditorService(options: {
     async readWorkspace(input: SourceListingAttributeEditorContext) {
       const current = await workspace(input);
       return projectWorkspace(current.workspace, current.draft);
+    },
+    async readSuggestions(input: SourceListingAttributeEditorContext) {
+      const current = await workspace(input);
+      await bound(input);
+      return projectSuggestions(current.workspace, current.draft);
     },
     async searchDictionary(input: SourceListingAttributeEditorContext & { schemaRevision: string; attributeId: number; query?: string; limit?: number }) {
       if (!Number.isSafeInteger(input.attributeId) || input.attributeId < 1
@@ -96,6 +135,14 @@ export function createSourceListingAttributeEditorService(options: {
         return options.attributes.prepareManualValues({ ownerUserId: request.ownerUserId, actorUserId: request.actorUserId, draft,
           changes: preparedChanges, expectedSchemaRevision: request.schemaRevision });
       });
+    },
+    async applySuggestions(input: SourceListingAttributeEditorContext & { operationKey: string; schemaRevision: string; candidates: unknown }) {
+      const candidates = normalizeSourceListingAttributeSuggestionChanges(input.candidates, input.schemaRevision);
+      return options.workflow.setSuggestedAttributeChanges({ draftId: input.draftId, ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId, expectedRevision: input.expectedRevision, expectedDraftVersion: input.expectedDraftVersion,
+        operationKey: input.operationKey, schemaRevision: input.schemaRevision, candidates }, async (draft, preparedCandidates) => {
+          return options.attributes.prepareSuggestedValues({ ownerUserId: input.ownerUserId, actorUserId: input.actorUserId, draft, candidates: preparedCandidates });
+        });
     },
     async validateAttributes(input: SourceListingAttributeEditorContext & { schemaRevision: string }) {
       const current = await workspace(input);

@@ -376,7 +376,7 @@ function resolvedImages(
     fail('OZON_LISTING_PRODUCTION_MEDIA_INVALID', 'Owned MediaAsset loader returned missing or extra assets');
   }
 
-  const selectedSkuKeys = new Set(draft.selectedSkuKeys);
+  const selectedSkuKeys = new Set(sourceListingEditorSkuKeysForDraft(draft));
   const product: OzonListingResolvedImageV1[] = [];
   const bySku: Record<string, OzonListingResolvedImageV1[]> = {};
   for (const assignment of draft.media.assignments) {
@@ -545,7 +545,7 @@ export async function preflightOzonListingProductionAuthorities(
     loaded.validation,
   );
   try {
-    for (const skuKey of input.draft.selectedSkuKeys) appendBoundDraftVideoAttributes(input.draft, skuKey, validation.schema,
+    for (const skuKey of sourceListingEditorSkuKeysForDraft(input.draft)) appendBoundDraftVideoAttributes(input.draft, skuKey, validation.schema,
       validation.result.report.normalizedAttributes.filter(attribute => attribute.skuKey === undefined || attribute.skuKey === skuKey)
         .map(attribute => ({ id: attribute.attributeId, values: [] })), validation.result.report.schemaRevision);
   } catch (error) {
@@ -639,3 +639,4 @@ export function createOzonListingProductionCompileAdapter(
 export type OzonListingProductionCompileAdapter = ReturnType<
   typeof createOzonListingProductionCompileAdapter
 >;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

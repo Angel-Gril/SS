@@ -10,6 +10,9 @@ import { projectSourceListingCopyEditor, type SourceListingCopyEditorService } f
 import type { SourceProductProfile } from './source-product-profile.js';
 import { rankSourceOzonCategoryCatalog } from './source-ozon-category-recommendation.js';
 import { EXTENSION_CATEGORY_RESPONSE_MAX_BYTES, projectExtensionCategory, projectExtensionCategoryTree } from './extension-listing-category-catalog.js';
+import type { AiListingCopyCapability } from './ai-listing-copy-capability.js';
+import type { SourceListingAiCopyService } from './source-listing-ai-copy.js';
+import { sourceListingEditorSkuKeysForDraft, sourceListingOfferRowsForDraft } from './source-listing-sku-copies.js';
 
 export interface ExtensionListingEditorBinding {
   snapshotId: string;
@@ -37,11 +40,12 @@ function boundedCatalogProjection<T>(value: T): T {
   return value;
 }
 function projection(draft: OzonListingDraft) {
+  const offerRows = sourceListingOfferRowsForDraft(draft);
   const fieldIssues: Array<{ field: 'PRICING' | 'PACKAGING'; message: string }> = [];
   let pricing: ReturnType<typeof validateSourceListingPricing> | null = null;
   let packaging: ReturnType<typeof projectSourceListingSkuPackaging> = null;
   try {
-    pricing = draft.pricing.value ? validateSourceListingPricing(draft.pricing.value, draft.selectedSkuKeys) : null;
+    pricing = draft.pricing.value ? validateSourceListingPricing(draft.pricing.value, sourceListingEditorSkuKeysForDraft(draft)) : null;
   } catch (error) {
     if (!(error instanceof SourceListingWorkflowReadinessError)) throw error;
     fieldIssues.push({ field: 'PRICING', message: '售价与当前 SKU 不一致，请重新保存价格与货号。' });
@@ -58,6 +62,8 @@ function projection(draft: OzonListingDraft) {
       draftRevision: draft.revision, draftVersion: draft.draftVersion,
     },
     selectedSkuKeys: draft.selectedSkuKeys,
+    ...(offerRows.length ? { offerRows: { contractVersion: 'source-listing-offer-rows/v1' as const,
+      rows: offerRows.map(({ rowKey, sourceSkuKey, offerId, pricing, packaging }) => ({ rowKey, sourceSkuKey, offerId, pricing, packaging })) } } : {}),
     category: draft.category,
     pricing,
     packaging: packaging ?? [],
@@ -73,15 +79,17 @@ function projection(draft: OzonListingDraft) {
   };
 }
 export function createExtensionListingEditorService(options: {
-  workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setCategory' | 'setPricing' | 'setSkuPackaging'>;
+  workflow: Pick<SourceListingWorkflowService, 'getDraft' | 'setCategory' | 'setPricing' | 'setSkuPackaging' | 'changeSkuSelection' | 'duplicateSku' | 'removeSkuCopy'>;
   ownership: Pick<SourceListingWorkflowContextResolver, 'assertOwnedTarget'>;
   loadCatalog(input: { ownerUserId: string; shopId: string }): Promise<{ revision: string; entries: OzonCategoryCatalogEntry[] }>;
   loadSourceProfile?(input: { ownerUserId: string; draft: OzonListingDraft }): Promise<SourceProductProfile>;
   retainCompatibleReviewedValues?(input: { ownerUserId: string; draft: OzonListingDraft; category: OzonListingDraftCategory }): Promise<Record<string, OzonListingDraftAttributeValue>>;
   attributesEditor?: SourceListingAttributeEditorService;
   copyEditor?: SourceListingCopyEditorService;
+  aiCopyWorkflow?: Pick<SourceListingAiCopyService, 'generate'>;
+  evaluateAiCopyCapability?(ownerUserId: string): Promise<AiListingCopyCapability>;
 }) {
-  async function bound(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding, operationKey?: string) {
+  async function bound(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding, operationKey?: string, generatedOperationKey?: string) {
     if (identity.actorUserId !== identity.ownerUserId || !identity.allowedShopIds.includes(binding.shopId)) {
       throw new ExtensionListingEditorError('editor_shop_denied', 403, '设备无权编辑该店铺');
     }
@@ -90,7 +98,8 @@ export function createExtensionListingEditorService(options: {
       throw new ExtensionListingEditorError('editor_context_stale', 409, '商品快照或店铺草稿已变化');
     }
     const replayed = Boolean(operationKey && (draft.auditEvents.some((entry) => entry.details?.editorOperationKey === operationKey)
-      || draft.copy.applyAudit.some((entry) => entry.operationKey === operationKey)));
+      || draft.copy.applyAudit.some((entry) => entry.operationKey === operationKey))
+      || generatedOperationKey && draft.copy.candidates.some((entry) => entry.generation?.operationKey === generatedOperationKey));
     if (!replayed && (draft.revision !== binding.draftRevision || draft.draftVersion !== binding.draftVersion)) {
       throw new ExtensionListingEditorError('editor_context_stale', 409, '草稿版本已变化，请重新读取');
     }
@@ -105,6 +114,14 @@ export function createExtensionListingEditorService(options: {
       return { revision: catalog.revision, entries: catalog.entries };
     },
   });
+  async function copyCapability(ownerUserId: string) {
+    const providerFeeNotice = '生成标题和描述会调用托管文字模型，可能产生 Provider 费用；不会自动审核或发布。';
+    if (!options.aiCopyWorkflow || !options.evaluateAiCopyCapability) {
+      return { available: false, reasonCode: 'EDITOR_COPY_UNAVAILABLE', providerFeeNotice };
+    }
+    const capability = await options.evaluateAiCopyCapability(ownerUserId);
+    return { available: capability.enabled, reasonCode: capability.enabled ? 'AVAILABLE' : capability.reason.toUpperCase(), providerFeeNotice };
+  }
   return {
     async read(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding) {
       return projection((await bound(identity, binding)).draft);
@@ -136,6 +153,12 @@ export function createExtensionListingEditorService(options: {
       return options.attributesEditor.readWorkspace({ draftId: binding.listingWorkflowId, ownerUserId: identity.ownerUserId,
         actorUserId: identity.actorUserId, expectedRevision: binding.draftRevision, expectedDraftVersion: binding.draftVersion });
     },
+    async attributeSuggestions(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding) {
+      await bound(identity, binding);
+      if (!options.attributesEditor) throw new ExtensionListingEditorError('editor_attributes_unavailable', 503, '官方属性编辑尚未配置');
+      return options.attributesEditor.readSuggestions({ draftId: binding.listingWorkflowId, ownerUserId: identity.ownerUserId,
+        actorUserId: identity.actorUserId, expectedRevision: binding.draftRevision, expectedDraftVersion: binding.draftVersion });
+    },
     async dictionary(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding,
       input: { schemaRevision: string; attributeId: number; query: string; limit: number }) {
       await bound(identity, binding);
@@ -143,9 +166,27 @@ export function createExtensionListingEditorService(options: {
       return options.attributesEditor.searchDictionary({ ...input, draftId: binding.listingWorkflowId, ownerUserId: identity.ownerUserId,
         actorUserId: identity.actorUserId, expectedRevision: binding.draftRevision, expectedDraftVersion: binding.draftVersion });
     },
+    async copyCapability(identity: ExtensionListingEditorIdentity, binding: ExtensionListingEditorBinding) {
+      await bound(identity, binding);
+      return copyCapability(identity.ownerUserId);
+    },
+    async generateCopy(identity: ExtensionListingEditorIdentity, input: {
+      binding: ExtensionListingEditorBinding; operationKey: string; fields: ('title' | 'description')[]; userInstructions?: string;
+    }) {
+      const { draft, replayed } = await bound(identity, input.binding, undefined, input.operationKey);
+      const capability = await copyCapability(identity.ownerUserId);
+      if (!capability.available) {
+        throw new ExtensionListingEditorError('editor_copy_generation_disabled', 503, '该账号的托管俄文文案生成尚未启用，可继续手工编辑。');
+      }
+      const generated = await options.aiCopyWorkflow!.generate({ draftId: draft.id, ownerUserId: identity.ownerUserId,
+        actorUserId: identity.actorUserId, expectedRevision: input.binding.draftRevision,
+        operationKey: input.operationKey, fields: input.fields, userInstructions: input.userInstructions });
+      return { data: projection(generated.draft), candidateId: generated.candidate.id, replayed: generated.replayed ?? replayed,
+        ...(generated.limit ? { limit: generated.limit } : {}) };
+    },
     async save(identity: ExtensionListingEditorIdentity, input: {
       binding: ExtensionListingEditorBinding; operationKey: string;
-      action: 'PRICING' | 'CATEGORY' | 'PACKAGING' | 'ATTRIBUTES' | 'COPY_CANDIDATE' | 'COPY_APPROVE' | 'VALIDATE'; value: unknown;
+      action: 'SKU_SELECTION' | 'SKU_DUPLICATE' | 'SKU_COPY_REMOVE' | 'PRICING' | 'CATEGORY' | 'PACKAGING' | 'ATTRIBUTES' | 'ATTRIBUTE_SUGGESTIONS' | 'COPY_CANDIDATE' | 'COPY_APPROVE' | 'VALIDATE'; value: unknown;
     }) {
       const { draft, replayed } = await bound(identity, input.binding, input.operationKey);
       const context = { ownerUserId: identity.ownerUserId, actorUserId: identity.actorUserId,
@@ -153,13 +194,39 @@ export function createExtensionListingEditorService(options: {
         expectedDraftVersion: input.binding.draftVersion, operationKey: input.operationKey };
       let result: OzonListingDraft;
       let candidateId: string | undefined;
-      if (input.action === 'PRICING') {
-        const value = validateSourceListingPricing(input.value, draft.selectedSkuKeys);
+      if (input.action === 'SKU_COPY_REMOVE') {
+        const value = input.value as { rowKey: string };
+        result = await options.workflow.removeSkuCopy({ ...context, rowKey: value.rowKey,
+          expectedDraftVersion: input.binding.draftVersion, operationKey: input.operationKey });
+      } else if (input.action === 'SKU_DUPLICATE') {
+        if (!input.value || typeof input.value !== 'object' || Array.isArray(input.value)
+          || Object.keys(input.value).length !== 1 || !Object.prototype.hasOwnProperty.call(input.value, 'sourceSkuKey')) {
+          throw new ExtensionListingEditorError('editor_invalid_request', 400, '复制 SKU 只接受来源 SKU 标识');
+        }
+        const value = input.value as { sourceSkuKey: string };
+        result = await options.workflow.duplicateSku({ ...context, sourceSkuKey: value.sourceSkuKey,
+          expectedDraftVersion: input.binding.draftVersion, operationKey: input.operationKey });
+      } else if (input.action === 'SKU_SELECTION') {
+        const value = input.value as { selectedSkuKeys: string[] };
+        const owned = await options.ownership.assertOwnedTarget({ ownerUserId: identity.ownerUserId, shopId: draft.shopId,
+          supplyGoodsId: draft.supplyGoodsId, sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
+          currentSourceCaptureSnapshotId: draft.sourceCaptureSnapshotId, selectedSkuKeys: value.selectedSkuKeys });
+        result = await options.workflow.changeSkuSelection({ ...context, selectedSkuKeys: owned.selectedSkuKeys });
+      } else if (input.action === 'PRICING') {
+        const value = validateSourceListingPricing(input.value, sourceListingEditorSkuKeysForDraft(draft));
         result = await options.workflow.setPricing({ ...context, value });
       } else if (input.action === 'PACKAGING') {
         const value = input.value as { items: unknown; evidence: string[] };
         result = await options.workflow.setSkuPackaging({ ...context, expectedDraftVersion: input.binding.draftVersion,
           items: normalizeSourceListingSkuPackagingItems(value.items), evidence: value.evidence });
+      } else if (input.action === 'ATTRIBUTE_SUGGESTIONS') {
+        if (!options.attributesEditor) throw new ExtensionListingEditorError('editor_attributes_unavailable', 503, '官方属性编辑尚未配置');
+        if (!input.value || typeof input.value !== 'object' || Array.isArray(input.value)
+          || Object.keys(input.value).some((key) => !['schemaRevision', 'candidates'].includes(key))) {
+          throw new ExtensionListingEditorError('editor_invalid_request', 400, '属性候选只接受当前 schema 与候选引用');
+        }
+        const value = input.value as { schemaRevision: string; candidates: unknown };
+        result = await options.attributesEditor.applySuggestions({ ...context, schemaRevision: value.schemaRevision, candidates: value.candidates });
       } else if (input.action === 'ATTRIBUTES') {
         if (!options.attributesEditor) throw new ExtensionListingEditorError('editor_attributes_unavailable', 503, '官方属性编辑尚未配置');
         const value = input.value as { schemaRevision: string; changes: unknown };

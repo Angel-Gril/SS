@@ -380,7 +380,7 @@ export function createByokMediaIngestCommandResolver(
       || !draft.sourceCaptureSnapshotId
       || !Array.isArray(draft.selectedSkuKeys)
       || commands.some((command) => (
-        !draft!.selectedSkuKeys.includes(command.skuKey)
+        !sourceListingEditorSkuKeysForDraft(draft! as any).includes(command.skuKey)
         || (command.slotKey !== `sku:${command.skuKey}:hero`
           && !SHARED_DETAIL_SLOT_KEYS.has(command.slotKey))
       ))) {
@@ -495,3 +495,4 @@ export async function inspectByokMediaIngestGrant(
     requireLiveAuthorizationForPendingReplay: true,
   });
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

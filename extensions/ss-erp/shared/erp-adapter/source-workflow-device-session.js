@@ -4,6 +4,7 @@
   var DEFAULT_REQUEST_TIMEOUT_MS = 10000;
   var DEFAULT_PUBLISH_REQUEST_TIMEOUT_MS = 30000;
   var DEFAULT_MASK_REQUEST_TIMEOUT_MS = 60000;
+  var PRODUCT_ANALYSIS_REQUEST_TIMEOUT_MS = 210000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
   // The server's bounded official-category projection is capped at 2 MiB
   // (tree <= 1 MiB plus the surrounding response). Keep ordinary status
@@ -189,8 +190,16 @@
       '/api/extension-device/source-workbench/editor/read',
       '/api/extension-device/source-workbench/editor/catalog',
       '/api/extension-device/source-workbench/editor/attributes',
+      '/api/extension-device/source-workbench/editor/attribute-suggestions',
+      '/api/extension-device/source-workbench/editor/logistics-scopes',
+      '/api/extension-device/source-workbench/editor/logistics-services',
+      '/api/extension-device/source-workbench/editor/logistics-quote',
       '/api/extension-device/source-workbench/editor/dictionary',
       '/api/extension-device/source-workbench/editor/save',
+      '/api/extension-device/source-workbench/editor/copy-capability',
+      '/api/extension-device/source-workbench/editor/copy-generate',
+      '/api/extension-device/source-workbench/vision/capability',
+      '/api/extension-device/source-workbench/vision/analyze',
       '/api/extension-device/workbench-watermark/preview',
       '/api/extension-device/workbench-watermark/apply',
       '/api/extension-device/workbench-watermark/templates',
@@ -626,7 +635,9 @@
           else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
         }
         var timeoutId;
-        var timeoutMs = MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
+        var timeoutMs = ['/api/extension-device/source-workbench/vision/analyze',
+          '/api/extension-device/source-workbench/editor/copy-generate'].includes(path)
+          ? PRODUCT_ANALYSIS_REQUEST_TIMEOUT_MS : MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
           ? maskRequestTimeoutMs
           : publishRequest ? publishRequestTimeoutMs : requestTimeoutMs;
         var requestDispatched = false;
@@ -673,6 +684,8 @@
             Authorization: 'Bearer ' + accessToken,
           };
           if (method === 'POST') {
+            if(/^\/api\/extension-device\/source-workbench\/editor\/logistics-(?:services|quote)$/u.test(path)
+              &&global.chrome?.runtime?.getManifest)headers['X-SS-ERP-Extension-Version']=global.chrome.runtime.getManifest().version;
             if (!binaryRequest) headers['Content-Type'] = 'application/json';
             else if (binaryRequest.contentType) headers['Content-Type'] = binaryRequest.contentType;
             var commandGrant = binaryRequest

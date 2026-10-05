@@ -5,6 +5,7 @@ import {
   type OzonListingSkuPackagingItem,
   type OzonListingSkuPackagingMeasurements,
 } from 'shared';
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 const MEASUREMENT_KEYS = ['weightG', 'lengthMm', 'widthMm', 'heightMm'] as const;
 export class SourceListingSkuPackagingError extends Error {
@@ -76,7 +77,7 @@ export function projectSourceListingSkuPackaging(draft: OzonListingDraft): OzonL
     }));
     if (MEASUREMENT_KEYS.some((key) => common[key] === null)) return null;
     const value = measurements(common);
-    return draft.selectedSkuKeys.map((skuKey) => ({ skuKey, ...value }));
+    return sourceListingEditorSkuKeysForDraft(draft).map((skuKey) => ({ skuKey, ...value }));
   }
   if (!reviewedManual(packaging) || packaging.value !== null || !record(packaging.skuValues)) {
     fail('SKU packaging is not bound to reviewed manual evidence');
@@ -85,6 +86,7 @@ export function projectSourceListingSkuPackaging(draft: OzonListingDraft): OzonL
     if (!reviewedManual(leaf)) fail('Each SKU packaging leaf requires reviewed manual evidence');
     return { skuKey, ...measurements(leaf.value) };
   });
-  assertSourceListingSkuPackagingCoverage(items, draft.selectedSkuKeys);
-  return draft.selectedSkuKeys.map((skuKey) => items.find((item) => item.skuKey === skuKey)!);
+  const selectedKeys = sourceListingEditorSkuKeysForDraft(draft);
+  assertSourceListingSkuPackagingCoverage(items, selectedKeys);
+  return selectedKeys.map((skuKey) => items.find((item) => item.skuKey === skuKey)!);
 }

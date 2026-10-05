@@ -27,6 +27,7 @@ import type { SourceProductProfile } from './source-product-profile.js';
 import { buildOzonAttributeSuggestionProvenance } from './ozon-attribute-suggestion-provenance.js';
 import { SOURCE_LISTING_SKU_PACKAGING_CONTRACT_VERSION, type OzonListingSkuPackagingFacts } from 'shared';
 import { hasSourceListingSkuPackaging, projectSourceListingSkuPackaging } from './source-listing-sku-packaging.js';
+import { sourceListingEditorSkuKeysForDraft, sourceListingOfferRowsForDraft } from './source-listing-sku-copies.js';
 
 const CATEGORY_INDEPENDENT_MANUAL_FACT_KEYS = new Set([
   'packaging',
@@ -415,7 +416,7 @@ function normalizedSkuKey(value: unknown): string {
 }
 
 function selectedSkuKeys(draft: OzonListingDraft): string[] {
-  return [...new Set(draft.selectedSkuKeys.map(normalizedSkuKey).filter(Boolean))];
+  return [...new Set(sourceListingEditorSkuKeysForDraft(draft).map(normalizedSkuKey).filter(Boolean))];
 }
 
 function sourceContextForSku(
@@ -633,6 +634,17 @@ function withOperationalReadiness(
 export function createSourceListingWorkflowAttributeService(
   options: SourceListingWorkflowAttributeServiceOptions,
 ) {
+  async function loadSourceContext(input: { ownerUserId: string; draft: OzonListingDraft }) {
+    const context = await options.loadSourceContext(input);
+    const copies = sourceListingOfferRowsForDraft(input.draft);
+    if (!copies.length) return context;
+    const skuStandards = { ...context.skuStandards };
+    for (const row of copies) {
+      const source = context.skuStandards?.[row.sourceSkuKey];
+      if (source) skuStandards[row.rowKey] = structuredClone(source);
+    }
+    return { ...context, skuStandards };
+  }
   type DictionaryMemo = Map<string, Promise<SourceListingAttributeDictionary>>;
   async function loadSchema(input: {
     ownerUserId: string;
@@ -1195,7 +1207,7 @@ export function createSourceListingWorkflowAttributeService(
   async function workspace(input: { ownerUserId: string; draft: OzonListingDraft }): Promise<SourceListingAttributeWorkspace> {
     const dictionaryMemo: DictionaryMemo = new Map();
     const schema = await loadSchema(input);
-    const sourceContext = await options.loadSourceContext(input);
+    const sourceContext = await loadSourceContext(input);
     const revision = schemaRevision(schema);
     const suggestions = freezeSuggestionResult({
       draft: input.draft,
@@ -1227,7 +1239,7 @@ export function createSourceListingWorkflowAttributeService(
   }> {
     const dictionaryMemo: DictionaryMemo = new Map();
     const schema = await loadSchema({ ...input, freshness });
-    const sourceContext = await options.loadSourceContext(input);
+    const sourceContext = await loadSourceContext(input);
     const result = withOperationalReadiness(
       await validateValues({
         ...input,
@@ -1367,7 +1379,7 @@ export function createSourceListingWorkflowAttributeService(
         throw new SourceListingWorkflowAttributeError('OZON_ATTRIBUTE_SCHEMA_MISMATCH', 409,
           'Official attribute schema changed before preparing manual values');
       }
-      const sourceContext = await options.loadSourceContext(input);
+      const sourceContext = await loadSourceContext(input);
       const values = structuredClone(input.draft.attributes.values);
       const selectedKeys = selectedSkuKeys(input.draft);
       const selectedKeySet = new Set(selectedKeys);
@@ -1490,7 +1502,7 @@ export function createSourceListingWorkflowAttributeService(
     }): Promise<Record<string, OzonListingDraftAttributeValue>> {
       const dictionaryMemo: DictionaryMemo = new Map();
       const schema = await loadSchema(input);
-      const sourceContext = await options.loadSourceContext(input);
+      const sourceContext = await loadSourceContext(input);
       const revision = schemaRevision(schema);
       const available = freezeSuggestionResult({
         draft: input.draft,

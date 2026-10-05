@@ -9,6 +9,7 @@ import {
   createAiMediaContextService,
   normalizeAiMediaSourceBuffer,
 } from '../services/ai-media-context.js';
+import { deriveSourceListingSkuCopyKey } from '../services/source-listing-sku-copies.js';
 
 const capture = {
   captureVersion: 'source-product-capture-v2',
@@ -354,6 +355,23 @@ describe('AI media collect context', () => {
 });
 
 describe('AI media listing-draft context', () => {
+  it('loads a copied offer source image through its original source mapping without inheriting assigned assets', async () => {
+    const operationKey = 'media-copy-operation', rowKey = deriveSourceListingSkuCopyKey('draft-1', operationKey);
+    const db = listingClient({ capture: { skus: listingCapture.skus.map((sku) => ({ ...sku,
+      mediaKeys: sku.key === 'sku-red' ? ['sku-red-1', 'sku-shared-1'] : ['sku-blue-1', 'sku-shared-1'] })) }, draft: {
+      shopId: 'shop-1', supplyGoodsId: 'goods-1',
+      offerRows: { contractVersion: 'source-listing-offer-rows/v1', rows: [{ rowKey, sourceSkuKey: 'sku-red', offerId: 'copy-offer',
+        sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: 'b'.repeat(64), sourceDraftVersion: 1, sourceDraftRevision: 3,
+        pricing: null, packaging: null, attributes: {} }] },
+      auditEvents: [{ type: 'SKU_DUPLICATED', draftVersion: 2, details: { rowKey, sourceSkuKey: 'sku-red', editorOperationKey: operationKey } }],
+    } });
+    const result = await createAiMediaContextService(db as never).loadListingDraft('owner-1', 'draft-1', {
+      expectedRevision: 4, expectedDraftVersion: 2, skuKey: rowKey, slotKey: `sku:${rowKey}:hero`,
+    });
+    expect(result.target).toMatchObject({ skuKey: rowKey, assignedAssetId: null });
+    expect(result.inputs.map((item) => item.sourceMediaKey)).toContain('sku-red-1');
+    expect(result.inputs.find((item) => item.sourceMediaKey === 'sku-red-1')?.skuKeys).toEqual([rowKey]);
+  });
   it('returns a metadata-stripped bounded source preview without persisting the remote URL', async () => {
     const source = await sharp({
       create: { width: 1200, height: 800, channels: 3, background: '#806040' },

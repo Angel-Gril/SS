@@ -3,6 +3,7 @@ import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
   verifySourceProductCaptureV2Submission,
   type SourceProductCaptureV2,
+  type OzonListingDraft,
 } from 'shared';
 import {
   isExtensionHostedAiImageActiveDraftStage,
@@ -19,6 +20,7 @@ import {
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
 } from './ai-image-suite-output-normalizer.js';
 import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
+import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_IDENTIFIER_LENGTH = 1_024;
@@ -43,6 +45,7 @@ SELECT
   d."source_capture_snapshot_id" AS "draftSnapshotId",
   d."supply_goods_id" AS "draftSupplyGoodsId",
   d."selected_sku_keys" AS "draftSelectedSkuKeys",
+  d."payload" AS "draftPayload",
   d."revision" AS "draftRevision",
   d."draft_version" AS "draftVersion",
   d."stage" AS "draftStage",
@@ -557,10 +560,23 @@ async function planAuthorityFromRow(
     return null;
   }
   if (!verified.valid) return null;
-  const capture = row.snapshotPayload as SourceProductCaptureV2;
+  let capture = row.snapshotPayload as SourceProductCaptureV2;
   const captured = capturedSkuKeys(capture);
   if (!captured || selectedSkuKeys.some((key) => !captured.includes(key))) return null;
-  const candidateMediaKeys = eligibleMediaKeys(capture, selectedSkuKeys);
+  let effectiveSkuKeys = selectedSkuKeys;
+  if (row.draftPayload !== undefined) {
+    const draft = row.draftPayload as OzonListingDraft;
+    if (!draft || draft.id !== listingWorkflowId || draft.ownerUserId !== ownerUserId || draft.shopId !== shopId
+      || draft.sourceCaptureSnapshotId !== snapshotId || draft.sourceCaptureHash !== captureHash || draft.supplyGoodsId !== supplyGoodsId
+      || draft.revision !== draftRevision || draft.draftVersion !== draftVersion || !sameStrings(draft.selectedSkuKeys, selectedSkuKeys)) return null;
+    try {
+      effectiveSkuKeys = sourceListingEditorSkuKeysForDraft(draft);
+      capture = projectSourceCaptureForDraft(capture, draft);
+    } catch { return null; }
+  }
+  const effectiveCaptured = capturedSkuKeys(capture);
+  if (!effectiveCaptured || effectiveSkuKeys.some((key) => !effectiveCaptured.includes(key))) return null;
+  const candidateMediaKeys = eligibleMediaKeys(capture, effectiveSkuKeys);
   if (!candidateMediaKeys) return null;
 
   return {
@@ -575,8 +591,8 @@ async function planAuthorityFromRow(
     listingWorkflowId,
     draftRevision,
     draftVersion,
-    selectedSkuKeys,
-    capturedSkuKeys: captured,
+    selectedSkuKeys: effectiveSkuKeys,
+    capturedSkuKeys: effectiveCaptured,
     candidateMediaKeys,
   };
 }

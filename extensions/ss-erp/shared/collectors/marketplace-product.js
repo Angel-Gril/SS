@@ -8,21 +8,29 @@
   'use strict';
 
   function extractTaobaoProduct(context) {
-    return extractMarketplaceProduct(context, {
+    var donor = rootNormalizer();
+    if (donor) { var adapted = donor.normalizeTaobao(context); if (adapted) return adapted; }
+    var product = extractMarketplaceProduct(context, {
       platform: 'taobao',
       sourcePlatform: 'taobao',
       extractor: 'ss-erp-taobao',
       fallbackTitle: '淘宝商品'
     });
+    assertExpectedProduct(context, product);
+    return product;
   }
 
   function extractTmallProduct(context) {
-    return extractMarketplaceProduct(context, {
+    var donor = rootNormalizer();
+    if (donor) { var adapted = donor.normalizeTaobao(context); if (adapted) return adapted; }
+    var product = extractMarketplaceProduct(context, {
       platform: 'tmall',
       sourcePlatform: 'tmall',
       extractor: 'ss-erp-tmall',
       fallbackTitle: '天猫商品'
     });
+    assertExpectedProduct(context, product);
+    return product;
   }
 
   function extractXianyuProduct(context) {
@@ -32,6 +40,16 @@
       extractor: 'ss-erp-xianyu',
       fallbackTitle: '闲鱼商品'
     });
+  }
+
+  function rootNormalizer() {
+    var api = typeof globalThis !== 'undefined' && globalThis.SS_ERP_DONOR_MARKETPLACE_CAPTURE;
+    return api && typeof api.normalizeTaobao === 'function' ? api : null;
+  }
+
+  function assertExpectedProduct(context, product) {
+    var wanted = parseProductId(context && (context.url || context.sourceUrl));
+    if (wanted && product.productId && String(product.productId) !== wanted) throw new Error('来源商品已变化，采集结果货号不匹配');
   }
 
   function extractMarketplaceProduct(context, options) {
@@ -475,7 +493,7 @@
   function getLocationValue(key) {
     try {
       if (typeof location !== 'undefined' && location && location[key] != null) return location[key];
-    } catch (e) {}
+    } catch {}
     return '';
   }
 

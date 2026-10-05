@@ -237,7 +237,7 @@ function normalizedSelectedSkuKeys(draft: OzonListingDraft): string[] {
       'Listing draft SKU selection is invalid',
     );
   }
-  const parsed = draft.selectedSkuKeys.map((value) => identifier(500).safeParse(value));
+  const parsed = sourceListingEditorSkuKeysForDraft(draft).map((value) => identifier(500).safeParse(value));
   if (parsed.some((result) => !result.success)) {
     return fail(
       'EXTENSION_BYOK_LISTING_PUBLISH_DEPENDENCY_INVALID',
@@ -796,3 +796,4 @@ export function createExtensionByokListingPublishService(options: {
 export type ExtensionByokListingPublishService = ReturnType<
   typeof createExtensionByokListingPublishService
 >;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

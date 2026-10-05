@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
-import type { SourceProductCaptureV2 } from 'shared';
+import type { OzonListingDraft, SourceProductCaptureV2 } from 'shared';
 import sharp from 'sharp';
 import { getStorageBackend } from './image-storage.js';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
@@ -15,6 +15,7 @@ import {
   isAiMediaEditReadySourceAsset,
 } from './ai-image-edit-source.js';
 import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
+import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 export {
   AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
@@ -464,7 +465,7 @@ export function createAiMediaContextService(
     }
     const draft = record(workflow.currentDraft?.payload);
     const snapshot = workflow.currentSourceCaptureSnapshot;
-    const capture = listingCapture(snapshot?.payload);
+    let capture = listingCapture(snapshot?.payload);
     const assignments = listingDraftAssignments(record(draft?.media));
     if (!draft
       || !workflow.currentDraft
@@ -505,10 +506,11 @@ export function createAiMediaContextService(
         'STALE_MEDIA_CONTEXT', 409, 'Listing draft revision changed; refresh before continuing',
       );
     }
+    capture = projectSourceCaptureForDraft(capture, draft as unknown as OzonListingDraft);
     const aliases = capturedSourceSkuAliases(capture);
     const selectedSkuKeys: string[] = [];
     const selectedSkuKeySet = new Set<string>();
-    for (const value of draft.selectedSkuKeys) {
+    for (const value of sourceListingEditorSkuKeysForDraft(draft as unknown as OzonListingDraft)) {
       const key = exactIdentifier(value, 500);
       if (!key || aliases.get(key) !== key || selectedSkuKeySet.has(key)) {
         throw new AiMediaContextError(

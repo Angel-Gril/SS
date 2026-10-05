@@ -107,6 +107,14 @@
     'ss-erp:precision-source-attestation',
     'ss-erp:source-listing-workbench-draft-create',
     'ss-erp:source-listing-workbench-editor-save',
+    'ss-erp:source-listing-workbench-editor-copy-capability',
+    'ss-erp:source-listing-workbench-editor-copy-generate',
+    'ss-erp:source-workbench-vision-capability',
+    'ss-erp:source-workbench-vision-analyze',
+    'ss-erp:source-listing-workbench-editor-attribute-suggestions',
+    'ss-erp:source-listing-workbench-editor-logistics-scopes',
+    'ss-erp:source-listing-workbench-editor-logistics-services',
+    'ss-erp:source-listing-workbench-editor-logistics-quote',
     'ss-erp:source-workbench-watermark-preview',
     'ss-erp:source-workbench-watermark-apply',
     'ss-erp:source-workbench-watermark-templates',
@@ -410,6 +418,10 @@
     if (!KNOWN_TYPES.has(messageType)) return false;
     var kind = senderKind(sender, runtimeId);
     if (['ss-erp:source-listing-workbench-editor-save', 'ss-erp:source-listing-workbench-publish', 'ss-erp:precision-source-attestation',
+      'ss-erp:source-listing-workbench-editor-copy-capability', 'ss-erp:source-listing-workbench-editor-copy-generate',
+      'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze',
+      'ss-erp:source-listing-workbench-editor-attribute-suggestions','ss-erp:source-listing-workbench-editor-logistics-scopes',
+      'ss-erp:source-listing-workbench-editor-logistics-services','ss-erp:source-listing-workbench-editor-logistics-quote',
       'ss-erp:source-workbench-watermark-preview', 'ss-erp:source-workbench-watermark-apply', 'ss-erp:source-workbench-watermark-templates',
       'ss-erp:source-workbench-video-read', 'ss-erp:source-workbench-video-save'].includes(messageType)
       && (!sender || sender.frameId !== 0 || typeof sender.documentId !== 'string' || !sender.documentId)) return false;

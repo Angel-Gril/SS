@@ -11,6 +11,9 @@ import {
   type CreateRuleBasedAiMediaPlanningInput,
 } from '../services/ai-media-planning.js';
 import { processRuleBasedAiMediaPlanning } from '../workers/ai-media-planning.js';
+import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
+import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-draft.js';
+import { sourceListingEditorSkuKeysForDraft } from '../services/source-listing-sku-copies.js';
 
 function planningInput(): CreateRuleBasedAiMediaPlanningInput {
   return {
@@ -69,6 +72,25 @@ function authority(): AiMediaPlanningAuthority {
 }
 
 describe('AI media planning rule worker', () => {
+  it('resolves copied offers only through internal current-draft authority, keeping the original capture hash and immutable capture', async () => {
+    const source = authority(); source.capture.skus[0]!.mediaKeys = ['main-1'];
+    const workflow = createSourceListingWorkflowService({ repository: new InMemoryOzonListingDraftRepository() });
+    const initial = await workflow.createDraft({ ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1', supplyGoodsId: 'goods-1',
+      sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: source.sourceCaptureHash, selectedSkuKeys: ['red-single'] });
+    const draft = await workflow.duplicateSku({ ownerUserId: 'owner-1', actorUserId: 'owner-1', draftId: initial.id,
+      expectedRevision: initial.revision, expectedDraftVersion: initial.draftVersion, operationKey: 'planner-copy-operation', sourceSkuKey: 'red-single' });
+    const repository = { loadRulePlanningAuthority: vi.fn().mockResolvedValue(source), createRulePlan: vi.fn().mockResolvedValue({ kind: 'created', plan: { id: 'new-copy-plan' } }) };
+    const service = createAiMediaPlanningService(repository as never, { sourcePreparation: false, loadListingDraft: workflow.getDraft });
+    const input = { ...planningInput(), selectedSkuKeys: sourceListingEditorSkuKeysForDraft(draft),
+      listingDraftContext: { id: draft.id, revision: draft.revision, draftVersion: draft.draftVersion } };
+    await service.createRuleBased(input);
+    const compiled = repository.createRulePlan.mock.calls[0]![0];
+    expect(compiled.sourceCaptureHash).toBe(source.sourceCaptureHash);
+    expect(compiled.plan.slots.some((slot: any) => slot.ownership.key === draft.offerRows!.rows[0]!.rowKey)).toBe(true);
+    expect(source.capture.skus).toHaveLength(1);
+    await expect(service.createRuleBased({ ...input, listingDraftContext: { ...input.listingDraftContext, revision: 99 } })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(createAiMediaPlanningService(repository as never, { sourcePreparation: false }).createRuleBased(input)).rejects.toMatchObject({ statusCode: 409 });
+  });
   it('freezes hero-only goals separately from omitted default goals without generating gallery slots', () => {
     const build = (galleryGoals?: []) => buildRuleBasedAiMediaPlanningArtifacts(resolveRuleBasedAiMediaPlanningInput({
       ...planningInput(), ...(galleryGoals === undefined ? {} : { galleryGoals }),

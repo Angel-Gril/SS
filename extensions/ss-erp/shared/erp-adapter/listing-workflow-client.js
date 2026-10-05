@@ -1281,6 +1281,7 @@
     if (Object.prototype.hasOwnProperty.call(data, 'packaging')) fields.push('packaging');
     if (Object.prototype.hasOwnProperty.call(data, 'fieldIssues')) fields.push('fieldIssues');
     if (Object.prototype.hasOwnProperty.call(data, 'copy')) fields.push('copy');
+    if (Object.prototype.hasOwnProperty.call(data, 'offerRows')) fields.push('offerRows');
     var readinessFields = ['mediaAssignments', 'stage', 'validation', 'blockers', 'freshness'];
     var hasReadiness = readinessFields.some(function (key) { return Object.prototype.hasOwnProperty.call(data, key); });
     if (hasReadiness) fields = fields.concat(readinessFields);
@@ -1291,15 +1292,41 @@
       || !Number.isSafeInteger(data.binding.draftVersion) || data.binding.draftVersion < binding.draftVersion
       || !Array.isArray(data.selectedSkuKeys) || !data.selectedSkuKeys.length || data.selectedSkuKeys.length > 100
       || !data.selectedSkuKeys.every(function (key) { return text(key, 500); })) throw new Error('invalid editor response');
-    if (fields.includes('packaging') && (!Array.isArray(data.packaging) || data.packaging.length > data.selectedSkuKeys.length
+    var editorSkuKeys = data.selectedSkuKeys.concat(record(data.offerRows) && Array.isArray(data.offerRows.rows) ? data.offerRows.rows.map(function (row) { return row && row.rowKey; }) : []);
+    if (editorSkuKeys.length > 100) throw new Error('invalid editor response');
+    if (fields.includes('packaging') && (!Array.isArray(data.packaging) || data.packaging.length > editorSkuKeys.length
       || new Set(data.packaging.map(function (row) { return row && row.skuKey; })).size !== data.packaging.length
       || !data.packaging.every(function (row) { return exactKeys(row, ['skuKey', 'weightG', 'lengthMm', 'widthMm', 'heightMm'])
-        && data.selectedSkuKeys.includes(row.skuKey) && ['weightG', 'lengthMm', 'widthMm', 'heightMm'].every(function (key) {
+        && editorSkuKeys.includes(row.skuKey) && ['weightG', 'lengthMm', 'widthMm', 'heightMm'].every(function (key) {
           return typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] > 0;
         }); }))) throw new Error('invalid editor response');
     if (fields.includes('fieldIssues') && (!Array.isArray(data.fieldIssues) || data.fieldIssues.length > 2
       || !data.fieldIssues.every(function (item) { return exactKeys(item, ['field', 'message'])
         && ['PRICING', 'PACKAGING'].includes(item.field) && text(item.message, 2000); }))) throw new Error('invalid editor response');
+    if (fields.includes('offerRows')) {
+      if (!record(data.offerRows) || !exactKeys(data.offerRows, ['contractVersion', 'rows'])
+        || data.offerRows.contractVersion !== 'source-listing-offer-rows/v1'
+        || !Array.isArray(data.offerRows.rows) || data.offerRows.rows.length > 100) throw new Error('invalid editor response');
+      var offerRowKeys = new Set();
+      var offerIds = new Set();
+      if (!data.offerRows.rows.every(function (row) {
+        if (!record(row) || !exactKeys(row, ['rowKey', 'sourceSkuKey', 'offerId', 'pricing', 'packaging'])
+          || !/^listing-copy:[a-f0-9]{64}$/u.test(row.rowKey) || data.selectedSkuKeys.includes(row.rowKey)
+          || !text(row.sourceSkuKey, 500) || !data.selectedSkuKeys.includes(row.sourceSkuKey)
+          || !text(row.offerId, 50) || offerRowKeys.has(row.rowKey) || offerIds.has(row.offerId)
+          || row.packaging !== null && (!exactKeys(row.packaging, ['weightG', 'lengthMm', 'widthMm', 'heightMm'])
+            || !Object.values(row.packaging).every(function (number) { return typeof number === 'number' && Number.isFinite(number) && number > 0; }))
+          || row.pricing !== null && (!record(row.pricing)
+            || !['skuKey', 'price', 'oldPrice', 'currencyCode', 'vat'].every(function (key) { return text(row.pricing[key], 500); })
+            || Object.keys(row.pricing).some(function (key) { return !['skuKey', 'price', 'oldPrice', 'currencyCode', 'vat', 'offerId'].includes(key); })
+            || ![row.rowKey, row.sourceSkuKey].includes(row.pricing.skuKey)
+            || !['price', 'oldPrice'].every(function (key) { return /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(row.pricing[key]) && Number(row.pricing[key]) > 0 && Number.isFinite(Number(row.pricing[key])); })
+            || Number(row.pricing.oldPrice) < Number(row.pricing.price)
+            || !['CNY', 'RUB'].includes(row.pricing.currencyCode)
+            || row.pricing.offerId !== undefined && !text(row.pricing.offerId, 50))) return false;
+        offerRowKeys.add(row.rowKey); offerIds.add(row.offerId); return true;
+      })) throw new Error('invalid editor response');
+    }
     if (fields.includes('copy')) {
       var copy = data.copy;
       var copyText = function (value, maximum) { return value === null || typeof value === 'string' && value.length <= maximum; };
@@ -1315,7 +1342,7 @@
       var validMedia = Array.isArray(data.mediaAssignments) && data.mediaAssignments.length <= 500
         && data.mediaAssignments.every(function (item) {
           return exactKeys(item, ['scope', 'skuKey', 'slotKey', 'assetId']) && text(item.slotKey, 500) && text(item.assetId, 200)
-            && (item.scope === 'PRODUCT' ? item.skuKey === null : item.scope === 'SKU' && data.selectedSkuKeys.includes(item.skuKey));
+            && (item.scope === 'PRODUCT' ? item.skuKey === null : item.scope === 'SKU' && editorSkuKeys.includes(item.skuKey));
         });
       if (!validMedia || !text(data.stage, 100) || !exactKeys(data.validation, ['status'])
         || !['NOT_RUN', 'STALE', 'VALID', 'INVALID'].includes(data.validation.status)
@@ -1380,11 +1407,202 @@
     if (!transport || typeof transport.get !== 'function') {
       throw new TypeError('source workflow transport is required');
     }
+    async function readLogistics(action, input) {
+      var bindingKeys = ['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId', 'draftRevision', 'draftVersion'];
+      var selectionKeys = ['assignmentId', 'companyId', 'warehouseId', 'originCountryUid', 'originCityUid', 'destinationCountryUid', 'destinationLocationUid'];
+      var requestKeys = action === 'scopes' ? ['binding'] : action === 'services' ? ['binding', 'selection']
+        : ['binding', 'selection', 'releaseId', 'effectiveChecksum', 'stableServiceKey', 'items'];
+      var isChecksum = function (value) { return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value); };
+      var positiveMinor = function (value) { return Number.isSafeInteger(value) && value > 0 && value <= 1000000000; };
+      var lease = function (value) { return dateTime(value) && Date.parse(value) > Date.now(); };
+      var validSelection = function (value) {
+        return exactKeys(value, selectionKeys) && selectionKeys.every(function (key) { return text(value[key], 200); });
+      };
+      var sameSelection = function (value, expected) {
+        return validSelection(value) && selectionKeys.every(function (key) { return value[key] === expected[key]; });
+      };
+      if (!exactKeys(input, requestKeys) || !exactKeys(input.binding, bindingKeys)
+        || action !== 'scopes' && !validSelection(input.selection)) throw new TypeError('invalid logistics request');
+      var binding = normalizedSuiteBinding(input.binding);
+      if (action === 'quote' && (!text(input.releaseId, 200) || !isChecksum(input.effectiveChecksum) || !text(input.stableServiceKey, 1000)
+        || !Array.isArray(input.items) || !input.items.length || input.items.length > 100
+        || new Set(input.items.map(function (item) { return item && item.skuKey; })).size !== input.items.length
+        || !input.items.every(function (item) { return exactKeys(item, ['skuKey', 'declaredPriceMinor', 'hasBattery'])
+          && text(item.skuKey, 500) && positiveMinor(item.declaredPriceMinor) && typeof item.hasBattery === 'boolean'; }))) {
+        throw new TypeError('invalid logistics quote request');
+      }
+      var bodyValue = { binding: binding };
+      if (action !== 'scopes') bodyValue.selection = Object.fromEntries(selectionKeys.map(function (key) { return [key, input.selection[key]]; }));
+      if (action === 'quote') {
+        bodyValue.releaseId = input.releaseId; bodyValue.effectiveChecksum = input.effectiveChecksum; bodyValue.stableServiceKey = input.stableServiceKey;
+        bodyValue.items = input.items.map(function (item) { return { skuKey: item.skuKey, declaredPriceMinor: item.declaredPriceMinor, hasBattery: item.hasBattery }; });
+      }
+      var response = await transport.post('/api/extension-device/source-workbench/editor/logistics-' + action, bodyValue, { requiredScope: 'listing:review' });
+      var body = record(response && response.body), data = response && response.state === 'response' && body && body.code === 1 && record(body.data);
+      if (!data) throw new Error(body && text(body.msg, 2000) ? body.msg : '物流规则不可用，请检查设备物流权限和当前仓库');
+      var sharedKeys = ['contractVersion', 'binding', 'hints'];
+      var responseKeys = sharedKeys.concat(action === 'scopes' ? ['selectedSkuKeys', 'packaging', 'assignments', 'requiresSelection']
+        : action === 'services' ? ['selection', 'releaseId', 'releaseSequence', 'effectiveChecksum', 'services', 'validUntil', 'authorizationValidUntil', 'requiresSelection']
+          : ['selection', 'releaseId', 'effectiveChecksum', 'stableServiceKey', 'source', 'currency', 'items', 'validUntil', 'authorizationValidUntil', 'requiresPricePreview', 'writesDraft']);
+      if (!exactKeys(data, responseKeys) || data.contractVersion !== 'extension-listing-logistics-pricing/v1'
+        || !exactKeys(data.binding, bindingKeys) || bindingKeys.some(function (key) { return data.binding[key] !== binding[key]; })) {
+        throw new Error('invalid logistics response');
+      }
+      function validHints(value) {
+        if (!exactKeys(value, ['commission', 'fx', 'requiresManual']) || !Array.isArray(value.requiresManual)
+          || new Set(value.requiresManual).size !== value.requiresManual.length) return false;
+        var fresh = function (date) { return dateTime(date) && Date.parse(date) <= Date.now() && Date.parse(date) > Date.now() - 7 * 86400000; };
+        var measuredSource = function (source) { return text(source, 100) && !/fallback|unknown|manual|default/i.test(source); };
+        var c = value.commission, f = value.fx;
+        if (c !== null && (!exactKeys(c, ['percent', 'source', 'fetchedAt', 'categoryId', 'typeId'])
+          || typeof c.percent !== 'number' || !Number.isFinite(c.percent) || c.percent < 0 || c.percent >= 100
+          || !count(c.categoryId) || c.categoryId <= 0 || !count(c.typeId) || c.typeId <= 0 || !measuredSource(c.source) || !fresh(c.fetchedAt))) return false;
+        if (f !== null && (!exactKeys(f, ['rate', 'source', 'fetchedAt']) || typeof f.rate !== 'number' || !Number.isFinite(f.rate)
+          || f.rate <= 0 || f.rate > 1000 || !measuredSource(f.source) || !fresh(f.fetchedAt))) return false;
+        var manual = (c === null ? ['commissionPct'] : []).concat(f === null ? ['fxRate'] : []);
+        return value.requiresManual.length === manual.length && manual.every(function (key) { return value.requiresManual.includes(key); });
+      }
+      if (!validHints(data.hints)) throw new Error('invalid logistics pricing hints');
+      if (action === 'scopes') {
+        var assignmentKeys = selectionKeys.concat(['shopId', 'shopName', 'warehouseName', 'originLabel', 'destinationLabel', 'releaseSequence', 'effectiveReleaseAvailable']);
+        if (!Array.isArray(data.selectedSkuKeys) || !data.selectedSkuKeys.length || data.selectedSkuKeys.length > 100
+          || new Set(data.selectedSkuKeys).size !== data.selectedSkuKeys.length || !data.selectedSkuKeys.every(function (key) { return text(key, 500); })
+          || !Array.isArray(data.assignments) || data.assignments.length > 500 || data.requiresSelection !== true
+          || new Set(data.assignments.map(function (item) { return item && item.assignmentId; })).size !== data.assignments.length
+          || !data.assignments.every(function (item) { return exactKeys(item, assignmentKeys) && item.shopId === binding.shopId
+            && selectionKeys.concat(['shopName', 'warehouseName', 'originLabel', 'destinationLabel']).every(function (key) { return text(item[key], 300); })
+            && count(item.releaseSequence) && typeof item.effectiveReleaseAvailable === 'boolean'; })
+          || !Array.isArray(data.packaging) || data.packaging.length !== 0 && data.packaging.length !== data.selectedSkuKeys.length
+          || new Set(data.packaging.map(function (item) { return item && item.skuKey; })).size !== data.packaging.length
+          || !data.packaging.every(function (item) { return exactKeys(item, ['skuKey', 'weightG', 'lengthMm', 'widthMm', 'heightMm'])
+            && data.selectedSkuKeys.includes(item.skuKey) && ['weightG', 'lengthMm', 'widthMm', 'heightMm'].every(function (key) {
+              return typeof item[key] === 'number' && Number.isFinite(item[key]) && item[key] > 0;
+            }); })) throw new Error('invalid logistics scopes');
+      } else {
+        if (!sameSelection(data.selection, bodyValue.selection) || !text(data.releaseId, 200) || !isChecksum(data.effectiveChecksum)
+          || !lease(data.validUntil) || !lease(data.authorizationValidUntil)) throw new Error('invalid logistics release response');
+        if (action === 'services') {
+          if (!count(data.releaseSequence) || data.releaseSequence <= 0 || data.requiresSelection !== true
+            || !Array.isArray(data.services) || data.services.length > 500
+            || new Set(data.services.map(function (item) { return item && item.stableServiceKey; })).size !== data.services.length
+            || !data.services.every(function (item) { return exactKeys(item, ['stableServiceKey', 'providerId', 'displayName', 'deliveryVariant', 'deliveryPromise'])
+              && text(item.stableServiceKey, 1000) && text(item.providerId, 300) && text(item.displayName, 1000)
+              && ['pickup', 'courier'].includes(item.deliveryVariant) && typeof item.deliveryPromise === 'string' && item.deliveryPromise.length <= 1000; })) {
+            throw new Error('invalid logistics services');
+          }
+        } else {
+          function validBand(range, declaredPriceMinor) {
+            if (!Array.isArray(range) || range.length !== 2 || !range.every(function (value) {
+              return typeof value === 'string' && /^(?:0|[1-9]\d{0,11})(?:\.\d{0,5}[1-9])?$/u.test(value);
+            })) return false;
+            var min = Number(range[0]), max = Number(range[1]);
+            return (max === 0 || min <= max) && (declaredPriceMinor === undefined
+              || declaredPriceMinor / 100 >= min && (max === 0 || declaredPriceMinor / 100 <= max));
+          }
+          if (data.releaseId !== bodyValue.releaseId || data.effectiveChecksum !== bodyValue.effectiveChecksum || data.stableServiceKey !== bodyValue.stableServiceKey
+            || data.source !== 'ERP_PUBLISHED_FORMULA' || data.currency !== 'CNY' || data.requiresPricePreview !== true || data.writesDraft !== false
+            || !Array.isArray(data.items) || data.items.length !== bodyValue.items.length
+            || new Set(data.items.map(function (item) { return item && item.skuKey; })).size !== data.items.length
+            || !data.items.every(function (item) {
+              var requested = item && bodyValue.items.find(function (row) { return row.skuKey === item.skuKey; });
+              return exactKeys(item, ['skuKey', 'declaredPriceMinor', 'shippingMinor', 'packingMinor', 'totalLogisticsMinor', 'shippingCostMinor', 'shippingCostCny', 'matchedBand', 'matchedRuleDigest'])
+                && requested && item.declaredPriceMinor === requested.declaredPriceMinor
+                && count(item.shippingMinor) && item.shippingMinor <= 1000000000 && item.packingMinor === 0
+                && item.totalLogisticsMinor === item.shippingMinor && item.shippingCostMinor === item.shippingMinor && item.shippingCostCny === item.shippingMinor / 100
+                && isChecksum(item.matchedRuleDigest) && exactKeys(item.matchedBand, ['priceRangeCNY', 'priceRangeRUB'])
+                && validBand(item.matchedBand.priceRangeCNY, item.declaredPriceMinor) && validBand(item.matchedBand.priceRangeRUB);
+            })) throw new Error('invalid logistics quote response');
+        }
+      }
+      // All response fields are validated before crossing from the Worker into the source-page frame.
+      return { state: 'ready', logistics: JSON.parse(JSON.stringify(data)) };
+    }
     return {
       async readDraftEditor(input) {
         var binding = normalizedSuiteBinding(input);
         var response = await transport.post('/api/extension-device/source-workbench/editor/read', { binding: binding }, { requiredScope: 'listing:review' });
         return editorResult(response, binding);
+      },
+      async readDraftCopyCapability(input) {
+        var binding = normalizedSuiteBinding(input);
+        var response = await transport.post('/api/extension-device/source-workbench/editor/copy-capability', { binding: binding }, { requiredScope: 'listing:review' });
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var body = record(response.body);
+        var data = body && body.code === 1 && record(body.data);
+        if (!exactKeys(data, ['available', 'reasonCode', 'providerFeeNotice']) || typeof data.available !== 'boolean'
+          || !['AVAILABLE', 'MASTER_OFF', 'TENANT_NOT_ALLOWED', 'INVALID_POLICY', 'LISTING_COPY_OFF', 'PROVIDER_NOT_READY', 'EDITOR_COPY_UNAVAILABLE'].includes(data.reasonCode)
+          || data.available !== (data.reasonCode === 'AVAILABLE') || !text(data.providerFeeNotice, 500)) throw new Error('invalid copy capability response');
+        return { state: 'ready', capability: data };
+      },
+      async readProductVisionCapability(input) {
+        var binding = normalizedSuiteBinding(input);
+        var response = await transport.post('/api/extension-device/source-workbench/vision/capability', { binding }, { requiredScope: 'listing:review' });
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var body = record(response.body), data = body && body.code === 1 && record(body.data);
+        if (!exactKeys(data, ['available', 'reasonCode', 'providerFeeNotice']) || typeof data.available !== 'boolean'
+          || !text(data.reasonCode, 100) || !text(data.providerFeeNotice, 500)) throw new Error('invalid vision capability response');
+        return { state: 'ready', capability: data };
+      },
+      async analyzeProductVision(input) {
+        if (!exactKeys(input, ['binding', 'skuKey', 'sourceMediaKeys', 'operationKey'])
+          || !text(input.skuKey, 500) || !text(input.operationKey, 128) || input.operationKey.length < 8
+          || !Array.isArray(input.sourceMediaKeys) || !input.sourceMediaKeys.length || input.sourceMediaKeys.length > 5
+          || new Set(input.sourceMediaKeys).size !== input.sourceMediaKeys.length || !input.sourceMediaKeys.every(function (key) { return text(key, 500); })) throw new TypeError('invalid vision request');
+        var binding = normalizedSuiteBinding(input.binding);
+        var response;
+        try { response = await transport.post('/api/extension-device/source-workbench/vision/analyze', { ...input, binding }, { requiredScope: 'media:execute' }); }
+        catch (error) { if (error && error.outcome === 'NOT_SUBMITTED') throw error; throw mutationUnknown('看图分析响应丢失，请核对原操作'); }
+        var body = record(response && response.body);
+        if (body && body.outcome === 'UNKNOWN_OUTCOME') throw mutationUnknown('原看图请求尚待核对，请保留原请求');
+        if (mutationResponseProvesRejection(response) || body && body.code === 0 && body.outcome === 'NOT_SUBMITTED') {
+          throw mutationNotSubmitted(body && text(body.msg, 2000) ? body.msg : 'ERP 已拒绝看图分析');
+        }
+        try {
+          var data = body && body.code === 1 && record(body.data), visual = data && record(data.visualDescription);
+          var bound = data && normalizedSuiteBinding(data.binding);
+          if (!exactKeys(data, ['binding', 'skuKey', 'sourceMediaKeys', 'operationKey', 'visualDescription', 'replayed'])
+            || JSON.stringify(bound) !== JSON.stringify(binding) || data.skuKey !== input.skuKey || data.operationKey !== input.operationKey
+            || JSON.stringify(data.sourceMediaKeys) !== JSON.stringify(input.sourceMediaKeys) || typeof data.replayed !== 'boolean'
+            || !exactKeys(visual, ['composition', 'background', 'lighting', 'style', 'observations'])
+            || !['composition', 'background', 'lighting', 'style'].every(function (key) { return typeof visual[key] === 'string' && visual[key].length <= 60; })
+            || !exactKeys(visual.observations, ['colors', 'shapes', 'visibleComponents', 'visibleText'])
+            || !Object.values(visual.observations).every(function (items) { return Array.isArray(items) && items.length <= 10
+              && items.every(function (item) { return typeof item === 'string' && item.length <= 100; }); })) throw new Error('invalid vision response');
+          return { state: 'ready', analysis: data };
+        } catch { throw mutationUnknown('看图回执不完整，请核对原操作'); }
+      },
+      async generateDraftCopy(input) {
+        var keys = ['binding', 'operationKey', 'fields'];
+        if (input && input.userInstructions !== undefined) keys.push('userInstructions');
+        if (!exactKeys(input, keys) || !text(input.operationKey, 128) || input.operationKey.length < 8
+          || !Array.isArray(input.fields) || !input.fields.length || input.fields.length > 2 || new Set(input.fields).size !== input.fields.length
+          || !input.fields.every(function (field) { return ['title', 'description'].includes(field); })
+          || input.userInstructions !== undefined && (typeof input.userInstructions !== 'string' || input.userInstructions.length > 2000)) throw new TypeError('invalid copy generation request');
+        var binding = normalizedSuiteBinding(input.binding);
+        var response;
+        try {
+          response = await transport.post('/api/extension-device/source-workbench/editor/copy-generate', {
+            binding: binding, operationKey: input.operationKey, fields: input.fields,
+            ...(input.userInstructions === undefined ? {} : { userInstructions: input.userInstructions }),
+          }, { requiredScope: 'listing:write' });
+        } catch (error) {
+          if (error && error.outcome === 'NOT_SUBMITTED') throw error;
+          throw mutationUnknown('文案生成响应丢失，请核对原操作');
+        }
+        var body = record(response && response.body);
+        if (body && body.code === 0 && body.errorCode === 'ozon_listing_ai_generation_in_progress') {
+          throw mutationUnknown('原文案生成仍在运行或等待核对，请保留原操作，不要重新生成');
+        }
+        if (mutationResponseProvesRejection(response) || body && body.code === 0 && body.errorCode === 'editor_copy_generation_disabled') {
+          var rejection = mutationNotSubmitted(body && text(body.msg, 2000) ? body.msg : 'ERP 已拒绝文案生成');
+          if (body && text(body.errorCode, 200)) rejection.code = body.errorCode;
+          throw rejection;
+        }
+        try {
+          var result = editorResult(response, binding);
+          if (result.state !== 'ready' || !result.candidateId || typeof body.replayed !== 'boolean') throw new Error('invalid copy generation response');
+          return result;
+        } catch { throw mutationUnknown('文案生成回执不完整，请核对原操作'); }
       },
       async readDraftCatalog(input) {
         var binding = normalizedSuiteBinding(input.binding);
@@ -1424,6 +1642,28 @@
         if (!validAttributeWorkspace(data)) throw new Error('invalid attribute workspace response');
         return { state: 'ready', workspace: data };
       },
+      async readDraftAttributeSuggestions(input) {
+        var binding = normalizedSuiteBinding(input);
+        var response = await transport.post('/api/extension-device/source-workbench/editor/attribute-suggestions', { binding }, { requiredScope: 'listing:review' });
+        var body = record(response && response.body), data = body && body.code === 1 && record(body.data);
+        if (!data) throw new Error(body?.msg || '自动属性读取失败');
+        if (!exactKeys(data, ['state','workspace','suggestions','blockedSuggestions']) || data.state !== 'ready' || !validAttributeWorkspace(data.workspace)
+          || !Array.isArray(data.suggestions) || data.suggestions.length > 500 || !Array.isArray(data.blockedSuggestions) || data.blockedSuggestions.length > 500
+          || !data.suggestions.every(function(candidate){return exactKeys(candidate,['attributeId','attributeName','candidateId','candidateHash','schemaRevision','reviewed','rows'])
+            && Number.isSafeInteger(candidate.attributeId) && candidate.attributeId>0 && text(candidate.attributeName,2000) && text(candidate.candidateId,500)
+            && /^[a-f0-9]{64}$/u.test(candidate.candidateHash) && candidate.schemaRevision===data.workspace.schemaRevision && candidate.reviewed===false
+            && Array.isArray(candidate.rows) && candidate.rows.length<=100 && candidate.rows.every(function(row){return record(row)&&row.reviewed===false
+              && (row.skuKey===null||text(row.skuKey,500))&&['SOURCE','AI'].includes(row.source)&&Array.isArray(row.dictionaryValueIds)&&row.dictionaryValueIds.length<=100
+              && Array.isArray(row.evidence)&&row.evidence.length<=20&&Array.isArray(row.unresolvedValues);});})) throw new Error('invalid attribute suggestions response');
+        return {state:'ready',suggestions:data};
+      },
+      async readDraftLogisticsScopes(input) { return readLogistics('scopes',{binding:normalizedSuiteBinding(input)}); },
+      async readDraftLogisticsServices(input) { return readLogistics('services',input); },
+      async quoteDraftLogistics(input) {
+        if(!Array.isArray(input.items)||!input.items.length||input.items.length>100||!input.items.every(function(item){return exactKeys(item,['skuKey','declaredPriceMinor','hasBattery'])
+          &&text(item.skuKey,500)&&Number.isSafeInteger(item.declaredPriceMinor)&&item.declaredPriceMinor>0&&typeof item.hasBattery==='boolean';}))throw new TypeError('invalid logistics quote');
+        return readLogistics('quote',input);
+      },
       async readDraftDictionary(input) {
         if (!exactKeys(input, ['binding', 'schemaRevision', 'attributeId', 'query', 'limit'])
           || !/^[a-f0-9]{64}$/u.test(input.schemaRevision || '') || !Number.isSafeInteger(input.attributeId) || input.attributeId < 1
@@ -1444,7 +1684,16 @@
       },
       async saveDraftEditor(input) {
         var binding = normalizedSuiteBinding(input.binding);
-        if (!['PRICING', 'CATEGORY', 'PACKAGING', 'ATTRIBUTES', 'COPY_CANDIDATE', 'COPY_APPROVE', 'VALIDATE'].includes(input.action) || !text(input.operationKey, 128) || input.operationKey.length < 8) throw new TypeError('invalid editor command');
+        if (!['SKU_SELECTION', 'SKU_DUPLICATE', 'SKU_COPY_REMOVE', 'PRICING', 'CATEGORY', 'PACKAGING', 'ATTRIBUTES', 'ATTRIBUTE_SUGGESTIONS', 'COPY_CANDIDATE', 'COPY_APPROVE', 'VALIDATE'].includes(input.action) || !text(input.operationKey, 128) || input.operationKey.length < 8) throw new TypeError('invalid editor command');
+        if(input.action==='ATTRIBUTE_SUGGESTIONS'&&(!exactKeys(input.value,['schemaRevision','candidates'])||!/^[a-f0-9]{64}$/u.test(input.value.schemaRevision)
+          ||!Array.isArray(input.value.candidates)||!input.value.candidates.length||input.value.candidates.length>500||!input.value.candidates.every(function(candidate){return exactKeys(candidate,['attributeId','candidateId','candidateHash','schemaRevision'])
+            &&Number.isSafeInteger(candidate.attributeId)&&candidate.attributeId>0&&text(candidate.candidateId,500)&&/^[a-f0-9]{64}$/u.test(candidate.candidateHash)&&candidate.schemaRevision===input.value.schemaRevision;})))throw new TypeError('invalid attribute suggestion command');
+        if (input.action === 'SKU_SELECTION' && (!exactKeys(input.value, ['selectedSkuKeys'])
+          || !Array.isArray(input.value.selectedSkuKeys) || !input.value.selectedSkuKeys.length || input.value.selectedSkuKeys.length > 100
+          || new Set(input.value.selectedSkuKeys).size !== input.value.selectedSkuKeys.length
+          || !input.value.selectedSkuKeys.every(function (key) { return text(key, 500) && key === key.normalize('NFKC').trim(); }))) throw new TypeError('invalid editor command');
+        if (input.action === 'SKU_DUPLICATE' && (!exactKeys(input.value, ['sourceSkuKey']) || !text(input.value.sourceSkuKey, 500))) throw new TypeError('invalid editor command');
+        if (input.action === 'SKU_COPY_REMOVE' && (!exactKeys(input.value, ['rowKey']) || !/^listing-copy:[a-f0-9]{64}$/u.test(input.value.rowKey))) throw new TypeError('invalid editor command');
         if (input.action === 'COPY_CANDIDATE') {
           var value = record(input.value);
           if (!value || !Object.keys(value).length || Object.keys(value).some(function (key) { return !['titleRu', 'descriptionRu'].includes(key); })

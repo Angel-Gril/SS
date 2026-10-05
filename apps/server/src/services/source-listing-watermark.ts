@@ -181,7 +181,7 @@ export function createSourceListingWatermarkService(options: Dependencies) {
     const sourceAssetIds = input.items.flatMap(item => item.sourceAssetId ? [item.sourceAssetId] : []);
     const sourceAssets = sourceAssetIds.length ? await options.loadOwnedAssets({ ownerUserId: actor.ownerUserId, assetIds: sourceAssetIds }) : [];
     const sources = input.items.map(item => {
-      const canonicalGallery = item.skuKey !== null && draft.selectedSkuKeys.includes(item.skuKey)
+      const canonicalGallery = item.skuKey !== null && sourceListingEditorSkuKeysForDraft(draft).includes(item.skuKey)
         && Array.from({ length: 7 }, (_, index) => `sku:${item.skuKey}:gallery:${index + 1}`).includes(item.slotKey);
       if (!canonicalGallery && !isSourceListingAiMediaTarget(draft, { skuKey: item.skuKey, slotKey: item.slotKey })) fail('watermark_source_invalid', 422, '图片不属于当前草稿 SKU 或图片槽位');
       if (item.sourceMediaKey) {
@@ -344,3 +344,4 @@ export function createSourceListingWatermarkService(options: Dependencies) {
   };
 }
 export type SourceListingWatermarkService = ReturnType<typeof createSourceListingWatermarkService>;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

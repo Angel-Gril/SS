@@ -1,6 +1,12 @@
 # SS ERP 内部开发真源
 
-## 2026-10-04 `1.0.420` 已双区部署；COM 下载消费者修复准备 `1.0.421`
+## 2026-10-05 精铺自动属性、物流定价、连续准备、SKU复制与多平台采集已本地验收，仍未提交
+
+用户现已授权提交、推送、签名和双区部署 `1.0.422` 候选。发布前复制行 provenance 缺失拒绝及内部 plan 绑定回归、最终完整 preflight、Server/Web 构建和真实 PostgreSQL 11 项均通过，正在准备提交和区域签名部署；当前应用和官网仍为 `1.0.421`。官网 pointer 切换保持独立门禁，准确发布范围只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+COM/CN 应用与公开下载仍为 `4df9ec38 / 1.0.421`。同窗自动属性、店铺物流定价、多店连续准备、未知建草稿只读恢复、同窗 SKU 复制/移除及淘宝/天猫/PDD native_v2 采集已通过本地 owner/Chrome 验收；全 server 6868 基线、复制相关回归98项、扩展关联采集/编辑回归、真实 PostgreSQL 视觉7+复制4、MV3/双包校验和 lint/typecheck 通过。视觉校准 Provider POST=2，费用未读取；视觉生产配置仍默认关闭、Ozon=0。复制行生产 Ozon 发布、其他 donor 平台深度适配与新版真实全链路仍有边界。按用户要求全部完成后再提交，当前没有提交/签名/部署；精确范围与证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+## 历史接续：`1.0.420` 双区部署与 COM 下载消费者修复
 
 `f4b133e6 / 1.0.420` 已完成完整offline、正式QA04、双区VPS/canary/approval/CAS；CN匿名Cloud/Local完整下载通过，COM下载返回404，根因为服务端publication消费者仍只允许原两项operation，脚本已接受显式三项。COM已受控CAS恢复原已批准`1.0.405`并确认latest正常，420pointer原件保留；CN公开420。消费者最小修复T2 RED→GREEN、34项下载回归与typecheck/lint通过，新增TEXT/FULL_EDIT/INPAINT仍拒绝。下一421候选仅publication owner变化，无生图/费用逻辑改动，沿用419suite明确execution bridge，不新增Provider。唯一事实见[直接适配owner](donor-workbench/direct-adaptation.md)。
 

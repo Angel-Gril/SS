@@ -95,6 +95,26 @@ export interface OzonListingSkuPricingV1 {
   offerId?: string;
 }
 
+export const SOURCE_LISTING_OFFER_ROWS_CONTRACT_VERSION = 'source-listing-offer-rows/v1' as const;
+
+export interface SourceListingOfferRow {
+  rowKey: string;
+  sourceSkuKey: string;
+  offerId: string;
+  sourceCaptureSnapshotId: string;
+  sourceCaptureHash: string;
+  sourceDraftVersion: number;
+  sourceDraftRevision: number;
+  pricing: OzonListingSkuPricingV1 | null;
+  packaging: OzonListingSkuPackagingMeasurements | null;
+  attributes: Record<string, OzonListingDraftAttributeValue>;
+}
+
+export interface SourceListingOfferRows {
+  contractVersion: typeof SOURCE_LISTING_OFFER_ROWS_CONTRACT_VERSION;
+  rows: SourceListingOfferRow[];
+}
+
 export interface OzonListingPricingV1 extends Record<string, unknown> {
   contractVersion: typeof OZON_LISTING_PRICING_CONTRACT_VERSION;
   items: OzonListingSkuPricingV1[];
@@ -372,6 +392,7 @@ export type OzonListingDraftAuditEventType =
   | 'SOURCE_SNAPSHOT_CHANGED'
   | 'SHOP_CHANGED'
   | 'SKU_SELECTION_CHANGED'
+  | 'SKU_DUPLICATED'
   | 'AI_COPY_CANDIDATE_CREATED'
   | 'AI_COPY_CANDIDATE_APPLIED'
   | 'AI_MEDIA_ASSIGNMENT_APPLIED'
@@ -429,6 +450,7 @@ export interface OzonListingDraft {
   sourceCaptureSnapshotId: string;
   sourceCaptureHash: string;
   selectedSkuKeys: string[];
+  offerRows?: SourceListingOfferRows;
   draftVersion: number;
   revision: number;
   stage: SourceListingWorkflowStage;

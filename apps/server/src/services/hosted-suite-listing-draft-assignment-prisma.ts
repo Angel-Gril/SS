@@ -992,7 +992,7 @@ function authorityStillCurrent(
       ? planSlot.ownershipLevel === 'sku' && planSlot.ownershipKey === item.skuKey
       : planSlot.ownershipLevel === 'compatibility_group'
         && planSlot.skuKeys.includes(item.skuKey)
-        && sameSortedStrings(planSlot.skuKeys, authority.draft.selectedSkuKeys);
+        && sameSortedStrings(planSlot.skuKeys, sourceListingEditorSkuKeysForDraft(authority.draft));
     return scopeCurrent
       && planSlot.ordinal === item.planSlotOrdinal
       && suiteSlot.ordinal === item.planSlotOrdinal
@@ -1324,3 +1324,4 @@ export function createPrismaHostedSuiteListingDraftAssignmentRepository(
     },
   };
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

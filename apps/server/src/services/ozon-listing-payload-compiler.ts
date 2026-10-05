@@ -34,6 +34,7 @@ import {
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from './ozon-v3-import-package-contract.js';
 import { hasSourceListingSkuPackaging, projectSourceListingSkuPackaging } from './source-listing-sku-packaging.js';
 import { appendBoundDraftVideoAttributes, SourceListingVideoError } from './source-listing-video-media.js';
+import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 export const OZON_LISTING_PAYLOAD_COMPILER_VERSION = 'ozon-listing-payload-compiler/v1' as const;
 export const OZON_LISTING_RESOLVED_IMAGES_CONTRACT_VERSION = 'ozon-listing-resolved-images/v1' as const;
@@ -315,7 +316,7 @@ function assertCaptureAuthority(draft: OzonListingDraft, capture: SourceProductC
 }
 
 function selectedCanonicalSkuKeys(draft: OzonListingDraft, capture: SourceProductCaptureV2): string[] {
-  const selected = draft.selectedSkuKeys;
+  const selected = sourceListingEditorSkuKeysForDraft(draft);
   if (!Array.isArray(selected) || selected.length === 0 || selected.length > OZON_LISTING_IMPORT_MAX_ITEMS) {
     fail('OZON_LISTING_COMPILE_SKU_INVALID', `A publish payload requires 1-${OZON_LISTING_IMPORT_MAX_ITEMS} selected SKUs`);
   }
@@ -806,12 +807,13 @@ export function compileOzonListingPayload(input: CompileOzonListingPayloadInput)
   const { draft, capture } = input;
   assertFrozenDraft(draft);
   assertCaptureAuthority(draft, capture);
-  const skuKeys = selectedCanonicalSkuKeys(draft, capture);
+  const effectiveCapture = projectSourceCaptureForDraft(capture, draft);
+  const skuKeys = selectedCanonicalSkuKeys(draft, effectiveCapture);
   const category = categoryAuthority(draft);
   const report = parseValidationReport(draft, input.validationReport);
   const copy = reviewedRussianCopy(draft);
   const pricing = parsePricing(draft, skuKeys);
-  const packages = new Map(skuKeys.map((skuKey) => [skuKey, packageFacts(draft, capture, report, skuKey)]));
+  const packages = new Map(skuKeys.map((skuKey) => [skuKey, packageFacts(draft, effectiveCapture, report, skuKey)]));
   const packageContract = packages.get(skuKeys[0]!)!.contract;
   const attributes = attributesBySku(report, skuKeys);
   try {

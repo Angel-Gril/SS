@@ -1,5 +1,5 @@
 import type { OzonListingAiCopyCandidate, OzonListingDraft } from 'shared';
-import { SourceListingWorkflowError, type SourceListingWorkflowService } from './source-listing-workflow.js';
+import { SourceListingWorkflowError, sourceListingAiCopyContextHash, type SourceListingWorkflowService } from './source-listing-workflow.js';
 import type { SourceListingAttributeEditorService, SourceListingAttributeEditorContext } from './source-listing-attribute-editor.js';
 import { SOURCE_LISTING_MANUAL_COPY_PROMPT_VERSION, SourceListingManualCopyError, normalizeSourceListingManualCopy } from './source-listing-manual-copy.js';
 
@@ -29,8 +29,13 @@ function closedInput(input: unknown, extras: string[]): void {
 function manualCandidate(candidate: OzonListingAiCopyCandidate): boolean {
   return candidate.kind === 'MANUAL' || candidate.kind === undefined && !candidate.generation;
 }
+function supportedCandidate(candidate: OzonListingAiCopyCandidate): boolean {
+  return manualCandidate(candidate) || candidate.kind === 'AI_GENERATED' && Boolean(candidate.generation);
+}
 function sourceCurrent(draft: OzonListingDraft, candidate: OzonListingAiCopyCandidate): boolean {
-  return candidate.sourceCaptureSnapshotId === draft.sourceCaptureSnapshotId && candidate.sourceCaptureHash === draft.sourceCaptureHash;
+  return candidate.sourceCaptureSnapshotId === draft.sourceCaptureSnapshotId && candidate.sourceCaptureHash === draft.sourceCaptureHash
+    && (!candidate.generation || draft.freshness.category.state === 'CURRENT' && draft.freshness.attributes.state === 'CURRENT'
+      && candidate.generation.draftContextHash === sourceListingAiCopyContextHash(draft));
 }
 function copyFields(candidate: OzonListingAiCopyCandidate) {
   return candidate.fields || candidate.generation?.fields || ['title', 'description'] as const;
@@ -38,7 +43,7 @@ function copyFields(candidate: OzonListingAiCopyCandidate) {
 export function projectSourceListingCopyEditor(draft: OzonListingDraft) {
   const applied = new Set(draft.copy.applyAudit.map((item) => item.candidateId));
   return { titleRu: draft.copy.publishTitleRu, descriptionRu: draft.copy.publishDescriptionRu,
-    pendingCandidates: draft.copy.candidates.filter((candidate) => manualCandidate(candidate) && !applied.has(candidate.id))
+    pendingCandidates: draft.copy.candidates.filter((candidate) => supportedCandidate(candidate) && !applied.has(candidate.id))
       .map((candidate) => ({ id: candidate.id, fields: [...copyFields(candidate)], titleRu: candidate.titleRu,
         descriptionRu: candidate.descriptionRu, sourceCurrent: sourceCurrent(draft, candidate) })),
   };
@@ -79,14 +84,16 @@ export function createSourceListingCopyEditorService(options: {
       identifier(input.candidateId, 1, 200, 'manual copy candidate');
       const draft = await owned(input);
       const candidate = draft.copy.candidates.find((item) => item.id === input.candidateId);
-      if (!candidate || !manualCandidate(candidate)) throw new SourceListingWorkflowError('OZON_LISTING_AI_CANDIDATE_NOT_FOUND', 'Manual copy candidate was not found', 404);
-      if (!sourceCurrent(draft, candidate)) throw new SourceListingWorkflowError('OZON_LISTING_AI_CANDIDATE_STALE', 'Manual copy belongs to another source snapshot', 409);
-      const fields = copyFields(candidate);
-      const normalized = normalizeSourceListingManualCopy({ ...(fields.includes('title') ? { titleRu: candidate.titleRu } : {}),
-        ...(fields.includes('description') ? { descriptionRu: candidate.descriptionRu } : {}) });
-      if (fields.includes('title') && normalized.titleRu !== candidate.titleRu
-        || fields.includes('description') && normalized.descriptionRu !== candidate.descriptionRu) {
-        throw new SourceListingManualCopyError('Edit the legacy copy before approving non-canonical publish text');
+      if (!candidate || !supportedCandidate(candidate)) throw new SourceListingWorkflowError('OZON_LISTING_AI_CANDIDATE_NOT_FOUND', 'Copy candidate was not found', 404);
+      if (!sourceCurrent(draft, candidate)) throw new SourceListingWorkflowError('OZON_LISTING_AI_CANDIDATE_STALE', 'Copy belongs to an older source snapshot or listing fact context', 409);
+      if (manualCandidate(candidate)) {
+        const fields = copyFields(candidate);
+        const normalized = normalizeSourceListingManualCopy({ ...(fields.includes('title') ? { titleRu: candidate.titleRu } : {}),
+          ...(fields.includes('description') ? { descriptionRu: candidate.descriptionRu } : {}) });
+        if (fields.includes('title') && normalized.titleRu !== candidate.titleRu
+          || fields.includes('description') && normalized.descriptionRu !== candidate.descriptionRu) {
+          throw new SourceListingManualCopyError('Edit the legacy copy before approving non-canonical publish text');
+        }
       }
       const replay = draft.copy.applyAudit.find((item) => item.operationKey === input.operationKey);
       if (!replay) assertVersion(input, draft);

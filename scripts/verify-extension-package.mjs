@@ -745,6 +745,7 @@ const requiredDonorWorkbenchFiles = [
   'shared/donor-workbench/precision-byok-edit-flow.js',
   'content/donor/adapter-1688.js',
   'shared/collectors/donor-1688-capture.js',
+  'shared/collectors/donor-marketplace-normalizer.js',
   'pages/donor/ui/panel.css',
   'pages/donor/ui/modules/i18n.js',
   'pages/donor/ui/modules/field-key-utils.js',
@@ -857,6 +858,17 @@ if (swText.includes('../shared/donor-workbench/prompt-handoff.js')) {
 const donorContentEntry = (manifest.content_scripts || []).find((entry) => (
   Array.isArray(entry.js) && entry.js.includes('content/donor-workbench-bridge.js')
 ));
+const sourceCollectorEntry = (manifest.content_scripts || []).find((entry) => (
+  Array.isArray(entry.js) && entry.js.includes('content/collect-content-script.js')
+));
+if (!sourceCollectorEntry) fail('source marketplace collector content-script entry missing');
+else checkScriptLoadOrder(sourceCollectorEntry.js, [
+  'shared/collectors/source-product-core.js',
+  'shared/collectors/donor-marketplace-normalizer.js',
+  'shared/collectors/pdd-product.js',
+  'shared/collectors/marketplace-product.js',
+  'content/collect-content-script.js',
+], 'native donor marketplace collector');
 if (!donorContentEntry) {
   fail('donor workbench content-script entry missing');
 } else {

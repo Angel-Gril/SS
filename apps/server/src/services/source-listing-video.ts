@@ -77,7 +77,7 @@ export function createSourceListingVideoService(options: SourceListingVideoDepen
           return result(previous, true);
         }
         const draft = assertVideoDraftContext(current, actor, input.binding, true);
-        if (input.skuKey !== null && !draft.selectedSkuKeys.includes(input.skuKey)) videoFail('video_sku_invalid', 422, '视频必须绑定到当前草稿 SKU');
+        if (input.skuKey !== null && !sourceListingEditorSkuKeysForDraft(draft).includes(input.skuKey)) videoFail('video_sku_invalid', 422, '视频必须绑定到当前草稿 SKU');
         const selected = ([['MAIN', input.mainUrl], ['RICH_CONTENT', input.richContentUrl]] as const).flatMap(([role, url]) => url ? [{ role, url }] : []);
         if (selected.length) buildSelectedVideoAttributes(draft, await options.loadSchema({ ownerUserId: actor.ownerUserId, draft }), selected);
         const now = (options.now?.() || new Date()).toISOString();
@@ -101,3 +101,4 @@ export function createSourceListingVideoService(options: SourceListingVideoDepen
   };
 }
 export type SourceListingVideoService = ReturnType<typeof createSourceListingVideoService>;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

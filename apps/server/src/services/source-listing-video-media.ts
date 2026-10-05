@@ -73,13 +73,13 @@ export function appendBoundDraftVideoAttributes(draft: OzonListingDraft, skuKey:
   existing: Array<{ id: number; complex_id?: number; values: Array<{ value: string; dictionary_value_id?: number }> }>, validationSchemaRevision: string) {
   const bindings = draft.media.videoBindings;
   if (bindings === undefined || Array.isArray(bindings) && !bindings.length) return existing;
-  if (!Array.isArray(bindings) || bindings.length > (draft.selectedSkuKeys.length + 1) * 2) videoFail('video_binding_invalid', 422, '草稿视频绑定无效');
+  if (!Array.isArray(bindings) || bindings.length > (sourceListingEditorSkuKeysForDraft(draft).length + 1) * 2) videoFail('video_binding_invalid', 422, '草稿视频绑定无效');
   const seen = new Set<string>();
   for (const binding of bindings) {
     if (!binding || typeof binding !== 'object') videoFail('video_binding_invalid', 422, '草稿视频绑定无效');
     const key = JSON.stringify([binding.skuKey, binding.role]);
     if (Object.keys(binding).sort().join(',') !== 'approvedAt,approvedByUserId,role,skuKey,sourceCaptureHash,sourceCaptureSnapshotId,sourceMediaKey,url'
-      || binding.skuKey !== null && !draft.selectedSkuKeys.includes(binding.skuKey) || seen.has(key)
+      || binding.skuKey !== null && !sourceListingEditorSkuKeysForDraft(draft).includes(binding.skuKey) || seen.has(key)
       || binding.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId || binding.sourceCaptureHash !== draft.sourceCaptureHash
       || binding.approvedByUserId !== draft.ownerUserId || !Number.isFinite(Date.parse(binding.approvedAt))
       || binding.sourceMediaKey !== null || !['MAIN', 'RICH_CONTENT'].includes(binding.role)
@@ -100,3 +100,4 @@ export function appendBoundDraftVideoAttributes(draft: OzonListingDraft, skuKey:
   }
   return [...existing, ...generated].sort((left, right) => left.id - right.id);
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

@@ -228,6 +228,23 @@ const steps = [
     args: ['--test', 'scripts/deploy-build-inputs.test.mjs'],
   },
   {
+    name: 'precision same-page entry and target-pricing contracts',
+    command: 'node',
+    args: ['--test', 'scripts/extension-precision-popup-entry.test.mjs', 'scripts/extension-target-pricing.test.mjs',
+      'scripts/extension-precision-pricing-session.test.mjs', 'scripts/extension-copy-generation-policy.test.mjs',
+      'scripts/extension-product-vision-client.test.mjs', 'scripts/extension-product-analysis-transport.test.mjs'],
+  },
+  {
+    name:'precision attribute/logistics preparation contracts',command:'node',
+    args:['--test','scripts/extension-preparation-adapters.test.mjs','scripts/extension-precision-preparation-flow.test.mjs',
+      'scripts/extension-attribute-suggestions-session.test.mjs','scripts/extension-logistics-pricing-client.test.mjs',
+      'scripts/extension-precision-editor-save.test.mjs','scripts/extension-precision-workflow-recovery.test.mjs'],
+  },
+  {
+    name: 'donor native marketplace capture contracts', command: 'node',
+    args: ['--test', 'scripts/extension-donor-marketplace-normalizer.test.mjs'],
+  },
+  {
     name: 'deployment environment snapshot contract',
     command: 'node',
     args: ['--test', 'scripts/deploy-environment.test.mjs'],

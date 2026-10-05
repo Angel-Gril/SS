@@ -12,7 +12,11 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 - [Milestones](./milestones.md)
 - [旧扩展直接适配与当前功能缺口](./direct-adaptation.md)
 
-## Progress
+## Historical Phase Acceptance
+
+These checked phases record their original contract acceptance, not complete donor
+product parity. Current product gaps and direct-adaptation acceptance belong to the
+linked owner below.
 
 - [x] Phase 0: Foundation and Safety (3/3 tasks) [details](./phase-0-foundation.md)
 - [x] Phase 1: Donor Workbench Shell (3/3 tasks) [details](./phase-1-shell.md)
@@ -21,6 +25,20 @@ Task: Rebuild the SS ERP browser extension workbench from the user-owned `jp2026
 - [x] Phase 4: Release and Cutover (3/3 tasks) [details](./phase-4-cutover.md)
 
 ## Current Status
+
+COM/CN applications and public Cloud/Local downloads serve `4df9ec38 / 1.0.421`.
+The two-region website gates, CAS and distribution passed. Local direct-adaptation
+tasks U9–U20 (12/12 locally) now also cover server-owned offer-row SKU duplication/removal,
+copy-aware pricing/packaging/attributes/media/compiler seams, and bounded native Taobao,
+Tmall and PDD donor collectors. U17 adds two actual synthetic vision-model calls and U18
+adds four independent PostgreSQL copy tests; production vision remains off. They are not
+yet committed, signed or deployed. Copy-row real Ozon publishing, other donor platforms'
+deep collectors and the new production end-to-end flow remain unaccepted. The user's
+latest instruction authorizes committing, pushing, signing and two-region deployment of the
+`1.0.422` candidate while website publication remains a separate gate. Current acceptance,
+evidence and remaining tasks live only in [direct-adaptation.md](./direct-adaptation.md).
+
+## Historical Continuation Notes
 
 Translation admission now records the exact verified transport with mandatory result
 review. Seven zh→ru synthetic samples returned results; five passed and two were

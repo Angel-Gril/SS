@@ -505,6 +505,7 @@ describe('extension hosted AI image plan service', () => {
       sourceCaptureSnapshotId: 'snapshot-1',
       context: { type: 'collect', id: 'goods-1' },
       idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      listingDraftContext: { id: 'listing-1', revision: 11, draftVersion: 7 },
       selectedSkuKeys: ['sku-1', 'sku-2'],
       candidateMediaKeys: ['media-1', 'media-2'],
     });

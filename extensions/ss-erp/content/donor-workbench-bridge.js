@@ -45,7 +45,7 @@
         return url.pathname === '/item.htm' && Boolean(url.searchParams.get('id'));
       }
       return false;
-    } catch (_error) {
+    } catch {
       return false;
     }
   }
@@ -57,26 +57,6 @@
     if (hostname.includes('taobao.com')) return 'taobao';
     if (hostname.includes('tmall.com')) return 'tmall';
     return '';
-  }
-
-  function sourceProductIdFromUrl(value, platform) {
-    try {
-      var url = new URL(value);
-      var productId = '';
-      if (platform === '1688') {
-        var match = url.pathname.match(/^\/offer\/([^/]+)\.html$/u);
-        productId = match ? decodeURIComponent(match[1]) : '';
-      } else if (platform === 'pdd') {
-        productId = url.searchParams.get('goods_id') || '';
-      } else if (platform === 'taobao' || platform === 'tmall') {
-        productId = url.searchParams.get('id') || '';
-      }
-      var normalized = String(productId || '').normalize('NFKC').trim();
-      return normalized && normalized.length <= 200
-        && !/[\u0000-\u001f\u007f]/u.test(normalized) ? normalized : '';
-    } catch (_error) {
-      return '';
-    }
   }
 
   function sendRuntimeMessage(message) {
@@ -750,21 +730,30 @@
     setBusy(true, '');
     try {
       const type = command.type === 'EDITOR_SAVE' ? 'save' : command.type === 'EDITOR_CATALOG' ? 'catalog'
+        : command.type === 'EDITOR_ATTRIBUTE_SUGGESTIONS' ? 'attribute-suggestions'
+          : command.type === 'LOGISTICS_SCOPES' ? 'logistics-scopes' : command.type === 'LOGISTICS_SERVICES' ? 'logistics-services' : command.type === 'LOGISTICS_QUOTE' ? 'logistics-quote'
+        : command.type === 'EDITOR_COPY_CAPABILITY' ? 'copy-capability' : command.type === 'EDITOR_COPY_GENERATE' ? 'copy-generate'
         : command.type === 'EDITOR_ATTRIBUTES' ? 'attributes' : command.type === 'EDITOR_DICTIONARY' ? 'dictionary' : 'read';
       const response = await sendRuntimeMessage({
-        type: 'ss-erp:source-listing-workbench-editor-' + type,
+        type: command.type === 'VISION_CAPABILITY' ? 'ss-erp:source-workbench-vision-capability'
+          : command.type === 'VISION_ANALYZE' ? 'ss-erp:source-workbench-vision-analyze' : 'ss-erp:source-listing-workbench-editor-' + type,
         sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform,
         listingWorkflowId: listing.id, binding: command.binding,
         ...(command.type === 'EDITOR_SAVE' ? { action: command.action, operationKey: command.operationKey, value: command.value } : {}),
+        ...(command.type === 'EDITOR_COPY_GENERATE' ? { operationKey: command.operationKey, fields: command.fields,
+          ...(command.userInstructions === undefined ? {} : { userInstructions: command.userInstructions }) } : {}),
+        ...(command.type === 'VISION_ANALYZE' ? { operationKey: command.operationKey, skuKey: command.skuKey, sourceMediaKeys: command.sourceMediaKeys } : {}),
+        ...(['LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(command.type)?{selection:command.selection}:{}),
+        ...(command.type==='LOGISTICS_QUOTE'?{releaseId:command.releaseId,effectiveChecksum:command.effectiveChecksum,stableServiceKey:command.stableServiceKey,items:command.items}:{}),
         ...(command.type === 'EDITOR_CATALOG' ? { query: command.query,...(command.preview===undefined?{}:{preview:command.preview}) } : {}),
         ...(command.type === 'EDITOR_DICTIONARY' ? { schemaRevision: command.schemaRevision, attributeId: command.attributeId,
           query: command.query, limit: command.limit } : {}),
       });
       if (!response || !response.ok || !response.result) throw Object.assign(new Error(response && response.error || 'ERP 草稿编辑未完成'), {
-        outcome: response && response.outcome || (command.type === 'EDITOR_SAVE' ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
+        outcome: response && response.outcome || (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE'].includes(command.type) ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
         code: response && response.code || null,
       });
-      if (command.type === 'EDITOR_SAVE') await loadProjection({ force: true });
+      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE'].includes(command.type)) await loadProjection({ force: true });
       commandResult(command.requestId, true, '', null, response.result);
     } catch (error) {
       commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code);
@@ -864,7 +853,7 @@
           trigger.title = '来源页未能加载扩展工作台，请刷新页面后重试';
           hideFrame();
         }
-      } catch (_error) {
+      } catch {
         // A loaded extension frame is cross-origin and intentionally unreadable here.
       }
     }, 10000);
@@ -951,7 +940,7 @@
     var command;
     try {
       command = Contract.parseFrameCommand(event.data);
-    } catch (_error) {
+    } catch {
       return;
     }
     if (command.type === 'READY') {
@@ -979,7 +968,7 @@
       return;
     }
     if (command.type === 'CREATE_DRAFT') void createDraft(command);
-    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_DICTIONARY'].includes(command.type)) void editorCommand(command);
+    if (['EDITOR_READ', 'EDITOR_CATALOG', 'EDITOR_SAVE', 'EDITOR_ATTRIBUTES', 'EDITOR_ATTRIBUTE_SUGGESTIONS', 'EDITOR_DICTIONARY', 'EDITOR_COPY_CAPABILITY', 'EDITOR_COPY_GENERATE', 'VISION_CAPABILITY', 'VISION_ANALYZE','LOGISTICS_SCOPES','LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(command.type)) void editorCommand(command);
     if (command.type === 'PUBLISH') void publishListing(command);
     if (['WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES'].includes(command.type)) void watermarkCommand(command);
     if (['VIDEO_READ', 'VIDEO_SAVE'].includes(command.type)) void videoCommand(command);
@@ -996,6 +985,15 @@
   });
 
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (message && message.type === 'ss-erp:precision-workbench-open') {
+      if (Object.keys(message).length !== 1 || !sender || sender.id !== chrome.runtime.id || sender.tab
+        || sender.url !== chrome.runtime.getURL('pages/popup.html') || !precisionEnabled || !frame || !trigger) {
+        sendResponse({ ok: false }); return false;
+      }
+      if (!open) showFrame();
+      sendResponse({ ok: true, state: 'WORKBENCH_OPENED' });
+      return false;
+    }
     if (message && message.type === 'ss-erp:precision-source-attest') {
       if (!sender || sender.id !== chrome.runtime.id || !precisionEnabled || !frame
         || !/^[a-f0-9]{48}$/u.test(message.nonce || '')

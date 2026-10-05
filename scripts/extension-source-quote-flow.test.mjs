@@ -20,8 +20,8 @@ assert.match(
 );
 assert.match(
   popupJs,
-  /buttonText:\s*['"]采集到 ERP['"]/,
-  'source pages should still keep one compact ERP collect action',
+  /buttonText:\s*['"]打开精铺工作台['"]/,
+  'source pages offer precision collection/editing alongside the separate costing action',
 );
 assert.match(
   popupHtml,

@@ -10,8 +10,15 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXTENSION_ROOT = path.join(ROOT, 'extensions', 'ss-erp');
-const PRODUCT_URL = 'https://detail.1688.com/offer/990499606077.html';
-const ORDINARY_PRODUCT_URL = 'https://detail.1688.com/offer/990499606078.html';
+const platformIndex = process.argv.indexOf('--source-platform');
+const SOURCE_PLATFORM = platformIndex < 0 ? '1688' : process.argv[platformIndex + 1];
+assert.ok(['1688', 'taobao', 'tmall', 'pdd'].includes(SOURCE_PLATFORM));
+const sourceUrl = (id) => SOURCE_PLATFORM === '1688' ? `https://detail.1688.com/offer/${id}.html`
+  : SOURCE_PLATFORM === 'pdd' ? `https://mobile.yangkeduo.com/goods.html?goods_id=${id}`
+    : `https://${SOURCE_PLATFORM === 'taobao' ? 'item.taobao.com' : 'detail.tmall.com'}/item.htm?id=${id}`;
+const PRODUCT_URL = sourceUrl('990499606077');
+const ORDINARY_PRODUCT_URL = sourceUrl('990499606078');
+const SOURCE_ORIGIN = new URL(PRODUCT_URL).origin;
 const WORKSPACE_PAGE = 'pages/precision-workbench.html';
 const PREVIEW_STORAGE_KEYS = [
   'ss-erp:donor-workbench-preview-enabled',
@@ -128,7 +135,21 @@ async function terminateProfileChromium(profile) {
   await Promise.race([new Promise((resolve) => process.once('exit', resolve)), pause(5_000)]);
 }
 
-function productHtml() {
+function productHtml(url = PRODUCT_URL) {
+  if (SOURCE_PLATFORM !== '1688') {
+    const id = new URL(url).searchParams.get(SOURCE_PLATFORM === 'pdd' ? 'goods_id' : 'id');
+    const image = SOURCE_PLATFORM === 'pdd' ? 'https://img.pddpic.com/media/main.png' : 'https://img.alicdn.com/media/main.png';
+    const data = SOURCE_PLATFORM === 'pdd' ? { goods: { goodsID: id, goodsName: 'Synthetic storage organizer',
+      topGallery: [{ url: image }], goodsSkuList: Array.from({ length: 16 }, (_, i) => ({ skuId: 'native-' + i,
+        groupPrice: 1280, stock: i === 0 ? 0 : 100, specList: [{ spec_key: '颜色', spec_value: 'White ' + i }], image })) } }
+      : { data: { item: { itemId: id, title: 'Synthetic storage organizer', images: [image] },
+        skuBase: { props: [{ pid: '1', name: '颜色', values: Array.from({ length: 16 }, (_, i) => ({ vid: String(i), name: 'White ' + i, image })) }],
+          skus: Array.from({ length: 16 }, (_, i) => ({ skuId: 'native-' + i, propPath: '1:' + i })) },
+        skuCore: { sku2info: Object.fromEntries(Array.from({ length: 16 }, (_, i) => ['native-' + i, { price: { priceText: '12.8' }, quantity: i === 0 ? 0 : 100 }])) } } };
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Synthetic storage organizer</title>
+      <script>window.${SOURCE_PLATFORM === 'pdd' ? 'rawData' : '__INITIAL_STATE__'}=${JSON.stringify(data)};</script>
+      </head><body><h1>Synthetic storage organizer</h1><img src="${image}"></body></html>`;
+  }
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
     <title>Synthetic storage organizer - 1688</title>
     <meta property="og:title" content="Synthetic storage organizer">
@@ -348,19 +369,19 @@ async function run() {
     artifacts, receipt: path.join(artifacts, 'summary.json'),
     screenshot: null, extensionId: null, sourceTitle: null,
     sourceCommit, extensionTreeSha256: await extensionTreeSha256(EXTENSION_ROOT), worktreeClean,
-    sourceFixture: 'synthetic-1688-product-served-by-CDP',
+    sourceFixture: `synthetic-${SOURCE_PLATFORM}-product-served-by-CDP`,
     workspacePage: WORKSPACE_PAGE, precisionDefault: true, previewStorage: null,
     defaultUiOpenVerified: false, ordinaryProductOpenVerified: false,
+    popupEntryVerified: false,
     forgedPageCommandRejected: false, rejectedSources: [],
     retiredFrameInterceptions: [],
     ...(MEDIA_CHANNEL_ONLY ? { acceptanceScope: 'opened-precision-ui-and-transport' } : {}),
     ...(PROBE_MEDIA_CHANNEL ? { mediaChannelProbe: { status: 'not_verified', ok: false } } : {}),
     pageErrors: [], blockedRequests: [], productionMutations: 0, providerRequests: 0, ozonRequests: 0,
   };
-  let child;
   let cdp;
   try {
-    child = spawn(chromeExecutable(), [
+    spawn(chromeExecutable(), [
       '--headless=new', `--user-data-dir=${profile}`, '--remote-debugging-port=0',
       '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
       '--disable-background-networking', '--disable-component-update', '--disable-sync',
@@ -453,14 +474,14 @@ async function run() {
         const reply = (method, params) => cdp.send(method, params, sessionId);
         const url = new URL(event.request.url);
         if ([PRODUCT_URL, ORDINARY_PRODUCT_URL, ...REJECTED_SOURCE_URLS].includes(event.request.url)) {
-          const body = Buffer.from(productHtml());
+          const body = Buffer.from(productHtml(event.request.url));
           await reply('Fetch.fulfillRequest', {
             requestId: event.requestId, responseCode: 200,
             responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }], body: body.toString('base64'),
           });
           return;
         }
-        if (url.origin === 'https://detail.1688.com' && url.pathname === '/media/main.png') {
+        if (['https://detail.1688.com', 'https://img.alicdn.com', 'https://img.pddpic.com'].includes(url.origin) && url.pathname === '/media/main.png') {
           const body = await readFile(path.join(EXTENSION_ROOT, 'icons', 'icon128.png'));
           await reply('Fetch.fulfillRequest', {
             requestId: event.requestId, responseCode: 200,
@@ -468,7 +489,7 @@ async function run() {
           });
           return;
         }
-        if (['https://detail.1688.com', 'https://detail.1688.com.example.test'].includes(url.origin)
+        if ([SOURCE_ORIGIN, 'https://detail.1688.com', 'https://detail.1688.com.example.test'].includes(url.origin)
           && url.pathname === '/favicon.ico') {
           await reply('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 204 });
           return;
@@ -521,9 +542,39 @@ async function run() {
     await until(() => evaluate('document.readyState === "complete"'), 'synthetic source page load');
     await until(() => evaluate('!!document.querySelector("#ss-erp-donor-workbench-trigger")'), 'donor workbench trigger injection');
 
-    const point = await evaluate(`(() => { const n=document.querySelector('#ss-erp-donor-workbench-trigger'); const r=n.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await send('Page.bringToFront');
+    const pageTargetsBefore = ((await cdp.send('Target.getTargets')).targetInfos || [])
+      .filter(item => item.type === 'page').map(item => item.targetId);
+    const openedPopup = await cdp.send('Runtime.evaluate', {
+      expression: 'chrome.action.openPopup()', awaitPromise: true, returnByValue: true,
+    }, workerSession);
+    assert.equal(Boolean(openedPopup.exceptionDetails), false, 'Chrome must open the actual action popup');
+    const popupTarget = await until(async () => {
+      const targets = (await cdp.send('Target.getTargets')).targetInfos || [];
+      return targets.find(item => item.url === `chrome-extension://${summary.extensionId}/pages/popup.html`);
+    }, 'actual extension popup target');
+    const popupSession = (await cdp.send('Target.attachToTarget', { targetId: popupTarget.targetId, flatten: true })).sessionId;
+    const popupEvaluate = async expression => {
+      const result = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, popupSession);
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+      return result.result.value;
+    };
+    await until(() => popupEvaluate(`document.getElementById('primaryActionBtn')?.textContent === '打开精铺工作台'
+      && !document.getElementById('primaryActionBtn').disabled`), 'popup recognizes the current product');
+    assert.equal(await popupEvaluate('document.body.textContent.includes("打开 ERP 继续")'), false);
+    const popupPoint = await popupEvaluate(`(() => {
+      const rect=document.getElementById('primaryActionBtn').getBoundingClientRect();
+      return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+    })()`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...popupPoint, button: 'left', clickCount: 1 }, popupSession);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...popupPoint, button: 'left', clickCount: 1 }, popupSession);
+    await until(() => evaluate('document.querySelector("#ss-erp-donor-workbench-frame")?.hidden === false'), 'popup opens the existing source-page iframe');
+    assert.equal(await popupEvaluate('document.getElementById("primaryActionStatus").classList.contains("ok")'), true);
+    const pageTargetsAfter = ((await cdp.send('Target.getTargets')).targetInfos || [])
+      .filter(item => item.type === 'page' && item.targetId !== popupTarget.targetId).map(item => item.targetId);
+    assert.deepEqual(pageTargetsAfter.sort(), pageTargetsBefore.sort(), 'popup entry must not create any ERP or other page tab');
+    summary.popupEntryVerified = true;
+    await cdp.send('Target.closeTarget', { targetId: popupTarget.targetId });
     await until(() => evaluate('document.querySelector("#ss-erp-donor-workbench-frame")?.hidden === false'), 'iframe open');
     const frameObservation = () => evaluate(`(() => {
       const frame=document.querySelector('#ss-erp-donor-workbench-frame');
@@ -555,11 +606,30 @@ async function run() {
     assert.equal(await iframeEvaluate('!!document.getElementById("start-btn")'), true);
     assert.equal(await iframeEvaluate('document.querySelectorAll(".precision-source-tile").length >= 1'), true);
     assert.equal(await iframeEvaluate('document.querySelectorAll("tr[data-editor-row-index]").length'), 16);
+    if (SOURCE_PLATFORM !== '1688') {
+      const nativeObservation = await cdp.send('Runtime.evaluate', {
+        expression: `(async()=>{const value=(await chrome.storage.local.get('spb_self_hosted_last_collected')).spb_self_hosted_last_collected;
+          const capture=value?.captureV2;return {native:capture?.provenanceMode==='native_v2',platform:capture?.platform,
+            productId:capture?.sourceIdentity.productId,skuCount:capture?.skus.length,stock:capture?.skus[0]?.stock,
+            sourceSkuId:capture?.skus[0]?.sourceSkuId,attributes:capture?.skus[0]?.attributes.map(item=>({name:item.name,value:item.value}))};})()`,
+        awaitPromise: true, returnByValue: true,
+      }, workerSession);
+      assert.equal(Boolean(nativeObservation.exceptionDetails), false);
+      assert.equal(nativeObservation.result.value.native, true, 'the installed collector must produce native V2');
+      assert.equal(nativeObservation.result.value.platform, SOURCE_PLATFORM);
+      assert.equal(nativeObservation.result.value.productId, '990499606077');
+      assert.equal(nativeObservation.result.value.skuCount, 16);
+      assert.equal(nativeObservation.result.value.stock, 0, 'installed collection must preserve zero inventory');
+      assert.equal(nativeObservation.result.value.sourceSkuId, 'native-0');
+      assert.deepEqual(nativeObservation.result.value.attributes, [{name:'颜色',value:'White 0'}]);
+      summary.nativeCollection = nativeObservation.result.value;
+    }
     assert.equal(await iframeEvaluate('document.documentElement.scrollWidth <= innerWidth'), true);
     summary.sourceImageRendered = await until(() => iframeEvaluate(`(() => {
       const image=document.querySelector('.precision-source-tile img');
       return Boolean(image?.complete && image.naturalWidth>0);
     })()`), 'rendered precision source image');
+
     if (PROBE_MEDIA_CHANNEL) {
       summary.mediaChannelProbe = await probeMediaChannel(cdp, {
         extensionId: summary.extensionId, executionContexts,

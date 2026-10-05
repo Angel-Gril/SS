@@ -237,7 +237,7 @@ function normalizedSelectedSkuKeys(draft: OzonListingDraft): string[] {
       'Listing draft SKU selection is invalid',
     );
   }
-  const parsed = draft.selectedSkuKeys.map((value) => identifier(500).safeParse(value));
+  const parsed = sourceListingEditorSkuKeysForDraft(draft).map((value) => identifier(500).safeParse(value));
   if (parsed.some((result) => !result.success)) {
     return fail(
       'EXTENSION_WORKBENCH_LISTING_PUBLISH_DEPENDENCY_INVALID',
@@ -690,7 +690,7 @@ export function createExtensionWorkbenchListingPublishService(options: {
         || draft.draftVersion !== envelope.draftVersion
         || !Array.isArray(draft.publishTaskIds)
         || !draft.publishTaskIds.includes(envelope.command.publishIntentId)
-        || !sameArray(draft.selectedSkuKeys, envelope.command.selectedSkuKeys)
+        || !sameArray(sourceListingEditorSkuKeysForDraft(draft), envelope.command.selectedSkuKeys)
         || commandRequestHash(envelope) !== parsed.data.requestHash) {
         return fail(
           'EXTENSION_WORKBENCH_LISTING_PUBLISH_STATUS_CONFLICT',
@@ -731,3 +731,4 @@ export function createExtensionWorkbenchListingPublishService(options: {
 export type ExtensionWorkbenchListingPublishService = ReturnType<
   typeof createExtensionWorkbenchListingPublishService
 >;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

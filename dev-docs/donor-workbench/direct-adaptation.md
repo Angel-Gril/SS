@@ -2,6 +2,92 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.422` 发布准备（已授权提交、推送、签名、双区部署）
+
+- 用户已明确授权本轮提交、推送、签名和 COM/CN 部署，撤销此前“全部完成前不提交”的发布等待。目标候选版本为 `1.0.422`，通过原发布脚本生成，不改写源 manifest 的历史 `1.0.264`。候选必须绑定最终 clean commit，COM 维持既有 DOTH 三 operation pilot，CN 维持 direct/RDS dark；新视觉配置默认关闭。
+- 发布前审查修复非空复制行缺少 provenance 时跳过校验的问题：完整草稿 ID、快照/hash、r/v 和原复制事件缺一则拒绝；无副本的旧薄草稿兼容。新增 helper/复制/垂直编译 `28/28`，加现 hosted plan 回归合计 `85/85`。旧计划调用断言新增内部 listingDraftContext，原 HTTP 未开放该字段；`57/57` 通过。
+- 默认 4GB Node 堆使完整 preflight 的 server typecheck OOM，8GB 运行通过类型检查；第一次全 server 的唯一失败为上述旧测试参数，修正后重新执行完整门禁。独立 PostgreSQL 的11项、Server/Web build、两类扩展包和浏览器证据均保持对应真实范围。没有用失败日志写出 PASS 或重标旧 release 原件。
+- 最终完整 preflight 在 8GB Node 堆下全部通过（包括全 server 和源扩展 verifier `586/586`）；Server/Web 生产构建、最终 helper/plan `85/85` 和独立 PostgreSQL `11/11` 复验通过。最新 PG 原件 `ss-erp-product-vision-pg-ta2a2d/summary.safe.json`，output SHA `725cb9b114883cf4c2d8e6d1832d8b6dfa58d898e5b85545aa9daa488285f9e9`。107 个明确项目路径已检查，不包含 env、密钥、profile 或临时发布原件。
+- 当前准备形成最终发布提交和区域候选签名/双区切换；运行与官网下载仍 `4df9ec38 / 1.0.421`。官网 website approval/CAS/分发 probe 不在本次四项授权内，更新日志继续保留 `Unreleased`；没有新 Provider/Ozon 请求或费用。
+
+### 2026-10-05 自动属性、物流定价与连续准备（本地验收完成）
+
+- 用户要求所有功能与验收完成后再提交、推送或部署。本轮没有 Git 提交、签名、部署、官网 CAS 或生产配置修改；运行/下载仍为 `4df9ec38 / 1.0.421`，本地 HEAD 为 `d76698d9`。下方历史“未实测”描述按本节新增证据更新，不能据此宣称 donor 全功能或线上新接口已经通过。
+- [x] U14 自动属性：设备 editor 增只读 `/attribute-suggestions` 与 `ATTRIBUTE_SUGGESTIONS` 保存动作，复用可信来源、逐 SKU 标准字段和官方词典候选。设备只能提交当前 schema、candidate ID/hash，服务端重新核对；保存保留 SOURCE/provenance，不伪造 MANUAL、尺寸、材质或认证。品牌、颜色、尺码、材质、性别、季节的来源映射可用，未匹配字段继续手填。候选窗口核对当前快照/店铺/草稿/版本，拒绝迟到结果与覆盖未保存属性；零候选可显式“改为手工补充”，不会产生保存/批准，上架 VALIDATE 仍检查必填。
+- [x] U15 物流定价：`extension-listing-logistics-pricing` 复用原有效发布版本、精确店铺仓库/起讫地授权与 shared 物流公式。设备另须已有 `logistics:discover/read`；界面显式选择路线、服务、电池状态，不默认第一项。基于已确认 SKU 包装，最多八次只读报价核对售价与价档；报价不写草稿、Provider 或 Ozon，既有物流 owner 仍保存下载授权回执。完整 selection/release/checksum/binding/SKU/费用被冻结，过期或变化拒绝应用。成本/毛利/佣金/汇率改变会清自动运费；明确手工运费保持手工来源。佣金无精确类目证据时仍手填，汇率只接受有来源且七天内的 RUB→CNY 数据。
+- [x] U16 连续准备：同窗按草稿→官方类目→属性→包装→定价→文案审核→图片审核/应用→最终校验推进；缺资料或审核时暂停，确认原步骤后继续。多店逐店准备，未完成前店不发后店创建请求；支持下一店在原 SKU 弹窗显式选择。来源/快照或处理中店铺变化会停止后续步骤，不把新店误记为旧店完成。不自动生成、批准或发布 Ozon；停止不声称取消已经发送的请求。
+- 未知初次 COLLECT/CREATE_DRAFT 现在保留原 source/shop/snapshot/SKU 上下文，通过“核对建草稿结果”只读 REFRESH/EDITOR_READ 恢复；实际 SKU 集合、r/v 与唯一草稿必须匹配。只有匹配的草稿被优先使用，不能用同店同数量的其他草稿替代。核对不闭合继续阻止新写入。保存被拒绝不会推进队列；保存已确认而只读刷新失败保留成功与刷新警告，不标记 UNKNOWN、不清 unrelated recovery。
+- T2 先实测 RED→GREEN：切店铺后 await 返回、属性候选竞态/dirty/零候选、物流路线变化/回包/金额与 lease、未知建草稿只读恢复、保存拒绝错误推进、定价 busy 不恢复等均保留最小 owner 回归。根 Agent 联合 14 个扩展脚本 `105/105`；全 server `6868 passed / 357 skipped`（450 passed files、45 environment-specific skipped files），workspace lint/typecheck、server build 与指定扩展/脚本 ESLint 通过。没有用 skipped 测试声称数据库实测通过；实际 PG 证据见下一节。
+- Chrome 全流程 fixture `ss-erp-precision-ui-evidence-lPb7u1`：自动属性→保存成功但刷新失败→包装→店铺物流→修改费用使运费/预览失效→重新报价→俄文候选与明确审核→已有已审核图片应用的只读核对→VALIDATE→第二店选择/建草稿。原手工编辑、包装/字典、套图/审核/assignment 和发布交接 fixture `ss-erp-precision-ui-evidence-xkNFEt` 通过；最终源码空候选 `ss-erp-precision-ui-evidence-pmalgI`、未知建草稿只读恢复 `ss-erp-precision-ui-evidence-p3HZAg` 通过，均无真实第三方/生产写入。这些模拟结果不替代当前新版生产套图、物流质量或实际 Ozon 上架验收。
+- 当前源码实际 MV3/action-popup/同页来源 iframe/Blob 双向验收 `ss-erp-donor-mv3-evidence-HqPNtX` 通过；extension tree SHA `dbb69df3fa398ce7f30d3fbd9592bc95577288c338bcf0dd98718d532b1ddf77`，dirty/未签名。本地临时 Cloud/Local verifier `590/586`、0 failure/warning；生成物不进入 Git，不是正式发布候选。
+- 保留限制：复制行已接入本地同窗编辑、图片行、独立价格/包装和移除，但尚未执行真实 Ozon 发布；纯 RUB/hybrid 物流公式仍按原 shared evaluator 拒绝，不能虚构最低价或零运费；来源视频仍需官方上传才可发布。淘宝/天猫/PDD native_v2 已通过隔离验收，其他 donor 平台和完整 i18n、全商品视觉质量及新版真实 Provider/物流/Ozon 全链路尚不能宣称完成。按用户“全部完成后再提交”的要求，保持未提交。
+
+### 2026-10-05 真实视觉校准与独立数据库证据
+
+- [x] U17 本轮此前未验证的视觉 transport 和数据库路径已补证。只读确认 COM 普通文字模型为 DeepSeek，不具备本功能所需的视觉合同，因此新增独立 `ai_product_vision_provider/base_url/api_key/model`；API key 敏感加密、feature/provider 默认关闭，未把生图或文本密钥隐式继承到视觉生产配置。
+- 在既有用户不限金额测试授权内，由专用 `product-vision-live-calibration.ts` 诊断进程复用已确认 official DashScope 凭据，仅内存调用 `qwen-vl-plus`，对两张脚本合成图各执行一次 POST，没有自动重试、账单/控制台读取、Ozon 或业务数据/生产配置写入。蓝色收纳盒、红白条纹上衣返回符合真实视觉 JSON 合同；颜色/形状/条纹等可见观察基本符合输入，未猜材质/尺寸/认证，盒子部分组件保留不确定表达。usage totalTokens 为 `861/831`；这是两张校准图的模型/transport 证据，不等于全部真实商品质量、开启生产视觉或真实套图通过。
+- 本轮真实 Provider POST 总计 **2**，供应商可能产生模型费用，实际账单未读取，不能再报告整轮零费用。安全原件 `ss-erp-vision-live-79861ac492894ff0ba12b6396a8dac14/calibration.safe.jsonl` SHA `aa36901902892fc66ed83a0ade40c82e1ca30f389f5930dc54c963f03729f4b2`；路径为本机临时私有诊断目录，不提交输出、凭据或图片到 Git。
+- 独立本机 PostgreSQL 执行真实 153 migrations、7/7 tests、0 skipped：视觉原子 quota/claim/receipt、UNKNOWN 保额度、断开 Prisma 后新 client/service 恢复、SKU 变更与 publish grant 撤销同事务、故意 trigger 失败原子回滚。运行 schema 已 DROP 并读回不存在，Provider/Ozon=0；不把新 client 恢复描述成 kill 生产 Worker。根 Agent 重验安全摘要 `ss-erp-product-vision-pg-XQdsHJ/summary.safe.json`，test output SHA `5e7d83e2ce7407e74afcba90fd546c38141d02853c74b49c2b41cf7b1b95a79b`。
+
+### 2026-10-05 SKU 复制与淘宝/PDD/天猫采集（本地验收完成）
+
+- [x] U18 SKU 复制：donor 的复制行为已接入服务端 `offerRows` 合同。原始 `selectedSkuKeys` 和冻结 capture 保持不变；服务器生成确定性 `listing-copy:<sha256>` 行键及独立 offer ID，复制已确认价格/包装/属性快照但不复制媒体 assignment。复制行可在同一编辑器中保存独立价格、包装、官方属性和图片行；同一 operation key 重放不新增版本/行，复制行可单独移除，来源行与历史仍保留。来源 SKU 被移除、快照/哈希/row provenance 错误、复制链和损坏映射均拒绝；freshness、grant 和校验在复制后失效并需重新核对。
+- 后端复制垂直回归 `98/98`，新增真实 PostgreSQL copy `4/4`（与视觉 7 项合计 `11/11`，153 migrations 实际应用，schema 清理确认）；最新 PG 回执 `ss-erp-product-vision-pg-KnOx01/summary.safe.json`，test output SHA `cdc59f860efa7f6c5425d658547673fffb8e9cc553c5f61838d7bf8a8464a0a6`（原件路径私有）。验证跨实例恢复、CAS、原键 replay、grant 撤销、触发器失败回滚和腐败映射拒绝。复制行尚未执行真实 Ozon 发布。
+- 扩展 client/合同闭合复制与移除动作：`SKU_DUPLICATE {sourceSkuKey}`、`SKU_COPY_REMOVE {rowKey}`，返回 DTO 只含 rowKey/sourceSkuKey/offerId/pricing/packaging；client 对绑定、复制键、价格、包装、嵌套私密字段和媒体 scope 做 exact 校验。定向 editor/client `16/16`，同窗复制未知回执/幂等 replay/独立价包/图片行/移除副本 fixture `ss-erp-precision-ui-evidence-1P4PNl` 通过，无 Provider/Ozon。
+- [x] U19 donor marketplace collector：只读复用 `jp20260803` 的淘宝、天猫、拼多多数据读取概念，接到现有 MV3 source capture v2；严格 URL/当前商品 ID、bounded main-world/network/script/JSONP 解析，不执行页面脚本，不读取密钥，不放开 debugger。真实 SKU ID/规格路径/图片、分币价格、零库存、kg→g 包装与 evidence sourceType 保留；foreign recommendation、错误 URL、getter/cycle、超预算脚本拒绝。normalizer/legacy `21/21`，source contracts 与旧 collector `18/18`；MV3 隔离页面对 Taobao/Tmall/PDD 各自 native_v2 `16 SKU`、`stock=0`、source SKU ID/属性和来源图通过，Provider/Ozon=0。
+- U18/U19 当前均为本地源码/隔离浏览器证据，仍未提交、签名、推送或部署。复制行的生产 hosted plan、图片审核/媒体权威和正式发布 compiler 已接入服务端 copy context 并通过本地负例；生产真实套图、Ozon 上架和官网门禁仍未执行。其他 donor 平台（Temu、AliExpress、WB、JD 等）保留既有 fallback，未宣称全部平台达到原版深度。
+- [x] U20 复制行消费者已收口：属性、包装、物流、文案、视觉、媒体候选/应用、hosted plan/authority、BYOK launch/ingest、视频、水印及发布编译均使用有效行键；复制媒体不自动克隆 assignment，原来源资产与来源事实只读映射。服务端消费者回归组合 `189/189`，物流/属性/规划/复制组合 `145/145`，另一组服务端新旧回归 `272/272`；扩展 editor/client `16/16` 和本地浏览器独立通过。真实 11 项 PostgreSQL 隔离回归和最后一次 Cloud/Local verifier 均通过；完整生产 Provider/Ozon 套图和发布仍按独立授权与门禁执行。
+
+### 2026-10-05 看图 JSON 与同草稿 SKU 调整（本地接续）
+
+- [x] U12 托管看图：精铺图片窗口同窗选择当前 SKU/共有 1–5 张来源图→分析→JSON 预览→显式应用到原可编辑提示词。视觉请求进入独立 `product-vision-workbench`，不是给旧规则计划伪造 modelOutput：结果仅为视觉观察与创作建议，不写 verifiedFacts/属性/计划，不自动审核、生图或发布，原 model-planning gate 仍 NOT_READY。原版视觉/自动属性的完整流水线仍未关闭。
+- 系统配置 owner 新增 `feature_extension_product_vision=false`、显式 `ai_product_vision_model`（不继承普通文本模型）、`ai_user_daily_product_vision_limit=10`。设备 `/vision/capability` 只读，`/vision/analyze` 必须原 review/write/media:execute、AI tenant 和原来源工作台策略均通过。主体/snapshot/goods/shop/SKU/图片/r/v 前置绑定；Provider POST 前再次核验草稿及冻结配置。没有修改生产开关或读生产凭据。
+- 服务端复用公共图片下载的 DNS/SSRF/redirect 限制，图片严格单帧、16M pixels/8MiB 输入，旋转/缩放为 <=1024px/1MiB JPEG。多模态 transport HTTPS、固定公共 DNS、无 cookies/redirect、单次 POST，最多五图、JSON响应<=64KiB、请求<=120秒；原子每日次数和原执行 claim 持久化，receipt 使用既有 cache 表，无 schema 迁移。Provider 后失败/错误JSON/保存失败保留 UNKNOWN 与额度，不重POST。cache原件读取按 owner/draft/op/hash，不依赖当前凭据/模型；数据库 SQL 本轮仅参数化 fixture 验证，独立 PostgreSQL 恢复演练未验证。
+- 原 real capture 可能使用带 URL 的 structured media key，本轮通过 `source-media-public-key.ts` 复用原 hosted-plan 的 SHA-256 alias；候选和看图服务共享该投影，仍对 owned 当前来源 key 精确还原，未接受外部 URL 或扩大图集合。新增 alias 正例真实先 422 RED，再 owner 最小修改 GREEN，原 hosted-plan 57 项回归通过。
+- [x] U13 SKU 调整：复用原 SKU 弹窗，以当前所选项初始化并显示全部来源 SKU；同一草稿允许增/减现有来源 SKU，不伪造复制 SKU。新 `EDITOR_SAVE/SKU_SELECTION` 仍用原 device-editor/read/write 和 source ownership；原领域 `changeSkuSelection` 增可选 expectedDraftVersion/operationKey 幂等支持，Web 无 key 行为兼容。原 pricing/media/copy/attributes/validation 失效与发布 grant 撤销保持，原素材/价格/账本审计不删除；未知保存核对只重放原 body/key。
+- 设备实际 transport 的新文案 capability/generate 与 vision capability/analyze 路径及 210s 有界分析超时已补齐：现底层此前未放行上轮新文案路径，这次最小真实 transport RED→GREEN；普通读取仍10s。UI等待略长于底层、未知请求不自动重试。消息只允许精确来源商品主frame/document，扩展普通页和来源登录页不能发起。
+- 主 Agent 独立执行后端八套 `254/254`（看图/transport/config/SKU/editor/domain/copy/hostedplan）及 server typecheck/build；扩展十二脚本 `79/79`，实际 device transport/原 BYOK ingest额外回归通过。新增 source/UI/client/config/service/test ESLint 通过；旧 donor SKU picker 的既有 no-cond-assign 仍在，本轮未为 lint 修改其业务。新视觉/client/transport 测试已加入 preflight，没有跑完整发布 offline。
+- 浏览器 `ss-erp-precision-ui-evidence-b2te4G`：原草稿选 `sku-1/sku-7` 改为 `sku-1/sku-2`、图片区跟随新选择；当前SKU/共有图分析→丢失回执→原 key 恢复→JSON应用→草稿版本变化后的迟到结果拒绝，未启用保持手工；恢复成功替换旧错误提示。原完整编辑/审核/assignment/发布交接模拟回归 `ss-erp-precision-ui-evidence-wt6bqx` 通过。均用本地 Provider/Ozon fixture，无真实 POST、费用或上架。
+- 最终本地临时 Cloud/Local package verifier `586/582`，0 failure/warning；实际 MV3 来源页/action-popup/无新Web页验收 `ss-erp-donor-mv3-evidence-BcjGYH`，tree SHA `1b26e1517c08df39a0459059de1a330a4e8298a53f30f8ef76d0ce49e8324f6e`，工作树 dirty，未签名。未提交/push/部署，线上仍 `4df9ec38 / 1.0.421`。下一主问题是逐 SKU 自动属性、自动物流定价、完整连续处理与多店；SKU 复制并生成新规格依然未支持。真实多模态模型质量/配置和独立数据库验证尚未完成，不宣称已生产可用。
+
+### 2026-10-04 同窗定价与托管俄文文案（本地接续）
+
+- [x] U10 实用定价：原按钮打开同窗工具，按每 SKU 的采集采购成本（缺失须填写）、确认运费、佣金/广告/其他比例费、包装/国内杂费、目标销售毛利和折扣计算 CNY/RUB 售价及划线参考价。反算属于 `shared/calculator-core/profit-engine.js`，明细复用 `enrichQuote`；比例之和须小于 100%，缺运费不默认为零，RUB 必须显式汇率。预览/填表只编辑本地，原 PRICING 显式保存才写草稿；保留货号、VAT 和其他编辑。店铺/草稿/SKU/成本/费用/币种漂移撤销旧预览。
+- 没有把全局物流缓存当成当前店铺官方报价：精铺尚缺 warehouse/origin/destination 完整 scope；运费标为用户估算，佣金和汇率须确认。自动物流、donor GUOO 价档/尾程公式尚待适配，划线价不等于 Ozon 促销配置。
+- [x] U11 同窗俄文生成：复用 `source-listing-ai-copy.ts` 的可信来源、已确认类目属性、模板、每日额度和持久幂等。设备新增 `/editor/copy-capability` 和 `/editor/copy-generate`，现 editor owner 核对 owner/device/shop/snapshot/goods/r/v 和原 review/write scopes。生成不审核、不发布，AI 候选经原 `applyAiCopyCandidate` 明确批准；事实漂移不可审。同 key 并发仅调用一次模型，第二次正确标记 replay；未知响应保留原 key，409 in_progress 继续保持未知，禁止自动重生成。生产能力默认受原准入限制，未核实/开启生产开关；未启用时继续手工。
+- T2 RED→GREEN：主 Agent 独立执行 server 五套 `65/65` 与 typecheck，扩展定价/session/client/source-only/donor/runtime/workflow `56/56`；新脚本已注册 preflight。UI/core/client/bridge/新测试 ESLint 通过。Worker、workspace contract、runtime policy、旧浏览器 runner 历史 lint 按 HEAD 对比无新增（分别 157/2/3/3）；不是全扩展 lint 零错误。本轮未运行完整 release offline。
+- 同窗 Chrome fixture `ss-erp-precision-ui-evidence-3t8kdc` 通过：两 SKU 计算→费用变化撤销→填表→显式保存；生成丢失回执→原 key 核对→候选预览→明确审核；关闭能力保持手工。原完整编辑/包装/类目/属性/套图/审核/assignment/发布交接 fixture `ss-erp-precision-ui-evidence-uHj5Ct` 通过；这两份使用模拟 Provider/Ozon，不能证明新的生产文案质量或正式发布。
+- 实际源码 MV3 安装 `ss-erp-donor-mv3-evidence-p7rb0K` 的 Chrome action popup 物理点击、同页 iframe、普通商品/伪造来源拒绝/图片解码通过，tree SHA `7efe4d813fbd18697bc8dc995a70aa459c370e1a7965d8ffcf3446e39cc0a5c5`，工作树 dirty。本地临时 Cloud/Local verifier `585/581`、0 failure/warning；未签名，不是生产候选。
+- 剩余：`runVision` 真多模态 JSON、逐 SKU 自动属性、物流自动报价、SKU 复制/选择变更持久化、多店连续处理。现规则规划的 model gate 仍 NOT_READY，BYOK 图片 operation 不具备文字/视觉能力。本轮未提交/push/签名/部署，无真实 Provider POST/Ozon 写入或费用。
+
+### 2026-10-04 产品流程差距审计与同页弹窗入口修复（本地）
+
+- 当前运行和官网公开包均为 `4df9ec387b75c0f26c8a483c42d33940c03a892c / 1.0.421`。用户尚未测试最新安装包，但源码已经足以证明：发布和套图合同通过不等于原版连续操作全部适配。ERP 服务端负责权限、草稿、费用、审核和发布；这些 owner 不要求用户导航到 ERP Web 页面。
+- 当前入口差距：popup 仍通过旧 collector 提交来源采集，并提供 `ss-erp:open-source-workflow-handoff` / “打开 ERP 继续”，Worker 的兼容 handler 会创建 `/collect/source` 标签页。该跳转是旧 CTA 的主动操作，不是采集成功后自动跳转。精铺 iframe 已有同窗 SKU/店铺建草稿、价格/货号/包装、类目/属性、图片处理/审核/应用、发布预览/确认/回执接线；Web 跳转不是这些接口的必要前置。
+- 原版连续功能的真实缺口见下表。原始参考只读，`jp20260803/ui/app/workflows/run-workflow.js` 的 `runVision` / `runText` 与当前 `shared/donor-workbench/precision-workflow.js` 已逐项对照。
+
+| 用户操作 | 当前实现与差距 | 继续适配的 owner |
+| --- | --- | --- |
+| 开始执行后连续处理商品 | 当前只串联读取→采集→所选 SKU 建草稿；后续依靠手工编辑，原版筛图/视觉分析/自动俄文和属性链未完整接入 | precision workflow；文案/图片服务端 owner |
+| 图片转视觉 JSON / 提示词 | `compilePrompt()` 只有可编辑的 composition/background/lighting/style 编译，没有原版 `runVision` 看图步骤 | prompt adapter 与现有托管/BYOK 能力 |
+| 俄文标题和描述 | 当前为手工候选编辑、保存和审核，没有原版自动 `runText` 流程 | copy editor 与 source-listing 文案 owner |
+| 定价工具 | 当前按钮仅滚动到价格表，佣金/利润/物流模板与自动填写尚未适配 | 现有 calculator / pricing owner，扩展仅应用计算结果 |
+| 复制/增删/重新选择 SKU | 复制行仅在本地，保存会拒绝；已有草稿的选择锁定；批量图片入口部分隐藏，尚无对应持久化流程 | source-listing 草稿 owner 与精铺 editor |
+| 多店、库存和视频 | 当前每次绑定单店，库存管理隐藏；来源视频仅预览，发布只接受已上传 Ozon 的官方媒体，普通来源视频上传尚未完成 | 现有 shop/draft/publisher/video owner |
+| 多平台采集和语言 | 1688 使用 donor collector，淘宝/PDD 仍使用原 SS collector；界面语言切换暂禁用。类目推荐两版均为规则评分，但目录与规则不同 | collectors / category recommendation / donor i18n |
+
+- 本轮验收范围：只关闭来源商品 popup 与精铺入口分裂。`popup.js` 主按钮改为“打开精铺工作台”，保留独立货源核价，移除 popup 旧采集/恢复 handoff/ERP CTA。新消息只发到原 tab 的主 frame；bridge 只接受本扩展精确 popup sender 和唯一 `type`，拒绝任意 URL payload、foreign/content sender。只确认 iframe 打开，不伪称采集/草稿/页面加载已完成；重复打开保留编辑，不新建 Web 标签页。兼容 Worker handoff API 未删除，不改权限、费用或服务端写入规则。
+- T2：上一接续已观察新 popup/default-entry 的 5 个目标失败再实现；本轮相关 10 脚本 `52/52`，触及文件 ESLint、diff 检查通过。source verifier `576`、临时 Cloud/Local 包 verifier `584/580`，均 0 failure/warning；临时包未签名、未作生产候选。HEAD 的两个旧脚本原本已失败：listing-workbench 要求加载已退役旧 UI（仍作为历史失败记录，本轮不改）；handoff 要求已移除旧面板 CTA，仅该受影响脚本更新为当前入口，保留原 Worker persistence/security/URL 合同。没有为通过测试重新挂载旧 UI。
+- 真实隔离 Chromium `147.0.7727.15` 安装当前源码，调用实际 Chrome action popup，并用物理点击打开同页 iframe；确认不存在新增 ERP/其他 page tab、正常商品入口、登录/伪造 URL 拒绝、来源图片解码通过。证据 `ss-erp-donor-mv3-evidence-4vvoDg/summary.json`，extension tree SHA `bc04fb46d42af7bd6cc1fd4ac322bb911100218aafba2012964f788199716d13`，`worktreeClean=false`，只能证明本地工作树，不是签名/上线 canary。SKU 图片交互 fixture `ss-erp-precision-ui-evidence-J75zEa` 通过（选中两 SKU、同窗来源/结果、明确驳回；未做 assignment），不冒称新完整生产套图通过。
+- 初版追加验收脚本尝试先关闭已打开工作台再测 popup，因 iframe 缩放/物理坐标未关闭而失败，原件保留；最终改为从初始隐藏 iframe 由真实 popup 直接打开，直接验证本次入口，未以 DOM 调用替代 popup 点击。关闭按钮在真实 MV3 的坐标验收未闭合，不能用本轮入口通过覆盖它。
+- [x] U9：来源商品 popup 同页精铺入口（本地验收完成）。本轮未提交/push/签名/部署，无 Provider POST、Ozon 写入或费用。下一优先级为连续工作流、自动文案/视觉分析和实用定价，再处理 SKU 持久化；不能再次用发布回执代替产品交互验收。
+
+### 2026-10-04 `1.0.421` 双区官网公开发布已完成
+
+- 最终应用/签名/双区官网 pointer 均绑定 `4df9ec387b75c0f26c8a483c42d33940c03a892c / 1.0.421`。native offline、正式 QA04、canonical VPS、双区 REL-04 canary、website approval、CAS、Cloud/Local 匿名完整下载和 publication verifier 均已完成；COM 下载消费者 404 已解决。COM 保持原 DOTH 翻译受限 pilot/逐图审核，CN dark；没有把旧 UI canary 当作全部精铺流程一致的证据。
+- 私有原件目录 `release-4df9ec38-website`：正式 QA04 SHA `eac67e3a42eabcfb7101c4f5fbe1a7a2597cdc9f1af0d9ee7d6b7feffc82a31a`；COM/CN approval SHA `d47abfdbd78d7369e26fb1b3ecdd329c553c867fad3ef42242c3d653ad4a79be` / `b586ea84d757b2c159a882eae087ec3dc3fe9116937ff562337ea4d2d8cb84b4`；distribution SHA `a8cf0b32b160b1def217d78b1e588343946f361d066514d23a238708ee18a6af` / `ca6517fa1db26e8c91c3e911f526a83887a5b59666b19b085f891982eb19ee69`。发布后 canonical VPS 两区均 PASS、0 failure/1 原远端备份 warning。本轮审计只读核对这些原件，没有重做生图、CAS 或部署。
+- `CHANGELOG.md` 将已随 421 公开的功能从 Unreleased 归入该版本、合并重复条目，并使用已存在提交的 compare 链接；本地 U9 修复仅记 Unreleased。
+
 ### 2026-10-04 `1.0.420` 官网CAS后COM消费者兼容收口
 
 - `f4b133e6bd796620663f8a103479b54bfe173ecc / 1.0.420` 完整native offline9 gates通过（server6628、PG209、Cloud584/Local580）；正式QA04 SHA `9af42607ce030181eb573f586241790216d3f5cde6ae56c251a45dc6c801f3e6`，明确保留c4execution、新target offline及cleanup读回，生图执行源码一致。双区部署/VPS、REL04 canary、approval均通过；物理officiallauncher与新create-plan按钮已真实创建/审核两槽计划、报价CNY0.28，但未START，无新增费用。

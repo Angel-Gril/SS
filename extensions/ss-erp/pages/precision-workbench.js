@@ -4,6 +4,9 @@ import { createPreviewController } from './donor/ui/presentation/views/preview-v
 import { createUiScaleController } from './donor/ui/presentation/controllers/ui-scale-controller.js';
 import { createOfficialAttributeEditor } from './donor/official-attribute-editor.js';
 import { createCopyEditor } from './donor/copy-editor.js';
+import { createPricingTool } from './donor/pricing-tool.js';
+import { createVisionTool } from './donor/vision-tool.js';
+import { createAttributeSuggestions } from './donor/attribute-suggestions.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
@@ -53,6 +56,7 @@ let pollingAttempts = 0;
 let editor = null;
 let editorLoadKey = '';
 let editorLoading = false;
+let editorReadTask=null;
 let saveBusy = false;
 let lastSave = null;
 let imageMode = 'ai-suite';
@@ -81,13 +85,13 @@ function command(type, fields = {}) {
     try { Contract.parseFrameCommand(outgoing); }
     catch { return Promise.reject(Object.assign(new Error('套图输入未通过校验，请重新读取并检查参考图与创作方向'), { outcome: 'NOT_SUBMITTED' })); }
   }
-  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY', 'VIDEO_SAVE'].includes(type)
+  const mutation = ['COLLECT', 'CREATE_DRAFT', 'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE', 'PREPARE_MEDIA_MUTATION', 'EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'CREATE_TRANSLATION', 'WATERMARK_APPLY', 'VIDEO_SAVE'].includes(type)
     || type === 'PUBLISH' && fields.action === 'CONFIRM';
   const promise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(requestId);
       reject(Object.assign(new Error('ERP 响应超时，请重新读取状态'), { outcome: mutation ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED' }));
-    }, 90000);
+    }, ['VISION_ANALYZE', 'EDITOR_COPY_GENERATE'].includes(type) ? 220000 : 90000);
     pending.set(requestId, { resolve, reject, timer, type, mutation });
   });
   parent.postMessage(outgoing, parentOrigin || '*');
@@ -95,7 +99,8 @@ function command(type, fields = {}) {
 }
 
 const session = Workflow.createSession({ getProjection: () => projection, send: command });
-function listing() { return Workflow.listingForShop(projection, selectedShopId); }
+let preparation;
+function listing() { return session.currentDraft(selectedShopId); }
 function status(message, variant = '') {
   element('status-text').textContent = message;
   element('status-text').className = `status-pill ${variant}`;
@@ -234,6 +239,21 @@ negativeLabel.append(negativeText, negativeHint);
 const jsonLabel = make('label', '', '视觉描述 JSON');
 const visualJson = make('textarea');
 visualJson.id = 'precision-visual-json';
+const visionTool = createVisionTool({ root: element('ui-scale-root'), command,
+  getBinding: () => currentEditorForPublish() ? currentEditorBinding() : null, getSkuKey: () => selectedSkuKey,
+  getMedia: () => eligibleReferenceMedia().filter(item => !item.skuKeys.length || item.skuKeys.includes(selectedSkuKey)),
+  getBusy: () => projection.busy || saveBusy || mediaMutationBusy || planSubmissionBusy,
+  applyDescription(description) {
+    const brief = Prompt.compileVisualCreativeBrief(description);
+    visualJson.value = JSON.stringify(description, null, 2);
+    promptText.value = brief?.prompt || ''; userPromptEdited = true; visualJsonError = ''; renderPromptState();
+    status('视觉 JSON 已应用到本地提示词，可继续编辑；尚未生图。', 'ok');
+  }, onMessage: status, report });
+const visionOpen = make('button', 'ghost', '看图生成视觉 JSON'); visionOpen.id = 'precision-vision-open';
+mediaToolbar.append(visionOpen);
+visionOpen.addEventListener('click', event => {
+  if (event.isTrusted && !visionOpen.disabled) void visionTool.open().catch(report).finally(render);
+});
 visualJson.addEventListener('input', () => {
   try {
     const description = JSON.parse(visualJson.value);
@@ -380,7 +400,8 @@ currency.addEventListener('change', () => { markListingEdited('currency'); rende
 const save = make('button', 'primary', '保存价格与货号'); save.id = 'editor-save-btn';
 const packagingSave = make('button', 'primary', '保存包装参数'); packagingSave.id = 'editor-packaging-save-btn';
 const replaySave = make('button', 'ghost', '核对上次保存'); replaySave.id = 'editor-replay-btn'; replaySave.hidden = true;
-localNotice.append(editorState, currency, save, packagingSave, replaySave);
+const skuSelection = make('button', 'ghost', '调整 SKU'); skuSelection.id = 'precision-sku-selection';
+localNotice.append(editorState, skuSelection, currency, save, packagingSave, replaySave);
 element('product-editor').after(localNotice);
 const categoryModal = make('div', 'settings-modal'); categoryModal.id = 'editor-category-modal'; categoryModal.hidden = true;
 element('ui-scale-root').append(categoryModal);
@@ -399,18 +420,56 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:curre
   },onError:report,
 });
 const attributes = createOfficialAttributeEditor({
-  root: element('ui-scale-root'), send: command, getEditor: currentEditorForPublish, getBinding: currentEditorBinding,
+  root: element('ui-scale-root'), send: command, getEditor: () => {
+    const data = currentEditorForPublish(); return data ? { ...data, selectedSkuKeys: editorSkuKeys() } : null;
+  }, getBinding: currentEditorBinding,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), onSave: (value) => saveEditor('ATTRIBUTES', value),
   onDirty: markListingEdited, onReset: () => { for (const key of unsavedListingFields) if (key.startsWith('official-')) unsavedListingFields.delete(key); },
   onChanged: (rebuild) => { if (rebuild) { editorSignature = ''; renderEditor(); } }, report, status,
 });
+let attributeSuggestionReviewed='';
+const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
+const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,
+ hasUnsavedAttributes:()=>[...unsavedListingFields].some(key=>key.startsWith('official-')),
+ getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),getSkuLabel:key=>projection.skus.find(sku=>sku.key===key)?.label||key,
+ onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},
+ onManual:()=>{attributeSuggestionReviewed=attributeSuggestionContext();element('product-editor').scrollIntoView({block:'start'});status('请手工补充官方必填属性；保存后点继续处理，上架前仍会校验完整性。');},report});
+const suggestionsOpen=make('button','ghost','自动匹配属性');suggestionsOpen.id='precision-attribute-suggestions-open';attributes.bar.append(suggestionsOpen);
+suggestionsOpen.addEventListener('click',event=>{if(event.isTrusted&&!suggestionsOpen.disabled)void attributeSuggestions.open().catch(report);});
 const fieldsSection = make('div');
 localNotice.replaceWith(fieldsSection);
 fieldsSection.append(localNotice, attributes.bar);
 const copyEditor = createCopyEditor({ root: element('ui-scale-root'), getEditor: currentEditorForPublish,
   getBinding: currentEditorBinding, getSourceTitle: () => projection.source.title,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), reloadEditor: loadEditor, saveEditor,
+  readCapability: async () => {
+    const binding = currentEditorBinding();
+    const response = await command('EDITOR_COPY_CAPABILITY', { binding, listingWorkflowId: binding.listingWorkflowId });
+    return response.data?.capability;
+  },
+  getGenerationPending: () => lastSave?.action === 'COPY_GENERATE' && lastSave.binding.listingWorkflowId === listing()?.id && !saveBusy,
   onDirty: markListingEdited, onReset: () => { for (const key of unsavedListingFields) if (key.startsWith('copy.')) unsavedListingFields.delete(key); }, report });
+const pricingTool = createPricingTool({ root: element('ui-scale-root'), getCurrency: () => currency.value,
+  command,getBinding:()=>currentEditorForPublish()?currentEditorBinding():null,
+  getRows: () => drafts.map(row => ({ skuKey: row.canonicalSkuKey, label: row.sourceSpec,
+    cost: projection.skus.find(sku => sku.key === (row.sourceSkuKey || row.canonicalSkuKey))?.priceCny })),
+  getContext: () => currentEditorForPublish() ? JSON.stringify([currentEditorBinding(), currency.value,
+    drafts.map(row => [row.canonicalSkuKey, row.offerId, row.fields['价格，CNY'], row.fields['折扣前价格，CNY']]),
+    projection.skus.map(sku => [sku.key, sku.priceCny])]) : '',
+  getBusy: () => projection.busy || saveBusy || Boolean(lastSave),
+  applyPrices(value) {
+    if (!currentEditorForPublish() || projection.busy || saveBusy || lastSave) throw new Error('草稿状态已变化，请重新计算');
+    const selected = editorSkuKeys();
+    if (value.items.length !== selected.length || value.items.some(item => !selected.includes(item.skuKey))) throw new Error('所选 SKU 已变化，请重新计算');
+    for (const item of value.items) {
+      const row = drafts.find(candidate => candidate.canonicalSkuKey === item.skuKey);
+      row.fields['价格，CNY'] = item.price; row.fields['折扣前价格，CNY'] = item.oldPrice;
+    }
+    currency.value = value.currency;
+    for (const field of ['价格，CNY', '折扣前价格，CNY', 'currency']) markListingEdited(field);
+    editorSignature = ''; render();
+    status('已填写计算后的售价与划线价，点击“保存价格与货号”写入当前草稿。', 'ok');
+  }, report });
 const validationBar = make('div', 'precision-local-fields');
 const validationState = make('span', '', '完成文案、图片与必填信息后，校验上架信息。'); validationState.id = 'precision-validation-state';
 const copyOpen = make('button', 'ghost', '俄文标题与描述'); copyOpen.id = 'editor-copy-btn';
@@ -615,9 +674,12 @@ function currentEditorBinding() {
 function editorIdentity(data) {
   return data?.binding ? JSON.stringify(['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].map((key) => data.binding[key])) : '';
 }
+function editorSkuKeys() {
+  return editor ? [...editor.selectedSkuKeys, ...(editor.offerRows?.rows || []).map((row) => row.rowKey)] : [];
+}
 function fieldSavedByAction(action, field) {
-  if (action === 'COPY_CANDIDATE') return field.startsWith('copy.');
-  if (action === 'ATTRIBUTES') return field.startsWith('official-');
+  if (action === 'COPY_CANDIDATE' || action === 'COPY_GENERATE') return field.startsWith('copy.');
+  if (action === 'ATTRIBUTES' || action==='ATTRIBUTE_SUGGESTIONS') return field.startsWith('official-');
   if (action === 'PACKAGING') return ['毛重，克', '包装长度，毫米', '包装宽度，毫米', '包装高度，毫米'].includes(field);
   if (action === 'PRICING') return ['价格，CNY', '折扣前价格，CNY', '__skuPrefix', 'skuPrefix', 'currency'].includes(field);
   return false;
@@ -637,15 +699,17 @@ function acceptEditor(data, savedAction = null) {
   render();
 }
 async function loadEditor() {
-  if (editorLoading || saveBusy || !listing()) return;
+  if(editorReadTask)return editorReadTask;
+  if (saveBusy || !listing()) return;
   editorLoading = true;
-  try {
+  editorReadTask=(async()=>{try {
     const binding = currentEditorBinding();
     const response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
     acceptEditor(response.data?.editor);
     editorState.textContent = editor.fieldIssues?.length ? editor.fieldIssues.map((item) => item.message).join(' ')
       : '修改后请分别保存价格与货号、包装参数。';
-  } finally { editorLoading = false; }
+  } finally { editorLoading = false; }})();
+  try{return await editorReadTask;}finally{editorReadTask=null;}
 }
 async function saveEditor(action, value, replay = false) {
   if (saveBusy) return;
@@ -659,22 +723,36 @@ async function saveEditor(action, value, replay = false) {
   } else if (!currentEditorForPublish()) throw new Error('草稿版本已变化，请重新读取后保存');
   saveBusy = true;
   let refreshAttributeSchema = false;
+  let mutationConfirmed = false;
+  let readbackWarning = '';
   render();
   try {
     if (!replay) lastSave = { listingWorkflowId: editor.binding.listingWorkflowId, binding: { ...editor.binding }, action,
       value, operationKey: 'precision-editor:' + crypto.randomUUID() };
-    const response = await command('EDITOR_SAVE', lastSave);
+    const response = action === 'COPY_GENERATE'
+      ? await command('EDITOR_COPY_GENERATE', { binding: lastSave.binding, listingWorkflowId: lastSave.listingWorkflowId,
+        operationKey: lastSave.operationKey, ...lastSave.value })
+      : await command('EDITOR_SAVE', lastSave);
     acceptEditor(response.data?.editor, action);
-    if (action === 'ATTRIBUTES') await attributes.afterSave();
+    mutationConfirmed = true;
+    lastSave=null;replaySave.hidden=true;
+    if (action === 'ATTRIBUTES'||action==='ATTRIBUTE_SUGGESTIONS'){
+      try{await attributes.afterSave();}catch{readbackWarning='属性已保存，官方字段刷新暂未成功，请使用“刷新官方属性”。';}
+    }
+    if(action==='ATTRIBUTES')attributeSuggestionReviewed=attributeSuggestionContext();
     copyEditor.afterSave(action, response.data);
     editorState.textContent = response.data?.replayed ? '同次保存已核对，草稿未重复写入。'
-      : action === 'COPY_CANDIDATE' ? 'ERP 已保存待审核文案，请预览后明确审核。' : action === 'COPY_APPROVE' ? 'ERP 已审核俄文文案。'
-        : action === 'VALIDATE' ? 'ERP 已返回上架校验结果。' : action === 'ATTRIBUTES' ? 'ERP 已保存商品属性。' : action === 'PACKAGING' ? 'ERP 已保存包装参数。' : action === 'PRICING' ? 'ERP 已保存价格与货号。' : 'ERP 已保存官方类目。';
+      : action === 'COPY_GENERATE' ? '已生成待审核俄文，请检查内容后明确审核。'
+        : action === 'COPY_CANDIDATE' ? 'ERP 已保存待审核文案，请预览后明确审核。' : action === 'COPY_APPROVE' ? 'ERP 已审核俄文文案。'
+        : action === 'SKU_SELECTION' ? 'SKU 已调整，请重新核对价格、属性、文案与图片。'
+          : action === 'SKU_DUPLICATE' ? '已复制来源 SKU，请补充独立货号、包装、价格、图片并重新校验。'
+            : action === 'SKU_COPY_REMOVE' ? '已移除复制行，来源 SKU 与历史图片仍保留。'
+          : action==='ATTRIBUTE_SUGGESTIONS'?'已按来源证据应用选中属性，请补齐未匹配字段。':action === 'VALIDATE' ? 'ERP 已返回上架校验结果。' : action === 'ATTRIBUTES' ? 'ERP 已保存商品属性。' : action === 'PACKAGING' ? 'ERP 已保存包装参数。' : action === 'PRICING' ? 'ERP 已保存价格与货号。' : 'ERP 已保存官方类目。';
     log(editorState.textContent);
-    status(editorState.textContent, 'ok');
+    status(readbackWarning || editorState.textContent, readbackWarning ? 'warn' : 'ok');
     lastSave = null; replaySave.hidden = true;
   } catch (error) {
-    if (error.outcome === 'NOT_SUBMITTED') {
+    if (mutationConfirmed || error.outcome === 'NOT_SUBMITTED') {
       lastSave = null; replaySave.hidden = true;
       refreshAttributeSchema = action === 'ATTRIBUTES' && String(error.code || '').toLowerCase() === 'ozon_attribute_schema_mismatch';
     }
@@ -682,15 +760,23 @@ async function saveEditor(action, value, replay = false) {
     throw error;
   } finally {
     saveBusy = false; render();
+    if(mutationConfirmed&&replay&&!session.needsRecovery()&&preparation?.state().status==='RECOVERY_REQUIRED'&&preparation.state().shopId===current.shopId){preparation.markRecovered();}
+    if(mutationConfirmed&&!session.needsRecovery()&&action!=='ATTRIBUTE_SUGGESTIONS')resumeAfterConfirmedStep(action);
     if (refreshAttributeSchema) {
       try { await command('REFRESH'); await loadEditor(); await attributes.load(true); }
       catch (error) { report(error); }
     }
   }
 }
+function resumeAfterConfirmedStep(action){
+ const step=preparation?.state().stepId;
+ if(preparation?.state().status!=='WAITING_INPUT'||preparation.isRunning())return;
+ if(({CATEGORY:'category',ATTRIBUTE_SUGGESTIONS:'attributes',ATTRIBUTES:'attributes',PACKAGING:'packaging',PRICING:'pricing',COPY_APPROVE:'copy'})[action]!==step)return;
+ queueMicrotask(()=>{void continuePreparation().catch(report);});
+}
 trusted('editor-save-btn', () => {
   if (!currentEditorForPublish()) throw new Error('请先读取当前店铺草稿');
-  const items = editor.selectedSkuKeys.map((skuKey) => {
+  const items = editorSkuKeys().map((skuKey) => {
     const row = drafts.find((draft) => draft.canonicalSkuKey === skuKey);
     if (!row) throw new Error('所选 SKU 与来源已变化，请重新采集');
     const previous = editor.pricing?.items.find((item) => item.skuKey === skuKey);
@@ -707,7 +793,7 @@ trusted('editor-save-btn', () => {
 });
 trusted('editor-packaging-save-btn', () => {
   if (!currentEditorForPublish()) throw new Error('请先读取当前店铺草稿');
-  const items = editor.selectedSkuKeys.map((skuKey) => {
+  const items = editorSkuKeys().map((skuKey) => {
     const row = drafts.find((draft) => draft.canonicalSkuKey === skuKey);
     if (!row) throw new Error('所选 SKU 与来源已变化，请重新读取');
     const item = { skuKey };
@@ -722,6 +808,24 @@ trusted('editor-packaging-save-btn', () => {
   return saveEditor('PACKAGING', { items, evidence: ['用户在扩展工作台确认各 SKU 实测包装，重量克、尺寸毫米'] });
 });
 trusted('editor-replay-btn', () => lastSave ? saveEditor(lastSave.action, lastSave.value, true) : undefined);
+trusted('precision-sku-selection', async () => {
+  if (!currentEditorForPublish()) throw new Error('请先读取当前店铺草稿');
+  if (unsavedListingFields.size || lastSave) throw new Error('有编辑尚未保存或核对，请处理后再调整 SKU');
+  if (projection.skus.length < 2) { status('来源商品只有一个 SKU，无需调整'); return; }
+  const expectedBinding = JSON.stringify(currentEditorBinding());
+  const previous = [...editor.selectedSkuKeys];
+  const selected = await picker.selectSkuRowsByUI(Workflow.toDonorData(projection), { selectedRowIds: previous });
+  if (!selected) return;
+  if (expectedBinding !== JSON.stringify(currentEditorBinding())) throw new Error('草稿已变化，请重新选择 SKU');
+  const keys = selected.sku_matrix.map(row => row.row_id);
+  if (JSON.stringify([...keys].sort()) === JSON.stringify([...previous].sort())) { status('SKU 选择未变化'); return; }
+  if (!confirm(`将草稿调整为 ${keys.length} 个 SKU。价格、属性、文案和图片需重新核对，旧发布确认将失效。继续？`)) return;
+  await saveEditor('SKU_SELECTION', { selectedSkuKeys: keys });
+  selectedDraftSkuKeys = new Set(editor.selectedSkuKeys);
+  byok.invalidate();
+  invalidatePublishPreview('SKU 已调整，请重新核对商品信息后预览上传。');
+  render();
+});
 
 function compilePrompt() {
   if (!userPromptEdited && !visualJson.value) {
@@ -819,15 +923,16 @@ async function reviewCandidate(workflowId, outputId, decision) {
 }
 function renderEditor() {
   const visibleSkus = draftSkuChoices();
-  const signature = JSON.stringify([projection.source.sourceProductId, visibleSkus, editor?.pricing, editor?.packaging, editorIdentity(editor), attributes.signature()]);
+  const signature = JSON.stringify([projection.source.sourceProductId, visibleSkus, editor?.pricing, editor?.packaging, editor?.offerRows, editorIdentity(editor), attributes.signature()]);
   if (signature !== editorSignature) {
     editorSignature = signature;
     const previousRows = new Map(drafts.map((row) => [row.canonicalSkuKey, row]));
     const preserveLocal = Boolean(editorRenderOwner && editorRenderOwner === editorIdentity(editor));
     editorRenderOwner = editorIdentity(editor);
     drafts = visibleSkus.map((sku, index) => {
-      const saved = editor?.pricing?.items.find((item) => item.skuKey === sku.key);
-      const measured = editor?.packaging?.find((item) => item.skuKey === sku.key);
+      const copy = editor?.offerRows?.rows.find((item) => item.rowKey === sku.key);
+      const saved = editor?.pricing?.items.find((item) => item.skuKey === sku.key) || copy?.pricing;
+      const measured = editor?.packaging?.find((item) => item.skuKey === sku.key) || copy?.packaging;
       const previous = preserveLocal ? previousRows.get(sku.key) : null;
       const fields = { '价格，CNY': saved?.price || '', '毛重，克': measured?.weightG ?? '',
         '包装宽度，毫米': measured?.widthMm ?? '', '包装高度，毫米': measured?.heightMm ?? '',
@@ -836,10 +941,11 @@ function renderEditor() {
         if (unsavedListingFields.has(field) && Object.prototype.hasOwnProperty.call(previous.fields, field)) fields[field] = previous.fields[field];
       }
       const offerId = previous && (unsavedListingFields.has('skuPrefix') || unsavedListingFields.has('__skuPrefix'))
-        ? previous.offerId : saved?.offerId || sku.sourceSkuId || sku.key;
+        ? previous.offerId : copy?.offerId || saved?.offerId || sku.sourceSkuId || sku.key;
       return {
       rowIndex: index + 1, skuCode: sku.sourceSkuId || sku.key, offerId,
       canonicalSkuKey: sku.key,
+      sourceSkuKey: copy?.sourceSkuKey, isCopiedSku: Boolean(copy),
       title: projection.source.title, sourceSpec: sku.label,
       sourceImageUrl: sku.imageUrl, media: { mainImage: sku.imageUrl },
       fields,
@@ -861,7 +967,16 @@ function renderEditor() {
         }
       } catch (error) { report(error); return; }
       if (change.scope === 'duplicateSku') {
-        status('复制行尚未接入 ERP 草稿保存，请先使用来源 SKU', 'warn');
+        const source = drafts.find((row) => row.rowIndex === change.rowIndex);
+        if (!currentEditorForPublish() || projection.busy || saveBusy || lastSave) { status('请等待当前操作完成并读取草稿后复制。', 'warn'); return; }
+        if (unsavedListingFields.size) { status('请先保存当前表格编辑，再复制该 SKU。', 'warn'); return; }
+        if (!source) return;
+        if (source.isCopiedSku) {
+          if (globalThis.confirm('移除当前复制行？来源 SKU、图片资产和历史记录会保留。'))
+            void saveEditor('SKU_COPY_REMOVE', { rowKey: source.canonicalSkuKey }).catch(report);
+          return;
+        }
+        void saveEditor('SKU_DUPLICATE', { sourceSkuKey: source.canonicalSkuKey }).catch(report);
         return;
       }
       markListingEdited(change.fieldKey || change.scope);
@@ -886,6 +1001,12 @@ function renderEditor() {
         draft.fields[change.fieldKey] = change.value;
       } else if (draft) draft.fields[change.fieldKey] = change.value;
     } });
+    document.querySelectorAll('#product-editor .editor-row-copy-btn').forEach((button) => {
+      const row = drafts[Number(button.dataset.rowIndex) - 1];
+      button.disabled = !currentEditorForPublish() || projection.busy || saveBusy || Boolean(lastSave);
+      button.textContent = row?.isCopiedSku ? '移除副本' : '复制';
+      button.title = row?.isCopiedSku ? '只移除当前复制行，保留原始来源 SKU。' : '复制当前来源 SKU，服务端会生成独立货号。';
+    });
     if (listing()) document.querySelectorAll('#product-editor input[type="checkbox"]').forEach((checkbox) => { checkbox.disabled = true; });
     renderCurrencyLabels();
   }
@@ -899,11 +1020,18 @@ function draftSkuChoices() {
   const selected = data || previousSameDraft ? (data || previousSameDraft).selectedSkuKeys
     : selectedDraftShopId === draft.shopId && selectedDraftSkuKeys ? [...selectedDraftSkuKeys] : [];
   const byKey = new Map(projection.skus.map((sku) => [sku.key, sku]));
-  return selected.map((key) => byKey.get(key)).filter(Boolean);
+  const rows = selected.map((key) => byKey.get(key)).filter(Boolean);
+  for (const copy of (data || previousSameDraft)?.offerRows?.rows || []) {
+    const source = byKey.get(copy.sourceSkuKey);
+    if (source) rows.push({ ...source, key: copy.rowKey, sourceSkuKey: copy.sourceSkuKey, label: `${source.label} · 复制行` });
+  }
+  return rows;
 }
 function eligibleReferenceMedia(skus = draftSkuChoices()) {
   const keys = new Set(skus.map((sku) => sku.key));
-  return projection.media.filter((item) => !item.skuKeys.length || item.skuKeys.some((key) => keys.has(key)));
+  return projection.media.map((item) => ({ ...item, skuKeys: [...item.skuKeys,
+    ...(editor?.offerRows?.rows || []).filter(row => item.skuKeys.includes(row.sourceSkuKey)).map(row => row.rowKey)] }))
+    .filter((item) => !item.skuKeys.length || item.skuKeys.some((key) => keys.has(key)));
 }
 function visibleWorkspaceMedia(media) {
   const workspaceState = imageWorkspace.state();
@@ -1046,7 +1174,10 @@ function render() {
   if (!projection.shops.some((shop) => shop.id === selectedShopId)) selectedShopId = projection.shops[0]?.id || '';
   select.value = selectedShopId;
   element('store-switch-btn').textContent = projection.shops.find((shop) => shop.id === selectedShopId)?.name || '选择店铺';
-  element('start-btn').disabled = projection.busy || session.isActive() || !sourceReady;
+  listing();
+  element('start-btn').disabled = projection.busy || session.isActive() || session.needsRecovery() || !sourceReady;
+  preparationRecover.disabled=!session.needsRecovery()||session.isActive()||projection.busy||saveBusy;
+  if(preparation?.isRunning())element('start-btn').disabled=true;
   element('start-btn').textContent = session.isActive() ? '执行中' : listing() ? '继续编辑' : '开始执行';
   element('confirm-export-btn').disabled = projection.busy || publishBusy || mediaMutationBusy || saveBusy || !listing();
   element('confirm-export-btn').title = '在当前工作台核对 ERP 上传预览与回执';
@@ -1065,9 +1196,14 @@ function render() {
     void refreshMediaState().catch(report);
   }
   save.disabled = packagingSave.disabled = !currentEditorForPublish() || projection.busy || saveBusy || Boolean(lastSave);
+  skuSelection.disabled = !currentEditorForPublish() || projection.busy || saveBusy || Boolean(lastSave) || unsavedListingFields.size > 0;
   replaySave.disabled = projection.busy || saveBusy;
   attributes.renderState();
+  attributeSuggestions.sync();
+  suggestionsOpen.disabled=!currentEditorForPublish()?.category||projection.busy||saveBusy||Boolean(lastSave)||[...unsavedListingFields].some(key=>key.startsWith('official-'));
   copyEditor.sync();
+  visionTool.sync();
+  pricingTool.sync();
   categoryPicker.syncBinding();
   validate.disabled = !currentEditorForPublish() || !attributes.currentSchemaRevision() || projection.busy || saveBusy || Boolean(lastSave);
   copyOpen.disabled = !listing() || projection.busy || saveBusy;
@@ -1124,23 +1260,65 @@ function schedulePolling() {
   }, 3000);
 }
 
-trusted('start-btn', async () => {
-  if (listing()) { element('product-editor').scrollIntoView({ block: 'start' }); status('继续编辑当前店铺草稿'); return; }
+async function ensureCurrentDraft(){
+  if(session.needsRecovery())throw Object.assign(Error('上次采集或建草稿结果尚待核对，请点击“核对建草稿结果”。'),{outcome:'UNKNOWN_OUTCOME'});
+  if (listing()) { await loadEditor(); return listing(); }
   log('读取来源商品并选择 SKU');
   const selectedShopAtStart = selectedShopId;
-  const draft = await session.start({ shopId: selectedShopAtStart, selectSkus: async (raw) => {
+  let draft;
+  try{draft = await session.start({ shopId: selectedShopAtStart, selectSkus: async (raw) => {
     const selected = new Set(drafts.filter((row) => row.uploadEnabled !== false).map((row) => row.canonicalSkuKey));
     const result = await picker.selectSkuRowsByUI({ ...raw, sku_matrix: raw.sku_matrix.filter((row) => selected.has(row.row_id)) });
+    if(selectedShopId!==selectedShopAtStart)throw Error('选择 SKU 期间店铺已切换，请重新开始当前店铺。');
     if (result) {
       selectedDraftSkuKeys = new Set(result.sku_matrix.map((row) => row.row_id));
       selectedDraftShopId = selectedShopAtStart;
     }
     if (pickerState.skuPickerAuto.timerId) { clearInterval(pickerState.skuPickerAuto.timerId); pickerState.skuPickerAuto.timerId = 0; }
     return result;
-  } });
+  } });}finally{render();}
+  if(selectedShopId!==selectedShopAtStart)throw Error('草稿请求已在原店铺完成，请切回原店铺检查后继续。');
   if (draft) { log('ERP 草稿已创建，继续在当前工作台处理图片'); status('草稿已就绪，选择图片处理方式'); }
   render();
-});
+  return draft;
+}
+const preparationBar=make('div','precision-preparation-bar'),preparationState=make('span','','商品准备：选择类目、确认属性和价格，再处理图片。');preparationState.id='precision-preparation-state';
+const preparationContinue=make('button','ghost','继续处理'),preparationStop=make('button','ghost','停止后续步骤'),prepareShops=make('button','ghost','多店连续准备');
+const preparationRecover=make('button','ghost','核对建草稿结果');preparationRecover.id='precision-preparation-recover';preparationRecover.disabled=true;
+preparationContinue.id='precision-preparation-continue';preparationStop.id='precision-preparation-stop';prepareShops.id='precision-preparation-shops';
+preparationBar.append(preparationState,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
+preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
+ getSource:()=>JSON.stringify([projection.source.platform,projection.source.sourceProductId,projection.handoff?.snapshotId]),getCurrentShop:()=>selectedShopId,
+ selectShop:async shopId=>{if(!projection.shops.some(shop=>shop.id===shopId))throw Error('店铺授权已变化');selectedShopId=shopId;render();await ensureCurrentDraft();},
+ onState:value=>{preparationState.textContent=`${projection.shops.find(shop=>shop.id===value.shopId)?.name||'当前商品'}：${value.message}`;preparationContinue.disabled=value.status==='RUNNING'||value.status==='RECOVERY_REQUIRED';preparationStop.disabled=value.status!=='RUNNING'&&value.status!=='WAITING_INPUT';},
+ steps:[
+  {id:'draft',label:'读取当前草稿',run:async()=>{await loadEditor();if(!currentEditorForPublish())return{completed:false,message:'请读取当前草稿后继续'};if(lastSave)throw Object.assign(Error('先核对原保存请求'),{outcome:'UNKNOWN_OUTCOME'});return{completed:true};}},
+  {id:'category',label:'确认官方类目',run:async()=>{if(currentEditorForPublish()?.category)return{completed:true};await categoryPicker.open();return{completed:false,message:'在当前窗口选择官方类目，保存后继续处理'};}},
+  {id:'attributes',label:'匹配商品属性',run:async()=>{await attributes.load(true);if(attributeSuggestionReviewed!==attributeSuggestionContext()){await attributeSuggestions.open();return{completed:false,message:'检查自动匹配属性并确认应用，未匹配字段在原表格补充后继续'};}return{completed:true};}},
+  {id:'packaging',label:'确认包装',run:async()=>{if(currentEditorForPublish()?.packaging.length===editorSkuKeys().length)return{completed:true};element('product-editor').scrollIntoView({block:'start'});return{completed:false,message:'填写当前 SKU 实测包装并保存，随后继续'};}},
+  {id:'pricing',label:'计算售价',run:async()=>{const data=currentEditorForPublish();if(data?.pricing?.items.length===data.selectedSkuKeys.length&&data.freshness?.pricing==='CURRENT')return{completed:true};pricingTool.open();return{completed:false,message:'按店铺物流计算并预览售价，保存价格后继续'};}},
+  {id:'copy',label:'生成俄文文案',run:async()=>{if(currentEditorForPublish()?.copy.titleRu&&editor.freshness?.content==='CURRENT')return{completed:true};await copyEditor.open();return{completed:false,message:'生成或编辑俄文文案，预览并明确审核后继续'};}},
+  {id:'media',label:'处理商品图片',run:async()=>{const data=currentEditorForPublish();if(data?.mediaAssignments?.length&&data.freshness?.media==='CURRENT')return{completed:true};imageWorkspace.open(selectedSkuKey);renderMedia();return{completed:false,message:'在图片窗口处理、审核并应用素材，确认费用后才会生图'};}},
+  {id:'validation',label:'校验上架信息',run:async()=>{if(unsavedListingFields.size)return{completed:false,message:'还有编辑尚未保存，请保存后继续'};await attributes.load(true);await saveEditor('VALIDATE',{schemaRevision:attributes.currentSchemaRevision()});return{completed:serverPublishReady(),message:editor.blockers?.map(item=>item.message).join('；')||'检查上架信息后继续'};}},
+ ]});
+async function continuePreparation(){if(session.needsRecovery())throw Error('请先核对原采集或建草稿结果');if(lastSave)throw Error('请先核对原保存请求');await preparation.continue();render();}
+async function recoverPreparation(){
+ const shopAtStart=selectedShopId,sourceAtStart=JSON.stringify([projection.source.platform,projection.source.sourceProductId]);
+ const result=await session.recoverCurrentDraft();
+ if(shopAtStart!==selectedShopId||sourceAtStart!==JSON.stringify([projection.source.platform,projection.source.sourceProductId]))throw Error('商品或店铺已切换，请回到原上下文核对');
+ if(result.state!=='ready')throw Error(result.message||'原采集或建草稿结果仍未核对，不会重新提交');
+ if(result.draft&&result.draft.shopId!==shopAtStart)throw Error('请切回原请求的店铺核对草稿');
+ if(result.draft)await loadEditor();
+ preparation.markRecovered();render();status('原采集或建草稿结果已核对，请点击开始或继续处理。','ok');
+}
+preparationRecover.addEventListener('click',event=>{if(event.isTrusted&&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});
+trusted('start-btn',async()=>{if(!listing()){await ensureCurrentDraft();if(!listing())return;}await preparation.start([selectedShopId]);render();});
+preparationContinue.addEventListener('click',event=>{if(event.isTrusted&&!preparationContinue.disabled)void continuePreparation().catch(report);});
+preparationStop.addEventListener('click',event=>{if(event.isTrusted)preparation.cancel();});
+const queueModal=make('div','settings-modal');queueModal.id='precision-preparation-shop-modal';queueModal.hidden=true;const queueDialog=make('div','settings-dialog'),queueHead=make('div','settings-head');queueHead.append(make('div','settings-title','多店连续准备 · 不自动发布'));
+const queueClose=make('button','ghost','关闭');queueClose.addEventListener('click',()=>{queueModal.hidden=true;});queueHead.append(queueClose);const queueBody=make('div','settings-body'),queueStart=make('button','primary','开始所选店铺准备');queueStart.id='precision-preparation-queue-start';queueDialog.append(queueHead,queueBody,queueStart);queueModal.append(queueDialog);element('ui-scale-root').append(queueModal);
+prepareShops.addEventListener('click',event=>{if(!event.isTrusted||preparation.isRunning())return;queueBody.replaceChildren();for(const shop of projection.shops){const label=make('label'),input=make('input');input.type='checkbox';input.value=shop.id;input.checked=shop.id===selectedShopId;label.append(input,make('span','',shop.name));queueBody.append(label);}queueModal.hidden=false;});
+queueStart.addEventListener('click',event=>{if(!event.isTrusted)return;const shops=[...queueBody.querySelectorAll('input:checked')].map(input=>input.value);queueModal.hidden=true;void(async()=>{if(!shops.length)throw Error('请选择至少一个已授权店铺');selectedShopId=shops[0];render();if(!await ensureCurrentDraft())return;await preparation.start(shops);})().catch(report).finally(render);});
 trusted('store-switch-btn', () => openModal('shop-modal'));
 trusted('shop-confirm-btn', () => { selectedShopId = element('erp-shop-select').value; element('shop-modal').hidden = true; render(); });
 trusted('settings-btn', () => {
@@ -1159,7 +1337,7 @@ for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () =>
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
-trusted('erp-refresh-btn', async () => { await command('REFRESH'); await refreshMediaState(); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品、草稿与图片任务已刷新', 'ok'); });
+trusted('erp-refresh-btn', async () => { if(session.needsRecovery()){await recoverPreparation();return;}await command('REFRESH'); await refreshMediaState(); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品、草稿与图片任务已刷新', 'ok'); });
 trusted('precision-image-refresh', async () => { await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });
 async function suiteCommand(action, costConfirmed = false) {
@@ -1215,6 +1393,7 @@ trusted('precision-assign', () => runMediaMutation(async () => {
   if (!context.draft || !assignableSuiteSlots(context).length) throw new Error('尚无可应用的已审核套图，请重新读取状态');
   await command('ASSIGN_HOSTED_SUITE', { listingWorkflowId: context.draft.id });
   await refreshConfirmedMedia('图片已应用到草稿');
+  if(preparation?.state().status==='WAITING_INPUT'&&preparation.state().stepId==='media')queueMicrotask(()=>{void continuePreparation().catch(report);});
 }));
 async function startImageWorkflow() {
   if (!imageWorkspace.state().open) {
@@ -1258,7 +1437,7 @@ async function startTranslation() {
   await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing().id });
 }
 trusted('confirm-export-btn', openPublish);
-trusted('pricing-tool-btn', () => { element('product-editor').scrollIntoView({ block: 'center' }); status('填写售价、折扣前价与货号，再点击保存价格与货号。'); });
+trusted('pricing-tool-btn', () => pricingTool.open());
 window.addEventListener('message', (event) => {
   if (event.source !== parent || !allowedOrigin(event.origin) || (parentOrigin && event.origin !== parentOrigin)
     || !event.data || event.data.contractVersion !== Contract.CONTRACT_VERSION) return;

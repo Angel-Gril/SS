@@ -16,6 +16,7 @@ import {
   createPrismaExtensionHostedAiImageAuthorityLoader,
   type ExtensionHostedAiImageAuthorityPrismaClient,
 } from '../services/extension-hosted-ai-image-authority-prisma.js';
+import { deriveSourceListingSkuCopyKey } from '../services/source-listing-sku-copies.js';
 
 const captureFixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
@@ -239,6 +240,23 @@ const candidateInput = () => ({
 });
 
 describe('Prisma extension hosted AI image authority loader', () => {
+  it('adds server-owned copied offers to planning authority without changing the captured source hash or canonical database selection', async () => {
+    const operationKey = 'hosted-copy-operation', rowKey = deriveSourceListingSkuCopyKey('listing-workflow-1', operationKey);
+    const row = planRow();
+    const draftPayload = { id: 'listing-workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1', supplyGoodsId: 'goods-1',
+      sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: row.snapshotCaptureHash, selectedSkuKeys: ['sku-0'], revision: 5, draftVersion: 7,
+      offerRows: { contractVersion: 'source-listing-offer-rows/v1', rows: [{ rowKey, sourceSkuKey: 'sku-0', offerId: 'copy-offer',
+        sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: row.snapshotCaptureHash, sourceDraftRevision: 4, sourceDraftVersion: 6,
+        pricing: null, packaging: null, attributes: {} }] },
+      auditEvents: [{ type: 'SKU_DUPLICATED', draftVersion: 7, details: { rowKey, sourceSkuKey: 'sku-0', editorOperationKey: operationKey } }] };
+    const { loader } = fixture([[{ ...row, draftPayload }]]);
+    const authority = await loader.loadPlanAuthority({ ownerUserId: 'owner-1', listingWorkflowId: 'listing-workflow-1' });
+    expect(authority?.selectedSkuKeys.sort()).toEqual(['sku-0', rowKey].sort());
+    expect(authority?.capturedSkuKeys).toContain(rowKey);
+    expect(authority?.candidateMediaKeys).toEqual(['media-main-0']);
+    expect(row.workflowSelectedSkuKeys).toEqual(['sku-0']);
+    expect((row.snapshotPayload as any).skus).toHaveLength(1);
+  });
   it('derives current plan authority and eligible media keys only from the verified capture', async () => {
     const { loader, query } = fixture([[planRow()]]);
 

@@ -90,7 +90,7 @@ export function createSkuPickerController({
     }
     resolvedValue2.pendingSkuRawData = null;
   }
-  function helperFn8(arg6) {
+  function helperFn8(arg6, initiallySelectedIds) {
     if (resolvedValue1.skuPicker && resolvedValue1.skuPickerList) {
       resolvedValue1.skuPicker.hidden = false;
       if (!flagValue5 && resolvedValue1.skuPickerList) {
@@ -113,7 +113,7 @@ export function createSkuPickerController({
       arg6.forEach((arg8, arg9) => {
         const helperValue2 = helperFn2(arg8, arg9);
         arrayValue.push(helperValue2);
-        setValue4.add(helperValue2);
+        if (!initiallySelectedIds || initiallySelectedIds.has(helperValue2)) setValue4.add(helperValue2);
       });
       if (arg6.length >= 80) {
         (function (arg10) {
@@ -315,7 +315,7 @@ export function createSkuPickerController({
         helperFn5();
       }
     },
-    selectSkuRowsByUI: async function (arg29) {
+    selectSkuRowsByUI: async function (arg29, options = {}) {
       const localValue38 = arg29?.sku_matrix || [];
       helperFn(null);
       helperFn7();
@@ -323,7 +323,7 @@ export function createSkuPickerController({
         return arg29;
       } else if (resolvedValue1.skuPicker && resolvedValue1.skuPickerList && resolvedValue1.skuApplyBtn) {
         resolvedValue2.pendingSkuRawData = arg29;
-        helperFn8(localValue38);
+        helperFn8(localValue38, Array.isArray(options.selectedRowIds) ? new Set(options.selectedRowIds) : null);
         resolvedValue5(helperFn0("sku_statusPickerReady", undefined, resolvedValue3.skuPickerReady || "检测到多个 SKU，请勾选需要采集的 SKU 后点击确认。"), "warn");
         return new Promise((arg30) => {
           resolvedValue2.pendingSkuResolve = arg30;

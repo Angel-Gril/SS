@@ -30,8 +30,6 @@
   var secondaryActionBtn = document.getElementById('secondaryActionBtn');
   var sourceSearchPlatformPrefs = document.getElementById('sourceSearchPlatformPrefs');
   var primaryActionStatus = document.getElementById('primaryActionStatus');
-  var sourceWorkflowHandoffBtn = createSourceWorkflowHandoffButton();
-  var sourceWorkflowHandoff = null;
   var primaryActionState = { type: 'loading', tab: null, productId: '' };
   var primaryActionRevision = 0;
   var secondaryActionState = { type: 'hidden' };
@@ -50,48 +48,6 @@
     primaryActionStatus.className = 'action-status' + (kind ? ' ' + kind : '');
   }
 
-  function createSourceWorkflowHandoffButton() {
-    if (!primaryActionStatus || !primaryActionStatus.parentNode) return null;
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'secondary-action';
-    button.textContent = '打开 ERP 继续';
-    button.title = '打开刚保存的 ERP 来源商品';
-    button.hidden = true;
-    primaryActionStatus.parentNode.insertBefore(button, primaryActionStatus);
-    return button;
-  }
-
-  function setSourceWorkflowHandoff(handoff) {
-    sourceWorkflowHandoff = handoff && typeof handoff === 'object' ? handoff : null;
-    if (!sourceWorkflowHandoffBtn) return;
-    sourceWorkflowHandoffBtn.hidden = !handoff;
-    sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
-  }
-
-  function openSourceWorkflowHandoff() {
-    if (!sourceWorkflowHandoff || !sourceWorkflowHandoffBtn) return;
-    var handoff = sourceWorkflowHandoff;
-    primaryActionRevision += 1;
-    setSourceWorkflowHandoff(null);
-    sourceWorkflowHandoffBtn.disabled = true;
-    sourceWorkflowHandoffBtn.textContent = '打开中...';
-    sendRuntimeMessage({
-      type: 'ss-erp:open-source-workflow-handoff',
-      snapshotId: handoff.snapshotId,
-      sourceProductId: handoff.sourceProductId,
-      platform: handoff.platform
-    }, function (response) {
-      sourceWorkflowHandoffBtn.textContent = '打开 ERP 继续';
-      sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
-      if (response && response.ok) {
-        setActionStatus('已创建 ERP 标签页，请确认页面加载后继续创建草稿', '');
-        return;
-      }
-      setActionStatus((response && response.error) || '打开 ERP 失败', 'fail');
-    });
-  }
-
   function setPrimaryAction(state) {
     primaryActionRevision += 1;
     primaryActionState = state || { type: 'unsupported', tab: null, productId: '' };
@@ -103,7 +59,6 @@
       primaryActionBtn.textContent = primaryActionState.buttonText || '打开设置';
     }
     setSecondaryAction(primaryActionState.secondaryAction || null);
-    setSourceWorkflowHandoff(null);
     setActionStatus('', '');
   }
 
@@ -271,60 +226,8 @@
     return '';
   }
 
-  function normalizeSourcePlatform(value) {
-    var platform = String(value || '').normalize('NFKC').trim().toLowerCase();
-    if (platform === 'pinduoduo' || platform === '拼多多' || platform === 'pdd') return 'pdd';
-    if (platform === '淘宝' || platform === 'taobao') return 'taobao';
-    if (platform === '天猫' || platform === 'tmall') return 'tmall';
-    return platform === '1688' ? '1688' : '';
-  }
-
   function sourcePlatformLabel(platform) {
     return { '1688': '1688', pdd: 'PDD', taobao: '淘宝', tmall: '天猫' }[platform] || '货源';
-  }
-
-  function sourceProductIdentity(product) {
-    product = product && typeof product === 'object' ? product : {};
-    var capture = product.captureV2 && typeof product.captureV2 === 'object' ? product.captureV2 : {};
-    var sourceIdentity = capture.sourceIdentity && typeof capture.sourceIdentity === 'object'
-      ? capture.sourceIdentity
-      : {};
-    return {
-      sourceProductId: String(
-        sourceIdentity.productId || product.sourceProductId || product.productId || '',
-      ).normalize('NFKC').trim(),
-      platform: normalizeSourcePlatform(capture.platform || product.sourcePlatform || product.platform),
-    };
-  }
-
-  function isCurrentSourceAction(tab, platform, revision) {
-    return revision === primaryActionRevision
-      && primaryActionState.type === 'quoteSourcePage'
-      && primaryActionState.tab
-      && primaryActionState.tab.id === tab.id
-      && primaryActionState.tab.url === tab.url
-      && primaryActionState.sourcePlatform === platform;
-  }
-
-  function restoreSourceWorkflowHandoffForCurrentPage(tab, platform, revision) {
-    sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (collectResponse) {
-      if (!isCurrentSourceAction(tab, platform, revision)
-        || !collectResponse || !collectResponse.ok) return;
-      var identity = sourceProductIdentity(collectResponse.data);
-      if (!identity.sourceProductId || identity.sourceProductId.length > 200) return;
-      var canonicalPlatform = identity.platform || platform;
-      if (canonicalPlatform !== platform) return;
-      sendRuntimeMessage({
-        type: 'ss-erp:source-listing-workbench-status',
-        sourceProductId: identity.sourceProductId,
-        platform: canonicalPlatform
-      }, function (statusResponse) {
-        if (!isCurrentSourceAction(tab, platform, revision)) return;
-        setSourceWorkflowHandoff(
-          statusResponse && statusResponse.ok ? statusResponse.handoff || null : null,
-        );
-      });
-    });
   }
 
   function buildOzonCandidateContext(tab, productId, product) {
@@ -357,13 +260,13 @@
 
   function updateSourceContextHint(host) {
     sendRuntimeMessage({ type: 'ss-erp:source-candidate-context-get' }, function (response) {
-      if (!response || !response.ok || primaryActionState.type !== 'quoteSourcePage') return;
+      if (!response || !response.ok || primaryActionState.type !== 'openPrecisionWorkbench' || !secondaryActionBtn) return;
       var ozon = response.context && response.context.ozon;
       if (ozon && (ozon.productId || ozon.title)) {
         var label = ozon.productId ? ('Ozon ' + ozon.productId) : String(ozon.title).slice(0, 16);
-        setText(primaryActionHint, host + ' · 核价将回填 ' + label);
+        secondaryActionBtn.title = host + ' · 核价将回填 ' + label;
       } else {
-        setText(primaryActionHint, host + ' · 先在 Ozon 商品页点“核价找货源”建立关联');
+        secondaryActionBtn.title = host + ' · 在 Ozon 商品页选择“核价找货源”建立关联';
       }
     });
   }
@@ -411,20 +314,19 @@
 
       if (sourcePlatform) {
         setPrimaryAction({
-          type: 'quoteSourcePage',
+          type: 'openPrecisionWorkbench',
           tab: tab,
           sourcePlatform: sourcePlatform,
           label: sourcePlatformLabel(sourcePlatform) + ' 货源页',
-          title: '货源核价',
-          hint: host,
-          buttonText: '核价',
+          title: '精铺工作台',
+          hint: host + ' · 在当前商品页选择 SKU、编辑价格和处理图片',
+          buttonText: '打开精铺工作台',
           secondaryAction: {
-            type: 'collectSourcePage',
+            type: 'quoteSourcePage',
             tab: tab,
-            buttonText: '采集到 ERP'
+            buttonText: '货源核价'
           }
         });
-        restoreSourceWorkflowHandoffForCurrentPage(tab, sourcePlatform, primaryActionRevision);
         updateSourceContextHint(host);
         return;
       }
@@ -552,53 +454,37 @@
     });
   }
 
-  function submitSourceToErp(sourceProduct, callback) {
-    sendRuntimeMessage({
-      type: 'ss-erp:collect-source-to-erp',
-      payload: { product: sourceProduct || {} }
-    }, callback);
-  }
-
-  function collectSourcePage(options) {
-    var useSecondary = options && options.secondary;
-    if (useSecondary) {
-      setSecondaryButtonBusy('采集中...');
-    } else {
-      setPrimaryButtonBusy('采集中...');
-    }
-    primaryActionRevision += 1;
-    setSourceWorkflowHandoff(null);
+  function openPrecisionWorkbench() {
+    var tab = primaryActionState.tab;
+    var revision = primaryActionRevision;
+    if (!tab || !Number.isSafeInteger(tab.id)) return;
+    setPrimaryButtonBusy('打开中...');
     setActionStatus('', '');
-    sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
-      if (useSecondary) {
-        restoreSecondaryButton();
-      } else {
+    chrome.tabs.get(tab.id, function (current) {
+      if (revision !== primaryActionRevision) return;
+      if (chrome.runtime.lastError || !current || current.url !== tab.url) {
         restorePrimaryButton();
+        setActionStatus('商品页已变化，请重新打开扩展弹窗。', 'fail');
+        return;
       }
-      if (response && response.ok) {
-        var data = response.data || {};
-        var baseStatus = data.title ? ('已采集：' + String(data.title).slice(0, 18)) : '已采集当前货源页';
-        submitSourceToErp(data, function (erpResponse) {
-          if (erpResponse && erpResponse.ok) {
-            setSourceWorkflowHandoff(erpResponse.handoff || null);
-            setActionStatus(baseStatus + '，已进入 ERP 上品列表', 'ok');
-            return;
-          }
-          var error = erpResponse && erpResponse.error ? erpResponse.error : '';
-          setActionStatus(baseStatus + '，写入 ERP 失败：' + (error || '未知错误'), 'fail');
-        });
-      } else {
-        setActionStatus((response && response.error) || '采集失败', 'fail');
-      }
+      chrome.tabs.sendMessage(tab.id, { type: 'ss-erp:precision-workbench-open' }, { frameId: 0 }, function (response) {
+        if (revision !== primaryActionRevision) return;
+        restorePrimaryButton();
+        if (chrome.runtime.lastError || !response || response.ok !== true || response.state !== 'WORKBENCH_OPENED') {
+          setActionStatus('精铺工作台未能打开，请刷新商品页后重试。', 'fail');
+          return;
+        }
+        setActionStatus('已在当前商品页打开精铺工作台。', 'ok');
+      });
     });
   }
 
   function quoteSourcePage() {
-    setPrimaryButtonBusy('核价中...');
+    setSecondaryButtonBusy('核价中...');
     setActionStatus('', '');
     sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
       if (!response || !response.ok) {
-        restorePrimaryButton();
+        restoreSecondaryButton();
         setActionStatus((response && response.error) || '读取货源页失败', 'fail');
         return;
       }
@@ -606,7 +492,7 @@
         type: 'ss-erp:source-quote-save',
         payload: { sourceProduct: response.data || {} }
       }, function (quoteResponse) {
-        restorePrimaryButton();
+        restoreSecondaryButton();
         if (quoteResponse && quoteResponse.ok) {
           setActionStatus('已记录采购价，正在回填 Ozon 核价面板', 'ok');
           return;
@@ -799,12 +685,8 @@
       collectOzonToErp();
       return;
     }
-    if (primaryActionState.type === 'collectSourcePage') {
-      collectSourcePage();
-      return;
-    }
-    if (primaryActionState.type === 'quoteSourcePage') {
-      quoteSourcePage();
+    if (primaryActionState.type === 'openPrecisionWorkbench') {
+      openPrecisionWorkbench();
       return;
     }
     if (primaryActionState.type === 'syncCookie' && syncCookieBtn) {
@@ -819,8 +701,8 @@
       searchSourcesByImage();
       return;
     }
-    if (secondaryActionState.type === 'collectSourcePage') {
-      collectSourcePage({ secondary: true });
+    if (secondaryActionState.type === 'quoteSourcePage') {
+      quoteSourcePage();
     }
   }
 
@@ -1297,9 +1179,6 @@
   }
   if (secondaryActionBtn) {
     secondaryActionBtn.addEventListener('click', runSecondaryAction);
-  }
-  if (sourceWorkflowHandoffBtn) {
-    sourceWorkflowHandoffBtn.addEventListener('click', openSourceWorkflowHandoff);
   }
   SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
     var input = getSourceSearchPlatformInput(option.platform);

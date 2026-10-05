@@ -2,20 +2,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+const precisionBridge = fs.readFileSync('extensions/ss-erp/content/donor-workbench-bridge.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const collectContentScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 const pageBridge = fs.readFileSync('extensions/ss-erp/content/page-bridge.js', 'utf8');
 const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
 
 assert.match(
-  popupJs,
+  precisionBridge,
   /type:\s*['"]ss-erp:collect-source-to-erp['"]/,
   'source-page collection should submit domestic source products to the ERP collect list',
 );
 assert.match(
   popupJs,
-  /已进入 ERP 上品列表/,
-  'popup should tell the user the source product entered the ERP listing workflow',
+  /type:\s*['"]ss-erp:precision-workbench-open['"]/,
+  'popup routes source collection to the same-page workbench instead of submitting the old workflow',
 );
 assert.match(
   serviceWorker,

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { publicSourceMediaKey as safeCandidateId } from './source-media-public-key.js';
 import { aiImageCreativeBriefSchema, type AiImageCreativeBrief } from './ai-image-creative-brief.js';
 import type { SourceListingWorkflowStage } from 'shared';
 import {
@@ -468,16 +469,6 @@ function safeText(value: unknown, maximum: number): string | null {
 // Source captures use a structured media key whose final segment is the
 // observed source URL. Project a stable opaque alias so the existing public
 // plan and MV3 contracts stay URL-free. Execution keeps the frozen original.
-function safeCandidateId(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length < 1 || value.length > 500
-    // eslint-disable-next-line no-control-regex
-    || /[\u0000-\u001f\u007f]/u.test(value)) return null;
-  if (!/(?:https?|blob|data|file|ftp):/iu.test(value)) return value;
-  return /^media:[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+\|\d+\|https:\/\/[^\s|]+$/u.test(value)
-    ? `media-key-sha256:${createHash('sha256').update(value).digest('hex')}`
-    : null;
-}
-
 function safeOwnership(value: unknown) {
   const item = record(value);
   const level = item?.level === 'sku' || item?.level === 'compatibility_group'
@@ -705,6 +696,8 @@ export function createExtensionHostedAiImagePlanService(
           }),
         }),
         selectedSkuKeys: authorized.selectedSkuKeys,
+        listingDraftContext: { id: authorized.binding.listingWorkflowId, revision: authorized.binding.draftRevision,
+          draftVersion: authorized.binding.draftVersion },
         candidateMediaKeys,
         ...(request.candidateMediaKeys === undefined ? {} : {
           referenceSelectionScopeHash: valuesHash(authorized.candidateMediaKeys),

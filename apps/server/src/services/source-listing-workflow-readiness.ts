@@ -15,6 +15,7 @@ import {
   type OzonListingVatRate,
   type OzonListingWorkflowIssue,
 } from 'shared';
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 
 const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
 const SUPPORTED_VAT_RATES = new Set<string>(OZON_LISTING_SUPPORTED_VAT_RATES);
@@ -253,7 +254,7 @@ function mediaIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
       'media.assignments',
     )];
   }
-  const selected = new Set(draft.selectedSkuKeys);
+  const selected = new Set(sourceListingEditorSkuKeysForDraft(draft));
   const seenAssets = new Set<string>();
   const seenSlots = new Set<string>();
   const coveredSkus = new Set<string>();
@@ -298,7 +299,7 @@ function mediaIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
     ));
   }
   if (!productCovered) {
-    for (const skuKey of draft.selectedSkuKeys) {
+    for (const skuKey of sourceListingEditorSkuKeysForDraft(draft)) {
       if (coveredSkus.has(skuKey)) continue;
       issues.push(issue(
         'OZON_LISTING_MEDIA_SKU_UNCOVERED',
@@ -312,7 +313,7 @@ function mediaIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
 
 function pricingIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
   try {
-    validateSourceListingPricing(draft.pricing.value, draft.selectedSkuKeys);
+    validateSourceListingPricing(draft.pricing.value, sourceListingEditorSkuKeysForDraft(draft));
     return [];
   } catch (error) {
     if (!(error instanceof SourceListingWorkflowReadinessError)) throw error;

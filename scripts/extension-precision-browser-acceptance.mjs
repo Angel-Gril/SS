@@ -118,7 +118,8 @@ function parentHtml(watermarkJpeg) {
   const processFixturePaid=${process.argv.includes('--paid-translation-flow')};
   const product=${JSON.stringify(fixtureProduct())};
   const shops=[{id:'doth',name:'DOTH'},{id:'other-fixture',name:'另一个测试店铺'}];
-  let handoff=null,workbench=null,pricing=null,category=null,packaging=[],billing=null,history=null,selectedSkuKeys=[];
+  let handoff=null,workbench=null,pricing=null,category=null,packaging=[],billing=null,history=null,selectedSkuKeys=[],offerRows=[];
+  const editorKeys=()=>selectedSkuKeys.concat(offerRows.map(row=>row.rowKey));
   let readyForPublish=false,assignedMedia=false,publishPreviews=0,publishStatusPolls=0,publishCommitted=false;
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
   const savedOperations=new Set();
@@ -153,6 +154,7 @@ function parentHtml(watermarkJpeg) {
     document.getElementById('workspace').contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);
   };
   window.__precisionSetCopySourceCurrent=(current)=>{copy.pendingCandidates.forEach(candidate=>candidate.sourceCurrent=current);};
+  window.__precisionExistingReviewedMedia=()=>{assignedMedia=true;window.__precisionAdvanceDraft();};
   window.addEventListener('message',async event=>{
     const frame=document.getElementById('workspace');
     if(event.source!==frame.contentWindow||event.origin!==location.origin)return;
@@ -220,6 +222,10 @@ function parentHtml(watermarkJpeg) {
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'官方属性字段已更新，请重新读取后填写并保存',outcome:'NOT_SUBMITTED',code:'ozon_attribute_schema_mismatch'},location.origin);
       return;
     }
+    if(command.type==='EDITOR_ATTRIBUTES'&&window.__precisionFailNextAttributeRead){
+      window.__precisionFailNextAttributeRead=false;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'官方属性只读刷新暂时不可用',outcome:'NOT_SUBMITTED'},location.origin);return;
+    }
     if(command.type==='EDITOR_SAVE'){
       await new Promise(resolve=>setTimeout(resolve,200));
       replayed=savedOperations.has(command.operationKey);
@@ -228,9 +234,26 @@ function parentHtml(watermarkJpeg) {
         savedOperations.add(command.operationKey);
         if(command.action!=='VALIDATE'){readyForPublish=false;validationStatus='STALE';validationBlockers=[];}
         if(command.action==='PRICING')pricing=command.value;
+        else if(command.action==='SKU_DUPLICATE'){
+          const sourceSkuKey=command.value.sourceSkuKey,rowKey='listing-copy:'+'a'.repeat(64);
+          offerRows.push({rowKey,sourceSkuKey,offerId:'copy-'+('a'.repeat(40)),
+            pricing:pricing?.items.find(row=>row.skuKey===sourceSkuKey)||null,packaging:packaging.find(row=>row.skuKey===sourceSkuKey)?Object.fromEntries(Object.entries(packaging.find(row=>row.skuKey===sourceSkuKey)).filter(([key])=>key!=='skuKey')):null});
+        }
+        else if(command.action==='SKU_COPY_REMOVE'){
+          const rowKey=command.value.rowKey;offerRows=offerRows.filter(row=>row.rowKey!==rowKey);
+          if(pricing)pricing={...pricing,items:pricing.items.filter(row=>row.skuKey!==rowKey)};
+          packaging=packaging.filter(row=>row.skuKey!==rowKey);
+        }
+        else if(command.action==='SKU_SELECTION'){
+          selectedSkuKeys=[...command.value.selectedSkuKeys];
+          workbench.status.listing.items[0].selectedSkuCount=selectedSkuKeys.length;
+        }
         else if(command.action==='PACKAGING')packaging=command.value.items;
         else if(command.action==='ATTRIBUTES')for(const change of command.value.changes){
           attributeValues.set(JSON.stringify([change.attributeId,change.skuKey||null]),{attributeId:change.attributeId,skuKey:change.skuKey||null,value:change.action==='CLEAR'?null:change.value,dictionaryValueIds:change.dictionaryValueIds||[],reviewed:true});
+        }
+        else if(command.action==='ATTRIBUTE_SUGGESTIONS'){
+          for(const field of attributeFields.filter(field=>field.ownership!=='SYSTEM'))for(const skuKey of field.ownership==='SKU'?selectedSkuKeys:[null])attributeValues.set(JSON.stringify([field.attributeId,skuKey]),{attributeId:field.attributeId,skuKey,value:field.attributeId===202?'Синий':field.cardinality==='MULTI'?['选项101']:field.attributeId===205?'fixture-model':'来源资料确认值',dictionaryValueIds:field.dictionaryId?[field.attributeId===202?7:101]:[],reviewed:true});
         }
         else if(command.action==='COPY_CANDIDATE'){
           candidateId='manual-copy-'+(copy.pendingCandidates.length+1);
@@ -259,9 +282,32 @@ function parentHtml(watermarkJpeg) {
         workbench.status.listing.items[0].draftVersion++;
       }
     }
-    if(command.type==='EDITOR_READ'||command.type==='EDITOR_SAVE'){
+    if(command.type==='EDITOR_COPY_CAPABILITY')result={state:'ready',capability:{available:!window.__precisionCopyGenerationDenied,
+      reasonCode:window.__precisionCopyGenerationDenied?'LISTING_COPY_OFF':'AVAILABLE',providerFeeNotice:'生成文案可能产生 Provider 费用，不自动审核或发布。'}};
+    if(command.type==='VISION_CAPABILITY')result={state:'ready',capability:{available:!window.__precisionVisionDisabled,
+      reasonCode:window.__precisionVisionDisabled?'VISION_OFF':'READY',providerFeeNotice:'看图分析可能产生模型费用，仅用于编辑提示词。'}};
+    if(command.type==='VISION_ANALYZE'){
+      replayed=savedOperations.has(command.operationKey);savedOperations.add(command.operationKey);
+      result={state:'ready',analysis:{binding:command.binding,operationKey:command.operationKey,skuKey:command.skuKey,
+        sourceMediaKeys:command.sourceMediaKeys,replayed,
+        visualDescription:{composition:'商品居中展示',background:'浅灰背景',lighting:'柔和自然光',style:'写实商品摄影',
+          observations:{colors:['白色'],shapes:['方形'],visibleComponents:['提手'],visibleText:[]}}}};
+      if(window.__precisionAdvanceDuringVision){window.__precisionAdvanceDuringVision=false;window.__precisionAdvanceDraft();}
+    }
+    if(command.type==='EDITOR_COPY_GENERATE'){
+      replayed=savedOperations.has(command.operationKey);
+      candidateId='generated-copy-fixture';
+      if(!replayed){
+        savedOperations.add(command.operationKey);
+        copy.pendingCandidates.push({id:candidateId,fields:[...command.fields],titleRu:'Женская хлопковая футболка',
+          descriptionRu:'Хлопковая футболка с длинными рукавами.',sourceCurrent:true});
+        workbench.status.listing.items[0].revision++;workbench.status.listing.items[0].draftVersion++;
+      }
+    }
+    if(command.type==='EDITOR_READ'||command.type==='EDITOR_SAVE'||command.type==='EDITOR_COPY_GENERATE'){
       const draft=workbench.status.listing.items[0];
-      result={state:'ready',replayed,...(candidateId?{candidateId}:{}),editor:{contractVersion:'extension-listing-editor/v1',binding:{snapshotId:'snapshot-fixture',supplyGoodsId:'goods-fixture',shopId:draft.shopId,listingWorkflowId:draft.id,draftRevision:draft.revision,draftVersion:draft.draftVersion},selectedSkuKeys,category,pricing,packaging,copy,stage:readyForPublish?'READY_TO_PUBLISH':'CATEGORY_REVIEW',validation:{status:validationStatus},blockers:validationBlockers,freshness:Object.fromEntries(['category','attributes','content','media','pricing','validation'].map(key=>[key,readyForPublish?'CURRENT':'STALE'])),mediaAssignments:assignedMedia?[{scope:'PRODUCT',skuKey:null,slotKey:'product-main',assetId:'suite-output-1'},{scope:'SKU',skuKey:'sku-1',slotKey:'sku-main',assetId:'source-output-1'}]:[]}};
+      const freshness={category:category?'CURRENT':'STALE',attributes:attributeValues.size?'CURRENT':'STALE',content:copy.titleRu?'CURRENT':'STALE',media:assignedMedia?'CURRENT':'STALE',pricing:pricing?'CURRENT':'STALE',validation:readyForPublish?'CURRENT':'STALE'};
+      result={state:'ready',replayed,...(candidateId?{candidateId}:{}),editor:{contractVersion:'extension-listing-editor/v1',binding:{snapshotId:'snapshot-fixture',supplyGoodsId:'goods-fixture',shopId:draft.shopId,listingWorkflowId:draft.id,draftRevision:draft.revision,draftVersion:draft.draftVersion},selectedSkuKeys,...(offerRows.length?{offerRows:{contractVersion:'source-listing-offer-rows/v1',rows:offerRows.map(row=>({...row,pricing:pricing?.items.find(item=>item.skuKey===row.rowKey)||row.pricing}))}}:{}),category,pricing,packaging,copy,stage:readyForPublish?'READY_TO_PUBLISH':'CATEGORY_REVIEW',validation:{status:validationStatus},blockers:validationBlockers,freshness,mediaAssignments:assignedMedia?[{scope:'PRODUCT',skuKey:null,slotKey:'product-main',assetId:'suite-output-1'},{scope:'SKU',skuKey:'sku-1',slotKey:'sku-main',assetId:'source-output-1'}]:[]}};
     }
     if(command.type==='EDITOR_CATALOG'){
       const leaf={categoryId:10,typeId:20,label:'服装 / 上衣',typeLabel:'上衣',pathTitles:['服装']};
@@ -270,7 +316,20 @@ function parentHtml(watermarkJpeg) {
         recommendations:[{...leaf,match:'recommended',reasons:['来源类目：女式T恤']}],
         ...(command.preview?{attributePreview:{...command.preview,schemaRevision:'c'.repeat(64),fields:[{attributeId:201,name:'商品特点',required:true,valueType:'STRING',cardinality:'SINGLE',dictionaryId:null,ownership:'EDITOR',editorMode:'EDITABLE',valuePolicy:'FREE_TEXT',maxValues:1}]}}:{})}};
     }
-    if(command.type==='EDITOR_ATTRIBUTES')result={state:'ready',workspace:{schemaRevision:attributeSchema,fields:attributeFields,values:attributeFields.flatMap(field=>(field.ownership==='SKU'?selectedSkuKeys:[null]).map(skuKey=>attributeValues.get(JSON.stringify([field.attributeId,skuKey]))||{attributeId:field.attributeId,skuKey,value:field.attributeId===204?'ERP自动关联':null,dictionaryValueIds:[],reviewed:false}))}};
+    if(command.type==='EDITOR_ATTRIBUTES')result={state:'ready',workspace:{schemaRevision:attributeSchema,fields:attributeFields,values:attributeFields.flatMap(field=>(field.ownership==='SKU'?editorKeys():[null]).map(skuKey=>attributeValues.get(JSON.stringify([field.attributeId,skuKey]))||{attributeId:field.attributeId,skuKey,value:field.attributeId===204?'ERP自动关联':null,dictionaryValueIds:[],reviewed:false}))}};
+    if(command.type==='EDITOR_ATTRIBUTE_SUGGESTIONS')result={state:'ready',workspace:{schemaRevision:attributeSchema,fields:attributeFields,values:[]},suggestions:attributeFields.filter(field=>field.ownership!=='SYSTEM').map(field=>({attributeId:field.attributeId,attributeName:field.name,candidateId:'candidate-'+field.attributeId,candidateHash:'e'.repeat(64),schemaRevision:attributeSchema,reviewed:false,
+      rows:(field.ownership==='SKU'?selectedSkuKeys:[null]).map(skuKey=>({skuKey,value:field.attributeId===202?'Синий':field.cardinality==='MULTI'?['选项101']:'来源资料确认值',sourceValue:'采集资料',source:'SOURCE',dictionaryValueIds:field.dictionaryId?[field.attributeId===202?7:101]:[],reviewed:false,evidence:[{id:'source-evidence',source:'SOURCE_STANDARD',path:'source.attributes',value:'采集资料',isEstimated:false,confidence:1}],unresolvedValues:[]}))})),blockedSuggestions:[]};
+    if(command.type==='EDITOR_ATTRIBUTE_SUGGESTIONS')result={state:'ready',suggestions:result};
+    if(command.type==='EDITOR_ATTRIBUTE_SUGGESTIONS'&&${process.argv.includes('--empty-attributes-flow')})result.suggestions.suggestions=[];
+    if(command.type.startsWith('LOGISTICS_')){
+      const hint={commission:null,fx:{rate:0.1,source:'open.er-api.com',fetchedAt:new Date().toISOString()},requiresManual:['commissionPct']};
+      const scope={assignmentId:'assignment-fixture',shopId:'doth',shopName:'DOTH',companyId:'company-fixture',warehouseId:'warehouse-fixture',warehouseName:'广州仓',originCountryUid:'cn',originCityUid:'guangzhou',originLabel:'广州',destinationCountryUid:'ru',destinationLocationUid:'moscow',destinationLabel:'莫斯科',releaseSequence:1,effectiveReleaseAvailable:true};
+      const common={contractVersion:'extension-listing-logistics-pricing/v1',binding:command.binding,hints:hint};
+      const lease={validUntil:new Date(Date.now()+3600000).toISOString(),authorizationValidUntil:new Date(Date.now()+300000).toISOString()};
+      if(command.type==='LOGISTICS_SCOPES')result={state:'ready',logistics:{...common,selectedSkuKeys,packaging,assignments:[scope],requiresSelection:true}};
+      if(command.type==='LOGISTICS_SERVICES')result={state:'ready',logistics:{...common,...lease,selection:command.selection,releaseId:'release-fixture',releaseSequence:1,effectiveChecksum:'f'.repeat(64),services:[{stableServiceKey:'service-fixture',providerId:'fixture-provider',displayName:'标准陆运',deliveryVariant:'pickup',deliveryPromise:'12–24天'}],requiresSelection:true}};
+      if(command.type==='LOGISTICS_QUOTE')result={state:'ready',logistics:{...common,...lease,selection:command.selection,releaseId:'release-fixture',effectiveChecksum:'f'.repeat(64),stableServiceKey:'service-fixture',source:'ERP_PUBLISHED_FORMULA',currency:'CNY',items:command.items.map(item=>({skuKey:item.skuKey,declaredPriceMinor:item.declaredPriceMinor,shippingMinor:250,packingMinor:0,totalLogisticsMinor:250,shippingCostMinor:250,shippingCostCny:2.5,matchedBand:{priceRangeCNY:['0','0'],priceRangeRUB:['0','0']},matchedRuleDigest:'d'.repeat(64)})),requiresPricePreview:true,writesDraft:false}};
+    }
     if(command.type==='EDITOR_DICTIONARY')result={state:'ready',dictionary:{schemaRevision:attributeSchema,attributeId:command.attributeId,values:command.attributeId===202?[{id:7,value:'Синий'},{id:8,value:'Зеленый'}]:[101,102,103,104].map(id=>({id,value:'选项'+id})),complete:true,dictionaryComplete:true,resultExhaustive:true,hasMore:false,resultTruncated:false}};
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='CREATE_AND_REVIEW_PLAN'){
       const draft=workbench.status.listing.items[0];
@@ -327,6 +386,14 @@ function parentHtml(watermarkJpeg) {
       result=!publishCommitted||publishStatusPolls===1?null:{state:publishStatusPolls===2?'PENDING':'SUCCEEDED',receiptId:'publish-receipt-fixture',failureCode:null};
     }
     frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);
+    if(command.type==='EDITOR_SAVE'&&command.action==='SKU_DUPLICATE'&&${process.argv.includes('--sku-copy-flow')}&&!window.__precisionLostCopyReply){
+      window.__precisionLostCopyReply=true;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'复制 SKU 回执未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);return;
+    }
+    if(command.type==='CREATE_DRAFT'&&${process.argv.includes('--draft-recovery-flow')}&&!window.__precisionLostDraftReply){
+      window.__precisionLostDraftReply=true;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'草稿回执尚未返回，请核对原结果',outcome:'UNKNOWN_OUTCOME'},location.origin);return;
+    }
     if(command.type==='EDITOR_SAVE'&&command.action==='PACKAGING'&&window.__precisionLoseNextPackagingReply){
       window.__precisionLoseNextPackagingReply=false;
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'包装保存回执暂未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);
@@ -341,6 +408,16 @@ function parentHtml(watermarkJpeg) {
       window.__precisionLoseNextCopyReply=false;
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'文案回执暂未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);
       return;
+    }
+    if(command.type==='EDITOR_COPY_GENERATE'&&window.__precisionLoseNextGeneratedCopyReply){
+      window.__precisionLoseNextGeneratedCopyReply=false;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'文案生成回执暂未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);
+      return;
+    }
+    if(command.type==='VISION_ANALYZE'&&window.__precisionLoseNextVisionReply){
+      window.__precisionLoseNextVisionReply=false;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,
+        ok:false,error:'看图回执尚未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);return;
     }
     frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:true,error:'',...(result===undefined?{}:{data:result})},location.origin);
   });
@@ -501,6 +578,8 @@ async function run() {
     diagnose = async () => ({
       commands: await evaluate('window.__precisionCommands'),
       privateCalls: await evaluate('window.__precisionPrivateCalls'),
+      pricing: await workspace('({state:document.getElementById("precision-pricing-state")?.textContent,inputs:[...document.querySelectorAll("#precision-pricing-modal input")].map(input=>({id:input.id,value:input.value,field:input.dataset.pricingField}))})'),
+      vision: await workspace('({open:document.getElementById("precision-vision-modal")?.hidden===false,state:document.getElementById("precision-vision-state")?.textContent,media:document.querySelectorAll("#precision-vision-modal input").length,sourceOpen:document.getElementById("precision-image-source-panel")?.hidden===false,managerOpen:document.getElementById("precision-image-manager")?.hidden===false,button:document.getElementById("precision-vision-open")?.getBoundingClientRect().toJSON(),focused:document.activeElement?.id})'),
       state: await workspace('({status:document.getElementById("status-text")?.textContent,categoryOpen:document.getElementById("editor-category-modal")?.hidden===false,categoryOptions:document.getElementById("editor-category-select")?.options.length,categoryDisabled:document.getElementById("editor-category-save")?.disabled,suite:document.getElementById("precision-suite-state")?.textContent,generateDisabled:document.getElementById("precision-generate")?.disabled,privateRuntime:!!window.chrome?.runtime,byokState:document.getElementById("precision-byok-config-state")?.textContent,byokProfileSdk:!!window.SS_ERP_BYOK_PROVIDER_SETTINGS_CLIENT,byokMediaSdk:!!window.SS_ERP_BYOK_WORKBENCH_CLIENT,editState:document.getElementById("precision-byok-edit-state")?.textContent,editError:document.getElementById("precision-byok-edit-state")?.textContent,editSourceCount:document.querySelectorAll("#precision-byok-edit-sources input").length,editLoadDisabled:document.getElementById("precision-byok-edit-load")?.disabled,editStartDisabled:document.getElementById("precision-byok-edit-start")?.disabled,editOperation:document.getElementById("precision-byok-edit-operation")?.value,editPrompt:document.getElementById("precision-byok-edit-prompt")?.value,readyState:document.readyState,moduleScripts:[...document.scripts].map(script=>({src:script.src,type:script.type})),resources:performance.getEntriesByType("resource").map(entry=>entry.name).filter(name=>name.includes("precision-workbench")),scriptErrors:parent.__precisionScriptErrors||[]})'),
     });
     cdp.on('Runtime.exceptionThrown', (event, observedSession) => {
@@ -612,14 +691,244 @@ async function run() {
     await screenshot('sku-selection');
     await click('#sku-apply-btn');
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="CREATE_DRAFT")'), 'draft create command');
+    if(process.argv.includes('--draft-recovery-flow')){
+      await until(()=>workspace('document.getElementById("status-text").textContent.includes("草稿回执")'),'unknown creation retains original recovery');
+      await click('#precision-preparation-recover');
+      await until(()=>workspace('document.getElementById("status-text").textContent.includes("已核对")'),'readonly draft recovery');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_DRAFT").length'),1);
+      assert.ok(await evaluate('window.__precisionCommands.some(c=>c.type==="EDITOR_READ")'));
+      await click('#start-btn');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("选择官方类目")'),'recovered draft continues without rebuilding');
+      await screenshot('draft-readonly-recovery');summary.draftRecovery={readonly:true,createRequests:1,continued:true};summary.ok=true;
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
     await until(() => workspace('document.getElementById("status-text").textContent.includes("草稿已就绪")'), 'draft readback');
     assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'), 2);
     await until(() => workspace('document.querySelectorAll("[data-image-sku-key]").length===2'), 'image workbench uses only selected draft SKUs');
     assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'), ['sku-1', 'sku-7']);
     assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-1', 'image-7'], 'product-level and selected SKU media are eligible');
     assert.ok(await workspace('document.querySelector(".editor-table-spec").textContent.includes("颜色 1")'));
+    assert.equal(await workspace('[...document.querySelectorAll(".editor-row-copy-btn")].some(button=>!button.disabled)'),true,'source SKU duplication is available in the same editor');
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
+    await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("选择官方类目")'), 'continuous preparation pauses at explicit official category review');
+    if(process.argv.includes('--sku-copy-flow')){
+      await click('#editor-category-modal .settings-head button');await click('#precision-preparation-stop');
+      await click('.editor-row-copy-btn[data-row-index="1"]');
+      await until(()=>workspace('document.getElementById("status-text").textContent.includes("复制 SKU 回执")'),'unknown copy requires original replay');
+      assert.equal(await workspace('document.getElementById("editor-replay-btn").hidden'),false);
+      await click('#editor-replay-btn');await until(()=>workspace('document.querySelectorAll("tr[data-editor-row-index]").length===3'),'copy appears after original receipt');
+      await until(()=>evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_SAVE"&&c.action==="SKU_DUPLICATE").length===2'),'original copy replay dispatch');
+      await until(()=>workspace('document.getElementById("editor-replay-btn").hidden&&!document.getElementById("editor-save-btn").disabled'),'copy replay confirmed');
+      const requests=await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_SAVE"&&c.action==="SKU_DUPLICATE")');
+      assert.equal(requests.length,2);assert.equal(requests[0].operationKey,requests[1].operationKey);
+      assert.equal(await workspace('document.querySelectorAll(".editor-row-copy-btn")[2].textContent'),'移除副本');
+      await until(()=>workspace('document.querySelectorAll("[data-image-sku-key]").length===3'),'copied row participates in image management');
+      const replace=async(selector,text)=>{await click(selector);await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.insertText',{text});};
+      for(const row of [1,2,3]){await replace(`input[data-row-index="${row}"][data-field-key="价格，CNY"]`,String(30+row));await replace(`input[data-row-index="${row}"][data-field-key="折扣前价格，CNY"]`,String(50+row));}
+      await click('#editor-save-btn');await until(()=>workspace('document.getElementById("status-text").textContent.includes("保存价格")'),'independent prices saved');
+      const prices=await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_SAVE"&&c.action==="PRICING").at(-1).value.items');
+      assert.equal(prices.length,3);assert.equal(new Set(prices.map(row=>row.offerId)).size,3);assert.equal(prices[2].price,'33');
+      for(const row of [1,2,3])for(const[field,value]of [['毛重，克',String(300+row)],['包装长度，毫米','140'],['包装宽度，毫米','80'],['包装高度，毫米','60']])await replace(`input[data-row-index="${row}"][data-field-key="${field}"]`,value);
+      await click('#editor-packaging-save-btn');await until(()=>workspace('document.getElementById("status-text").textContent.includes("保存包装")'),'independent packaging saved');
+      const packages=await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_SAVE"&&c.action==="PACKAGING").at(-1).value.items');assert.equal(packages.length,3);assert.equal(packages[2].weightG,303);
+      await click('[data-image-sku-key="listing-copy:'+'a'.repeat(64)+'"]');
+      await until(()=>workspace('!document.getElementById("precision-image-manager").hidden'),'same-window copy images');
+      await screenshot('independent-sku-copy');
+      await click('#precision-image-close');
+      await click('.editor-row-copy-btn[data-row-index="3"]');
+      await until(()=>workspace('document.querySelectorAll("tr[data-editor-row-index]").length===2'),'copy removal preserves source rows');
+      await until(()=>workspace('document.querySelectorAll("[data-image-sku-key]").length===2'),'removed copy image row disappears');
+      assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'),['sku-1','sku-7']);
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_DRAFT").length'),1);
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false);
+      summary.skuCopy={originalReplay:true,sourceIdentityUnchanged:true,independentPriceAndPackaging:true,imageRow:true,removeCopyOnly:true,automaticPublish:false};summary.ok=true;
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if(process.argv.includes('--empty-attributes-flow')){
+      await until(()=>workspace('document.querySelectorAll(".category-auto-card").length>0'),'category loaded');await click('.category-auto-card');
+      await until(()=>workspace('!document.querySelector("[data-category-confirm]").disabled'),'category ready');await click('[data-category-confirm]');
+      await until(()=>workspace('!document.getElementById("precision-attribute-suggestions-modal").hidden&&!document.getElementById("precision-attribute-suggestions-manual").disabled'),'empty suggestions show manual continuation');
+      assert.equal(await workspace('document.getElementById("precision-attribute-suggestions-apply").disabled'),true);
+      await click('#precision-attribute-suggestions-manual');await click('#precision-preparation-continue');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("包装")'),'manual attribute path reaches next input');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="EDITOR_SAVE"&&c.action==="ATTRIBUTE_SUGGESTIONS")'),false);
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false);
+      await screenshot('empty-attributes-manual');summary.emptyAttributes={explicitManual:true,noMutation:true,continues:true};summary.ok=true;
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if(!process.argv.includes('--complete-preparation-flow')){
+      await click('#editor-category-modal .settings-head button');
+      await click('#precision-preparation-stop');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("已停止")'),'explicit manual editing exits preparation queue');
+    }
+    if(process.argv.includes('--complete-preparation-flow')){
+      const replace=async(selector,text)=>{await click(selector);assert.equal(await workspace('document.activeElement.matches('+JSON.stringify(selector)+')'),true);await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.insertText',{text});};
+      await until(()=>workspace('document.querySelectorAll(".category-auto-card").length>0'),'category recommendations loaded');
+      await click('.category-auto-card');
+      await until(()=>workspace('!document.querySelector("[data-category-confirm]").disabled'),'explicit category preview');await click('[data-category-confirm]');
+      await until(()=>workspace('!document.getElementById("precision-attribute-suggestions-modal").hidden&&!document.getElementById("precision-attribute-suggestions-apply").disabled'),'automatically opened attribute candidates');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="EDITOR_SAVE"&&c.action==="ATTRIBUTE_SUGGESTIONS")'),false);
+      await screenshot('source-attribute-candidates');await evaluate('window.__precisionFailNextAttributeRead=true');await click('#precision-attribute-suggestions-apply');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("包装")'),'continuous packaging prerequisite');
+      assert.match(await workspace('document.getElementById("status-text").textContent'),/已保存.*刷新/);
+      assert.equal(await workspace('document.getElementById("editor-replay-btn").hidden'),true,'readback failure never becomes unknown save');
+      for(const row of [1,2])for(const[field,value]of [['毛重，克','350'],['包装长度，毫米','140'],['包装宽度，毫米','80'],['包装高度，毫米','60']])await replace(`input[data-row-index="${row}"][data-field-key="${field}"]`,value);
+      await click('#editor-packaging-save-btn');
+      await until(()=>workspace('!document.getElementById("precision-pricing-modal").hidden'),'pricing automatically continues');
+      await replace('#precision-pricing-commissionPct','10');await replace('#precision-pricing-discountPct','0');
+      await click('#precision-pricing-logistics');await until(()=>workspace('document.querySelectorAll("#precision-logistics-scope option").length===2'),'current-shop routes');
+      await workspace('(()=>{const n=document.getElementById("precision-logistics-scope");n.value="0";n.dispatchEvent(new window.Event("change",{bubbles:true}));})()');await click('#precision-logistics-read');
+      await until(()=>workspace('document.querySelectorAll("#precision-logistics-service option").length===2'),'authorized services');
+      await workspace('(()=>{for(const[id,value]of [["precision-logistics-service","service-fixture"],["precision-logistics-battery","no"]]){const n=document.getElementById(id);n.value=value;n.dispatchEvent(new window.Event("change",{bubbles:true}));}})()');
+      await click('#precision-logistics-quote');await until(()=>workspace('document.getElementById("precision-logistics-state").textContent.includes("价档核验")'),'shipping and sale-price stable band');
+      await screenshot('authorized-logistics-pricing');await click('#precision-logistics-close');await click('#precision-pricing-preview');
+      assert.equal(await workspace('document.getElementById("precision-pricing-apply").disabled'),false);
+      await replace('#precision-pricing-commissionPct','11');
+      assert.equal(await workspace('document.getElementById("precision-pricing-apply").disabled'),true,'fee change invalidates sale preview');
+      assert.equal(await workspace('document.querySelectorAll("#precision-pricing-modal input[data-pricing-field=shipping]").length'),2);
+      assert.ok(await workspace('[...document.querySelectorAll("#precision-pricing-modal input[data-pricing-field=shipping]")].every(input=>input.value==="")'),'fee change discards automatic freight');
+      await replace('#precision-pricing-commissionPct','10');
+      await click('#precision-pricing-logistics');await until(()=>workspace('document.querySelectorAll("#precision-logistics-scope option").length===2'),'new route read');
+      await workspace('(()=>{const n=document.getElementById("precision-logistics-scope");n.value="0";n.dispatchEvent(new window.Event("change",{bubbles:true}));})()');await click('#precision-logistics-read');
+      await until(()=>workspace('document.querySelectorAll("#precision-logistics-service option").length===2'),'new service read');
+      await workspace('(()=>{for(const[id,value]of [["precision-logistics-service","service-fixture"],["precision-logistics-battery","no"]]){const n=document.getElementById(id);n.value=value;n.dispatchEvent(new window.Event("change",{bubbles:true}));}})()');
+      await click('#precision-logistics-quote');await until(()=>workspace('document.getElementById("precision-logistics-state").textContent.includes("价档核验")'),'requoted changed fees');
+      await click('#precision-logistics-close');await click('#precision-pricing-preview');await click('#precision-pricing-apply');
+      await click('#editor-save-btn');await until(()=>workspace('!document.getElementById("precision-copy-modal").hidden&&!document.getElementById("precision-copy-generate").disabled'),'copy next action same-window');
+      await click('#precision-copy-generate');await until(()=>workspace('!document.getElementById("precision-copy-approve").disabled'),'pending copy review');await click('#precision-copy-approve');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("图片")'),'explicit media review gate');
+      await click('#precision-copy-close');await evaluate('window.__precisionExistingReviewedMedia()');
+      await until(()=>workspace('!document.getElementById("editor-save-btn").disabled'),'reviewed-media readback');await click('#precision-preparation-continue');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("准备已完成")'),'complete preparation chain');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false,'complete preparation never publishes automatically');
+      const quotes=await evaluate('window.__precisionCommands.filter(c=>c.type==="LOGISTICS_QUOTE")');assert.equal(quotes.length,4);assert.deepEqual(quotes.at(-1).items.map(i=>i.declaredPriceMinor),[2000,2000]);
+      await screenshot('continuous-preparation-complete');assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await click('#precision-preparation-shops');await until(()=>workspace('!document.getElementById("precision-preparation-shop-modal").hidden'),'multi-shop queue dialog');
+      await click('#precision-preparation-shop-modal input[value="other-fixture"]');await click('#precision-preparation-queue-start');
+      await until(()=>workspace('!document.getElementById("sku-picker").hidden'),'next authorized shop source-SKU selection');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_DRAFT").length'),1,'second-shop mutation waits for explicit SKU choice');
+      await click('#sku-toggle-btn');await click('input[data-row-id="sku-1"]');await click('input[data-row-id="sku-7"]');await click('#sku-apply-btn');
+      await until(()=>evaluate('window.__precisionCommands.some(c=>c.type==="CREATE_DRAFT"&&c.shopId==="other-fixture")'),'same-window next-shop draft');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false);
+      await screenshot('multi-shop-next-draft');
+      summary.preparation={automaticAttributes:true,sourceProvenance:true,scopeBoundLogistics:true,priceBandVerified:true,continuousSteps:true,explicitCopyAndMediaReview:true,automaticPublish:false};summary.ok=true;await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if (process.argv.includes('--vision-sku-flow')) {
+      await click('#precision-sku-selection');
+      await until(() => workspace('!document.getElementById("sku-picker").hidden'), 'adjust SKU in original picker');
+      assert.deepEqual(await workspace('[...document.querySelectorAll("#sku-picker input:checked")].map(input=>input.dataset.rowId)'), ['sku-1','sku-7']);
+      await click('input[data-row-id="sku-7"]'); await click('input[data-row-id="sku-2"]');
+      await screenshot('sku-adjustment'); await click('#sku-apply-btn');
+      await until(() => workspace('document.getElementById("status-text").textContent.includes("SKU 已调整")'), 'updated same draft SKU selection');
+      const selection = await evaluate('window.__precisionCommands.find(command=>command.type==="EDITOR_SAVE"&&command.action==="SKU_SELECTION")');
+      assert.deepEqual(selection.value.selectedSkuKeys, ['sku-1','sku-2']);
+      await until(() => workspace('document.querySelectorAll("[data-image-sku-key]").length===2'), 'new image row scope');
+      assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'), ['sku-1','sku-2']);
+      await until(() => workspace('!document.getElementById("precision-sku-selection").disabled'), 'SKU selection save and refresh are complete');
+      await click('[data-image-sku-key="sku-1"]');
+      await click('#precision-image-sources');
+      await workspace('document.querySelector("#precision-vision-open").scrollIntoView({block:"center",behavior:"instant"})');
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      const hit = await workspace('(()=>{const n=document.getElementById("precision-vision-open"),r=n.getBoundingClientRect();return{visible:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.id,disabled:n.disabled}})()');
+      assert.equal(hit.visible, 'precision-vision-open'); assert.equal(hit.disabled, false);
+      await click('#precision-vision-open');
+      await until(() => workspace('!document.getElementById("precision-vision-modal").hidden&&!document.getElementById("precision-vision-start").disabled'), 'vision capability admitted');
+      assert.equal(await workspace('document.querySelectorAll("#precision-vision-modal input").length'), 2, 'only current SKU and shared source media are offered');
+      await evaluate('window.__precisionLoseNextVisionReply=true'); await click('#precision-vision-start');
+      await until(() => workspace('!document.getElementById("precision-vision-recover").hidden'), 'unknown vision keeps original recovery');
+      await click('#precision-vision-recover');
+      await until(() => workspace('!document.getElementById("precision-vision-apply").disabled'), 'readback visual JSON before application');
+      assert.equal(await workspace('document.getElementById("status-text").textContent.includes("看图分析完成")'),true, 'successful recovery replaces the earlier missing-receipt error');
+      await screenshot('vision-json-result');
+      const visions = await evaluate('window.__precisionCommands.filter(command=>command.type==="VISION_ANALYZE")');
+      assert.equal(visions.length,2); assert.equal(visions[0].operationKey,visions[1].operationKey);
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EXECUTE_HOSTED_SUITE")'), false);
+      await click('#precision-vision-apply');
+      assert.equal(await workspace('document.getElementById("precision-visual-json").value.includes("提手")'),true);
+      assert.equal(await workspace('document.getElementById("precision-prompt-text").value.includes("浅灰背景")'),true);
+      await click('#precision-vision-open');
+      await until(() => workspace('!document.getElementById("precision-vision-start").disabled'), 'second vision visible');
+      await evaluate('window.__precisionAdvanceDuringVision=true'); await click('#precision-vision-start');
+      await until(() => workspace('document.getElementById("precision-vision-state").textContent.includes("已变化")'), 'late visual result does not overwrite changed draft');
+      assert.equal(await workspace('document.getElementById("precision-vision-apply").disabled'),true);
+      await click('#precision-vision-close');
+      await evaluate('window.__precisionVisionDisabled=true');
+      await until(() => workspace('!document.getElementById("editor-save-btn").disabled'), 'fresh draft editor read');
+      await click('#precision-vision-open');
+      await until(() => workspace('document.getElementById("precision-vision-state").textContent.includes("未启用")'), 'disabled vision stays manual');
+      assert.equal(await workspace('document.getElementById("precision-vision-start").disabled'),true);
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="PUBLISH")'),false);
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      summary.skuAdjustment={sameDraft:true,selection:['sku-1','sku-2'],sourceOnly:true};
+      summary.vision={editableJson:true,promptApplied:true,sameKeyRecovery:true,staleResultRejected:true,unavailableStaysManual:true};
+      summary.ok=true;await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if (process.argv.includes('--pricing-copy-flow')) {
+      const replace = async (selector, text) => {
+        await click(selector);
+        assert.equal(await workspace('document.activeElement.matches(' + JSON.stringify(selector) + ')'), true, 'physical input focuses ' + selector);
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+        await send('Input.insertText', { text });
+        assert.equal(await workspace('document.querySelector(' + JSON.stringify(selector) + ').value'), text);
+      };
+      await click('#pricing-tool-btn');
+      await until(() => workspace('!document.getElementById("precision-pricing-modal").hidden'), 'same-window pricing tool');
+      assert.equal(await workspace('document.querySelectorAll("[data-pricing-field=cost]").length'), 2);
+      await replace('#precision-pricing-commissionPct', '10');
+      await replace('#precision-pricing-discountPct', '0');
+      await click('#precision-pricing-preview');
+      assert.equal(await workspace('document.getElementById("precision-pricing-apply").disabled'), true, 'missing freight cannot become a free-shipping estimate');
+      await replace('#precision-pricing-freight', '2.5'); await click('#precision-pricing-fill-freight');
+      await click('#precision-pricing-preview');
+      await until(() => workspace('!document.getElementById("precision-pricing-apply").disabled'), 'per-SKU price preview');
+      await screenshot('pricing-preview');
+      await replace('#precision-pricing-adPct', '1');
+      assert.equal(await workspace('document.getElementById("precision-pricing-apply").disabled'), true, 'fee edit invalidates the old preview');
+      await click('#precision-pricing-preview'); await click('#precision-pricing-apply');
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EDITOR_SAVE")'), false, 'price application is only a local edit');
+      assert.equal(await workspace('document.querySelector(' + JSON.stringify('input[data-row-index="1"][data-field-key="价格，CNY"]') + ').value'), '20.29');
+      await until(() => workspace('!document.getElementById("editor-save-btn").disabled'), 'explicit price save is ready');
+      await click('#editor-save-btn');
+      await until(() => workspace('document.getElementById("status-text").textContent.includes("ERP 已保存价格与货号")'), 'explicit pricing save receipt');
+      const pricing = await evaluate('window.__precisionCommands.find(command=>command.type==="EDITOR_SAVE"&&command.action==="PRICING")');
+      assert.deepEqual(pricing.value.items.map(item => item.price), ['20.29', '20.29']);
+      assert.ok(pricing.value.items.every(item => item.currencyCode === 'CNY'));
+      await until(() => workspace('!document.getElementById("editor-copy-btn").disabled'), 'pricing save completes before editing copy');
+      await click('#editor-copy-btn');
+      await until(() => workspace('!document.getElementById("precision-copy-modal").hidden'), 'same-window copy editor');
+      await until(() => workspace('!document.getElementById("precision-copy-generate").disabled'), 'copy generation admitted');
+      await evaluate('window.__precisionLoseNextGeneratedCopyReply=true');
+      await click('#precision-copy-generate');
+      await until(() => workspace('!document.getElementById("precision-copy-generation-recover").hidden'), 'unknown generation keeps original recovery');
+      assert.equal(await workspace('document.getElementById("precision-copy-generate").disabled'), true);
+      await click('#precision-copy-generation-recover');
+      await until(() => workspace('document.getElementById("precision-copy-title").value.includes("футболка")&&!document.getElementById("precision-copy-approve").disabled'), 'generated candidate readback and review');
+      const generations = await evaluate('window.__precisionCommands.filter(command=>command.type==="EDITOR_COPY_GENERATE")');
+      assert.equal(generations.length, 2);
+      assert.equal(generations[0].operationKey, generations[1].operationKey, 'recovery retains the original generation key');
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="EDITOR_SAVE"&&command.action==="COPY_APPROVE")'), false);
+      await screenshot('generated-copy-review');
+      await click('#precision-copy-approve');
+      await until(() => workspace('document.getElementById("precision-copy-state").textContent.includes("已审核")'), 'explicit generated-copy approval');
+      await click('#precision-copy-close');
+      await evaluate('window.__precisionCopyGenerationDenied=true'); await click('#editor-copy-btn');
+      await until(() => workspace('document.getElementById("precision-copy-capability").textContent.includes("未启用")'), 'disabled production generation stays manual');
+      assert.equal(await workspace('document.getElementById("precision-copy-generate").disabled'), true);
+      assert.equal(await evaluate('window.__precisionCommands.filter(command=>command.type==="EDITOR_COPY_GENERATE").length'), 2);
+      await screenshot('copy-generation-disabled');
+      assert.equal(await evaluate('window.__precisionCommands.some(command=>command.type==="PUBLISH"||command.type==="EXECUTE_HOSTED_SUITE")'), false);
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.pricing = { preview: true, staleInputsRejected: true, explicitSave: true, perSkuCount: 2 };
+      summary.copy = { generatedPending: true, explicitApproval: true, sameKeyRecovery: true, unavailableStaysManual: true };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
     if (process.argv.includes('--video-flow')) {
       await click('[data-video-sku="sku-1"][data-video-role=MAIN]');
       await until(() => workspace('document.getElementById("precision-video-publish-modal").hidden===false&&!document.getElementById("precision-video-save").disabled'), 'video draft settings');

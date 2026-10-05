@@ -107,8 +107,60 @@
     return Math.round(targetCost * 100) / 100;
   }
 
+  function calculateSalePriceForTargetMargin(input) {
+    input = input || {};
+    function amount(key, label, positive) {
+      var value = input[key];
+      var number = Number(value);
+      if (value == null || typeof value === 'boolean' || String(value).trim() === ''
+        || !Number.isFinite(number) || number < 0 || (positive && number === 0) || number > 100000000) {
+        throw new Error('请填写有效的' + label);
+      }
+      return number;
+    }
+    function percentage(key, label) {
+      var number = amount(key, label, false);
+      if (number >= 100) throw new Error(label + '必须小于 100%');
+      return number;
+    }
+    var cost = amount('cost', '采购成本', true);
+    var shippingCost = amount('shippingCost', '运费估算', false);
+    var packingFee = amount('packingFee', '包装费', false);
+    var domesticFee = amount('domesticFee', '国内运费及杂费', false);
+    var commissionPct = percentage('commissionPct', '佣金率');
+    var adPct = percentage('adPct', '广告费率');
+    var otherPct = percentage('otherPct', '其他比例费率');
+    var targetMarginPct = percentage('targetMarginPct', '目标销售毛利率');
+    var discountPct = percentage('discountPct', '划线价折扣比例');
+    var denominator = 1 - (commissionPct + adPct + otherPct + targetMarginPct) / 100;
+    if (denominator <= 0) throw new Error('佣金、广告、其他比例费用和目标毛利之和必须小于 100%');
+    if (input.currency !== 'CNY' && input.currency !== 'RUB') throw new Error('请选择 CNY 或 RUB 售价币种');
+    var fxRate = input.currency === 'RUB' ? amount('fxRate', '汇率（CNY/RUB）', true) : 0;
+    var currencyFactor = input.currency === 'RUB' ? fxRate : 1;
+    function roundPriceUp(value) {
+      return Math.max(1, Math.ceil(value * 100 - 1e-8)) / 100;
+    }
+    var price = roundPriceUp((cost + shippingCost + packingFee + domesticFee) / denominator / currencyFactor);
+    var oldPrice = roundPriceUp(price / (1 - discountPct / 100));
+    if (!Number.isFinite(price) || !Number.isFinite(oldPrice) || price > 100000000 || oldPrice > 100000000) {
+      throw new Error('计算价格超出范围，请检查费用和汇率');
+    }
+    var priceRMB = price * currencyFactor;
+    var quote = enrichQuote({ shippingCost: shippingCost, packingFee: packingFee, reason: '用户确认的运费估算' }, {
+      priceRMB: priceRMB, cost: cost, packingFee: packingFee, commissionPct: commissionPct, fxRate: fxRate,
+      customFees: [
+        { label: '广告费', amount: priceRMB * adPct / 100 },
+        { label: '其他比例费用', amount: priceRMB * otherPct / 100 },
+        { label: '国内运费及杂费', amount: domesticFee },
+      ],
+    });
+    return { price: price.toFixed(2), oldPrice: oldPrice.toFixed(2), currency: input.currency,
+      targetMarginPct: targetMarginPct, quote: quote };
+  }
+
   window.OZON_CALC_PROFIT_ENGINE = {
     enrichQuote: enrichQuote,
     calculateCostForTargetMargin: calculateCostForTargetMargin,
+    calculateSalePriceForTargetMargin: calculateSalePriceForTargetMargin,
   };
 }());

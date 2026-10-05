@@ -9,6 +9,45 @@ vm.runInNewContext(readFileSync('extensions/ss-erp/shared/donor-workbench/worksp
 const binding = { snapshotId: 'snapshot', supplyGoodsId: 'goods', shopId: 'shop', listingWorkflowId: 'draft', draftRevision: 1, draftVersion: 1 };
 const editor = { contractVersion: 'extension-listing-editor/v1', binding, selectedSkuKeys: ['sku'], category: null, pricing: null };
 
+test('copy generation reads actual admission and creates only pending candidates using the frozen device draft', async () => {
+  const calls = [];
+  const capability = { available: true, reasonCode: 'AVAILABLE', providerFeeNotice: '生成文案可能产生 Provider 费用，不自动审核或发布。' };
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {},
+    post: async (path, body, options) => { calls.push({ path, body, options });
+      return { state: 'response', body: path.endsWith('copy-capability') ? { code: 1, data: capability }
+        : { code: 1, data: editor, candidateId: 'candidate', replayed: false } }; } } });
+  const available = await client.readDraftCopyCapability(binding);
+  assert.deepEqual(JSON.parse(JSON.stringify(available.capability)), capability);
+  const generated = await client.generateDraftCopy({ binding, operationKey: 'copy-generation-123', fields: ['title', 'description'], userInstructions: '保留真实规格' });
+  assert.equal(generated.candidateId, 'candidate');
+  assert.equal(calls[1].options.requiredScope, 'listing:write');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].body)), { binding, operationKey: 'copy-generation-123', fields: ['title', 'description'], userInstructions: '保留真实规格' });
+  const frame = { contractVersion: context.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION,
+    type: 'EDITOR_COPY_GENERATE', requestId: 'copy-1', listingWorkflowId: binding.listingWorkflowId,
+    binding, operationKey: 'copy-generation-123', fields: ['title', 'description'] };
+  assert.equal(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand(frame).type, frame.type);
+  assert.throws(() => context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand({ ...frame, fields: ['title', 'attributes'] }));
+  assert.throws(() => context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand({ ...frame, apiKey: 'forged' }));
+});
+
+test('copy generation rejects malformed requests before transport and preserves unknown mutation outcomes', async () => {
+  const calls = [];
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {}, post: async (path, body) => {
+    calls.push({ path, body }); return { state: 'unknown_outcome' }; } } });
+  const request = { binding, operationKey: 'copy-generation-123', fields: ['title'] };
+  for (const invalid of [{ fields: [] }, { fields: ['title', 'title'] }, { fields: ['attributes'] },
+    { operationKey: 'short' }, { userInstructions: 'a'.repeat(2001) }, { ownerUserId: 'foreign' }]) {
+    await assert.rejects(client.generateDraftCopy({ ...request, ...invalid }));
+  }
+  assert.equal(calls.length, 0);
+  await assert.rejects(client.generateDraftCopy(request), error => error.outcome === 'UNKNOWN_OUTCOME');
+  assert.equal(calls.length, 1, 'an unknown generation is never automatically retried');
+  const running = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {}, post: async () => ({
+    state: 'http_error', status: 409, body: { code: 0, errorCode: 'ozon_listing_ai_generation_in_progress', msg: '原请求仍待核对' },
+  }) } });
+  await assert.rejects(running.generateDraftCopy(request), error => error.outcome === 'UNKNOWN_OUTCOME');
+});
+
 test('category catalog transports an exact readonly preview and retains the official tree and recommendations', async()=>{
   const preview={categoryId:10,typeId:20,catalogRevision:'catalog-1'};
   const leaf={categoryId:10,typeId:20,label:'服装 / T恤',typeLabel:'T恤',pathTitles:['服装']};
@@ -203,4 +242,65 @@ test('packaging commands retain each SKU measurement and reject caller-owned evi
     state: 'response', body: { code: 1, data: { ...editor, packaging: value.items } },
   }) } });
   assert.deepEqual(JSON.parse(JSON.stringify((await client.saveDraftEditor({ binding, action: 'PACKAGING', operationKey: 'packaging-operation-1', value })).editor.packaging)), value.items);
+});
+
+test('SKU selection changes use only current source keys and preserve the original mutation identity', async () => {
+  const requests = [];
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {}, post: async (path, body) => {
+    requests.push({ path, body }); return { state: 'response', body: { code: 1, replayed: false,
+      data: { ...editor, binding: { ...binding, draftRevision: 2, draftVersion: 2 }, selectedSkuKeys: ['sku', 'sku-2'] } } };
+  } } });
+  const command = { binding, operationKey: 'sku-selection-operation', action: 'SKU_SELECTION', value: { selectedSkuKeys: ['sku', 'sku-2'] } };
+  assert.deepEqual(JSON.parse(JSON.stringify((await client.saveDraftEditor(command)).editor.selectedSkuKeys)), ['sku', 'sku-2']);
+  assert.equal(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand({ ...command,
+    contractVersion: context.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION, type: 'EDITOR_SAVE', requestId: 'select-1', listingWorkflowId: 'draft' }).action, 'SKU_SELECTION');
+  for (const value of [{ selectedSkuKeys: [] }, { selectedSkuKeys: ['sku', 'sku'] },
+    { selectedSkuKeys: ['sku'], copiedFrom: 'other' }, { selectedSkuKeys: ['a'.repeat(501)] }]) await assert.rejects(client.saveDraftEditor({ ...command, value }));
+  assert.equal(requests.length, 1);
+});
+
+test('SKU duplication transports only a source key and consumes safe independent offer rows', async () => {
+  const rowKey = 'listing-copy:' + 'a'.repeat(64);
+  const row = { rowKey, sourceSkuKey: 'sku', offerId: 'copy-offer', pricing: null, packaging: null };
+  const data = { ...editor, offerRows: { contractVersion: 'source-listing-offer-rows/v1', rows: [row] } };
+  const calls = [];
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {}, post: async (...args) => {
+    calls.push(args); return { state: 'response', body: { code: 1, data } };
+  } } });
+  const command = { binding, action: 'SKU_DUPLICATE', operationKey: 'copy-operation-1', value: { sourceSkuKey: 'sku' } };
+  assert.deepEqual(JSON.parse(JSON.stringify((await client.saveDraftEditor(command)).editor.offerRows)), data.offerRows);
+  assert.equal(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand({ ...command, type: 'EDITOR_SAVE',
+    contractVersion: context.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION, requestId: 'copy-1', listingWorkflowId: 'draft' }).action, 'SKU_DUPLICATE');
+  for (const value of [{ sourceSkuKey: 'sku', rowKey }, { sourceSkuKey: '' }, { sourceSkuKey: 'sku', reviewed: true }]) {
+    await assert.rejects(client.saveDraftEditor({ ...command, value }));
+  }
+  assert.equal(calls.length, 1);
+  for (const change of [
+    value => { value.rows[0].sourceSkuKey = 'foreign'; },
+    value => { value.rows[0].attributes = { secret: 'sentinel' }; },
+    value => { value.rows[0].pricing = { apiKey: 'sentinel' }; },
+    value => { value.rows[0].pricing = { skuKey: rowKey, price: '-1', oldPrice: '1', currencyCode: 'CNY', vat: '0', offerId: 'copy-offer' }; },
+    value => { value.rows[0].pricing = { skuKey: rowKey, price: '1', oldPrice: '1', currencyCode: 'CNY', vat: '0', offerId: { apiKey: 'sentinel' } }; },
+    value => { value.rows[0].packaging = { weightG: 0, lengthMm: 1, widthMm: 1, heightMm: 1 }; },
+    value => { value.rows.push({ ...value.rows[0] }); },
+  ]) {
+    const bad = JSON.parse(JSON.stringify(data)); change(bad.offerRows);
+    const rejecting = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {},
+      post: async () => ({ state: 'response', body: { code: 1, data: bad } }) } });
+    await assert.rejects(rejecting.readDraftEditor(binding), /invalid editor/);
+  }
+});
+
+test('removing a copy submits the exact row identity without deleting its source SKU', async () => {
+  const rowKey = 'listing-copy:' + 'b'.repeat(64), calls = [];
+  const client = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({ transport: { get: async () => {}, post: async (...args) => {
+    calls.push(args); return { state: 'response', body: { code: 1, data: editor } };
+  } } });
+  const command = { binding, action: 'SKU_COPY_REMOVE', operationKey: 'remove-copy-operation', value: { rowKey } };
+  await client.saveDraftEditor(command);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].value)), { rowKey });
+  assert.equal(context.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand({ ...command, type: 'EDITOR_SAVE',
+    contractVersion: context.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION, requestId: 'remove-1', listingWorkflowId: 'draft' }).action, 'SKU_COPY_REMOVE');
+  for (const value of [{ rowKey: 'sku' }, { rowKey, sourceSkuKey: 'sku' }]) await assert.rejects(client.saveDraftEditor({ ...command, value }));
+  assert.equal(calls.length, 1);
 });

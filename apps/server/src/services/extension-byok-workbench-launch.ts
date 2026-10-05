@@ -314,7 +314,7 @@ function resolveDraftMediaAuthority(input: {
     || draft.selectedSkuKeys.length > MAX_ASSIGNMENTS) {
     return fail('BYOK_WORKBENCH_LAUNCH_CONTEXT_STALE', 409, 'Listing SKU authority is invalid');
   }
-  const skuKeys = draft.selectedSkuKeys.map((value) => canonicalIdentifier(value, 500));
+  const skuKeys = sourceListingEditorSkuKeysForDraft(draft as any).map((value) => canonicalIdentifier(value, 500));
   if (skuKeys.some((value) => value === null)
     || new Set(skuKeys).size !== skuKeys.length
     || !draft.media
@@ -645,3 +645,4 @@ export function sameExtensionByokWorkbenchLaunchContext(
       === candidate[key as keyof typeof candidate]
   ));
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

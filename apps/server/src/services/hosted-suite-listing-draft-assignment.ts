@@ -774,7 +774,7 @@ function assertDraftAuthority(
   draft: OzonListingDraft,
   input: AssignHostedSuiteOutputToListingDraftInput,
 ): OzonListingDraftMediaAssignment[] {
-  const selectedSkuKeysValid = validIdentifierArray(draft.selectedSkuKeys, 500);
+  const selectedSkuKeysValid = validIdentifierArray(sourceListingEditorSkuKeysForDraft(draft), 500);
   const draftValid = draft.id === input.listingWorkflowId
     && draft.ownerUserId === input.ownerUserId
     && draft.shopId === input.shopId
@@ -786,7 +786,7 @@ function assertDraftAuthority(
     && draft.sourceCaptureSnapshotId === input.sourceCaptureSnapshotId
     && isSha256(draft.sourceCaptureHash)
     && selectedSkuKeysValid
-    && input.items.every((item) => draft.selectedSkuKeys.includes(item.skuKey))
+    && input.items.every((item) => sourceListingEditorSkuKeysForDraft(draft).includes(item.skuKey))
     && draft.stage !== 'PUBLISHED'
     && draft.stage !== 'PUBLISH_INTENT_RECORDED'
     && draft.runState !== 'CANCELLED'
@@ -836,7 +836,7 @@ function assertPlanAuthority(
     && binding.draftRevision === input.expectedDraftRevision
     && binding.draftVersion === input.expectedDraftVersion
     && binding.sourceCaptureSnapshotId === input.sourceCaptureSnapshotId
-    && sameStringArray(binding.selectedSkuKeys, draft.selectedSkuKeys)
+    && sameStringArray(binding.selectedSkuKeys, sourceListingEditorSkuKeysForDraft(draft))
     && planVersion.id === input.planVersionId
     && planVersion.planId === input.planId
     && planVersion.ownerUserId === input.ownerUserId
@@ -968,7 +968,7 @@ function assignmentScopeFor(
     || !validIdentifierArray(planSlot.skuKeys, MAX_ASSIGNMENTS)
     || planSlot.skuKeys.length < 1
     || !planSlot.skuKeys.includes(item.skuKey)
-    || !sameSortedStringSet(planSlot.skuKeys, draft.selectedSkuKeys)) {
+    || !sameSortedStringSet(planSlot.skuKeys, sourceListingEditorSkuKeysForDraft(draft))) {
     fail(
       'HOSTED_LISTING_ASSIGNMENT_PLAN_STALE',
       409,
@@ -1275,7 +1275,7 @@ function buildRecord(
         supplyGoodsId: authority.draft.supplyGoodsId,
         sourceCaptureSnapshotId: authority.draft.sourceCaptureSnapshotId,
         sourceCaptureHash: authority.draft.sourceCaptureHash,
-        selectedSkuKeys: authority.draft.selectedSkuKeys,
+        selectedSkuKeys: sourceListingEditorSkuKeysForDraft(authority.draft),
         revision: authority.draft.revision,
         draftVersion: authority.draft.draftVersion,
         assignments,
@@ -1630,3 +1630,4 @@ export function createHostedSuiteListingDraftAssignmentService(
 export type HostedSuiteListingDraftAssignmentService = ReturnType<
   typeof createHostedSuiteListingDraftAssignmentService
 >;
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

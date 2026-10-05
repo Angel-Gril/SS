@@ -32,6 +32,7 @@ import {
 import {
   assertSourceListingSkuPackagingCoverage,
   normalizeSourceListingSkuPackagingItems,
+  projectSourceListingSkuPackaging,
 } from './source-listing-sku-packaging.js';
 import {
   SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_BYTES,
@@ -41,8 +42,11 @@ import {
   sourceListingJsonLimitMessage,
 } from './source-listing-json-limits.js';
 import { normalizeSourceListingManualAttributeChanges } from './source-listing-manual-attribute-changes.js';
+import { normalizeSourceListingAttributeSuggestionChanges } from './source-listing-attribute-suggestion-changes.js';
 import type { SourceListingAttributeManualChange } from './source-listing-workflow-attributes.js';
+import type { SourceListingAttributeSuggestionReference } from './source-listing-workflow-attributes.js';
 import { SOURCE_LISTING_MANUAL_COPY_PROMPT_VERSION, normalizeSourceListingManualCopy } from './source-listing-manual-copy.js';
+import { deriveSourceListingSkuCopyKey, sourceListingEditorSkuKeysForDraft, sourceListingOfferRowsForDraft } from './source-listing-sku-copies.js';
 
 type IdFactory = (prefix: string) => string;
 
@@ -295,6 +299,7 @@ export function sourceListingAiCopyContextHash(draft: OzonListingDraft): string 
     sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
     sourceCaptureHash: draft.sourceCaptureHash,
     selectedSkuKeys: [...draft.selectedSkuKeys].sort(),
+    ...(draft.offerRows?.rows.length ? { offerRows: draft.offerRows } : {}),
     category: draft.category,
     reviewedAttributes,
   })).digest('hex');
@@ -310,6 +315,7 @@ export function hashOzonListingPublishState(draft: OzonListingDraft): string {
     sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
     sourceCaptureHash: draft.sourceCaptureHash,
     selectedSkuKeys: draft.selectedSkuKeys,
+    ...(draft.offerRows?.rows.length ? { offerRows: draft.offerRows } : {}),
     draftVersion: draft.draftVersion,
     category: draft.category,
     attributes: draft.attributes,
@@ -478,7 +484,7 @@ export function createSourceListingWorkflowService(options: {
 
   async function idempotentEditorMutation(
     input: { draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number; expectedDraftVersion?: number; operationKey?: string },
-    kind: 'CATEGORY_CHANGED' | 'PRICING_CHANGED' | 'MANUAL_FACT_CONFIRMED' | 'ATTRIBUTE_VALUES_CHANGED' | 'AI_COPY_CANDIDATE_CREATED' | 'VALIDATION_RECORDED',
+    kind: 'CATEGORY_CHANGED' | 'PRICING_CHANGED' | 'SKU_SELECTION_CHANGED' | 'SKU_DUPLICATED' | 'MANUAL_FACT_CONFIRMED' | 'ATTRIBUTE_VALUES_CHANGED' | 'AI_COPY_CANDIDATE_CREATED' | 'VALIDATION_RECORDED',
     value: unknown,
     update: (draft: OzonListingDraft) => OzonListingDraft | Promise<OzonListingDraft>,
   ): Promise<OzonListingDraft> {
@@ -514,6 +520,8 @@ export function createSourceListingWorkflowService(options: {
       if (input.expectedDraftVersion !== undefined) {
         const current = await getDraft(input);
         if (current.draftVersion !== input.expectedDraftVersion) {
+          const completed = await replay();
+          if (completed) return completed;
           throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Editor draft version changed', 409);
         }
       }
@@ -546,6 +554,9 @@ export function createSourceListingWorkflowService(options: {
     const next = structuredClone(draft);
     next.draftVersion += 1;
     next.attributes.values = structuredClone(values);
+    if (next.offerRows?.rows.length) next.offerRows.rows = next.offerRows.rows.map((row) => ({ ...row,
+      attributes: Object.fromEntries(Object.entries(values).flatMap(([key, value]) => value.skuValues?.[row.rowKey]
+        ? [[key, structuredClone(value.skuValues[row.rowKey])]] : [])) as Record<string, OzonListingDraftAttributeValue> }));
     next.freshness.attributes = currentFreshness();
     next.freshness.content = stale('ATTRIBUTE_VALUES_CHANGED');
     next.freshness.validation = stale('ATTRIBUTE_VALUES_CHANGED');
@@ -731,6 +742,22 @@ export function createSourceListingWorkflowService(options: {
       });
     },
 
+    async setSuggestedAttributeChanges(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; schemaRevision: string; candidates: unknown;
+    }, prepareValues: (draft: OzonListingDraft, candidates: SourceListingAttributeSuggestionReference[]) => Promise<Record<string, OzonListingDraftAttributeValue>>) {
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string' || typeof prepareValues !== 'function') {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Suggested attribute edits require an operation key and exact draft version', 400);
+      }
+      const candidates = normalizeSourceListingAttributeSuggestionChanges(input.candidates, input.schemaRevision);
+      return idempotentEditorMutation(input, 'ATTRIBUTE_VALUES_CHANGED', { action: 'SUGGESTIONS', schemaRevision: input.schemaRevision, candidates }, async (draft) => {
+        const values = await prepareValues(draft, structuredClone(candidates));
+        assertAttributeValuesBudget(values);
+        return changedAttributeValues(draft, values, input.actorUserId, 'SUGGESTION_APPLIED');
+      });
+    },
+
     async setSkuPackaging(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
       expectedDraftVersion: number; operationKey: string; items: OzonListingSkuPackagingItem[]; evidence: string[];
@@ -742,7 +769,7 @@ export function createSourceListingWorkflowService(options: {
       const items = normalizeSourceListingSkuPackagingItems(input.items);
       const evidence = normalizedEvidence(input.evidence);
       return idempotentEditorMutation(input, 'MANUAL_FACT_CONFIRMED', { action: 'PACKAGING', items, evidence }, (draft) => {
-        assertSourceListingSkuPackagingCoverage(items, draft.selectedSkuKeys);
+        assertSourceListingSkuPackagingCoverage(items, sourceListingEditorSkuKeysForDraft(draft));
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.attributes.values.packaging = {
@@ -752,6 +779,12 @@ export function createSourceListingWorkflowService(options: {
             dictionaryMatch: { status: 'NOT_APPLICABLE', dictionaryValueId: null }, manualReview: 'CONFIRMED',
           } satisfies OzonListingDraftAttributeValue])),
         };
+        if (next.offerRows?.rows.length) next.offerRows.rows = next.offerRows.rows.map((row) => {
+          const item = items.find((item) => item.skuKey === row.rowKey)!;
+          const { skuKey: _key, ...packaging } = item;
+          return { ...row, packaging, attributes: { ...row.attributes,
+            packaging: structuredClone((next.attributes.values.packaging as OzonListingDraftAttributeValue).skuValues![row.rowKey]!) } };
+        });
         for (const key of ['packageWeightG', 'packageLengthMm', 'packageWidthMm', 'packageHeightMm']) delete next.attributes.values[key];
         const complexity = inspectSourceListingJsonValue(next.attributes.values, {
           maxBytes: SOURCE_LISTING_ATTRIBUTE_VALUES_MAX_BYTES,
@@ -768,7 +801,7 @@ export function createSourceListingWorkflowService(options: {
         next.validation.status = 'STALE';
         next.grantRevocation = { required: true, reason: 'MANUAL_FACT_CONFIRMED', previousShopId: null };
         next.auditEvents.push(event(next.draftVersion, 'MANUAL_FACT_CONFIRMED', input.actorUserId, {
-          attributeKey: 'packaging', action: 'PACKAGING', skuKeys: draft.selectedSkuKeys, evidence,
+          attributeKey: 'packaging', action: 'PACKAGING', skuKeys: sourceListingEditorSkuKeysForDraft(draft), evidence,
         }));
         return next;
       });
@@ -825,7 +858,7 @@ export function createSourceListingWorkflowService(options: {
         next.draftVersion += 1;
         next.media.assignments = normalizedMediaAssignments(
           input.assignments,
-          draft.selectedSkuKeys,
+          sourceListingEditorSkuKeysForDraft(draft),
         );
         next.freshness.media = currentFreshness();
         next.freshness.validation = stale('MEDIA_ASSIGNMENT_CHANGED');
@@ -846,10 +879,21 @@ export function createSourceListingWorkflowService(options: {
       value: Record<string, unknown> | null;
     }) {
       return idempotentEditorMutation(input, 'PRICING_CHANGED', input.value, (draft) => {
-        const value = validateSourceListingPricing(input.value, draft.selectedSkuKeys);
+        const value = validateSourceListingPricing(input.value, sourceListingEditorSkuKeysForDraft(draft));
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.pricing.value = structuredClone(value);
+        if (next.offerRows?.rows.length) {
+          const offers = value.items.map((item) => item.offerId).filter((offerId) => offerId !== undefined);
+          if (new Set(offers).size !== offers.length) throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Offer IDs must be unique', 400);
+          next.offerRows.rows = next.offerRows.rows.map((row) => {
+            const pricing = value.items.find((item) => item.skuKey === row.rowKey)!;
+            const offerId = pricing.offerId || row.offerId;
+            pricing.offerId = offerId;
+            return { ...row, offerId, pricing: { ...pricing, offerId } };
+          });
+          next.pricing.value = structuredClone(value);
+        }
         next.freshness.pricing = currentFreshness();
         next.freshness.validation = stale('PRICING_CHANGED');
         next.validation.status = 'STALE';
@@ -900,6 +944,7 @@ export function createSourceListingWorkflowService(options: {
         next.sourceCaptureHash = required(input.sourceCaptureHash, 'sourceCaptureHash');
         if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         next.selectedSkuKeys = selectedSkuKeys;
+        delete next.offerRows;
         next.stage = 'CATEGORY_REVIEW';
         for (const key of ['category', 'attributes', 'content', 'media', 'pricing', 'validation'] as const) {
           next.freshness[key] = stale('SOURCE_SNAPSHOT_CHANGED');
@@ -939,18 +984,18 @@ export function createSourceListingWorkflowService(options: {
 
     changeSkuSelection(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      operationKey?: string;
+      expectedDraftVersion?: number;
       selectedSkuKeys: string[];
     }) {
-      return mutate(input, (draft) => {
-        const selectedSkuKeys = normalizedSkuKeys(input.selectedSkuKeys);
-        if (!selectedSkuKeys.length) {
-          throw new SourceListingWorkflowError(
-            'OZON_LISTING_DRAFT_INPUT_INVALID', 'At least one SKU must be selected', 400,
-          );
-        }
+      const selectedSkuKeys = normalizedSkuKeys(input.selectedSkuKeys);
+      return idempotentEditorMutation(input, 'SKU_SELECTION_CHANGED', { selectedSkuKeys }, (draft) => {
         const next = structuredClone(draft);
         next.draftVersion += 1;
         next.selectedSkuKeys = selectedSkuKeys;
+        const offerRows = sourceListingOfferRowsForDraft(draft).filter((row) => selectedSkuKeys.includes(row.sourceSkuKey));
+        if (offerRows.length) next.offerRows = { contractVersion: 'source-listing-offer-rows/v1', rows: offerRows };
+        else delete next.offerRows;
         if (next.media.videoBindings !== undefined) next.media.videoBindings = [];
         for (const key of ['attributes', 'content', 'media', 'pricing', 'validation'] as const) {
           next.freshness[key] = stale('SKU_SELECTION_CHANGED');
@@ -958,6 +1003,92 @@ export function createSourceListingWorkflowService(options: {
         next.validation.status = 'STALE';
         next.grantRevocation = { required: true, reason: 'SKU_SELECTION_CHANGED', previousShopId: null };
         next.auditEvents.push(event(next.draftVersion, 'SKU_SELECTION_CHANGED', input.actorUserId, { selectedSkuKeys }));
+        return next;
+      });
+    },
+
+    async duplicateSku(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; sourceSkuKey: string;
+    }): Promise<OzonListingDraft> {
+      const sourceSkuKey = required(input.sourceSkuKey, 'sourceSkuKey');
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string' || input.operationKey.length < 8) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'SKU duplication requires an operation key and draft version', 400);
+      }
+      return idempotentEditorMutation(input, 'SKU_DUPLICATED', { sourceSkuKey }, (draft) => {
+        if (!draft.selectedSkuKeys.includes(sourceSkuKey)) {
+          throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Only an existing source SKU can be duplicated', 422);
+        }
+        const existing = sourceListingOfferRowsForDraft(draft);
+        if (existing.length + draft.selectedSkuKeys.length >= 100) throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'Too many total listing rows', 400);
+        const rowKey = deriveSourceListingSkuCopyKey(draft.id, input.operationKey);
+        const offerId = `copy-${rowKey.slice('listing-copy:'.length, 'listing-copy:'.length + 40)}`;
+        if (existing.some((row) => row.rowKey === rowKey || row.offerId === offerId)) {
+          throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'SKU duplication identity already exists', 409);
+        }
+        const originalPricing = draft.pricing.value ? validateSourceListingPricing(draft.pricing.value, sourceListingEditorSkuKeysForDraft(draft)) : null;
+        const sourcePrice = originalPricing?.items.find((item) => item.skuKey === sourceSkuKey);
+        const pricing = sourcePrice ? { ...structuredClone(sourcePrice), skuKey: rowKey, offerId } : null;
+        const measured = projectSourceListingSkuPackaging(draft)?.find((item) => item.skuKey === sourceSkuKey);
+        const packaging = measured ? { weightG: measured.weightG, lengthMm: measured.lengthMm, widthMm: measured.widthMm, heightMm: measured.heightMm } : null;
+        const attributes = Object.fromEntries(Object.entries(draft.attributes.values).flatMap(([key, value]) => {
+          const leaf = value?.skuValues?.[sourceSkuKey];
+          return leaf ? [[key, structuredClone(leaf)]] : [];
+        }));
+        const next = structuredClone(draft);
+        next.draftVersion += 1;
+        next.offerRows = { contractVersion: 'source-listing-offer-rows/v1', rows: [...existing, {
+          rowKey, sourceSkuKey, offerId, sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
+          sourceCaptureHash: draft.sourceCaptureHash, sourceDraftVersion: draft.draftVersion,
+          sourceDraftRevision: draft.revision, pricing: structuredClone(pricing),
+          packaging, attributes,
+        }] };
+        if (originalPricing && pricing) next.pricing.value = { ...originalPricing, items: [...originalPricing.items, pricing] };
+        for (const value of Object.values(next.attributes.values)) {
+          if (value.skuValues?.[sourceSkuKey]) value.skuValues[rowKey] = structuredClone(value.skuValues[sourceSkuKey]);
+        }
+        for (const key of ['media', 'pricing', 'validation', 'content'] as const) next.freshness[key] = stale('SKU_SELECTION_CHANGED');
+        next.validation.status = 'STALE';
+        next.grantRevocation = { required: true, reason: 'SKU_SELECTION_CHANGED', previousShopId: null };
+        next.auditEvents.push(event(next.draftVersion, 'SKU_DUPLICATED', input.actorUserId, { sourceSkuKey, rowKey, offerId,
+          sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId, sourceCaptureHash: draft.sourceCaptureHash,
+          sourceDraftRevision: draft.revision, sourceDraftVersion: draft.draftVersion }));
+        return next;
+      });
+    },
+
+    async removeSkuCopy(input: {
+      draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
+      expectedDraftVersion: number; operationKey: string; rowKey: string;
+    }): Promise<OzonListingDraft> {
+      const rowKey = required(input.rowKey, 'rowKey');
+      if (!Number.isSafeInteger(input.expectedDraftVersion) || input.expectedDraftVersion < 1
+        || typeof input.operationKey !== 'string' || input.operationKey.length < 8) {
+        throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_INPUT_INVALID', 'SKU copy removal requires an operation key and draft version', 400);
+      }
+      return idempotentEditorMutation(input, 'SKU_DUPLICATED', { action: 'REMOVE', rowKey }, (draft) => {
+        const rows = sourceListingOfferRowsForDraft(draft);
+        const removed = rows.find((row) => row.rowKey === rowKey);
+        if (!removed) throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', 'Copied SKU row was not found', 409);
+        const next = structuredClone(draft);
+        const currentRows = rows.filter((row) => row.rowKey !== rowKey);
+        if (currentRows.length) next.offerRows = { contractVersion: 'source-listing-offer-rows/v1', rows: currentRows };
+        else delete next.offerRows;
+        if (next.pricing.value && typeof next.pricing.value === 'object' && !Array.isArray(next.pricing.value)) {
+          const items = (next.pricing.value as any).items?.filter((item: any) => item?.skuKey !== rowKey) || [];
+          next.pricing.value = { ...(next.pricing.value as any), items };
+        }
+        for (const value of Object.values(next.attributes.values)) {
+          if (value.skuValues) delete value.skuValues[rowKey];
+        }
+        next.media.assignments = next.media.assignments.filter((assignment) => assignment.skuKey !== rowKey);
+        if (next.media.videoBindings) next.media.videoBindings = next.media.videoBindings.filter((binding) => binding.skuKey !== rowKey);
+        next.draftVersion += 1;
+        for (const key of ['media', 'pricing', 'validation', 'content'] as const) next.freshness[key] = stale('SKU_SELECTION_CHANGED');
+        next.validation.status = 'STALE';
+        next.grantRevocation = { required: true, reason: 'SKU_SELECTION_CHANGED', previousShopId: null };
+        next.auditEvents.push(event(next.draftVersion, 'SKU_DUPLICATED', input.actorUserId, { action: 'REMOVE', rowKey }));
         return next;
       });
     },

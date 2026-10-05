@@ -80,6 +80,34 @@ test('source product entries are bounded to the supported marketplace product pa
     'http://detail.1688.com/offer/123.html', 'https://item.taobao.com/item.htm']) assert.equal(harness(url).trigger, undefined, url);
 });
 
+test('only the installed popup opens the same-page workbench and receives a visible-frame acknowledgement', () => {
+  const state = harness();
+  let result;
+  state.runtimeListener({ type: 'ss-erp:precision-workbench-open' },
+    { id: runtimeId, url: `chrome-extension://${runtimeId}/pages/popup.html` }, value => { result = value; });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, state: 'WORKBENCH_OPENED' });
+  assert.equal(state.frame.hidden, false);
+  assert.equal(state.legacyClicks, 0);
+  const readCount = state.runtimeRequests.length;
+  state.runtimeListener({ type: 'ss-erp:precision-workbench-open' },
+    { id: runtimeId, url: `chrome-extension://${runtimeId}/pages/popup.html` }, value => { result = value; });
+  assert.equal(result.ok, true);
+  assert.equal(state.runtimeRequests.length, readCount, 'opening an already visible workbench preserves the current editing context');
+});
+
+test('same-page popup entry rejects foreign senders, content-script senders and caller payloads', () => {
+  for (const [message, sender] of [
+    [{ type: 'ss-erp:precision-workbench-open' }, { id: 'foreign', url: `chrome-extension://${runtimeId}/pages/popup.html` }],
+    [{ type: 'ss-erp:precision-workbench-open' }, { id: runtimeId, url: 'https://detail.1688.com/offer/845581683597.html', tab: { id: 7 } }],
+    [{ type: 'ss-erp:precision-workbench-open', url: 'https://app.ss-erp.com' }, { id: runtimeId, url: `chrome-extension://${runtimeId}/pages/popup.html` }],
+  ]) {
+    const state = harness(); let result;
+    state.runtimeListener(message, sender, value => { result = value; });
+    assert.equal(result?.ok, false);
+    assert.equal(state.frame.hidden, true);
+  }
+});
+
 async function translationStatus(responseTransform = value => value, exercise) {
   const handoff = { snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture', sourceProductId: '845581683597', platform: '1688' };
   const listing = { id: 'draft-fixture', shopId: 'doth', stage: 'MEDIA_REVIEW', status: 'ACTIVE', runState: 'ACTIVE',

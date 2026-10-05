@@ -1,12 +1,12 @@
-export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, getBusy, reloadEditor, saveEditor, onDirty, onReset, report }) {
+export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, getBusy, reloadEditor, saveEditor, readCapability, getGenerationPending, onDirty, onReset, report }) {
   const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const binding = () => { try { return getBinding(); } catch { return null; } };
   const token = () => JSON.stringify(binding());
   const identity = () => { const value = binding(); return value ? JSON.stringify([value.snapshotId, value.supplyGoodsId, value.shopId, value.listingWorkflowId]) : ''; };
-  let context = '', selected = null, opening = false;
+  let context = '', selected = null, opening = false, generationCapability = null;
   const dirty = new Set();
   const modal = make('div', 'settings-modal'); modal.id = 'precision-copy-modal'; modal.hidden = true;
-  const card = make('div', 'settings-dialog'), head = make('div', 'settings-head'); head.append(make('div', 'settings-title', '俄文标题与描述 · 手工编辑和审核'));
+  const card = make('div', 'settings-dialog precision-copy-dialog'), head = make('div', 'settings-head'); head.append(make('div', 'settings-title', '俄文标题与描述'));
   const close = make('button', 'ghost', '关闭'); close.id = 'precision-copy-close'; close.addEventListener('click', () => { modal.hidden = true; }); head.append(close);
   const body = make('div', 'settings-body'), source = make('p'), notice = make('p', '', '文案统一用于当前草稿所有 SKU。保存后先预览待审核内容，再明确审核。');
   const titleLabel = make('label', 'field', '俄文标题'), title = make('textarea'); title.id = 'precision-copy-title';
@@ -16,10 +16,17 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   title.style.minHeight = '88px'; description.style.minHeight = '150px';
   titleLabel.append(title); descriptionLabel.append(description);
   const save = make('button', 'primary', '保存为待审核文案'); save.id = 'precision-copy-save';
+  const generation = make('div', 'precision-copy-generation');
+  const instructionsLabel = make('label', 'field', '生成要求（可选）'), instructions = make('textarea');
+  instructions.id = 'precision-copy-instructions'; instructions.maxLength = 2000; instructionsLabel.append(instructions);
+  const generate = make('button', 'ghost', '生成俄文标题和描述'); generate.id = 'precision-copy-generate';
+  const recover = make('button', 'ghost', '核对上次生成'); recover.id = 'precision-copy-generation-recover'; recover.hidden = true;
+  const capabilityState = make('p'); capabilityState.id = 'precision-copy-capability'; capabilityState.setAttribute('role', 'status');
+  generation.append(instructionsLabel, generate, recover, capabilityState);
   const state = make('p'); state.id = 'precision-copy-state'; state.setAttribute('role', 'status');
   const candidates = make('div'); const review = make('div'); review.id = 'precision-copy-review';
   const approve = make('button', 'primary', '确认所示文案并审核'); approve.id = 'precision-copy-approve';
-  body.append(source, notice, titleLabel, descriptionLabel, save, state, candidates, review, approve);
+  body.append(source, notice, generation, titleLabel, descriptionLabel, save, state, candidates, review, approve);
   card.append(head, body); modal.append(card); root.append(modal);
   const candidate = () => getEditor()?.copy?.pendingCandidates.find((item) => item.id === selected?.id);
   function reviewCurrent() { const value = candidate(); return value && value.sourceCurrent === true && selected.token === token() && selected.contents === JSON.stringify(value); }
@@ -31,7 +38,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   function select(value) { selected = { id: value.id, token: token(), contents: JSON.stringify(value) }; sync(); }
   function sync() {
     const key = identity();
-    if (context && context !== key) { modal.hidden = true; selected = null; dirty.clear(); onReset(); }
+    if (context && context !== key) { modal.hidden = true; selected = null; generationCapability = null; dirty.clear(); onReset(); }
     context = key;
     const data = getEditor();
     const value = candidate();
@@ -44,6 +51,12 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     title.readOnly = description.readOnly = !data?.copy || opening || getBusy();
     save.disabled = !data?.copy || !dirty.size || opening || getBusy();
     approve.disabled = !reviewCurrent() || dirty.size > 0 || opening || getBusy();
+    generate.disabled = generationCapability?.available !== true || !data?.copy || dirty.size > 0 || opening || getBusy();
+    instructions.disabled = opening || getBusy();
+    recover.hidden = !getGenerationPending?.(); recover.disabled = opening;
+    capabilityState.textContent = opening ? '正在读取托管文案能力。'
+      : generationCapability?.available ? generationCapability.providerFeeNotice
+        : '当前账号未启用托管文案生成，可继续手工编辑。';
     state.textContent = opening || !data?.copy ? '正在读取当前草稿文案。' : dirty.size ? '有手工编辑尚未保存。'
       : data.copy.pendingCandidates.length ? '待审核文案已保存，选择下方候选预览后审核。'
       : data.copy.titleRu ? '俄文文案已审核，可继续校验上架信息。' : '请准备俄文标题与描述。';
@@ -64,6 +77,16 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   }
   title.addEventListener('input', () => { dirty.add('title'); onDirty('copy.title'); sync(); });
   description.addEventListener('input', () => { dirty.add('description'); onDirty('copy.description'); sync(); });
+  generate.addEventListener('click', event => {
+    if (!event.isTrusted || generate.disabled) return;
+    const value = { fields: ['title', 'description'], ...(instructions.value.trim() ? { userInstructions: instructions.value.trim() } : {}) };
+    if (!confirm(`${generationCapability.providerFeeNotice}\n结果保存为待审核文案。确认生成？`)) return;
+    void Promise.resolve().then(() => saveEditor('COPY_GENERATE', value)).catch(report).finally(sync);
+  });
+  recover.addEventListener('click', event => {
+    if (!event.isTrusted || recover.disabled || !getGenerationPending?.()) return;
+    void Promise.resolve().then(() => saveEditor('COPY_GENERATE', {}, true)).catch(report).finally(sync);
+  });
   save.addEventListener('click', (event) => {
     if (!event.isTrusted || save.disabled) return;
     void Promise.resolve().then(async () => {
@@ -90,11 +113,20 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     sync,
     async open() {
       if (!binding()) throw new Error('请先创建当前店铺草稿');
-      modal.hidden = false; opening = true; sync();
-      try { await reloadEditor(); } finally { opening = false; sync(); }
+      modal.hidden = false; opening = true; generationCapability = null; sync();
+      try {
+        await reloadEditor();
+        const expected = token();
+        if (readCapability) {
+          try {
+            const capability = await readCapability();
+            if (expected === token()) generationCapability = capability;
+          } catch { if (expected === token()) generationCapability = null; }
+        }
+      } finally { opening = false; sync(); }
     },
     afterSave(action, response) {
-      if (!['COPY_CANDIDATE', 'COPY_APPROVE'].includes(action)) return;
+      if (!['COPY_CANDIDATE', 'COPY_APPROVE', 'COPY_GENERATE'].includes(action)) return;
       dirty.clear(); onReset();
       if (action === 'COPY_APPROVE') selected = null;
       else {
@@ -103,6 +135,6 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
       }
       sync();
     },
-    reset() { context = ''; selected = null; dirty.clear(); onReset(); modal.hidden = true; },
+    reset() { context = ''; selected = null; generationCapability = null; dirty.clear(); onReset(); modal.hidden = true; },
   };
 }

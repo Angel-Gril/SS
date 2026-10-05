@@ -438,7 +438,7 @@ function assertCurrentDraft(
     );
   }
   if (workflow.contextSkuKey != null
-    && !draft.selectedSkuKeys.includes(workflow.contextSkuKey)) {
+    && !sourceListingEditorSkuKeysForDraft(draft).includes(workflow.contextSkuKey)) {
     throw new AiMediaApplicationMutationError(
       'STALE_MEDIA_WORKFLOW',
       'The selected SKU is no longer part of the listing draft',
@@ -1001,7 +1001,7 @@ export async function rollbackAiMediaListingDraftApplication(
       );
     }
     if (applyMutation.contextSkuKey != null
-      && !draft.selectedSkuKeys.includes(applyMutation.contextSkuKey)) {
+      && !sourceListingEditorSkuKeysForDraft(draft).includes(applyMutation.contextSkuKey)) {
       throw new AiMediaApplicationMutationError(
         'ROLLBACK_TARGET_CHANGED',
         'The listing draft SKU scope changed after this application',
@@ -1162,7 +1162,7 @@ async function listSnapshot(
     : null;
   const frontierEligible = Boolean(frontier
     && target.sourceCaptureSnapshotId === frontier.sourceCaptureSnapshotId
-    && (frontier.contextSkuKey == null || target.selectedSkuKeys.includes(frontier.contextSkuKey))
+    && (frontier.contextSkuKey == null || sourceListingEditorSkuKeysForDraft(target).includes(frontier.contextSkuKey))
     && currentProjection
     && hashAiMediaListingDraftAssignment(currentProjection) === frontier.afterStateHash);
   const recoveredOperation = input.operationKey
@@ -1230,3 +1230,4 @@ export async function listAiMediaListingDraftWorkflowApplications(
     });
   }, { isolationLevel: 'RepeatableRead' });
 }
+import { sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';

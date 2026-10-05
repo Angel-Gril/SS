@@ -95,6 +95,7 @@ export interface GenerateSourceListingAiCopyInput {
 export interface SourceListingAiCopyGenerationResult {
   draft: OzonListingDraft;
   candidate: OzonListingAiCopyCandidate;
+  replayed?: boolean;
   limit?: { used: number; remaining: number; limit: number };
 }
 
@@ -387,7 +388,7 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
             409,
           );
         }
-        return { draft: current, candidate: replay };
+        return { draft: current, candidate: replay, replayed: true };
       }
       if (current.revision !== input.expectedRevision) {
         throw new SourceListingWorkflowError(
@@ -485,7 +486,7 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
       if (claim?.kind === 'replay') {
         const latest = await options.workflow.getDraft({ draftId: input.draftId, ownerUserId: input.ownerUserId });
         const candidate = latest.copy.candidates.find((value) => value.generation?.operationKey === operationKey);
-        if (candidate) return { draft: latest, candidate };
+        if (candidate) return { draft: latest, candidate, replayed: true };
         throw new SourceListingWorkflowError(
           'OZON_LISTING_AI_GENERATION_IN_PROGRESS', 'AI copy generation result is still being reconciled', 409,
         );
@@ -541,7 +542,7 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
             }),
           } : {}),
         },
-        }).then((result) => ({ ...result, limit: generated.limit }));
+        }).then((result) => ({ ...result, limit: generated.limit, replayed: false }));
         if (claim?.kind === 'claimed') await options.executionStore!.complete(claim.executionId);
         return result;
       } catch (error) {

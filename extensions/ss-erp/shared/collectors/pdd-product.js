@@ -18,6 +18,11 @@
   ];
 
   function extractPddProduct(context) {
+    var donor = typeof globalThis !== 'undefined' && globalThis.SS_ERP_DONOR_MARKETPLACE_CAPTURE;
+    if (donor && typeof donor.normalizePdd === 'function') {
+      var adapted = donor.normalizePdd(context);
+      if (adapted) return adapted;
+    }
     var ctx = context || {};
     var sources = Array.isArray(ctx.sources) ? ctx.sources : [];
     var url = String(ctx.url || ctx.sourceUrl || getLocationValue('href') || '');
@@ -31,6 +36,8 @@
       pickFirstValue(globals, ['goodsID', 'goodsId', 'goods_id', 'goodsIdStr', 'id']) ||
       parseGoodsIdFromUrl(url)
     );
+    var expectedProductId = parseGoodsIdFromUrl(url);
+    if (expectedProductId && productId && productId !== expectedProductId) throw new Error('来源商品已变化，采集结果货号不匹配');
     var title = normalizeText(
       pickFirstValue(goods, ['goodsName', 'goods_name', 'title', 'name']) ||
       pickFirstValue(globals, ['goodsName', 'goods_name', 'title', 'name']) ||
@@ -658,7 +665,7 @@
   function getLocationValue(key) {
     try {
       return typeof location !== 'undefined' && location ? location[key] : '';
-    } catch (_error) {
+    } catch {
       return '';
     }
   }

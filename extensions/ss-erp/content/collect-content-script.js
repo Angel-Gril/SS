@@ -277,7 +277,7 @@
 
     assertCollectionSourcePageUnchanged(sourcePage);
     assertCollectionResultMatchesSourcePage(sourcePage, data);
-    if (platform === '1688' && data && data.captureV2) {
+    if (['1688', 'taobao', 'tmall', 'pdd'].includes(platform) && data && data.captureV2) {
       await validateNativeSourceCaptureV2(data.captureV2);
     }
     assertCollectionSourcePageUnchanged(sourcePage);

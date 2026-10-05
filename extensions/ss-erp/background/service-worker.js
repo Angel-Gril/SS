@@ -6633,7 +6633,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (['ss-erp:source-listing-workbench-editor-read', 'ss-erp:source-listing-workbench-editor-catalog', 'ss-erp:source-listing-workbench-editor-save',
-    'ss-erp:source-listing-workbench-editor-attributes', 'ss-erp:source-listing-workbench-editor-dictionary'].includes(message.type)) {
+    'ss-erp:source-listing-workbench-editor-attributes', 'ss-erp:source-listing-workbench-editor-dictionary',
+    'ss-erp:source-listing-workbench-editor-copy-capability', 'ss-erp:source-listing-workbench-editor-copy-generate',
+    'ss-erp:source-listing-workbench-editor-attribute-suggestions','ss-erp:source-listing-workbench-editor-logistics-scopes',
+    'ss-erp:source-listing-workbench-editor-logistics-services','ss-erp:source-listing-workbench-editor-logistics-quote',
+    'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze'].includes(message.type)) {
     let mutationAttempted = false;
     Promise.resolve().then(async () => {
       const platform = sourceWorkflowPlatform(message.platform);
@@ -6650,9 +6654,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId, shopId: listing.shopId,
         listingWorkflowId: listing.listingWorkflowId, draftRevision: requested.draftRevision, draftVersion: requested.draftVersion,
       };
-      if (message.type.endsWith('-save')) mutationAttempted = true;
+      if (message.type.endsWith('-save') || message.type.endsWith('-copy-generate') || message.type.endsWith('-vision-analyze')) mutationAttempted = true;
       const result = message.type.endsWith('-save')
         ? await client.saveDraftEditor({ binding, action: message.action, operationKey: message.operationKey, value: message.value })
+        : message.type.endsWith('-copy-capability') ? await client.readDraftCopyCapability(binding)
+        : message.type.endsWith('-copy-generate') ? await client.generateDraftCopy({ binding, operationKey: message.operationKey, fields: message.fields,
+          ...(message.userInstructions === undefined ? {} : { userInstructions: message.userInstructions }) })
+        : message.type.endsWith('-vision-capability') ? await client.readProductVisionCapability(binding)
+        : message.type.endsWith('-vision-analyze') ? await client.analyzeProductVision({ binding, skuKey: message.skuKey,
+          sourceMediaKeys: message.sourceMediaKeys, operationKey: message.operationKey })
+        : message.type.endsWith('-attribute-suggestions') ? await client.readDraftAttributeSuggestions(binding)
+        : message.type.endsWith('-logistics-scopes') ? await client.readDraftLogisticsScopes(binding)
+        : message.type.endsWith('-logistics-services') ? await client.readDraftLogisticsServices({binding,selection:message.selection})
+        : message.type.endsWith('-logistics-quote') ? await client.quoteDraftLogistics({binding,selection:message.selection,releaseId:message.releaseId,effectiveChecksum:message.effectiveChecksum,stableServiceKey:message.stableServiceKey,items:message.items})
         : message.type.endsWith('-catalog') ? await client.readDraftCatalog({ binding, query: message.query,...(message.preview===undefined?{}:{preview:message.preview}) })
         : message.type.endsWith('-attributes') ? await client.readDraftAttributes(binding)
         : message.type.endsWith('-dictionary') ? await client.readDraftDictionary({ binding, schemaRevision: message.schemaRevision,
