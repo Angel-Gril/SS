@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.0.424] - 2026-10-05
+
 ### Added
 
 - 精铺支持按可信采集资料匹配逐 SKU 官方属性，预览来源后明确应用；无可用建议时可继续手工补充。
@@ -139,7 +141,8 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/4df9ec387b75c0f26c8a483c42d33940c03a892c...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/46e17e00622753a8f37ff501697a3cc8d2324baa...HEAD
+[1.0.424]: https://github.com/Angel-Gril/SS/compare/4df9ec387b75c0f26c8a483c42d33940c03a892c...46e17e00622753a8f37ff501697a3cc8d2324baa
 [1.0.421]: https://github.com/Angel-Gril/SS/compare/0d695279369e8fcb4cf71563c4d8a8510b580481...4df9ec387b75c0f26c8a483c42d33940c03a892c
 [1.0.403]: https://github.com/Angel-Gril/SS/compare/8bab3486cf5c434617fa1798b6e8a5a4e9ebbce4...fdee810303d1216d2f587d4c09c9a9f59766abed
 [1.0.395]: https://github.com/Angel-Gril/SS/commit/3723f5dd1a175537a183bd750f8c168a2f742baf

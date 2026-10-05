@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-05 `1.0.424` 双区官网公开发布完成
+
+COM/CN 应用与官网 Cloud/Local 下载已公开 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。正式 QA04、最终 fresh suite 的预览/审核/草稿 assignment/replay、新区域 VPS/canary、website approval/CAS、匿名完整下载与最终 publication verifier 均通过。原 DOTH 受限 hosted pilot/CN direct dark 保持；无 Ozon 写入。本轮两套图合计 ERP CNY0.56，真实输出创意变化小且带白边，不宣称所有 donor 功能或创作质量一致。当前事实及原件只维护在[直接适配 owner](./direct-adaptation.md)。下面的历史状态保留各轮当时边界。
+
 ## 2026-10-05 `1.0.422` 双区部署完成，官网 pointer 保持旧版
 
 最终本地验证后，`d376bb1a49f071f9c9b4eca1615c33539e61c7c2` 已提交、推送、签名并部署到 COM/CN。Cloud/Local 包、签名、备份恢复和 canonical VPS evidence 均绑定同一 commit/version；COM 保持 DOTH 受限 hosted pilot，CN 保持 direct/RDS dark。官网 approval、CAS、distribution probe 和公开 pointer 切换尚未执行，公开下载仍为 `1.0.421`。本轮没有新增 Provider/Ozon 请求或费用。
@@ -30,17 +34,15 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `4df9ec38 / 1.0.421`.
-The two-region website gates, CAS and distribution passed. Local direct-adaptation
-tasks U9–U20 (12/12 locally) now also cover server-owned offer-row SKU duplication/removal,
-copy-aware pricing/packaging/attributes/media/compiler seams, and bounded native Taobao,
-Tmall and PDD donor collectors. U17 adds two actual synthetic vision-model calls and U18
-adds four independent PostgreSQL copy tests; production vision remains off. They are not
-yet committed, signed or deployed. Copy-row real Ozon publishing, other donor platforms'
-deep collectors and the new production end-to-end flow remain unaccepted. The user's
-latest instruction authorizes committing, pushing, signing and two-region deployment of the
-`1.0.422` candidate while website publication remains a separate gate. Current acceptance,
-evidence and remaining tasks live only in [direct-adaptation.md](./direct-adaptation.md).
+COM/CN applications and public Cloud/Local downloads serve `46e17e00 / 1.0.424`.
+The final-commit QA04, two-region website gates, CAS, full downloads and post-publication
+VPS verification passed; temporary test device and account credentials were cleaned up.
+Direct-adaptation tasks U9–U20 now ship with server-owned SKU duplication/removal,
+copy-aware pricing/packaging/attributes/media/compiler seams and bounded native Taobao,
+Tmall and PDD collectors. Production vision remains off. Copy-row real Ozon publishing,
+other donor platforms' deep collectors and broad creative-quality parity remain unaccepted.
+Current acceptance, evidence and remaining tasks live only in
+[direct-adaptation.md](./direct-adaptation.md).
 
 ## Historical Continuation Notes
 

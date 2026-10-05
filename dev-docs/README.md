@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-05 `46e17e00 / 1.0.424` 双区官网公开发布完成
+
+COM/CN 应用、官网 latest 和四个 Cloud/Local ZIP 均绑定 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。最终原生 offline、签名 MV3、fresh suite/审核/草稿 assignment/replay、正式 QA04、双区 canonical VPS/REL-04/website approval/CAS、匿名完整下载及 final publication verifier 均通过。COM 保持原 DOTH 三 operation pilot，CN 保持 direct/RDS dark。两轮 suite 共四次 Provider submit、ERP 结算 CNY 0.56，无 Ozon 写入或 Provider 控制台访问；首轮423结果保留，未冒充424执行。准确证据、质量限制与清理状态只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)，公开变更见根 `CHANGELOG.md`。
+
 ## 2026-10-05 官网最新版切换接续
 
 官网公开切换已获授权。`59a8454e / 1.0.423` 已完成双区部署、完整原生 offline 和两区 canonical VPS；同 commit 两图 suite 成功，但预览/assignment 对“冻结参考子集”与“完整素材授权”摘要的比较仍有缺口，修复候选为 `1.0.424`。官网仍 `4df9ec38 / 1.0.421`，未执行新 CAS。范围与原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

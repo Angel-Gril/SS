@@ -2,6 +2,15 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-05 `1.0.424` 双区官网公开发布完成
+
+- COM/CN 当前应用、官网 latest 和四个匿名下载 ZIP 均为 `46e17e00622753a8f37ff501697a3cc8d2324baa / 1.0.424`。Git 已推送；完整原生 offline、签名 MV3 来源页/默认入口/Blob、备份恢复、两区 canonical VPS、正式 QA04、COM受限pilot/CN no-shop dark canary、新 website approval、CAS 和 distribution/final publication verifier 全部通过。COM DOTH `IMAGE_TO_IMAGE/SUITE/IMAGE_TRANSLATE`、CN direct/RDS dark、视觉默认关闭保持。
+- 最终 suite `cmuuxrscg000c5oh1twpsc50e` 恰好两个原 Provider submit、各 CNY0.14一次结算。审核前PENDING UI及真实数据库、START/CONTINUE原始响应、两张扩展安全Blob预览、逐图审核、隔离草稿r1/v1→r2/v2两条assignment和原请求replay完整保存。待处理jobs/costs/recovery/workflows/suites均0，Ozon0，未读取Provider控制台。上一423 suite两笔CNY0.14成功结果仍按原提交/快照保留，未重标或重复派发；两轮合计ERP CNY0.56。
+- 实际图片保持透明收纳盒轮廓、把手、纹理和原场景，900×1200输出有白边且创意变化很小；审核批准仅表示本次隔离草稿候选可用，不证明新场景创作质量或donor全功能100%一致。生产复制SKU Ozon发布、其他平台深采集和视觉配置等未验证范围保持原owner边界。
+- 私有原件 `C:/Users/550W/AppData/Local/SS-ERP/private/release-46e17e00-website`。QA04 SHA `99cfbab54af64b2d04f13979aa22e851ac39abb7a3067d7e2ce7515d860fabda`；COM/CN canary SHA `5be85c51c7cca69218d9ef4e266a32cc7c8fa209496ebb23a50269ab8c910c38` / `275788defd457aacf0e891825d8e7cd654d1cf2a4c78ee7ca977b421b6a6f834`；approval SHA `acf54eb8897b9894b49dae82724829183d2ad78e8627cbc82d0ee2ef5965e27b` / `d0ace71d2e97904fcd6cead83e534179a185bcfd4cd72131f779c02aa08f72c9`；distribution SHA `7807446107b2d07ca7973198dfd21b2d2e83dc2c32c2464c133ba29d0548768f` / `fbd8f8aecb54dfe13d1eded16b0630e5a2bafe38537be5b319124dead0cc758e`。两区CAS原旧approval分别`d47abfdb...a79be`、`b586ea84...cb84b4`。
+- 初次REL04使用本地路径派生extension ID而被生产CORS拒绝，失败原件保留；改用已有批准的区域extension origin重新运行，同commit通过，未扩大CORS。发布后 full canonical VPS 两区PASS、0 failure/1既有远端备份未配置warning，SHA分别`ba54310d1c0c6278ad8816caba40c51baba963c95615437cc1bca20878e069ae` / `3656ac7fb24ddf91d4cac8edfbc0271897410aa7958739068b7ba05a0e1704a7`。
+- 当前轮QA设备由原owner正常撤销；COM/CN临时account Redis sessions分别移除1/2个（COM owner/admin同一账号产生同一key），旧临时session均已过期或失效，远端12个凭据/清理文件和本机16份token副本已删除，原用户浏览器保持。套图、草稿、已结算费用和全部验收原件保留。文档同步提交不会重部署应用或重签候选。
+
 ### 2026-10-05 `1.0.423` 双区与 fresh suite；参考图子集预览缺口修正
 
 - `59a8454e553d0bd49320e010beb67010fe9ad717 / 1.0.423` 已推送、区域签名并双区部署；完整原生 offline 和两区 canonical VPS 均 PASS。官网下载仍 `1.0.421`，未执行 CAS。
