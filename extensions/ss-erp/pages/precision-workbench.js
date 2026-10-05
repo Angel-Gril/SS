@@ -56,6 +56,7 @@ let pollingTimer = 0;
 let pollingAttempts = 0;
 let editor = null;
 let editorLoadKey = '';
+let editorReadFailureKey = '';
 let editorLoading = false;
 let editorReadTask=null;
 let saveBusy = false;
@@ -728,12 +729,14 @@ function acceptEditor(data, savedAction = null) {
   const current = currentEditorBinding();
   if (!data || data.contractVersion !== 'extension-listing-editor/v1' || !data.binding
     || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every((key) => data.binding[key] === current[key])
+    || data.binding.draftRevision !== current.draftRevision || data.binding.draftVersion !== current.draftVersion
     || !Array.isArray(data.selectedSkuKeys) || data.selectedSkuKeys.length < 1 || data.selectedSkuKeys.length > 100) throw new Error('ERP 草稿详情不完整');
   if (editorIdentity(editor) !== editorIdentity(data)) unsavedListingFields.clear();
   else for (const field of unsavedListingFields) if (fieldSavedByAction(savedAction, field)) unsavedListingFields.delete(field);
   editor = data;
   selectedDraftSkuKeys = new Set(editor.selectedSkuKeys);
   editorLoadKey = `${data.binding.listingWorkflowId}:${data.binding.draftRevision}:${data.binding.draftVersion}`;
+  editorReadFailureKey = '';
   if (!unsavedListingFields.has('currency')) currency.value = editor.pricing?.items[0]?.currencyCode || 'CNY';
   editorSignature = '';
   render();
@@ -742,8 +745,10 @@ async function loadEditor() {
   if(editorReadTask)return editorReadTask;
   if (saveBusy || !listing()) return;
   editorLoading = true;
+  const initialBinding = currentEditorBinding();
+  const initialKey = `${initialBinding.listingWorkflowId}:${initialBinding.draftRevision}:${initialBinding.draftVersion}`;
   editorReadTask=(async()=>{try {
-    const binding = currentEditorBinding();
+    const binding = initialBinding;
     let response;
     try {
       response = await command('EDITOR_READ', { listingWorkflowId: binding.listingWorkflowId, binding });
@@ -758,9 +763,9 @@ async function loadEditor() {
     editorState.textContent = editor.fieldIssues?.length ? editor.fieldIssues.map((item) => item.message).join(' ')
       : '修改后请分别保存价格与货号、包装参数。';
   } catch (error) {
-    // A failed read must not poison editorLoadKey; the next authoritative projection
-    // should be allowed to retry after a device/session or source refresh.
-    editorLoadKey = '';
+    // Stop render-driven retries for this exact binding. The explicit refresh button
+    // clears this key; a new draft/revision naturally produces a different key.
+    editorReadFailureKey = initialKey;
     throw error;
   } finally { editorLoading = false; }})();
   try{return await editorReadTask;}finally{editorReadTask=null;}
@@ -1269,7 +1274,8 @@ function render() {
   validationState.textContent = validationEditor?.blockers?.length ? validationEditor.blockers.map((item) => item.message).join(' ')
     : serverPublishReady() ? 'ERP 校验已通过，所有信息为当前状态，可上架。' : '完成文案、图片与必填信息后，校验上架信息。';
   if (currentEditorForPublish()?.category && !editorLoading && !saveBusy && !projection.busy) void attributes.load().catch(report);
-  if (binding && binding !== editorLoadKey && !projection.busy && !session.isActive() && !editorLoading && !saveBusy) {
+  if (binding && binding !== editorLoadKey && binding !== editorReadFailureKey
+    && !projection.busy && !session.isActive() && !editorLoading && !saveBusy) {
     editorLoadKey = binding;
     void loadEditor().catch(report);
   }
@@ -1417,7 +1423,16 @@ for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () =>
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
-trusted('erp-refresh-btn', async () => { if(session.needsRecovery()){await recoverPreparation();return;}await command('REFRESH'); await refreshMediaState(); if (imageMode === 'translate') await readTranslationAvailability(true); status('商品、草稿与图片任务已刷新', 'ok'); });
+trusted('erp-refresh-btn', async () => {
+  if(session.needsRecovery()){await recoverPreparation();return;}
+  editorReadFailureKey = '';
+  editorLoadKey = '';
+  await command('REFRESH');
+  await refreshMediaState();
+  if (imageMode === 'translate') await readTranslationAvailability(true);
+  await loadEditor();
+  status('商品、草稿与图片任务已刷新', 'ok');
+});
 trusted('precision-image-refresh', async () => { await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });
 async function suiteCommand(action, costConfirmed = false) {

@@ -26,8 +26,15 @@ assert.match(bridge, /const refreshed = await loadProjection\(\{ force: true \}\
   'editor context failures must trigger one authoritative read before reporting a stale context');
 assert.match(bridge, /EDITOR_CONTEXT_REFRESH_REQUIRED/u,
   'unreadable editor context must identify a refresh requirement instead of a generic mutation failure');
-assert.match(fs.readFileSync(`${root}/pages/precision-workbench.js`, 'utf8'), /editorLoadKey = ''/u,
-  'failed editor reads must remain retryable after the next projection');
+const precisionWorkbench = fs.readFileSync(`${root}/pages/precision-workbench.js`, 'utf8');
+assert.match(precisionWorkbench, /editorReadFailureKey/u,
+  'failed editor reads must stop render-driven retries for the same binding');
+assert.match(precisionWorkbench, /binding !== editorReadFailureKey/u,
+  'a failed binding must remain blocked until an explicit refresh or a new revision');
+assert.match(precisionWorkbench, /editorReadFailureKey = ''[\s\S]{0,320}await command\('REFRESH'\)/u,
+  'explicit refresh must clear the read circuit before requesting a fresh projection');
+assert.match(precisionWorkbench, /data\.binding\.draftRevision !== current\.draftRevision[\s\S]{0,100}data\.binding\.draftVersion !== current\.draftVersion/u,
+  'late editor readbacks must not overwrite the current draft revision');
 assert.ok(sourceEntry.js.includes('content/donor/adapter-1688.js'));
 assert.ok(sourceEntry.js.includes('shared/collectors/donor-1688-capture.js'));
 assert.equal(sourceEntry.js.includes('content/source-listing-workbench.js'), false,
