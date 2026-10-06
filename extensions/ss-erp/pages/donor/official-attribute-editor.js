@@ -18,7 +18,15 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
   let workspace = null, loadedToken = '', requestedToken = '', loading = false, dialog = null;
   let loadTask = null;
   const edits = new Map();
-  const token = () => { try { return JSON.stringify([getBinding(), getEditor()?.category]); } catch { return ''; } };
+  const token = () => {
+    try {
+      const binding = getBinding(), category = getEditor()?.category;
+      return JSON.stringify([
+        ['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId', 'draftRevision', 'draftVersion'].map(key => binding?.[key]),
+        [category?.categoryId, category?.typeId, category?.catalogRevision],
+      ]);
+    } catch { return ''; }
+  };
   const current = () => workspace && loadedToken === token();
   const bar = make('div', 'precision-local-fields');
   const state = make('span', '', '选择官方类目后读取商品属性。'); state.id = 'precision-attributes-state';
@@ -86,13 +94,20 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     const data = getEditor();
     if (!data?.category || loading || getBusy() && !clearAfterSave) return;
     const basis = token();
+    const binding = { ...getBinding() };
     if (!force && requestedToken === basis) return;
     requestedToken = basis; loading = true;
     const task = { basis, promise: null };
     task.promise = Promise.resolve().then(async () => {
-      const reply = await send('EDITOR_ATTRIBUTES', { listingWorkflowId: data.binding.listingWorkflowId, binding: getBinding() });
+      if (basis !== token()) return;
+      let reply;
+      try { reply = await send('EDITOR_ATTRIBUTES', { listingWorkflowId: data.binding.listingWorkflowId, binding }); }
+      catch (error) { if (basis !== token()) return; throw error; }
+      // Superseded reads are discarded. A caller awaiting the new revision
+      // continues with its own bound read instead of inheriting a stale error.
+      if (basis !== token()) return;
       const value = reply.data?.workspace;
-      if (reply.data?.state !== 'ready' || !value || !Array.isArray(value.fields) || !Array.isArray(value.values) || !/^[a-f0-9]{64}$/u.test(value.schemaRevision || '') || basis !== token()) throw new Error('官方属性与当前草稿不一致，请刷新官方属性');
+      if (reply.data?.state !== 'ready' || !value || !Array.isArray(value.fields) || !Array.isArray(value.values) || !/^[a-f0-9]{64}$/u.test(value.schemaRevision || '')) throw new Error('官方属性读取未完成，请重新读取官方属性');
       if (workspace && workspace.schemaRevision !== value.schemaRevision || clearAfterSave) {
         if (!clearAfterSave && edits.size) status('官方字段已更新，旧属性编辑需重新填写', 'warn');
         edits.clear(); onReset();

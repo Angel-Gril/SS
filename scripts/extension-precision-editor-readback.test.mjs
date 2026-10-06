@@ -142,3 +142,43 @@ test('unknown mutation keeps its exact original operation and never refreshes or
   await assert.rejects(f.context.saveEditor('PRICING', {}), /尚待核对/);
   assert.equal(f.calls.length, 1);
 });
+
+test('category save keeps preparation pending until the real editor readback finishes during saveBusy', async () => {
+  let resolveRead;
+  const saved = { ...binding, draftRevision: 2, draftVersion: 2 };
+  const f = fixture(async type => {
+    if (type === 'EDITOR_SAVE') return { data: { editor: details(saved) } };
+    if (type === 'REFRESH') { f.setBinding(saved); return { ok: true }; }
+    if (type === 'EDITOR_READ') return new Promise(resolve => { resolveRead = resolve; });
+    throw Error('unexpected command');
+  });
+  let done = false;
+  const save = f.context.saveEditor('CATEGORY', {}).then(() => { done = true; });
+  await tick();
+  assert.equal(f.calls.filter(call => call.type === 'EDITOR_READ').length, 1, 'use the real read function despite saveBusy');
+  assert.equal(done, false, 'do not resume on a no-op read');
+  assert.equal(f.context.saveBusy, true);
+  resolveRead({ data: { editor: details(saved) } }); await save;
+  assert.equal(f.context.saveBusy, false);
+  assert.equal(f.context.lastSave, null);
+  assert.equal(f.context.editor.binding.draftVersion, 2);
+});
+
+test('confirmed category readback waits out a superseded read and never applies it to the new revision', async () => {
+  let resolveOldRead;
+  const saved = { ...binding, draftRevision: 2, draftVersion: 2 };
+  const f = fixture(async (type, payload) => {
+    if (type === 'EDITOR_SAVE') return { data: { editor: details(saved) } };
+    if (type === 'REFRESH') { f.setBinding(saved); return { ok: true }; }
+    if (type === 'EDITOR_READ' && payload.binding.draftRevision === 1) return new Promise(resolve => { resolveOldRead = resolve; });
+    return { data: { editor: details(saved) } };
+  });
+  const old = f.context.loadEditor();
+  const result = Promise.allSettled([old, f.context.saveEditor('CATEGORY', {})]);
+  await tick(); resolveOldRead({ data: { editor: details(binding) } });
+  const outcomes = await result;
+  assert.deepEqual(outcomes.map(row => row.status), ['rejected', 'fulfilled']);
+  assert.equal(f.calls.filter(row => row.type === 'EDITOR_SAVE').length, 1);
+  assert.equal(f.calls.filter(row => row.type === 'EDITOR_READ').length, 2);
+  assert.equal(f.context.editor.binding.draftVersion, 2);
+});

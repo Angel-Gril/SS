@@ -162,6 +162,7 @@ function parentHtml(watermarkJpeg) {
     if(event.source!==frame.contentWindow||event.origin!==location.origin)return;
     const command=contract.parseFrameCommand(event.data);
     commands.push(command);
+    if(command.type==='REFRESH'&&window.__precisionCategoryRefresh)await window.__precisionCategoryRefresh;
     if(command.type==='EDITOR_READ'&&${process.argv.includes('--editor-read-recovery')}&&!window.__precisionFailedEditorRead){
       window.__precisionFailedEditorRead=true;
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,
@@ -413,6 +414,12 @@ function parentHtml(watermarkJpeg) {
     if(command.type==='PUBLISH'&&command.action==='STATUS'){
       publishStatusPolls++;
       result=!publishCommitted||publishStatusPolls===1?null:{state:publishStatusPolls===2?'PENDING':'SUCCEEDED',receiptId:'publish-receipt-fixture',failureCode:null};
+    }
+    if(command.type==='EDITOR_SAVE'&&command.action==='CATEGORY'&&${process.argv.includes('--category-refresh-race')}){
+      window.__precisionCategoryRefresh=new Promise(resolve=>setTimeout(resolve,200));
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:true,error:'',data:result},location.origin);
+      await window.__precisionCategoryRefresh;window.__precisionCategoryRefresh=null;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);return;
     }
     frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);
     if(command.type==='EDITOR_SAVE'&&command.action==='SKU_DUPLICATE'&&${process.argv.includes('--sku-copy-flow')}&&!window.__precisionLostCopyReply){
@@ -761,6 +768,25 @@ async function run() {
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
     await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("选择官方类目")'), 'continuous preparation pauses at explicit official category review');
+    if(process.argv.includes('--process-category-recovery')){
+      await click('#editor-category-modal .settings-head button');await click('#process-view-btn');
+      await until(()=>workspace('!document.getElementById("process-modal").hidden'),'same-window process view');
+      assert.equal(await workspace('document.getElementById("precision-process-continue").textContent'),'确认官方类目并继续');
+      const style=await workspace('(()=>{const keys=["borderRadius","fontFamily","fontSize","lineHeight"];return ["start-btn","precision-process-continue"].map(id=>Object.fromEntries(keys.map(key=>[key,getComputedStyle(document.getElementById(id))[key]])));})()');
+      assert.deepEqual(style[0],style[1],'process and toolbar primary buttons use the same typography and shape');
+      await screenshot('process-current-category');await click('#precision-process-continue');
+      await until(()=>workspace('!document.getElementById("editor-category-modal").hidden&&document.querySelectorAll(".category-auto-card").length>0'),'process action reopens the current category');
+      await click('.category-auto-card');await until(()=>workspace('!document.querySelector("[data-category-confirm]").disabled'),'official category preview');
+      assert.equal(await workspace('document.querySelector("[data-category-confirm]").textContent'),'确认类目并继续');
+      await screenshot('category-confirm-and-continue');await click('[data-category-confirm]');
+      await until(()=>workspace('!document.getElementById("precision-attribute-suggestions-modal").hidden&&!document.getElementById("precision-attribute-suggestions-manual").disabled'),'category save proceeds to attributes without manual refresh');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_SAVE"&&c.action==="CATEGORY").length'),1);
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="CREATE_DRAFT").length'),1);
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>["PREPARATION_ANALYZE","EXECUTE_HOSTED_SUITE","PUBLISH"].includes(c.type))'),false);
+      summary.categoryContinuation={processAction:true,unifiedButtons:true,savedOnce:true,automaticAttributes:true,responseBeforeProjection:process.argv.includes('--category-refresh-race')};summary.ok=true;
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
     if(process.argv.includes('--sku-copy-flow')){
       await click('#editor-category-modal .settings-head button');await click('#precision-preparation-stop');
       await click('.editor-row-copy-btn[data-row-index="1"]');

@@ -127,7 +127,7 @@ function log(message, error = false) {
     row.append(time, content);
     output.append(row);
   }
-  element('process-title').textContent = message;
+  if (!preparation || preparation.state().status === 'IDLE') element('process-title').textContent = message;
 }
 function report(error) { status(error.message || String(error), 'err'); log(error.message || String(error), true); }
 function trusted(id, handler) {
@@ -427,11 +427,12 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:curre
     if (!value.open || value.previewStatus !== 'ready') return;
     const stateNode=element('precision-preparation-state');
     if (!stateNode || preparation?.state()?.stepId !== 'category') return;
-    const message='已读取官方属性；点击“确认类目并继续”后刷新草稿并继续。';
+    const message=value.status==='saving'?'正在保存类目并读取最新草稿，请稍候…'
+      :'已读取官方属性；点击“确认类目并继续”后刷新草稿并继续。';
     stateNode.textContent=`${projection.shops.find(shop=>shop.id===selectedShopId)?.name||'当前商品'}：${message}`;
     element('process-title').textContent=message;
     element('process-detail').textContent='类目卡片只是选择；确认后才会写入当前草稿并进入属性与 AI 分析。';
-    element('process-status-badge').textContent='等待确认';
+    element('process-status-badge').textContent=value.status==='saving'?'保存并刷新':'等待确认';
   },
 });
 const attributes = createOfficialAttributeEditor({
@@ -757,10 +758,18 @@ function acceptEditor(data, savedAction = null) {
   editorSignature = '';
   render();
 }
-async function loadEditor() {
-  if(editorReadTask)return editorReadTask;
-  if (saveBusy || !listing()) return;
+async function loadEditor(options = {}) {
+  if (editorReadTask) {
+    if (!options.confirmedBinding) return editorReadTask;
+    // A pre-save read may be superseded by the acknowledged revision. Its
+    // failure cannot substitute for the readback of the confirmed save.
+    try { await editorReadTask; } catch {}
+  }
+  if (saveBusy && !options.confirmedBinding || !listing()) return;
   const initialBinding = currentEditorBinding();
+  if (options.confirmedBinding && editorBindingKey(options.confirmedBinding) !== editorBindingKey(initialBinding)) {
+    throw new Error('类目已保存，当前草稿版本已更新，请重新读取后继续');
+  }
   let attemptedKey = editorBindingKey(initialBinding);
   editorLoadKey = attemptedKey;
   editorLoading = true;
@@ -824,10 +833,11 @@ async function saveEditor(action, value, replay = false, beforeDispatch = null) 
     if(action==='ATTRIBUTES')attributeSuggestionReviewed=attributeSuggestionContext();
     copyEditor.afterSave(action, response.data);
     if (action === 'CATEGORY') {
+      const confirmedBinding = { ...editor.binding };
       try {
         const refreshed = await command('REFRESH');
         if (!refreshed?.ok) throw new Error('类目已保存，但草稿状态尚未刷新');
-        await loadEditor();
+        await loadEditor({ confirmedBinding });
       } catch (error) {
         readbackWarning = '类目已保存，但官方属性尚未刷新，请点击“重新读取”后继续。';
         log(error.message || readbackWarning, true);
@@ -1269,6 +1279,7 @@ function render() {
   listing();
   element('start-btn').disabled = projection.busy || session.isActive() || session.needsRecovery() || !sourceReady;
   preparationRecover.disabled=!session.needsRecovery()||session.isActive()||projection.busy||saveBusy;
+  renderProcessAction();
   if(preparation?.isRunning())element('start-btn').disabled=true;
   element('start-btn').textContent = session.isActive() || preparation?.isRunning() ? '处理中…' : listing() ? '继续处理' : '开始执行';
   element('confirm-export-btn').disabled = projection.busy || publishBusy || mediaMutationBusy || saveBusy || !listing();
@@ -1385,13 +1396,23 @@ const analysisOpen=make('button','ghost','商品 AI 分析');analysisOpen.id='pr
 analysisOpen.addEventListener('click',event=>{if(event.isTrusted&&!analysisOpen.disabled)void openProductAnalysis().catch(report);});
 preparationBar.append(preparationState,analysisOpen,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
 const processStages=make('div','precision-preparation-process');processStages.id='precision-preparation-process';element('ai-output').before(processStages);
+function renderProcessAction(){
+ const state=preparation?.state(),button=element('precision-process-continue');
+ if(!button)return;
+ button.disabled=projection.busy||saveBusy||session.isActive()||preparation?.isRunning()||state?.status==='RECOVERY_REQUIRED';
+ button.textContent=state?.stepId==='category'?'确认官方类目并继续':'继续当前步骤';
+ element('precision-process-next-step').textContent=state?.status==='RECOVERY_REQUIRED'?'请先核对原请求结果。'
+  :state?.stepId==='category'?'打开类目窗口，确认保存后会自动继续。':'查看并完成当前待办，已保存内容会保留。';
+}
 preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
  getSource:()=>JSON.stringify([projection.source.platform,projection.source.sourceProductId,projection.handoff?.snapshotId]),getCurrentShop:()=>selectedShopId,
  selectShop:async shopId=>{if(!projection.shops.some(shop=>shop.id===shopId))throw Error('店铺授权已变化');selectedShopId=shopId;render();await ensureCurrentDraft();},
  onState:value=>{preparationState.textContent=`${projection.shops.find(shop=>shop.id===value.shopId)?.name||'当前商品'}：${value.message}`;preparationContinue.disabled=value.status==='RUNNING'||value.status==='RECOVERY_REQUIRED';preparationStop.disabled=value.status!=='RUNNING'&&value.status!=='WAITING_INPUT';
    renderPreparationProcess(processStages,value);element('process-title').textContent=value.message;
    element('process-detail').textContent='按当前处理阶段展示。图片筛选、商品观察和文案由本次分析生成，请检查后确认。';
-   element('process-status-badge').textContent=({RUNNING:'处理中',COMPLETE:'已完成',WAITING_INPUT:'等待确认',RECOVERY_REQUIRED:'核对原请求',STOPPED:'已停止',CONTEXT_CHANGED:'上下文已变化'})[value.status]||'待开始';},
+   element('process-status-badge').textContent=({RUNNING:'处理中',COMPLETE:'已完成',WAITING_INPUT:'等待确认',RECOVERY_REQUIRED:'核对原请求',STOPPED:'已停止',CONTEXT_CHANGED:'上下文已变化'})[value.status]||'待开始';
+   element('process-status-badge').className='process-console-badge '+(value.status==='RUNNING'?'is-running':['WAITING_INPUT','RECOVERY_REQUIRED'].includes(value.status)?'is-paused':'is-idle');
+   renderProcessAction();},
  steps:[
   {id:'draft',label:'读取当前草稿',run:async()=>{await loadEditor();if(!currentEditorForPublish())return{completed:false,message:'请读取当前草稿后继续'};if(lastSave)throw Object.assign(Error('先核对原保存请求'),{outcome:'UNKNOWN_OUTCOME'});return{completed:true};}},
   {id:'category',label:'确认官方类目',run:async()=>{if(currentEditorForPublish()?.category)return{completed:true};await categoryPicker.open();return{completed:false,message:'在当前窗口选择官方类目，保存后继续处理'};}},
@@ -1476,6 +1497,11 @@ for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () =>
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
+trusted('precision-process-continue',async()=>{
+ element('process-modal').hidden=true;
+ if(session.needsRecovery()){await recoverPreparation();return;}
+ await startProductPreparation();
+});
 trusted('erp-refresh-btn', async () => {
   if(session.needsRecovery()){await recoverPreparation();return;}
   if(editorRefreshBusy)return;

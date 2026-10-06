@@ -149,12 +149,25 @@
 #editor-category-modal button:not(.precision-category-leaf):not(.category-auto-card) {
   min-height: 38px;
   border-radius: 10px;
-  font: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
   font-weight: 700;
 }
 .precision-preparation-bar button.primary,
 #process-modal button.primary,
 #editor-category-modal button.primary { color: #fff; }
+.precision-process-actions { justify-content: space-between; flex-wrap: wrap; }
+.precision-process-actions .settings-tip { flex: 1; min-width: 180px; }
+.toolbar button, .precision-local-fields button, .precision-preparation-bar button,
+.settings-head button, .settings-foot button {
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  min-height: 38px;
+  padding: 9px 14px;
+  border-radius: 10px;
+}
 .precision-preparation-notice { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .precision-preparation-curation { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
 .precision-preparation-curation-item { display: grid; grid-template-columns: 20px 90px minmax(0,1fr); align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 12px; cursor: pointer; }
