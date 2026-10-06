@@ -2,6 +2,16 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 `21bbd220 / 1.0.432` 类目/属性真实读回与过程入口已双区公开
+
+- 最终运行提交 `21bbd220cad4ee9d97f0e51db59d6a7afdaeecc4` 已推送、签名、COM/CN 标准部署并公开。两区 current、API/Worker/Web、官网 latest 和四个 Cloud/Local ZIP 全部绑定432；`/ready` 的db/Redis为ok。COM商品分析true/`qwen-vl-max`，CN分析false，BYOK三个开关false；没有改变身份、店铺范围、金额、schema或Provider配置。
+- 类目保存锁内的真实读回、旧响应拒绝/新响应继续、语义类目键和过程入口已通过最终59项定向回归。隔离Chrome覆盖保存成功先返回、projection延迟到达、只保存一次、自动字段/分析准备和当前步骤入口；两个实际签名Cloud ZIP的相同浏览器场景均通过（COM `ss-erp-precision-ui-evidence-ASgS3S`，CN `ss-erp-precision-ui-evidence-ofYT1i`）。按钮的字号/行高/字体/圆角计算样式一致。结果仍为本地owner fixture，不能冒充用户截图中任意真实商品的模型质量验收。
+- 原生完整offline最终PASS：服务端6960项、真实PG scope撤销7项和AI事务210项、升级回放、lint/typecheck/Server/Web构建、Cloud/Local verifier619/615通过。首轮在`web-dashboard-session.test.mjs`测试进程失败，单独9项及同组64项复跑通过，未修改Web源码；没有定位稳定复现，最终完整重跑通过才生成回执。正式QA04 SHA `c790526d49fffd8ac90ad5688070f8c724acf0795b296459acc890725a364159`；原producer证明与425套图执行源码相同，保留原执行提交和suite/审核/assignment/replay，不新增付费套图。
+- 两区原有ACTIVE Ed25519 key `ss-erp-extension-release-2026-08-02-01`签名与独立验签通过，未轮换key。Cloud ZIP SHA COM `c666aaf32f6215eb96ddf579c862d4c52fc75c3e61b39f75e4245700d3e02548`、CN `87e14b70486ecff46d091c31bd09b90780b24032c076a234ed11264a068ef9a6`；Local SHA COM `8add58b8f035a698e50ada6c79e02d066ebbd6c36682ef64265d6112a9eda642`、CN `3ad3313b347cd5bb95f2037483c71974f390f82d401145e752891c817c748be1`。431签名中间候选保留且未部署/公开。
+- COM144/CN143张表的目标部署及运行后backup/restore均通过，临时库清理，deployment/runtime备份目录继续分离。external准备adapter的archive字节再次与标准部署原始Git blob不一致，首次部署正确拒绝、current未切换；将失败gate/release保留至私有证据目录，逐文件核对Git blob后安装原字节gate，重新标准部署成功。恢复adapter一次误引用移动后的原路径，后使用准确失败目录闭合，未跳过标准比较或覆盖已有运行release。
+- 双区canonical VPS及REL04 canary PASS，canary SHA COM `4fe0a175fb7e55e813c7f907fb956427ba4ccf1d43acdfc79a10e2b946a02001`、CN `1cafa07ecc6a6aceef2f10d0f85d9958363201a7b28df949afcd97878b443af5`。Website approval SHA COM `196bfcc877122ba2e64b0d904d972900c160da1b26c58f338e5583046cb58bdc`、CN `a4df4cae7b248ef524ed70039cb45b99b66fecdd3ee24fdcac33b1bfdf6807d7`，CAS消费430旧approval和运行release封存包。双家公共DNS一致、原生固定公网TLS/重定向/字节限制及四包匿名完整下载通过，distribution SHA COM `bd02100e5220d888e0e0dc63480e396beea5122963ef111a056a6bd7d0772ec2`、CN `91e853f38415c5415a34f711aef943758b419d755c8ba74a91587065ce685953`，final publication verifier两区PASS。
+- 发布后完整VPS两区PASS、0failure/1既有远端备份未配置warning。COM canary临时设备session由owner清理，account会话仅清理本轮key（COM1/CN2），4份本机token及远端token/session-key文件清除；未接管/重启用户普通Chrome。没有真实Provider/Ozon请求、新增费用或供应商控制台访问。私有原件在 `release-21bbd220-deploy432`、`release-21bbd220-website` 与区域candidate/signature目录；本轮文档发布提交不重新签名或部署。
+
 ### 2026-10-06 类目/属性实际读回收口，最终候选 `1.0.432`
 
 - `e861627c / 1.0.431` 中间签名候选保留，未部署/公开。早期CATEGORY测试将`loadEditor` stub成成功，遗漏真实函数的`saveBusy`提前return；实际函数新增测试明确RED（0次读回），最终允许仅已确认保存的精确binding在锁内读取，等待被替代的旧编辑器请求后核对新版本，不重复写入。

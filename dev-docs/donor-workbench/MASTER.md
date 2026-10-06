@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-06 `1.0.432` 类目/属性与过程入口修复已双区公开
+
+应用、官网和四个 Cloud/Local 下载均绑定 `21bbd220 / 1.0.432`，最终完整发布门禁与实际签名包的类目确认自动继续验收通过。COM 商品分析开启、CN dark，Provider/Ozon/新增费用零；原件和边界见[直接适配 owner](./direct-adaptation.md)。431中间候选未部署。
+
 ## 2026-10-06 类目/属性读回最终候选 `1.0.432`
 
 431中间签名保留但未部署；保存期间的实际读回和被替代属性请求已 RED→GREEN，过程窗口当前步骤及统一按钮在Chrome通过。最终候选432仍待发布，线上430；精确范围见[直接适配 owner](./direct-adaptation.md)。
@@ -66,7 +70,7 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `98f94f1e / 1.0.430`.
+COM/CN applications and public Cloud/Local downloads serve `21bbd220 / 1.0.432`.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads
 passed. Same-binding read failures stop automatically; explicit refresh recovers the

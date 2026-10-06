@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 `21bbd220 / 1.0.432` 类目与属性读回修复双区公开完成
+
+COM/CN 应用、官网 latest 和 Cloud/Local 下载均已公开 `21bbd220cad4ee9d97f0e51db59d6a7afdaeecc4 / 1.0.432`。类目确认后等待真实草稿读回、被替代属性请求不阻断新版本、过程窗口当前步骤入口与统一按钮均有定向及签名包浏览器证据；正式 QA04、双区备份恢复/VPS/canary/approval/CAS、匿名完整下载和发布后验收通过。COM 商品分析保持开启、CN dark；无新增 Provider/Ozon 请求或费用，临时会话已清理。准确原件和限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-06 类目/属性读回时序收口，最终候选 `1.0.432`
 
 431中间候选尚未部署，复核发现保存期间读回空返回及被替代属性请求阻断新版本分析，已在实际函数中 RED→GREEN 收口。59项关联回归、保存回执先于projection的Chrome流程和过程窗口当前步骤/按钮统一验收通过；最终候选改为432。线上仍为 `98f94f1e / 1.0.430`；唯一证据与界限见[直接适配 owner](donor-workbench/direct-adaptation.md)。
