@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-06 类目保存刷新修复准备 `1.0.431`
+
+类目属性读回后不再用旧草稿版本推进连续准备；确认按钮明确写入并继续，统一过程窗口按钮样式。目标候选 `1.0.431` 尚未发布，线上仍 `1.0.430`；事实见[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-06 `1.0.430` 工作台调度与 AI 入口已双区公开
 
 U25/U26 两项修复已发布（2/2），COM/CN 应用和公开 Cloud/Local 下载均绑定 `98f94f1e / 1.0.430`。完整发布门禁和匿名下载通过，COM分析保持开启、CN dark，Provider/Ozon/新费用均零；准确回执与限制见[直接适配 owner](./direct-adaptation.md)。

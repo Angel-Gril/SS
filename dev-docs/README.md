@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 类目确认后的权威刷新修复，准备 `1.0.431`
+
+用户实测发现类目属性已经读回时，连续准备仍可能停在“确认官方类目”，根因为类目保存回执先于 bridge 的权威 projection 刷新返回。扩展现在等待刷新和编辑器读回后再继续；类目窗口明确区分“已选中”与“确认类目并继续”，过程/准备按钮样式统一。定向保存、类目对话框、连续准备和隔离 Chrome 回归通过；当前线上仍为 `98f94f1e / 1.0.430`，准备新候选。准确范围和发布边界见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-06 `98f94f1e / 1.0.430` 工作台调度与 AI 入口双区公开发布完成
 
 COM/CN 应用、官网 latest 和 Cloud/Local 下载均已切换到 `98f94f1e2e1854238a54d8fc2b90e4a7b27e6b12 / 1.0.430`。完整原生 offline/正式 QA04、签名 MV3、双区备份恢复/VPS/canary/approval/CAS、公共 DNS 和匿名完整下载均通过；COM AI 商品分析保持开启，CN dark。真实 Provider/Ozon 请求和新增费用均为零；当前证据和限制只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

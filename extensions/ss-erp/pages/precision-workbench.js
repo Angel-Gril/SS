@@ -423,6 +423,16 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:curre
     if(JSON.stringify(binding)!==JSON.stringify(currentEditorBinding()))throw new Error('店铺或草稿已变化，请重新选择类目');
     return saveEditor('CATEGORY',selection);
   },onError:report,
+  onState:value=>{
+    if (!value.open || value.previewStatus !== 'ready') return;
+    const stateNode=element('precision-preparation-state');
+    if (!stateNode || preparation?.state()?.stepId !== 'category') return;
+    const message='已读取官方属性；点击“确认类目并继续”后刷新草稿并继续。';
+    stateNode.textContent=`${projection.shops.find(shop=>shop.id===selectedShopId)?.name||'当前商品'}：${message}`;
+    element('process-title').textContent=message;
+    element('process-detail').textContent='类目卡片只是选择；确认后才会写入当前草稿并进入属性与 AI 分析。';
+    element('process-status-badge').textContent='等待确认';
+  },
 });
 const attributes = createOfficialAttributeEditor({
   root: element('ui-scale-root'), send: command, getEditor: () => {
@@ -813,6 +823,16 @@ async function saveEditor(action, value, replay = false, beforeDispatch = null) 
     }
     if(action==='ATTRIBUTES')attributeSuggestionReviewed=attributeSuggestionContext();
     copyEditor.afterSave(action, response.data);
+    if (action === 'CATEGORY') {
+      try {
+        const refreshed = await command('REFRESH');
+        if (!refreshed?.ok) throw new Error('类目已保存，但草稿状态尚未刷新');
+        await loadEditor();
+      } catch (error) {
+        readbackWarning = '类目已保存，但官方属性尚未刷新，请点击“重新读取”后继续。';
+        log(error.message || readbackWarning, true);
+      }
+    }
     editorState.textContent = response.data?.replayed ? '同次保存已核对，草稿未重复写入。'
       : action === 'COPY_GENERATE' ? '已生成待审核俄文，请检查内容后明确审核。'
         : action === 'COPY_CANDIDATE' ? 'ERP 已保存待审核文案，请预览后明确审核。' : action === 'COPY_APPROVE' ? 'ERP 已审核俄文文案。'
@@ -833,7 +853,7 @@ async function saveEditor(action, value, replay = false, beforeDispatch = null) 
   } finally {
     saveBusy = false; render();
     if(mutationConfirmed&&replay&&!session.needsRecovery()&&preparation?.state().status==='RECOVERY_REQUIRED'&&preparation.state().shopId===current.shopId){preparation.markRecovered();}
-    if(mutationConfirmed&&!session.needsRecovery()&&action!=='ATTRIBUTE_SUGGESTIONS')resumeAfterConfirmedStep(action);
+    if(mutationConfirmed&&!(action === 'CATEGORY' && readbackWarning)&&!session.needsRecovery()&&action!=='ATTRIBUTE_SUGGESTIONS')resumeAfterConfirmedStep(action);
     if (refreshAttributeSchema) {
       try { await command('REFRESH'); await loadEditor(); await attributes.load(true); }
       catch (error) { report(error); }

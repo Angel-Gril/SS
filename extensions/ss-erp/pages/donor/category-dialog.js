@@ -39,7 +39,7 @@ function treeProjection(nodes, leaves, budget, depth = 0) {
 }
 
 export function createCategoryDialog({ root, getBinding, getProduct = () => null, loadCatalog,
-  loadSuggestions, loadAttributePreview, saveSelection, onError = () => {} }) {
+  loadSuggestions, loadAttributePreview, saveSelection, onError = () => {}, onState = () => {} }) {
   if (!root?.ownerDocument || typeof getBinding !== 'function' || typeof loadCatalog !== 'function'
     || typeof saveSelection !== 'function') throw new TypeError('Category dialog requires an element and ERP owner adapters');
   const document = root.ownerDocument;
@@ -94,8 +94,10 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     status.textContent = value.message;
     status.classList.toggle('precision-category-error', value.status === 'error' || value.previewStatus === 'error');
     confirmButton.disabled = !value.canSave || value.status === 'saving';
-    confirmButton.textContent = value.status === 'saving' ? '正在保存…' : '确认选择';
+    confirmButton.textContent = value.status === 'saving' ? '正在保存…'
+      : value.previewStatus === 'ready' ? '确认类目并继续' : '确认选择';
     searchButton.disabled = value.status === 'saving'; searchInput.disabled = value.status === 'saving';
+    onState(snapshot());
   }
   function syncBinding() {
     const current = keyOfBinding(readBinding());
@@ -105,7 +107,7 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
       value.message = current ? '店铺或草稿已变化，请重新读取官方类目' : '请先选择店铺并创建 ERP 草稿';
       renderTree(); renderRecommendations(); renderStatus();
     }
-    return snapshot();
+    const currentState = snapshot(); onState(currentState); return currentState;
   }
   function isCurrent(requestEpoch, bindingKey) {
     syncBinding(); return value.open && epoch === requestEpoch && observedBinding === bindingKey;
@@ -156,7 +158,7 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
       if (!preview || preview.categoryId !== selection.categoryId || preview.typeId !== selection.typeId
         || preview.catalogRevision !== selection.catalogRevision) throw new TypeError('Attribute preview owner mismatch');
       renderAttributes(preview); value.previewStatus = 'ready'; value.canSave = true;
-      value.message = '已读取官方属性，请确认所选类目与商品匹配'; renderStatus();
+      value.message = '已读取官方属性；点击“确认类目并继续”后刷新草稿并继续下一步'; renderStatus();
     } catch {
       if (!isCurrent(requestEpoch, requestedBinding) || requestPreview !== previewEpoch) return;
       value.previewStatus = 'error'; value.canSave = false; value.message = '商品属性读取失败，请重新选择类目后重试';

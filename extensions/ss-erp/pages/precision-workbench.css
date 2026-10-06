@@ -144,6 +144,17 @@
 .precision-preparation-analysis-dialog { width: 1080px; max-width: 100%; grid-template-rows: auto minmax(0,1fr) auto; }
 .precision-preparation-analysis-dialog .settings-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
 .precision-preparation-analysis-dialog .settings-foot { flex-wrap: wrap; gap: 8px; }
+.precision-preparation-bar button,
+#process-modal button,
+#editor-category-modal button:not(.precision-category-leaf):not(.category-auto-card) {
+  min-height: 38px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+}
+.precision-preparation-bar button.primary,
+#process-modal button.primary,
+#editor-category-modal button.primary { color: #fff; }
 .precision-preparation-notice { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .precision-preparation-curation { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
 .precision-preparation-curation-item { display: grid; grid-template-columns: 20px 90px minmax(0,1fr); align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 12px; cursor: pointer; }

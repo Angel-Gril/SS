@@ -7,11 +7,12 @@ function fixture({ failure, refreshFailure, recovery = false, draftRecovery = fa
   const source = readFileSync('extensions/ss-erp/pages/precision-workbench.js', 'utf8');
   const body = source.slice(source.indexOf('async function saveEditor('), source.indexOf('function resumeAfterConfirmedStep('));
   const binding = { snapshotId: 'snapshot', supplyGoodsId: 'goods', shopId: 'shop', listingWorkflowId: 'draft', draftRevision: 1, draftVersion: 1 };
-  const messages = [], resumes = [], restores = [];
+  const messages = [], resumes = [], restores = [], commands = [];
   const context = {
     editor: { binding }, saveBusy: false, lastSave: recovery ? { binding, listingWorkflowId: 'draft', action: 'ATTRIBUTES', value: {}, operationKey: 'original' } : null,
     crypto: { randomUUID: () => 'key' }, replaySave: {}, render() {}, currentEditorBinding: () => binding,
-    currentEditorForPublish: () => ({}), command: async () => { if (failure) throw failure; return { data: { editor: { binding } } }; },
+    currentEditorForPublish: () => ({}), command: async (type) => { commands.push(type); if (failure) throw failure; return type === 'REFRESH' ? { ok: true } : { data: { editor: { binding } } }; },
+    loadEditor: async () => { commands.push('EDITOR_READ'); },
     acceptEditor() {}, attributes: { afterSave: async () => { if (refreshFailure) throw Error('read failed'); } },
     attributeSuggestionContext: () => 'current', copyEditor: { afterSave() {} }, editorState: {},
     status: (message, kind) => messages.push({ message, kind }), log() {}, report() {},
@@ -21,7 +22,7 @@ function fixture({ failure, refreshFailure, recovery = false, draftRecovery = fa
   };
   vm.createContext(context);
   vm.runInContext(body + ';globalThis.save=saveEditor;', context);
-  return { context, messages, resumes, restores };
+  return { context, messages, resumes, restores, commands };
 }
 
 test('a rejected mutation cannot advance the preparation queue', async () => {
@@ -48,4 +49,11 @@ test('only an acknowledged original save replay clears its preparation recovery'
   await f.context.save('ATTRIBUTES', {}, true);
   assert.deepEqual(f.restores, [true]);
   assert.deepEqual(f.resumes, ['ATTRIBUTES']);
+});
+test('category save waits for authoritative refresh before resuming preparation', async () => {
+  const f = fixture();
+  f.context.preparation.state = () => ({ status: 'WAITING_INPUT', shopId: 'shop', stepId: 'category' });
+  await f.context.save('CATEGORY', {});
+  assert.deepEqual(f.commands, ['EDITOR_SAVE', 'REFRESH', 'EDITOR_READ']);
+  assert.deepEqual(f.resumes, ['CATEGORY']);
 });

@@ -2,6 +2,12 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 类目确认后的权威刷新修复，准备 `1.0.431`
+
+- 用户截图复现：类目弹窗已读取属性，但只选中推荐卡片没有完成保存，过程窗口仍显示“确认官方类目”；此前即使点击确认，保存回执先返回、权威 projection 后刷新，也可能让下一阶段读取旧草稿版本，底部留下“官方属性与当前草稿不一致”。
+- 修复：`saveEditor('CATEGORY')` 在确认 mutation 后等待 `REFRESH` 和一次 `EDITOR_READ`，成功后才调用 `resumeAfterConfirmedStep`；刷新失败保留已保存状态并提示显式“重新读取”，不会重复类目写入。类目对话框属性读回后按钮改为“确认类目并继续”，过程和准备栏按钮统一为当前工作台样式。
+- 定向 `52 passed`（含类别保存刷新顺序、类目树/属性预览、草稿读回、连续准备和商品分析），隔离 Chrome `--complete-preparation-flow` 与 `--preparation-analysis` 通过；Provider/Ozon/费用均为0。本轮尚未提交、签名或部署，线上仍为 `98f94f1e / 1.0.430`。
+
 ### 2026-10-06 `98f94f1e / 1.0.430` 工作台调度与 AI 入口双区公开发布
 
 - 最终修复提交 `98f94f1e2e1854238a54d8fc2b90e4a7b27e6b12` 已推送并双区标准部署、官网公开；U25/U26已闭合。COM/CN三服务和db/Redis健康，官网latest与四个Cloud/Local ZIP都绑定`1.0.430`。COM商品分析true/`qwen-vl-max`、CNfalse、BYOK generation/ingest/publish false，由实际配置读回确认。没有新Provider/Ozon请求或费用，没有读取供应商控制台。
