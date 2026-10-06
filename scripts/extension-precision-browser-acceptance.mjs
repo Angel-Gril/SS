@@ -162,6 +162,11 @@ function parentHtml(watermarkJpeg) {
     if(event.source!==frame.contentWindow||event.origin!==location.origin)return;
     const command=contract.parseFrameCommand(event.data);
     commands.push(command);
+    if(command.type==='EDITOR_READ'&&${process.argv.includes('--editor-read-recovery')}&&!window.__precisionFailedEditorRead){
+      window.__precisionFailedEditorRead=true;
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,
+        ok:false,error:'设备草稿读取暂时不可用，请重新读取',outcome:'NOT_SUBMITTED',code:'DEVICE_READ_UNAVAILABLE'},location.origin);return;
+    }
     if(command.type==='COLLECT')handoff={snapshotId:'snapshot-fixture',supplyGoodsId:'goods-fixture',sourceProductId:'845581683597',platform:'1688'};
     if(command.type==='CREATE_DRAFT'){selectedSkuKeys=command.selectedSkuKeys;workbench={state:'ready',status:{snapshot:{current:true},listing:{items:[{
       id:'draft-fixture',shopId:command.shopId,stage:'CATEGORY_REVIEW',status:'ACTIVE',runState:'ACTIVE',
@@ -711,7 +716,7 @@ async function run() {
       assert.deepEqual(await workspace('parent.__precisionScriptErrors||[]'), []);
       await click('input[name="image-workflow-mode"][value="ai-suite"] + span');
     }
-    await click('#start-btn');
+    await click(process.argv.includes('--ai-entry-flow')?'#precision-preparation-analysis-open':'#start-btn');
     await until(() => workspace('document.getElementById("sku-picker").hidden===false'), 'original donor SKU picker');
     assert.equal(await workspace('document.querySelectorAll(".sku-picker-item").length'), 16);
     assert.equal(await workspace('document.getElementById("sku-apply-btn").textContent.includes("s)")'), false, 'no automatic mutation countdown');
@@ -721,6 +726,19 @@ async function run() {
     await screenshot('sku-selection');
     await click('#sku-apply-btn');
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="CREATE_DRAFT")'), 'draft create command');
+    if(process.argv.includes('--editor-read-recovery')){
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("设备草稿读取暂时不可用")'),'one failed read pauses at the actual failure');
+      await pause(150);
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_READ").length'),1,'same binding does not render-loop reads');
+      await click('#erp-refresh-btn');
+      await until(()=>workspace('!document.getElementById("editor-save-btn").disabled&&document.getElementById("status-text").textContent.includes("已刷新")'),'explicit refresh restores the editable table');
+      assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'),2);
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>c.type==="EDITOR_READ").length'),2,'explicit refresh sends exactly one new read');
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>["EDITOR_SAVE","PREPARATION_ANALYZE","EXECUTE_HOSTED_SUITE","PUBLISH"].includes(c.type))'),false);
+      await screenshot('failed-editor-read-recovered');summary.editorReadRecovery={failedReads:1,recoveredReads:1,automaticLoop:false,editableRows:2,writeRequests:0};summary.ok=true;
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
     if(process.argv.includes('--draft-recovery-flow')){
       await until(()=>workspace('document.getElementById("status-text").textContent.includes("草稿回执")'),'unknown creation retains original recovery');
       await click('#precision-preparation-recover');

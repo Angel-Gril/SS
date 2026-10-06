@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-06 工作台调度与连续分析入口修复
+
+当前新任务 U25/U26 两项本地验收完成（2/2），读取复用/等待、明确先决步骤和原候选恢复均有 owner 与隔离 Chrome 证据；准备 `1.0.430`，线上仍 `1.0.429`。唯一实现、证据和发布边界见[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-06 `1.0.429` 草稿读取修复已双区公开
 
 应用、官网和 Cloud/Local 下载均绑定 `566f146b / 1.0.429`，完整发布门禁与读取失败→明确刷新恢复的浏览器验收通过；COM 托管分析继续开启、CN dark，Provider/Ozon/新费用均零。准确事实只维护在[直接适配 owner](./direct-adaptation.md)。

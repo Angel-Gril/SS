@@ -19,6 +19,11 @@
   var frameReady = false;
   var legacySurfaceStyles = new Map();
   var busy = false;
+  var idleReaders = [];
+  var projectionRead = null;
+  var editorReadRequests = new Map();
+  var mutationPending = false;
+  var busyMessage = '';
   var refreshEpoch = 0;
   var historyEpoch = 0;
   var billingEpoch = 0;
@@ -111,18 +116,53 @@
       history: currentHistory,
       billing: currentBilling,
       busy: busy,
+      busyMessage: busyMessage,
       error: error || '',
     });
     currentHistory = currentProjection.history;
     publishProjection();
   }
 
-  function setBusy(value, error) {
-    busy = value === true;
+  function setBusy(value, error, message, readOnly) {
+    if (!readOnly) mutationPending = value === true;
+    busy = value === true || mutationPending;
+    busyMessage = busy ? message || busyMessage || '正在处理当前草稿…' : '';
     rebuildProjection(error);
+    if (!busy) idleReaders.splice(0).forEach(function (resolve) { resolve(); });
   }
 
-  async function loadProjection(options) {
+  async function waitForAuthority() {
+    // Read callers wait for the original write/refresh; they never retry a write.
+    while (busy || projectionRead || hostedAuthorityRefresh) {
+      var pending = hostedAuthorityRefresh && hostedAuthorityRefresh.promise || projectionRead;
+      if (pending) await pending;
+      else await new Promise(function (resolve) { idleReaders.push(resolve); });
+    }
+  }
+
+  function readEditorRuntime(message) {
+    var key = JSON.stringify(message);
+    if (editorReadRequests.has(key)) return editorReadRequests.get(key);
+    var pending = sendRuntimeMessage(message).finally(function () {
+      if (editorReadRequests.get(key) === pending) editorReadRequests.delete(key);
+    });
+    editorReadRequests.set(key, pending);
+    return pending;
+  }
+
+  function loadProjection(options) {
+    if (projectionRead) {
+      // A read started before a committed mutation cannot prove its new revision.
+      if (options && options.afterMutation === true) return projectionRead.then(function () {
+        return loadProjection({ force: true });
+      });
+      return projectionRead;
+    }
+    projectionRead = readProjection(options).finally(function () { projectionRead = null; });
+    return projectionRead;
+  }
+
+  async function readProjection(options) {
     options = options || {};
     var epoch = ++refreshEpoch;
     if (options.force === true) {
@@ -131,7 +171,7 @@
         state: 'idle', listingWorkflowId: '', error: '', projection: null,
       };
     }
-    setBusy(true, '');
+    setBusy(true, '', busy ? busyMessage : '正在读取商品与草稿状态…', true);
     try {
       var collected = precisionEnabled && sourcePlatform() === '1688'
         ? { ok: true, data: await globalThis.SS_ERP_DONOR_1688_CAPTURE.collect({
@@ -190,7 +230,8 @@
           : { state: 'unavailable', reason: 'runtime_unavailable' },
         history: currentHistory,
         billing: currentBilling,
-        busy: false,
+        busy: mutationPending,
+        busyMessage: mutationPending ? busyMessage : '',
         error: error,
       });
       currentHistory = currentProjection.history;
@@ -198,16 +239,16 @@
       return true;
     } catch (error) {
       if (epoch !== refreshEpoch) return;
-      setBusy(false, error && error.message ? error.message : String(error));
+      setBusy(false, error && error.message ? error.message : String(error), '', true);
       return false;
     } finally {
-      if (epoch === refreshEpoch) busy = false;
+      if (epoch === refreshEpoch) setBusy(false, currentProjection.error, '', true);
     }
   }
 
   async function collectSource(requestId) {
-    if (busy) return commandResult(requestId, false, '工作台正在处理上一项操作');
-    setBusy(true, '');
+    if (busy) return commandResult(requestId, false, busyMessage);
+    setBusy(true, '', '正在保存当前商品采集…');
     try {
       if (!currentProduct) await loadProjection();
       if (!currentProduct) throw new Error('当前商品尚未读取');
@@ -216,16 +257,16 @@
         payload: { product: currentProduct },
       });
       if (!response || !response.ok) throw new Error(response && response.error || '采集到 ERP 失败');
-      if (!await loadProjection({ force: true })) throw new Error('采集响应已返回，但快照尚未核对，请重新读取');
+      if (!await loadProjection({ force: true, afterMutation: true })) throw new Error('采集响应已返回，但快照尚未核对，请重新读取');
       commandResult(requestId, true, '');
     } catch (error) {
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(requestId, false, error && error.message ? error.message : String(error));
-    }
+    } finally { setBusy(false, currentProjection.error); }
   }
 
   async function createDraft(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     var projection = currentProjection;
     var allowedShopIds = new Set(projection.shops.map(function (shop) { return shop.id; }));
     var allowedSkuKeys = new Set(projection.skus.map(function (sku) { return sku.key; }));
@@ -240,7 +281,7 @@
       commandResult(command.requestId, false, '请先将当前商品采集到 ERP');
       return;
     }
-    setBusy(true, '');
+    setBusy(true, '', '正在创建所选店铺草稿…');
     try {
       var response = await sendRuntimeMessage({
         type: 'ss-erp:source-listing-workbench-draft-create',
@@ -253,15 +294,16 @@
       if (!response || !response.ok || !response.result) {
         throw new Error(response && response.error || '创建 ERP 草稿失败');
       }
-      if (!await loadProjection({ force: true })) throw new Error('草稿响应已返回，但草稿尚未核对，请重新读取');
+      if (!await loadProjection({ force: true, afterMutation: true })) throw new Error('草稿响应已返回，但草稿尚未核对，请重新读取');
       commandResult(command.requestId, true, '');
     } catch (error) {
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
-    }
+    } finally { setBusy(false, currentProjection.error); }
   }
 
   async function openMediaWorkbench(command) {
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
     });
@@ -317,11 +359,11 @@
     } catch (error) {
       setBusy(false, error && error.message ? error.message : String(error));
       commandResult(command.requestId, false, error && error.message ? error.message : String(error));
-    }
+    } finally { setBusy(false, currentProjection.error); }
   }
 
   async function openEmbeddedMedia(command) {
-    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成');
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
     const handoff = currentProjection.handoff;
     if (!precisionEnabled || !listing || !handoff) return commandResult(command.requestId, false, '请先采集并创建所选店铺草稿');
@@ -469,7 +511,7 @@
     var refresh = { promise: null, epoch: 0 };
     hostedAuthorityRefresh = refresh;
     refresh.promise = (async function () {
-      var projectionRead = loadProjection({ force: true });
+      var projectionRead = loadProjection({ force: true, afterMutation: true });
       refresh.epoch = refreshEpoch;
       if (!await projectionRead || hostedAuthorityRefresh !== refresh
         || !sameHostedMediaContext(context)) return false;
@@ -509,7 +551,7 @@
   }
 
   async function executeHostedSuite(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作', null, undefined, 'NOT_SUBMITTED');
+    if (busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
     });
@@ -548,10 +590,11 @@
     // refresh cannot change that outcome or delay it past the frame timeout.
     commandResult(command.requestId, true, '');
     await refreshHostedAuthority(context);
+    setBusy(false, currentProjection.error);
   }
 
   async function assignHostedSuite(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作', null, undefined, 'NOT_SUBMITTED');
+    if (busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
     });
@@ -578,9 +621,11 @@
     }
     commandResult(command.requestId, true, '');
     await refreshHostedAuthority(context);
+    setBusy(false, currentProjection.error);
   }
 
   async function prepareMediaMutation(command) {
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     var history = currentProjection.history;
     var listing = currentProjection.workbench.status.listing.items.find(function (item) {
       return item.id === command.listingWorkflowId;
@@ -626,7 +671,7 @@
   }
 
   async function executeMediaTask(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     var task = currentProjection.workbench.status.media.items.find(function (item) {
       return item.id === command.mediaWorkflowId;
     });
@@ -664,7 +709,7 @@
   }
 
   async function createTranslation(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
     const sourceMediaKey = String(command.sourceMediaKey || '').normalize('NFKC').trim();
     const allowed = currentProjection.media.some(function (item) { return item.key === sourceMediaKey; });
@@ -719,7 +764,9 @@
   }
 
   async function editorCommand(command) {
-    if (busy) return commandResult(command.requestId, false, '工作台正在处理上一项操作');
+    const mutation = ['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'PREPARATION_ANALYZE', 'PREPARATION_APPLY'].includes(command.type);
+    if (mutation && busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
+    if (!mutation) await waitForAuthority();
     let listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
     const matches = () => Boolean(listing && currentProjection.handoff
       && command.binding?.shopId === listing.shopId
@@ -733,14 +780,22 @@
         return commandResult(command.requestId, false, `${reason}，请点击“重新读取”后再编辑`, null, undefined, 'NOT_SUBMITTED', 'EDITOR_CONTEXT_REFRESH_REQUIRED');
       }
     }
-    setBusy(true, '');
+    if (mutation) {
+      if (busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
+      const message = command.type === 'PREPARATION_ANALYZE' ? '正在分析商品图片…'
+        : command.type === 'VISION_ANALYZE' ? '正在生成商品视觉描述…'
+          : command.type === 'EDITOR_COPY_GENERATE' ? '正在生成俄文文案…'
+            : command.type === 'PREPARATION_APPLY' ? '正在保存选中的 AI 属性…'
+              : command.action === 'CATEGORY' ? '正在保存官方类目…' : '正在保存当前草稿…';
+      setBusy(true, '', message);
+    }
     try {
       const type = command.type === 'EDITOR_SAVE' ? 'save' : command.type === 'EDITOR_CATALOG' ? 'catalog'
         : command.type === 'EDITOR_ATTRIBUTE_SUGGESTIONS' ? 'attribute-suggestions'
           : command.type === 'LOGISTICS_SCOPES' ? 'logistics-scopes' : command.type === 'LOGISTICS_SERVICES' ? 'logistics-services' : command.type === 'LOGISTICS_QUOTE' ? 'logistics-quote'
         : command.type === 'EDITOR_COPY_CAPABILITY' ? 'copy-capability' : command.type === 'EDITOR_COPY_GENERATE' ? 'copy-generate'
         : command.type === 'EDITOR_ATTRIBUTES' ? 'attributes' : command.type === 'EDITOR_DICTIONARY' ? 'dictionary' : 'read';
-      const response = await sendRuntimeMessage({
+      const response = await (mutation ? sendRuntimeMessage : readEditorRuntime)({
         type: command.type.startsWith('PREPARATION_') ? 'ss-erp:source-workbench-preparation-' + command.type.slice(12).toLowerCase()
           : command.type === 'VISION_CAPABILITY' ? 'ss-erp:source-workbench-vision-capability'
           : command.type === 'VISION_ANALYZE' ? 'ss-erp:source-workbench-vision-analyze' : 'ss-erp:source-listing-workbench-editor-' + type,
@@ -769,16 +824,16 @@
         code: response && response.code || null,
       });
       commandResult(command.requestId, true, '', null, response.result);
-      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true });
+      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true, afterMutation: true });
     } catch (error) {
       commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code);
     } finally {
-      setBusy(false, '');
+      if (mutation) setBusy(false, currentProjection.error);
     }
   }
 
   async function publishListing(command) {
-    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成');
+    if (busy) return commandResult(command.requestId, false, busyMessage);
     const listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
     if (!listing || !currentProjection.handoff) return commandResult(command.requestId, false, '请先创建所选店铺草稿');
     setBusy(true, '');
@@ -802,7 +857,7 @@
   }
 
   async function videoCommand(command) {
-    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成', null, undefined, 'NOT_SUBMITTED');
+    if (busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
     const binding = command.request.binding;
     const context = hostedMediaContext(binding.listingWorkflowId);
     if (!context || context.shopId !== binding.shopId || context.snapshotId !== binding.snapshotId || context.supplyGoodsId !== binding.supplyGoodsId) {
@@ -825,7 +880,7 @@
   }
 
   async function watermarkCommand(command) {
-    if (busy) return commandResult(command.requestId, false, '请等待上一项操作完成', null, undefined, 'NOT_SUBMITTED');
+    if (busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
     const request = command.request;
     const context = hostedMediaContext(request.listingWorkflowId);
     if (!context || context.shopId !== request.shopId || context.snapshotId !== request.snapshotId || context.supplyGoodsId !== request.supplyGoodsId) {

@@ -2,6 +2,15 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 工作台读取竞态与 AI 入口修复，准备 `1.0.430`
+
+- [x] U25 读取调度：真实 bridge 行为新增四目标 RED→GREEN。editor 只读不占全局 mutation 锁，相同消息复用一个 Worker 请求；读调用等待原保存及其权威刷新，重复 projection 刷新共用一次读取。editor mutation 仍互斥，拒绝明确为 `NOT_SUBMITTED`；未知写入不重发、迟到读回和六字段 binding fence 保留。
+- [x] U26 连续分析入口：官方属性 `load(true)` 等待原读取完成或共同返回失败，不再提前进入缺 schema 的分析；AI 按钮走同一采集/SKU/类目/分析流程，确认类目后自动继续，刷新后的原候选先恢复而不重新开始整条流程。准备窗口显示草稿、SKU、类目、字段与图片的具体下一步，并提供只读重试；并发准备/分析共用原任务及一次费用确认。
+- 测试分类为 T2（调度、原请求复用、上下文漂移、失败恢复）和 T3（原窗口连续操作）。桥接、属性、入口与分析窗口目标在旧行为上明确 RED，修复后最终关联 `86 passed`；扩展源码 verifier `611 pass / 0 failure / 0 warning`。独立复核又收口提交前读取不能代替提交后读取、手动刷新不能释放写入锁、suite/assignment恢复后排队读取不悬挂。新行为回归已纳入 preflight；server/shared/依赖、权限、金额和数据库结构未改。
+- 隔离 Chrome 连续分析/原请求恢复/候选编辑审核/BYOK设置通过，证据 `C:/Users/550W/AppData/Local/Temp/ss-erp-precision-ui-evidence-bPdIZt`；完整商品准备、多店后续输入、属性/物流/文案/图片明确审核通过，证据 `ss-erp-precision-ui-evidence-F4Qc58`。初次回归暴露刷新恢复候选时误启动准备队列，失败原件 `ss-erp-precision-ui-evidence-6yBpTr` 保留，修正后新鲜通过；fixture 模型结果不冒充真实生产质量。
+- AI入口真实物理点击从无草稿→SKU→类目→一次分析/原请求恢复通过（`ss-erp-precision-ui-evidence-7YWUjI`）；失败读取一次→点击刷新→一次恢复读取和可编辑表格通过（`ss-erp-precision-ui-evidence-K8xVsf`），无保存/模型/上架请求。源码默认 MV3 来源页/透明壳/伪造来源拒绝通过（`ss-erp-donor-mv3-evidence-42gNPL`）。为避免重复执行完整发布套件，中间 preflight 停止于打包版本回归，不冒充完整PASS；最终 clean commit 将运行正式原生 offline。
+- Provider/Ozon/生产写入均为 0，未读取供应商费用。本轮沿用用户既有提交、推送、签名、双区部署和公开发布授权；下一步必须绑定最终 clean commit 的 offline、签名 MV3、双区部署/VPS、正式 QA04/canary/approval/CAS/distribution。源码中间状态不宣称线上已修复；目前公开仍为 `566f146b / 1.0.429`，COM `qwen-vl-max` 分析开启、CN dark。
+
 ### 2026-10-06 `566f146b / 1.0.429` 草稿读取修复双区公开发布完成
 
 - 用户授权继续修复、提交、推送和部署，沿用此前明确官网公开授权；最终提交 `566f146b9dc494bb581f6cf1d97b2b1757ac7b05 / 1.0.429` 已双区签名、标准部署并公开。两份428中间签名原件保留，均未部署或覆盖。源码只改扩展读取/刷新 owner 和测试；未修改 server/shared/依赖、设备权限、金额或 Provider 配置。

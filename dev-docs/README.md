@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 工作台读取调度与自动 AI 入口修复，本地验收通过
+
+只读请求互斥、重复刷新互相作废、官方字段未等待读回即进入分析的根因已复现并修正；AI 入口接入同窗商品准备，已有候选先恢复。定向 owner 和隔离 Chrome 连续 AI/完整准备流程已通过，正在准备 `1.0.430` 候选；线上仍为 `566f146b / 1.0.429`。当前证据与发布边界只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-06 `566f146b / 1.0.429` 草稿读取修复双区公开发布完成
 
 COM/CN 应用、官网 latest 和 Cloud/Local 下载已更新到 `566f146b9dc494bb581f6cf1d97b2b1757ac7b05 / 1.0.429`。实际函数 RED→GREEN、读取失败一次后明确刷新恢复的真实 Chrome、签名 MV3、最终完整 offline/QA04、双区备份恢复/VPS/canary/approval/CAS/匿名完整下载和发布后 VPS 均通过。COM 商品分析保持 `qwen-vl-max` 开启、CN 保持 dark；本轮无 Provider/Ozon 请求或新增费用，临时账号凭据已清理。证据和限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)，公开日志遵循根 `CHANGELOG.md`。

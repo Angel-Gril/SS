@@ -585,6 +585,7 @@
       history: historyProjection(options.history, projectedWorkbench.status.listing.items),
       billing: billingProjection(options.billing, projectedWorkbench.status.listing.items),
       busy: options.busy === true,
+      busyMessage: options.busy === true ? text(options.busyMessage, 120) : '',
       error: text(options.error, 500),
       updatedAt: new Date().toISOString(),
     });
@@ -636,6 +637,7 @@
       history: item.history,
       billing: item.billing,
       busy: item.busy,
+      busyMessage: item.busyMessage,
       error: item.error,
     });
     return Object.freeze({ ...parsed, billing: billingProjection(item.billing, parsed.workbench.status.listing.items, true) });

@@ -16,6 +16,7 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     if (text !== undefined) node.textContent = text; return node;
   };
   let workspace = null, loadedToken = '', requestedToken = '', loading = false, dialog = null;
+  let loadTask = null;
   const edits = new Map();
   const token = () => { try { return JSON.stringify([getBinding(), getEditor()?.category]); } catch { return ''; } };
   const current = () => workspace && loadedToken === token();
@@ -77,12 +78,18 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     return value;
   }
   async function load(force = false, clearAfterSave = false) {
+    if (loadTask) {
+      const pending = loadTask;
+      await pending.promise;
+      if (pending.basis === token() && !clearAfterSave) return;
+    }
     const data = getEditor();
     if (!data?.category || loading || getBusy() && !clearAfterSave) return;
     const basis = token();
     if (!force && requestedToken === basis) return;
-    requestedToken = basis; loading = true; renderState(); onChanged(true);
-    try {
+    requestedToken = basis; loading = true;
+    const task = { basis, promise: null };
+    task.promise = Promise.resolve().then(async () => {
       const reply = await send('EDITOR_ATTRIBUTES', { listingWorkflowId: data.binding.listingWorkflowId, binding: getBinding() });
       const value = reply.data?.workspace;
       if (reply.data?.state !== 'ready' || !value || !Array.isArray(value.fields) || !Array.isArray(value.values) || !/^[a-f0-9]{64}$/u.test(value.schemaRevision || '') || basis !== token()) throw new Error('官方属性与当前草稿不一致，请刷新官方属性');
@@ -91,7 +98,12 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
         edits.clear(); onReset();
       }
       workspace = value; loadedToken = basis;
-    } finally { loading = false; renderState(); onChanged(true); }
+    }).finally(() => {
+      if (loadTask === task) { loadTask = null; loading = false; renderState(); onChanged(true); }
+    });
+    loadTask = task;
+    renderState(); onChanged(true);
+    return task.promise;
   }
   function renderState() {
     const data = getEditor();

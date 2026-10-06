@@ -56,6 +56,7 @@ let pollingTimer = 0;
 let pollingAttempts = 0;
 let editor = null;
 let editorLoadKey = '';
+let editorRefreshBusy = false;
 let editorReadFailureKey = '';
 let editorLoading = false;
 let editorReadTask=null;
@@ -693,6 +694,8 @@ preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root')
   getAttributeNames:()=>new Map(Object.values(attributes.templateMeta()?.fieldMeta||{}).filter(field=>field.attributeId).map(field=>[field.attributeId,field.editorLabel])),
   getBusy:()=>projection.busy||saveBusy||mediaMutationBusy||planSubmissionBusy||Boolean(lastSave),
   getRecoveryBusy:()=>projection.busy||saveBusy||mediaMutationBusy||planSubmissionBusy,
+  getPrerequisites:()=>({draft:Boolean(currentEditorForPublish()),sku:Boolean(selectedSkuKey),
+    category:Boolean(currentEditorForPublish()?.category),schema:Boolean(attributes.currentSchemaRevision())}),
   getCopyCandidates:()=>currentEditorForPublish()?.copy?.pendingCandidates||[],
   onCuration(keys,analyzedKeys){for(const key of analyzedKeys)referenceKeys.delete(key);for(const key of keys.slice(0,5))referenceKeys.add(key);referenceSelectionInitialized=true;mediaSignature='';renderMedia();},
   onVisual:applyAnalysisVisual,
@@ -1247,11 +1250,12 @@ function render() {
   element('start-btn').disabled = projection.busy || session.isActive() || session.needsRecovery() || !sourceReady;
   preparationRecover.disabled=!session.needsRecovery()||session.isActive()||projection.busy||saveBusy;
   if(preparation?.isRunning())element('start-btn').disabled=true;
-  element('start-btn').textContent = session.isActive() ? '执行中' : listing() ? '继续编辑' : '开始执行';
+  element('start-btn').textContent = session.isActive() || preparation?.isRunning() ? '处理中…' : listing() ? '继续处理' : '开始执行';
   element('confirm-export-btn').disabled = projection.busy || publishBusy || mediaMutationBusy || saveBusy || !listing();
   element('confirm-export-btn').title = '在当前工作台核对 ERP 上传预览与回执';
   element('image-card').hidden = !projection.skus.length;
-  element('erp-connection-status').textContent = projection.shops.length ? 'ERP 已连接' : '尚无授权店铺';
+  element('erp-connection-status').textContent = projection.busy ? projection.busyMessage || '正在读取商品与草稿状态…'
+    : projection.shops.length ? 'ERP 已连接' : '尚无授权店铺';
   if (projection.error) status(projection.error, 'err');
   renderEditor(); renderMedia();
   sourceVideo.refresh();
@@ -1282,7 +1286,7 @@ function render() {
     : serverPublishReady() ? 'ERP 校验已通过，所有信息为当前状态，可上架。' : '完成文案、图片与必填信息后，校验上架信息。';
   if (currentEditorForPublish()?.category && !editorLoading && !saveBusy && !projection.busy) void attributes.load().catch(report);
   if (binding && binding !== editorLoadKey && binding !== editorReadFailureKey
-    && !projection.busy && !session.isActive() && !editorLoading && !saveBusy) {
+    && !projection.busy && !session.isActive() && !editorLoading && !editorRefreshBusy && !saveBusy) {
     editorLoadKey = binding;
     void loadEditor().catch(report);
   }
@@ -1358,7 +1362,7 @@ const preparationContinue=make('button','ghost','继续处理'),preparationStop=
 const preparationRecover=make('button','ghost','核对建草稿结果');preparationRecover.id='precision-preparation-recover';preparationRecover.disabled=true;
 preparationContinue.id='precision-preparation-continue';preparationStop.id='precision-preparation-stop';prepareShops.id='precision-preparation-shops';
 const analysisOpen=make('button','ghost','商品 AI 分析');analysisOpen.id='precision-preparation-analysis-open';
-analysisOpen.addEventListener('click',event=>{if(event.isTrusted&&!analysisOpen.disabled)void(async()=>{await loadEditor();await attributes.load(true);await preparationAnalysis.open();})().catch(report);});
+analysisOpen.addEventListener('click',event=>{if(event.isTrusted&&!analysisOpen.disabled)void openProductAnalysis().catch(report);});
 preparationBar.append(preparationState,analysisOpen,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
 const processStages=make('div','precision-preparation-process');processStages.id='precision-preparation-process';element('ai-output').before(processStages);
 preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
@@ -1393,6 +1397,28 @@ preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
   {id:'validation',label:'校验上架信息',run:async()=>{if(unsavedListingFields.size)return{completed:false,message:'还有编辑尚未保存，请保存后继续'};await attributes.load(true);await saveEditor('VALIDATE',{schemaRevision:attributes.currentSchemaRevision()});return{completed:serverPublishReady(),message:editor.blockers?.map(item=>item.message).join('；')||'检查上架信息后继续'};}},
  ]});
 async function continuePreparation(){if(session.needsRecovery())throw Error('请先核对原采集或建草稿结果');if(lastSave)throw Error('请先核对原保存请求');await preparation.continue();render();}
+async function startProductPreparation(){
+ if(preparation.isRunning())return;
+ if(session.needsRecovery())throw Error('请先核对原采集或建草稿结果');
+ if(lastSave)throw Error('请先核对原保存请求');
+ if(!listing()){await ensureCurrentDraft();if(!listing())return;}
+ if(preparation.state().status==='WAITING_INPUT'&&preparation.state().shopId===selectedShopId)await continuePreparation();
+ else await preparation.start([selectedShopId]);
+ render();
+}
+async function openProductAnalysis(){
+ if(listing()){
+   await loadEditor();
+   if(currentEditorForPublish()?.category){
+     await attributes.load(true);await preparationAnalysis.open();
+     if(preparationAnalysis.current()||preparationAnalysis.state().operation||preparationAnalysis.state().application)return;
+   }
+ }
+ if(preparationAnalysis.current()||preparationAnalysis.state().operation||preparationAnalysis.state().application){
+   await loadEditor();await attributes.load(true);await preparationAnalysis.open();return;
+ }
+ await startProductPreparation();
+}
 async function recoverPreparation(){
  const shopAtStart=selectedShopId,sourceAtStart=JSON.stringify([projection.source.platform,projection.source.sourceProductId]);
  const result=await session.recoverCurrentDraft();
@@ -1403,7 +1429,7 @@ async function recoverPreparation(){
  preparation.markRecovered();render();status('原采集或建草稿结果已核对，请点击开始或继续处理。','ok');
 }
 preparationRecover.addEventListener('click',event=>{if(event.isTrusted&&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});
-trusted('start-btn',async()=>{if(!listing()){await ensureCurrentDraft();if(!listing())return;}await preparation.start([selectedShopId]);render();});
+trusted('start-btn',startProductPreparation);
 preparationContinue.addEventListener('click',event=>{if(event.isTrusted&&!preparationContinue.disabled)void continuePreparation().catch(report);});
 preparationStop.addEventListener('click',event=>{if(event.isTrusted)preparation.cancel();});
 const queueModal=make('div','settings-modal');queueModal.id='precision-preparation-shop-modal';queueModal.hidden=true;const queueDialog=make('div','settings-dialog'),queueHead=make('div','settings-head');queueHead.append(make('div','settings-title','多店连续准备 · 不自动发布'));
@@ -1432,6 +1458,9 @@ trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
 trusted('erp-refresh-btn', async () => {
   if(session.needsRecovery()){await recoverPreparation();return;}
+  if(editorRefreshBusy)return;
+  editorRefreshBusy=true;
+  try {
   editorReadFailureKey = '';
   editorLoadKey = '';
   await command('REFRESH');
@@ -1439,6 +1468,7 @@ trusted('erp-refresh-btn', async () => {
   if (imageMode === 'translate') await readTranslationAvailability(true);
   await loadEditor();
   status('商品、草稿与图片任务已刷新', 'ok');
+  } finally { editorRefreshBusy=false;render(); }
 });
 trusted('precision-image-refresh', async () => { await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });

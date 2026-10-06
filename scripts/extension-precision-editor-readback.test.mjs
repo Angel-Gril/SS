@@ -12,7 +12,7 @@ function fixture(run) {
   let current = { ...binding };
   const calls = [], errors = [], statuses = [];
   const context = {
-    editor: details(current), editorLoadKey: '', editorReadFailureKey: '', editorLoading: false, editorReadTask: null,
+    editor: details(current), editorLoadKey: '', editorReadFailureKey: '', editorLoading: false, editorReadTask: null, editorRefreshBusy: false,
     saveBusy: false, lastSave: null, projection: { busy: false, handoff: current },
     session: { isActive: () => false, needsRecovery: () => false },
     listing: () => ({ id: current.listingWorkflowId, shopId: current.shopId, revision: current.draftRevision, draftVersion: current.draftVersion }),
