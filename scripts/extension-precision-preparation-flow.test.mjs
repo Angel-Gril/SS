@@ -164,3 +164,14 @@ test('multi-shop continuation never calls later shops while the first shop requi
   assert.deepEqual(shops, ['doth', 'doth', 'bini']);
   assert.equal(flow.state().status, 'COMPLETE');
 });
+test('manual continuation bypasses only failed analysis while retaining an explicit skipped status',async()=>{
+  const api=load();let manual=false,posts=0,edits=0;
+  const flow=api.create({getSource:()=> 'source',selectShop:async()=>{},steps:[
+    {id:'analysis',run:async()=>{if(manual)return{completed:true,skipped:true,message:'继续手工编辑，原分析结果仍未确认'};
+      posts++;throw Object.assign(Error('分析未知'),{outcome:'UNKNOWN_OUTCOME'});}},
+    {id:'editing',run:async()=>{edits++;return{completed:false,message:'填写商品字段'};}}]});
+  await flow.start(['doth']);assert.equal(flow.state().status,'RECOVERY_REQUIRED');
+  manual=true;flow.continueManually('analysis');await flow.continue();
+  assert.equal(posts,1);assert.equal(edits,1);assert.equal(flow.state().steps[0].status,'SKIPPED');
+  assert.equal(flow.state().stepId,'editing');assert.equal(flow.state().status,'WAITING_INPUT');
+});

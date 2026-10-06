@@ -239,7 +239,8 @@ const steps = [
     args:['--test','scripts/extension-preparation-adapters.test.mjs','scripts/extension-precision-preparation-flow.test.mjs',
       'scripts/extension-attribute-suggestions-session.test.mjs','scripts/extension-logistics-pricing-client.test.mjs',
       'scripts/extension-precision-editor-save.test.mjs','scripts/extension-precision-editor-readback.test.mjs','scripts/extension-precision-workflow-recovery.test.mjs',
-      'scripts/extension-official-attributes-readback.test.mjs','scripts/extension-precision-analysis-entry.test.mjs','scripts/extension-preparation-analysis-view.test.mjs'],
+      'scripts/extension-official-attributes-readback.test.mjs','scripts/extension-precision-analysis-entry.test.mjs','scripts/extension-preparation-analysis-view.test.mjs',
+      'scripts/extension-preparation-analysis-session.test.mjs','scripts/extension-product-preparation-client.test.mjs','scripts/extension-preparation-worker-stage.test.mjs'],
   },
   {
     name: 'donor native marketplace capture contracts', command: 'node',

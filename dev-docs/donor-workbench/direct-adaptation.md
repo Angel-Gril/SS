@@ -1,5 +1,14 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-06 分阶段商品准备实现（本地未发布）
+
+- 当前工作区正在把原精铺工具的连续流程接入 SS ERP：托管商品准备拆为 `CURATION → VISION → COPY` 三个有独立回执的阶段。筛图最多接收 24 张来源图，视觉阶段按当前 SKU 优先、共有图补足，最多使用 8 张；COPY 复用前两阶段检查点，不再次下载图片。
+- 每阶段使用同一根 operation key、草稿/来源/SKU/官方类目绑定和独立幂等回执。已完成阶段会持久化并在刷新后复用；未知结果只读核对原阶段，不自动重发。已发送但响应/候选校验/保存失败会记录受限的非密 failure kind/code；未发送的设备未配对、权限不足等结果保持 `NOT_SUBMITTED`，避免无 Provider 请求被误锁成未知。
+- 阶段托管请求采用 opt-in 流式兼容传输、最多 180 秒模型等待和 20 秒图片准备窗口；普通 legacy 单请求路径保持原模型、输入上限和 30 秒配置不变。后阶段提示词只携带有界的筛图选择与观察摘要，完整回执仍保存在绑定检查点。
+- 扩展工作台逐阶段显示真实等待秒数、已完成结果和具体失败阶段；可以明确继续手工编辑，未完成 AI 阶段显示 `SKIPPED`，不冒充成功。隔离 Chrome fixture 与本地 PostgreSQL 验收已通过；真实 Provider 质量、费用和生产部署尚未验收，本轮未提交、推送或部署。
+- 最新隔离 Chrome 证据：`C:/Users/550W/AppData/Local/Temp/ss-erp-precision-ui-evidence-d0IzYy/summary.json`。真实物理点击、24 张候选、8 张视觉图、视觉阶段只读恢复、文案 UNKNOWN 后手工编辑均通过；fixture 模型提交 9 次，Provider/Ozon/生产写入均为 0。
+- 最新门禁：阶段 owner 50/50，受影响 server 169/169，扩展相关回归 93/93，隔离 PostgreSQL 22/22（0 skipped，153 migrations，schema 清理通过），完整 `pnpm preflight` 通过（server 6999 passed/373 skipped，扩展 611 pass/0 failure/0 warning）。
+
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
 ### 2026-10-06 `21bbd220 / 1.0.432` 类目/属性真实读回与过程入口已双区公开

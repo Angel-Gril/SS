@@ -723,6 +723,9 @@ preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root')
     return saveEditor('COPY_CANDIDATE',value,false,beforeDispatch);
   },approveCopy:candidateId=>saveEditor('COPY_APPROVE',{candidateId}),
   onCompleted:step=>{
+    if(step==='analysis-manual'&&preparation?.state().stepId==='analysis'){
+      preparation.continueManually('analysis');queueMicrotask(()=>{void continuePreparation().catch(report);});return;
+    }
     if(step==='analysis'&&preparation?.state().status==='RECOVERY_REQUIRED')preparation.markRecovered();
     if(['analysis','analysis-review'].includes(step)&&['WAITING_INPUT','RECOVERY_REQUIRED'].includes(preparation?.state().status))queueMicrotask(()=>{void continuePreparation().catch(report);});
   },onMessage:status,report});
@@ -1417,6 +1420,7 @@ preparation=globalThis.SS_ERP_PRECISION_PREPARATION_FLOW.create({
   {id:'draft',label:'读取当前草稿',run:async()=>{await loadEditor();if(!currentEditorForPublish())return{completed:false,message:'请读取当前草稿后继续'};if(lastSave)throw Object.assign(Error('先核对原保存请求'),{outcome:'UNKNOWN_OUTCOME'});return{completed:true};}},
   {id:'category',label:'确认官方类目',run:async()=>{if(currentEditorForPublish()?.category)return{completed:true};await categoryPicker.open();return{completed:false,message:'在当前窗口选择官方类目，保存后继续处理'};}},
   {id:'analysis',label:'AI 筛图、商品视觉与候选生成',isCurrent:()=>preparationAnalysis.current(),run:async()=>{
+    if(preparationAnalysis.state().current&&preparationAnalysis.state().manuallyContinued)return{completed:true,skipped:true,message:'自动 AI 分析已跳过，保留原请求与已完成结果，继续手工填写'};
     await attributes.load(true);
     const result=await preparationAnalysis.run();
     if(result?.receipt)return{completed:true,receipt:{operationKey:result.receipt.operationKey},message:'AI 分析已完成，请检查筛图、视觉、属性与俄文候选'};
@@ -1642,12 +1646,15 @@ window.addEventListener('message', (event) => {
     if (event.data.ok === true) task.resolve(event.data);
     else task.reject(Object.assign(new Error(event.data.error || 'ERP 操作失败'), {
       code: event.data.code || null,
+      failureCode: event.data.failureCode || null,
+      failureKind: event.data.failureKind || null,
       outcome: event.data.outcome || (task.mutation ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
     }));
   }
 });
 window.addEventListener('pagehide', () => {
   byok.invalidate(); privateRuntime?.invalidate();
+  preparationAnalysis?.dispose();
   clearTimeout(pollingTimer);
   picker.cancelSelection();
   for (const task of pending.values()) { clearTimeout(task.timer); task.reject(new Error('工作台已关闭')); }

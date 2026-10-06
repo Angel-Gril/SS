@@ -153,3 +153,22 @@ test('checkpoint is bound to current frame, source, device and exact draft; secr
   await assert.rejects(checkpoint.write({binding,owner,checkpoint:{...state,draft:{titleRu:'x'.repeat(300000),descriptionRu:'',tagsRu:[]}}}));
   await checkpoint.clear({binding,owner});assert.equal(await checkpoint.read({binding,owner}),null);
 });
+test('hosted stage checkpoints retain completed results and unknown operation across reload without accepting foreign roots',async()=>{
+  const f=fixture(),store=f.globals.SS_ERP_BYOK_PRODUCT_ANALYSIS_CHECKPOINT.createStore({sessionStorage:f.sessionStorage});
+  const categoryRevision={catalogRevision:'catalog-1',schemaRevision:'a'.repeat(64)};
+  const context={binding,skuKey:'sku-1',sourceMediaKeys:['media-1'],categoryRevision,mode:'ERP_HOSTED',stagedAnalysis:true};
+  const operation={binding,skuKey:'sku-1',sourceMediaKeys:['media-1'],categoryRevision,operationKey:'staged-analysis-1',stage:'VISION'};
+  const curation={binding,skuKey:'sku-1',sourceMediaKeys:['media-1'],category:{categoryId:10,typeId:11,...categoryRevision},
+    operationKey:operation.operationKey,stage:'CURATION',curation:report().curation,replayed:false};
+  const state={version:1,context,operation,analysisInput:null,receipt:null,draft:null,application:null,
+    review:{curationConfirmed:false,visualApplied:false,copySaved:false,attributesApplied:false},selections:{curationMediaKeys:null,visualDescription:null},
+    rootOperationKey:operation.operationKey,stage:'VISION',stageResults:{CURATION:curation},stageStartedAt:1000,
+    failure:{stage:'VISION',code:'product_vision_timeout'},manuallyContinued:true};
+  await store.write({binding,owner,checkpoint:state});
+  assert.deepEqual(clone(await store.read({binding,owner:{...owner,documentId:'reloaded'}})),state);
+  for(const corrupt of [value=>{value.stageResults.CURATION.binding.shopId='other';},value=>{value.rootOperationKey='other-operation';},
+    value=>{value.stageResults.CURATION.sourceMediaKeys=['unowned'];},value=>{value.context.mode='BYOK';},
+    value=>{value.stageResults.VISION={...value.stageResults.CURATION,stage:'VISION',apiKey:key};}]){
+    const invalid=clone(state);corrupt(invalid);await assert.rejects(store.write({binding,owner,checkpoint:invalid}));
+  }
+});

@@ -6739,7 +6739,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const preparationInput = { binding, skuKey: message.skuKey, sourceMediaKeys: message.sourceMediaKeys, categoryRevision: message.categoryRevision,
         ...(message.operationKey === undefined ? {} : { operationKey: message.operationKey }),
         ...(message.executionMode === undefined ? {} : { executionMode: message.executionMode }),
-        ...(message.providerContext === undefined ? {} : { providerContext: message.providerContext }) };
+        ...(message.providerContext === undefined ? {} : { providerContext: message.providerContext }),
+        ...(message.stage === undefined ? {} : { stage: message.stage }) };
       const result = message.type.endsWith('-preparation-capability') ? await client.readProductPreparationCapability(binding)
         : message.type.endsWith('-preparation-context') ? await client.readProductPreparationContext(preparationInput)
         : message.type.endsWith('-preparation-analyze') ? await client.analyzeProductPreparation(preparationInput)
@@ -6765,7 +6766,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!result || result.state !== 'ready') throw new Error('草稿编辑读取或保存未完成');
       return result;
     }).then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message || String(error),
-      outcome: error.outcome || (mutationAttempted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'), code: error.code || null }));
+      outcome: error.outcome || (mutationAttempted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'), code: error.code || null,
+      failureCode: error.failureCode || null, failureKind: error.failureKind || null, stage: error.stage || null }));
     return true;
   }
 

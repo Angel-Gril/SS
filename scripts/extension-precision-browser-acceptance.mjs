@@ -13,6 +13,7 @@ const EXTENSION_ROOT = path.join(ROOT, 'extensions', 'ss-erp');
 const PAGE_ORIGIN = 'https://detail.1688.com';
 const PAGE_URL = `${PAGE_ORIGIN}/offer/845581683597.html`;
 const IMAGE_ORIGIN = 'https://images.ss-erp-fixture.invalid';
+const STAGED_ANALYSIS = process.argv.includes('--staged-analysis');
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -104,7 +105,8 @@ function fixtureProduct() {
         key: 'image-' + index, role: index % 2 ? 'product_detail' : 'product_main',
         disposition: 'accepted', url: IMAGE_ORIGIN + '/image-' + index + '.png',
         skuKeys: index === 0 ? [] : ['sku-' + index],
-      })), { key: 'video-fixture', kind: 'video', role: 'video', disposition: 'accepted',
+      })), ...(STAGED_ANALYSIS?Array.from({length:24},(_,index)=>({key:'common-'+index,role:'product_detail',disposition:'accepted',url:IMAGE_ORIGIN+'/common-'+index+'.png',skuKeys:[]})):[]),
+      { key: 'video-fixture', kind: 'video', role: 'video', disposition: 'accepted',
         url: IMAGE_ORIGIN + '/source.mp4', skuKeys: [] }],
     },
   };
@@ -124,6 +126,8 @@ function parentHtml(watermarkJpeg) {
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
   const savedOperations=new Set();
   const preparationAnalyses=new Map();
+  const stagedFixture=${STAGED_ANALYSIS};
+  window.__precisionSimulatedModelSubmits=[];
   window.__precisionCheckpoints=new Map();
   const watermarkRequests=new Map();
   let videoBindings=[];
@@ -175,8 +179,8 @@ function parentHtml(watermarkJpeg) {
       blockerCount:0,warningCount:0,blockers:[],warnings:[],updatedAt:'2026-09-30T08:00:00Z'
     }]},media:{items:[]}}};}
     let result;
-    if(command.type==='PREPARATION_CAPABILITY')result={state:'ready',capability:{available:${process.argv.includes('--preparation-analysis')},
-      reasonCode:'${process.argv.includes('--preparation-analysis')?'READY':'VISION_OFF'}',providerFeeNotice:'商品分析使用一个模型请求，可能产生模型费用。'}};
+    if(command.type==='PREPARATION_CAPABILITY')result={state:'ready',capability:{available:${process.argv.includes('--preparation-analysis')||STAGED_ANALYSIS},
+      reasonCode:'${process.argv.includes('--preparation-analysis')||STAGED_ANALYSIS?'READY':'VISION_OFF'}',...(stagedFixture?{stagedAnalysis:true}:{}),providerFeeNotice:stagedFixture?'依次执行三个模型阶段，可能产生模型费用。':'商品分析使用一个模型请求，可能产生模型费用。'}};
     if(command.type==='PREPARATION_ANALYZE'){
       const analysis={binding:command.binding,skuKey:command.skuKey,sourceMediaKeys:command.sourceMediaKeys,operationKey:command.operationKey,
         category:{categoryId:category.categoryId,typeId:category.typeId,...command.categoryRevision},replayed:false,
@@ -185,13 +189,30 @@ function parentHtml(watermarkJpeg) {
           visualDescription:{composition:'商品居中',background:'浅灰背景',lighting:'柔光',style:'写实',observations:{colors:[],shapes:['来源商品轮廓'],visibleComponents:[],visibleText:[]}},
           productSummary:{observations:['图片中可见商品轮廓'],uncertainties:['材质和包装尺寸需要核对']},
           skuObservations:[{skuKey:command.skuKey,observations:['按当前采集 SKU 保留款式'],titleRu:'Товар'}],
-          suggestedAttributes:[{attributeId:201,value:'Простой дизайн',evidence:{sourceMediaKeys:command.sourceMediaKeys,observation:'图片中外形简洁'},manualReview:'REQUIRED'}],
+          suggestedAttributes:[{attributeId:201,value:'Простой дизайн',evidence:{sourceMediaKeys:command.sourceMediaKeys.slice(0,5),observation:'图片中外形简洁'},manualReview:'REQUIRED'}],
           copy:{titleRu:'Товар для дома',descriptionRu:'Описание товара по выбранным изображениям.',tagsRu:['товар','дом']}}};
-      preparationAnalyses.set(command.operationKey,analysis);result={state:'ready',analysis};
+      let prepared=analysis;
+      const receiptKey=command.operationKey+(command.stage?':'+command.stage:'');
+      if(command.stage){
+        const prior=preparationAnalyses.get(receiptKey);
+        if(prior)prepared={...prior,replayed:true};
+        else{
+          const {report,...basis}=analysis;
+          prepared=command.stage==='CURATION'?{...basis,stage:command.stage,curation:report.curation}
+            :command.stage==='VISION'?{...basis,stage:command.stage,visualDescription:report.visualDescription,productSummary:report.productSummary,skuObservations:report.skuObservations,visionSourceMediaKeys:command.sourceMediaKeys.slice(0,8)}
+            :{...analysis,stage:command.stage};
+          window.__precisionSimulatedModelSubmits.push({operationKey:command.operationKey,stage:command.stage,skuKey:command.skuKey});
+        }
+      }
+      preparationAnalyses.set(receiptKey,prepared);result={state:'ready',analysis:prepared};
+      if(stagedFixture&&command.skuKey==='sku-1'&&command.stage==='VISION')await new Promise(resolve=>{window.__precisionReleaseStagedVision=resolve;});
+      if(stagedFixture&&(command.skuKey==='sku-7'&&command.stage==='VISION'||command.skuKey==='sku-2'&&command.stage==='COPY')){
+        frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:command.stage==='VISION'?'视觉分析响应暂未返回，请核对原视觉阶段':'文案生成响应暂未返回，请核对原文案阶段',outcome:'UNKNOWN_OUTCOME'},location.origin);return;
+      }
       if(window.__precisionLosePreparationReply){window.__precisionLosePreparationReply=false;
         frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:false,error:'商品分析响应暂未返回，请核对原操作',outcome:'UNKNOWN_OUTCOME'},location.origin);return;}
     }
-    if(command.type==='PREPARATION_READ')result={state:'ready',analysis:preparationAnalyses.get(command.operationKey)||null};
+    if(command.type==='PREPARATION_READ')result={state:'ready',analysis:preparationAnalyses.get(command.operationKey+(command.stage?':'+command.stage:''))||null};
     if(command.type==='PREPARATION_APPLY'){
       const draft=workbench.status.listing.items[0];
       if(!savedOperations.has(command.operationKey)){savedOperations.add(command.operationKey);draft.revision++;draft.draftVersion++;}
@@ -673,7 +694,7 @@ async function run() {
       assert.ok(await workspace('(()=>{const content=document.querySelector(".content");return window.getComputedStyle(content).overflowY==="auto"&&content.scrollHeight>content.clientHeight;})()'),
         'all sixteen SKU image rows retain whole-workbench vertical scrolling');
     }
-    await until(() => workspace('document.querySelectorAll(".precision-source-tile img").length === 16'), 'sixteen images');
+    await until(() => workspace('document.querySelectorAll(".precision-source-tile img").length === '+(STAGED_ANALYSIS?40:16)), 'all fixture source images');
     assert.equal(await workspace('document.referrer'), '');
     await until(() => workspace('[...document.querySelectorAll(".precision-source-tile img")].every(image=>image.complete&&image.naturalWidth>0)'), 'decoded preview images');
     const click = async (selector) => {
@@ -730,6 +751,7 @@ async function run() {
     await click('#sku-toggle-btn');
     await click('input[data-row-id="sku-1"]');
     await click('input[data-row-id="sku-7"]');
+    if(STAGED_ANALYSIS)await click('input[data-row-id="sku-2"]');
     await screenshot('sku-selection');
     await click('#sku-apply-btn');
     await until(() => evaluate('window.__precisionCommands.some(command=>command.type==="CREATE_DRAFT")'), 'draft create command');
@@ -759,10 +781,10 @@ async function run() {
       await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
     }
     await until(() => workspace('document.getElementById("status-text").textContent.includes("草稿已就绪")'), 'draft readback');
-    assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'), 2);
-    await until(() => workspace('document.querySelectorAll("[data-image-sku-key]").length===2'), 'image workbench uses only selected draft SKUs');
-    assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'), ['sku-1', 'sku-7']);
-    assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), ['image-0', 'image-1', 'image-7'], 'product-level and selected SKU media are eligible');
+    assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'), STAGED_ANALYSIS?3:2);
+    await until(() => workspace('document.querySelectorAll("[data-image-sku-key]").length==='+ (STAGED_ANALYSIS?3:2)), 'image workbench uses only selected draft SKUs');
+    assert.deepEqual(await workspace('[...document.querySelectorAll("[data-image-sku-key]")].map(row=>row.dataset.imageSkuKey)'), STAGED_ANALYSIS?['sku-1','sku-2','sku-7']:['sku-1', 'sku-7']);
+    assert.deepEqual(await workspace('[...document.querySelectorAll(".precision-source-tile")].map(tile=>tile.dataset.referenceKey)'), STAGED_ANALYSIS?['image-0','image-1','image-2','image-7',...Array.from({length:24},(_,index)=>'common-'+index)]:['image-0', 'image-1', 'image-7'], 'product-level and selected SKU media are eligible');
     assert.ok(await workspace('document.querySelector(".editor-table-spec").textContent.includes("颜色 1")'));
     assert.equal(await workspace('[...document.querySelectorAll(".editor-row-copy-btn")].some(button=>!button.disabled)'),true,'source SKU duplication is available in the same editor');
     await screenshot('selected-draft');
@@ -831,6 +853,74 @@ async function run() {
       assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH")'),false);
       await screenshot('empty-attributes-manual');summary.emptyAttributes={explicitManual:true,noMutation:true,continues:true};summary.ok=true;
       assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
+    }
+    if(STAGED_ANALYSIS){
+      summary.scope='LOCAL_STAGED_ANALYSIS_BROWSER_FIXTURE';
+      summary.modelEvidence='Synthetic stage responses only; no real model quality or production acceptance is claimed.';
+      const stages=()=>workspace('[...document.querySelectorAll("#precision-preparation-analysis-stages [data-analysis-phase]")].map(row=>({stage:row.dataset.analysisPhase,status:row.dataset.stageStatus,message:row.lastElementChild.textContent}))');
+      const requests=sku=>evaluate('window.__precisionCommands.filter(c=>c.type==="PREPARATION_ANALYZE"&&c.skuKey==='+JSON.stringify(sku)+')');
+      await until(()=>workspace('document.querySelectorAll(".category-auto-card").length>0'),'staged preparation category recommendations');
+      await click('.category-auto-card');await until(()=>workspace('!document.querySelector("[data-category-confirm]").disabled'),'staged category ready');await click('[data-category-confirm]');
+      await until(()=>workspace('document.querySelector("[data-analysis-phase=CURATION]")?.dataset.stageStatus==="COMPLETE"&&document.querySelector("[data-analysis-phase=VISION]")?.dataset.stageStatus==="RUNNING"'),'curation is visible while the distinct vision request waits');
+      assert.equal(await workspace('document.querySelectorAll("#precision-preparation-curation input[data-analysis-source]").length'),24,'hosted analysis includes 24 available candidates by default');
+      assert.equal((await requests('sku-1'))[0].sourceMediaKeys.length,24);
+      await until(()=>workspace('/[1-9][0-9]* 秒/.test(document.getElementById("precision-preparation-analysis-state").textContent)'),'actual waiting heartbeat advances without fictional percent');
+      assert.equal(await workspace('document.getElementById("precision-preparation-analysis-state").textContent.includes("%")'),false);
+      assert.equal(await workspace('document.getElementById("precision-preparation-copy-title").disabled'),true,'copy output is not invented before its stage');
+      await screenshot('staged-curation-complete-vision-waiting');
+      await evaluate('window.__precisionReleaseStagedVision()');
+      await until(()=>workspace('document.querySelector("[data-analysis-phase=COPY]")?.dataset.stageStatus==="COMPLETE"&&!document.getElementById("precision-preparation-copy-title").disabled'),'three-stage success produces editable candidates');
+      assert.deepEqual((await requests('sku-1')).map(row=>row.stage),['CURATION','VISION','COPY']);
+      assert.equal(new Set((await requests('sku-1')).map(row=>row.operationKey)).size,1,'the success chain has one frozen root operation');
+      assert.ok((await stages()).every(row=>row.status==='COMPLETE'));
+      assert.match((await stages()).find(row=>row.stage==='VISION').message,/8 张/,'vision UI presents the actual bounded reference count');
+      await screenshot('staged-analysis-success');
+      async function startNextSku(sku){
+        await click('#precision-preparation-analysis-close');await click('#precision-preparation-stop');
+        await click('[data-image-sku-key="'+sku+'"]');await until(()=>workspace('!document.getElementById("precision-image-manager").hidden'),'next SKU selected in original image table');
+        await click('#precision-image-close');await click('#start-btn');
+      }
+      await startNextSku('sku-7');
+      await until(()=>workspace('document.querySelector("[data-analysis-phase=VISION]")?.dataset.stageStatus==="RECOVERY_REQUIRED"&&!document.getElementById("precision-preparation-analysis-recover").disabled'),'lost vision response retains completed curation and exact stage recovery');
+      assert.deepEqual((await stages()).map(row=>row.status),['COMPLETE','RECOVERY_REQUIRED','PENDING']);
+      assert.equal((await requests('sku-7')).length,2,'unknown vision blocks the not-yet-started copy stage');
+      const originalVision=(await requests('sku-7')).find(row=>row.stage==='VISION');
+      await screenshot('staged-vision-original-recovery');await click('#precision-preparation-analysis-recover');
+      await until(()=>workspace('document.querySelector("[data-analysis-phase=COPY]")?.dataset.stageStatus==="COMPLETE"'),'original vision readback proceeds to the first copy request');
+      const recoveredRead=await evaluate('window.__precisionCommands.filter(c=>c.type==="PREPARATION_READ"&&c.skuKey==="sku-7")');
+      assert.equal(recoveredRead.length,1);assert.equal(recoveredRead[0].stage,'VISION');assert.equal(recoveredRead[0].operationKey,originalVision.operationKey);
+      assert.deepEqual(recoveredRead[0].binding,originalVision.binding);assert.deepEqual(recoveredRead[0].sourceMediaKeys,originalVision.sourceMediaKeys);
+      assert.deepEqual((await requests('sku-7')).map(row=>row.stage),['CURATION','VISION','COPY'],'the original vision model request is not resent');
+      await screenshot('staged-vision-readonly-recovered');
+      await startNextSku('sku-2');
+      await until(()=>workspace('document.querySelector("[data-analysis-phase=COPY]")?.dataset.stageStatus==="RECOVERY_REQUIRED"&&!document.getElementById("precision-preparation-analysis-manual").disabled'),'unknown copy preserves curation and visual results and exposes manual continuation');
+      assert.deepEqual((await stages()).map(row=>row.status),['COMPLETE','COMPLETE','RECOVERY_REQUIRED']);
+      assert.ok(await workspace('document.getElementById("precision-preparation-visual-json").value.includes("浅灰背景")'));
+      const submitsBefore=await evaluate('window.__precisionSimulatedModelSubmits.length');
+      await screenshot('staged-copy-unknown-with-partial-results');await click('#precision-preparation-analysis-manual');
+      await until(()=>workspace('document.querySelector("#precision-preparation-process [data-preparation-step=analysis]")?.dataset.stageStatus==="SKIPPED"'),'manual continuation marks the AI step skipped, never completed');
+      await until(()=>workspace('!document.getElementById("precision-attribute-suggestions-modal").hidden&&!document.getElementById("precision-attribute-suggestions-manual").disabled'),'manual field preparation remains available in the same workbench');
+      await click('#precision-attribute-suggestions-manual');await click('#precision-preparation-continue');
+      await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("包装")'),'manual editing proceeds to actual missing packaging');
+      await click('input[data-row-index="1"][data-field-key="毛重，克"]');
+      await send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await send('Input.insertText',{text:'350'});
+      assert.equal(await workspace('document.querySelector('+JSON.stringify('input[data-row-index="1"][data-field-key="毛重，克"]')+').value'),'350','manual product fields remain editable without changing unknown AI authority');
+      assert.equal(await evaluate('window.__precisionSimulatedModelSubmits.length'),submitsBefore,'manual continuation issues no additional simulated provider submit');
+      await screenshot('staged-manual-fields-ai-skipped');
+      await click('#precision-preparation-stop');await click('#precision-preparation-analysis-open');
+      await until(()=>workspace('document.getElementById("precision-preparation-analysis-state").textContent.includes("待核对")&&!document.getElementById("precision-preparation-analysis-recover").hidden'),'original unknown copy remains independently available after manual editing');
+      assert.equal(await workspace('document.getElementById("precision-preparation-analysis-start").hidden'),true);
+      const privateCheckpoint=await evaluate('[...window.__precisionCheckpoints.values()].find(c=>c.context.skuKey==="sku-2")');
+      assert.equal(privateCheckpoint.manuallyContinued,true);assert.equal(privateCheckpoint.operation.stage,'COPY');assert.equal(privateCheckpoint.receipt,null);
+      assert.ok(privateCheckpoint.stageResults.CURATION&&privateCheckpoint.stageResults.VISION);assert.equal(privateCheckpoint.stageResults.COPY,undefined);
+      assert.equal((await requests('sku-2')).length,3);
+      assert.equal(await evaluate('window.__precisionCommands.some(c=>c.type==="PUBLISH"||c.type==="EXECUTE_HOSTED_SUITE")'),false);
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      summary.stagedAnalysis={fixtureOnly:true,physicalClicks:true,candidateImages:24,visionImages:8,successfulStageRequests:3,
+        partialResultsDuringVision:true,realElapsedHeartbeat:true,readonlyVisionRecovery:true,visionPostRetries:0,unknownCopyManualContinuation:true,
+        aiStepStatusAfterManual:'SKIPPED',manualFieldsEditable:true,unknownOperationRetained:true,simulatedModelSubmits:submitsBefore,
+        additionalModelSubmitsAfterManual:0,automaticPublish:false};summary.ok=true;
       await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));return;
     }
     if(process.argv.includes('--preparation-analysis')){
@@ -1675,6 +1765,8 @@ async function run() {
     assert.ok(await workspace('document.getElementById("status-text").textContent.includes("已完成")'), 'confirmed receipt clears the earlier error message');
     await screenshot('publish-receipt');
     await click('#precision-publish-close');
+    // Kept inactive for historical evidence; the active BYOK edit scenario runs earlier in this script.
+    // eslint-disable-next-line no-constant-condition, no-constant-binary-expression
     if (false && process.argv.includes('--byok-edit') && !process.argv.includes('--byok-flow')) {
       await click('input[name=image-workflow-mode][value=byok] + span');
       await click('#precision-byok-config');

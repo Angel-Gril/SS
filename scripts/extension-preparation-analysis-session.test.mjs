@@ -82,3 +82,76 @@ test('explicit image and editable visual decisions survive reload as selections,
   assert.deepEqual(recovered.state().selections.curationMediaKeys,['image-2']);assert.equal(recovered.state().selections.visualDescription.background,'浅灰厨房背景');
   await assert.rejects(recovered.confirmCuration(['foreign-media']),/图片/);
 });
+
+const stagedBasis = () => ({...basis(),stagedAnalysis:true});
+function stageReceipt(input) {
+  const full = report(input);
+  const common = {binding:full.binding,skuKey:full.skuKey,sourceMediaKeys:full.sourceMediaKeys,
+    operationKey:full.operationKey,category:full.category,stage:input.stage,replayed:false};
+  if(input.stage==='CURATION')return {...common,curation:full.report.curation};
+  if(input.stage==='VISION')return {...common,visualDescription:full.report.visualDescription,
+    productSummary:full.report.productSummary,skuObservations:full.report.skuObservations};
+  return {...full,stage:'COPY',replayed:false};
+}
+test('staged hosted analysis saves curation and vision before requesting the next stage under one root operation',async()=>{
+  const {createPreparationAnalysisSession}=await load();const requests=[],snapshots=[];let saved;
+  const session=createPreparationAnalysisSession({getContext:stagedBasis,createOperationKey:()=> 'operation',
+    persist:async value=>{saved=structuredClone(value);},onState:value=>snapshots.push(value),
+    analyze:async input=>{assert.equal(saved.operation.stage,input.stage);requests.push(input);
+      if(input.stage==='VISION')assert.ok(saved.stageResults.CURATION);
+      if(input.stage==='COPY')assert.ok(saved.stageResults.VISION);
+      return stageReceipt(input);},read:async()=>null});
+  await session.analyze();
+  assert.deepEqual(requests.map(input=>input.stage),['CURATION','VISION','COPY']);
+  assert.equal(new Set(requests.map(input=>input.operationKey)).size,1);
+  assert.ok(snapshots.some(state=>state.status==='VISION_ANALYZING'&&state.stageResults.CURATION));
+  assert.equal(session.state().analysisInput.stage,'COPY');assert.equal(session.state().status,'REVIEW_REQUIRED');
+});
+test('unknown vision preserves curation through reload and read recovery continues only the unsent copy stage',async()=>{
+  const {createPreparationAnalysisSession}=await load();const requests=[],reads=[];let checkpoint;
+  const options={getContext:stagedBasis,createOperationKey:()=> 'operation',persist:async value=>{checkpoint=structuredClone(value);},
+    analyze:async input=>{requests.push(input.stage);if(input.stage==='VISION')throw Object.assign(Error('timeout'),{outcome:'UNKNOWN_OUTCOME',failureCode:'product_vision_timeout'});return stageReceipt(input);},
+    read:async input=>{reads.push(input.stage);return stageReceipt(input);}};
+  const first=createPreparationAnalysisSession(options);await assert.rejects(first.analyze(),/timeout/);
+  assert.ok(first.state().stageResults.CURATION);assert.equal(first.state().stage,'VISION');
+  const second=createPreparationAnalysisSession(options);assert.equal(second.restore(checkpoint),true);
+  await assert.rejects(second.analyze(),/核对/);await second.recover();
+  assert.deepEqual(requests,['CURATION','VISION','COPY']);assert.deepEqual(reads,['VISION']);
+  assert.equal(second.state().status,'REVIEW_REQUIRED');
+});
+test('manual continuation keeps unknown analysis and completed curation without dispatching or falsely approving it',async()=>{
+  const {createPreparationAnalysisSession}=await load();let requests=0;
+  const session=createPreparationAnalysisSession({getContext:stagedBasis,createOperationKey:()=> 'operation',persist:async()=>{},
+    analyze:async input=>{requests++;if(input.stage==='VISION')throw Error('network');return stageReceipt(input);},read:async()=>null});
+  await assert.rejects(session.analyze());await session.continueManually();
+  assert.equal(session.state().status,'MANUAL_CONTINUATION');assert.equal(session.state().operation.stage,'VISION');
+  assert.equal(session.state().receipt,null);assert.ok(session.state().stageResults.CURATION);
+  await session.confirmCuration(['image-1']);await session.recover();
+  assert.equal(requests,2);assert.equal(session.state().manuallyContinued,true);
+  await assert.rejects(session.analyze(),/核对/);
+});
+test('unsent copy stage resumes using its original root and never repeats completed paid stages',async()=>{
+  const {createPreparationAnalysisSession}=await load();const requests=[];let unavailable=true;
+  const session=createPreparationAnalysisSession({getContext:stagedBasis,createOperationKey:()=> 'operation',persist:async()=>{},
+    analyze:async input=>{requests.push([input.stage,input.operationKey]);if(input.stage==='COPY'&&unavailable)throw Object.assign(Error('not ready'),{outcome:'NOT_SUBMITTED'});return stageReceipt(input);},read:async()=>null});
+  await assert.rejects(session.analyze(),/not ready/);unavailable=false;await session.analyze();
+  assert.deepEqual(requests.map(([stage])=>stage),['CURATION','VISION','COPY','COPY']);
+  assert.equal(new Set(requests.map(([,key])=>key)).size,1);
+});
+test('staged receipts cannot change stage, binding or ordered media and never unlock downstream requests',async()=>{
+  const {createPreparationAnalysisSession}=await load();
+  for(const corrupt of [value=>{value.stage='VISION';},value=>{value.binding.shopId='foreign';},value=>{value.curation.reverse();}]){
+    let posts=0;
+    const session=createPreparationAnalysisSession({getContext:stagedBasis,createOperationKey:()=> 'operation',persist:async()=>{},
+      analyze:async input=>{posts++;const value=structuredClone(stageReceipt(input));corrupt(value);return value;},read:async()=>null});
+    await assert.rejects(session.analyze());assert.equal(posts,1);assert.equal(session.state().status,'RECOVERY_REQUIRED');
+  }
+});
+test('COPY accepts evidence from the eight bound vision references without applying it as verified fact',async()=>{
+  const {createPreparationAnalysisSession}=await load();const context={...stagedBasis(),sourceMediaKeys:Array.from({length:8},(_,i)=>'image-'+i)};
+  const session=createPreparationAnalysisSession({getContext:()=>context,createOperationKey:()=> 'operation',persist:async()=>{},
+    analyze:async input=>{const value=stageReceipt(input);
+      if(input.stage==='COPY')value.report.suggestedAttributes=[{attributeId:1,value:'Белый',manualReview:'REQUIRED',
+        evidence:{sourceMediaKeys:input.sourceMediaKeys,observation:'可见白色'}}];return value;},read:async()=>null});
+  await session.analyze();assert.equal(session.state().status,'REVIEW_REQUIRED');assert.equal(session.state().review.attributesApplied,false);
+});

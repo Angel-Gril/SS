@@ -84,7 +84,7 @@
                 message: result?.message || step.label || step.id,
               });
             }
-            stepStates.set(stepKey, 'COMPLETE');
+            stepStates.set(stepKey, result.skipped ? 'SKIPPED' : 'COMPLETE');
             if (result.receipt !== undefined) receipts.set(stepKey, result.receipt);
             publish({ message: result.message || (step.label || step.id) + '已完成' });
           }
@@ -137,6 +137,10 @@
       markRecovered: function () {
         if (state.status === 'RECOVERY_REQUIRED')
           publish({ status: 'WAITING_INPUT', message: '原请求已核对，可以继续。' });
+      },
+      continueManually: function (stepId) {
+        if(running||stepId!=='analysis'||state.stepId!==stepId)throw new Error('只能停止当前自动分析并继续手工编辑');
+        publish({status:'WAITING_INPUT',message:'自动分析已停止，原请求仍保留待核对；继续手工编辑。'});
       },
     };
   }

@@ -50,6 +50,9 @@
       if (value?.contractVersion != null) keys.push('contractVersion');
       if (value && Object.hasOwn(value, 'application')) keys.push('application');
       if (value && Object.hasOwn(value, 'selections')) keys.push('selections');
+      for(var extra of ['rootOperationKey','stage','stageResults','stageStartedAt','failure','manuallyContinued']) {
+        if(value&&Object.hasOwn(value,extra))keys.push(extra);
+      }
       if (!api.exact(value, keys) || value.version !== 1
         || value.contractVersion != null && value.contractVersion !== 'precision-preparation-checkpoint/v1'
         || !value.context || !sameDraft(api.binding(value.context.binding), binding)
@@ -57,10 +60,32 @@
         || !api.exact(value.review, ['curationConfirmed', 'visualApplied', 'copySaved', 'attributesApplied'])
         || Object.values(value.review).some(function (flag) { return typeof flag !== 'boolean'; })) throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
       var originalBinding = api.binding(value.context.binding);
+      var stages=['CURATION','VISION','COPY'],results=value.stageResults||{};
+      if(value.context.stagedAnalysis!==undefined&&typeof value.context.stagedAnalysis!=='boolean'
+        ||value.manuallyContinued!==undefined&&typeof value.manuallyContinued!=='boolean'
+        ||value.stage!==undefined&&value.stage!==null&&!stages.includes(value.stage)
+        ||value.stageStartedAt!==undefined&&value.stageStartedAt!==null&&(!Number.isSafeInteger(value.stageStartedAt)||value.stageStartedAt<0)
+        ||!results||typeof results!=='object'||Array.isArray(results)||Object.keys(results).some(function(key){return !stages.includes(key);})
+        ||value.rootOperationKey!==undefined&&value.rootOperationKey!==null&&api.identifier(value.rootOperationKey,128)!==value.rootOperationKey
+        ||Object.keys(results).length&&(!value.context.stagedAnalysis||value.context.mode!=='ERP_HOSTED'))throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
+      var missing=false;
+      for(var stage of stages){
+        var result=results[stage];
+        if(!result){missing=true;continue;}
+        if(missing||result.stage!==stage||result.operationKey!==value.rootOperationKey
+          ||JSON.stringify(api.binding(result.binding))!==JSON.stringify(originalBinding)
+          ||result.skuKey!==value.context.skuKey||JSON.stringify(result.sourceMediaKeys)!==JSON.stringify(value.context.sourceMediaKeys)
+          ||result.category?.catalogRevision!==value.context.categoryRevision?.catalogRevision
+          ||result.category?.schemaRevision!==value.context.categoryRevision?.schemaRevision)throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
+      }
+      if(value.operation?.stage&&(value.operation.operationKey!==value.rootOperationKey||value.operation.stage!==value.stage
+        ||!stages.includes(value.operation.stage)))throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
+      if(value.failure!==undefined&&value.failure!==null&&(!api.exact(value.failure,['stage','code'])
+        ||!stages.includes(value.failure.stage)||!/^[a-zA-Z0-9_]{1,100}$/u.test(value.failure.code)))throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
       if (value.selections != null) {
         if (!api.exact(value.selections, ['curationMediaKeys', 'visualDescription'])) throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
         var selectedKeys = value.selections.curationMediaKeys;
-        if (selectedKeys !== null && (!Array.isArray(selectedKeys) || !selectedKeys.length || selectedKeys.length > 5
+        if (selectedKeys !== null && (!Array.isArray(selectedKeys) || !selectedKeys.length || selectedKeys.length > (value.context.stagedAnalysis?24:5)
           || new Set(selectedKeys).size !== selectedKeys.length || !Array.isArray(value.context.sourceMediaKeys)
           || selectedKeys.some(function (key) { return !value.context.sourceMediaKeys.includes(api.identifier(key)); }))) throw api.error('SS_ERP_PREPARATION_CHECKPOINT_INVALID');
         if (value.selections.visualDescription !== null) api.visualDescription(value.selections.visualDescription);

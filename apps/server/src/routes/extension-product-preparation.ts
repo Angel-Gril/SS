@@ -49,7 +49,8 @@ export async function extensionProductPreparationRoutes(app: FastifyInstance, op
       } catch (error) {
         if (error instanceof z.ZodError) return reply.status(400).send({ code: 0, errorCode: 'invalid_request', msg: '商品分析参数错误。', outcome: 'NOT_SUBMITTED' });
         if (error instanceof ProductPreparationWorkbenchError) return reply.status(error.statusCode).send({ code: 0, errorCode: error.code, msg: error.message,
-          outcome: error.outcome === 'NOT_SENT' ? 'NOT_SUBMITTED' : error.outcome });
+          outcome: error.outcome === 'NOT_SENT' ? 'NOT_SUBMITTED' : error.outcome,
+          ...(error.stage ? { stage: error.stage } : {}), ...(error.failureKind ? { failureKind: error.failureKind, failureCode: error.failureCode } : {}) });
         const value = error as { code?: unknown; statusCode?: unknown };
         if (typeof value.code === 'string' && [400, 403, 404, 409, 422].includes(Number(value.statusCode))) return reply.status(Number(value.statusCode)).send({ code: 0, errorCode: value.code.toLowerCase(), msg: '商品分析草稿上下文不可用。', outcome: 'NOT_SUBMITTED' });
         request.log.error({ code: 'product_preparation_unavailable' }, 'product preparation unavailable');

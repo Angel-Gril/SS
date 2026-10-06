@@ -10,17 +10,23 @@ export const preparationText = (max: number) => z.string().max(max).refine(value
 const russian = (max: number) => preparationText(max).refine(value => !/[\u3400-\u9fff]/u.test(value) && (!value || /[\u0400-\u04ff]/u.test(value)));
 const observations = z.array(preparationText(200)).max(20);
 const scalar = z.union([preparationText(300), z.number().finite(), z.boolean()]);
+export const preparationCurationSchema = z.array(z.object({ sourceMediaKey: preparationIdSchema,
+  decision: z.enum(['KEEP', 'OMIT', 'REVIEW']), reason: preparationText(200) }).strict()).min(1).max(24);
+export const preparationSummarySchema = z.object({ observations, uncertainties: observations }).strict();
+export const preparationSkuObservationsSchema = z.array(z.object({ skuKey: preparationIdSchema, observations, titleRu: russian(500) }).strict()).length(1);
+export const preparationAttributesSchema = z.array(z.object({ attributeId: z.number().int().positive(), value: z.union([scalar, z.array(scalar).min(1).max(20)]),
+  dictionaryValueId: z.number().int().positive().optional(),
+  evidence: z.object({ sourceMediaKeys: z.array(preparationIdSchema).min(1).max(24), observation: preparationText(200).refine(value => value.trim().length > 0) }).strict(),
+  manualReview: z.literal('REQUIRED') }).strict()).max(40);
+export const preparationCopySchema = z.object({ titleRu: russian(500), descriptionRu: russian(4096), tagsRu: z.array(russian(80)).max(20) }).strict();
 export const preparationReportSchema = z.object({
   contractVersion: z.literal(PRODUCT_PREPARATION_PROMPT_CONTRACT), reviewState: z.literal('CANDIDATE'),
-  curation: z.array(z.object({ sourceMediaKey: preparationIdSchema, decision: z.enum(['KEEP', 'OMIT', 'REVIEW']), reason: preparationText(200) }).strict()).min(1).max(5),
+  curation: preparationCurationSchema,
   visualDescription: productVisionDescriptionSchema,
-  productSummary: z.object({ observations, uncertainties: observations }).strict(),
-  skuObservations: z.array(z.object({ skuKey: preparationIdSchema, observations, titleRu: russian(500) }).strict()).length(1),
-  suggestedAttributes: z.array(z.object({ attributeId: z.number().int().positive(), value: z.union([scalar, z.array(scalar).min(1).max(20)]),
-    dictionaryValueId: z.number().int().positive().optional(),
-    evidence: z.object({ sourceMediaKeys: z.array(preparationIdSchema).min(1).max(5), observation: preparationText(200).refine(value => value.trim().length > 0) }).strict(),
-    manualReview: z.literal('REQUIRED') }).strict()).max(40),
-  copy: z.object({ titleRu: russian(500), descriptionRu: russian(4096), tagsRu: z.array(russian(80)).max(20) }).strict(),
+  productSummary: preparationSummarySchema,
+  skuObservations: preparationSkuObservationsSchema,
+  suggestedAttributes: preparationAttributesSchema,
+  copy: preparationCopySchema,
 }).strict();
 export type ProductPreparationReport = z.infer<typeof preparationReportSchema>;
 export type ProductPreparationDictionaries = Record<string, Array<{ id: number; value: string }>>;

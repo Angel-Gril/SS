@@ -85,6 +85,12 @@ function preparationOptions(client: PrismaClient, input: { skuField?: boolean } 
 }
 const analyzeInput = (fixture: Awaited<ReturnType<typeof seed>>, operationKey: string) => ({ binding: fixture.binding, skuKey: 'sku-0',
   sourceMediaKeys: ['media-main-0'], operationKey, categoryRevision: { catalogRevision: 'fixture-catalog', schemaRevision } });
+const stageTransport = () => vi.fn<ProductPreparationWorkbenchOptions['analyzeTransport']>(async ({ prompt }) => ({
+  text: JSON.stringify(prompt.includes('STAGE:CURATION') ? { curation: report.curation } : prompt.includes('STAGE:VISION')
+    ? { visualDescription: report.visualDescription, productSummary: report.productSummary, skuObservations: report.skuObservations }
+    : { suggestedAttributes: report.suggestedAttributes, copy: report.copy }),
+  usage: { promptTokens: 12, completionTokens: 18, totalTokens: 30 },
+}));
 async function publishGrant(client: PrismaClient, fixture: Awaited<ReturnType<typeof seed>>) {
   const pairing = `${fixture.prefix}_pairing`, session = `${fixture.prefix}_session`, token = `${fixture.prefix}_token`, grant = `${fixture.prefix}_grant`;
   await client.$executeRaw`INSERT INTO "extension_device_pairing_codes" ("id", "deployment_id", "actor_user_id", "owner_user_id", "code_digest", "shop_ids", "scopes", "status", "expires_at", "claimed_at", "created_at", "updated_at")
@@ -112,6 +118,72 @@ describe.skipIf(!enabled)('isolated continuous preparation PostgreSQL evidence',
     expect((await first.$queryRaw<Array<{ schema: string }>>`SELECT current_schema() AS schema`)[0]?.schema).toBe(target.searchParams.get('schema'));
   });
   afterAll(async () => { await Promise.all([first?.$disconnect(), second?.$disconnect()]); });
+
+  it('durably checkpoints all three stages across clients and applies/replays only the final COPY candidates', async () => {
+    const fixture = await seed(first), original = analyzeInput(fixture, 'staged-preparation-restart');
+    const firstOptions = preparationOptions(first), firstTransport = stageTransport();
+    firstOptions.analyzeStageTransport = firstTransport;
+    const curation = await createProductPreparationWorkbenchService(firstOptions).analyze(fixture.identity, { ...original, stage: 'CURATION' });
+    const nextOptions = preparationOptions(second), nextTransport = stageTransport(); nextOptions.analyzeStageTransport = nextTransport;
+    const restarted = createProductPreparationWorkbenchService(nextOptions);
+    expect(await restarted.read(fixture.identity, { ...original, stage: 'CURATION' })).toEqual({ ...curation, replayed: true });
+    const vision = await restarted.analyze(fixture.identity, { ...original, stage: 'VISION' });
+    expect(vision).toMatchObject({ stage: 'VISION', visionSourceMediaKeys: original.sourceMediaKeys });
+    const finalInput = { ...original, stage: 'COPY' as const };
+    const copy = await restarted.analyze(fixture.identity, finalInput); expect(copy).toMatchObject({ stage: 'COPY', report });
+    expect(firstTransport).toHaveBeenCalledTimes(1); expect(nextTransport).toHaveBeenCalledTimes(2);
+    expect(nextTransport.mock.calls.at(-1)![0].images).toEqual([]);
+    expect(firstOptions.analyzeTransport).not.toHaveBeenCalled(); expect(nextOptions.analyzeTransport).not.toHaveBeenCalled();
+    const namespaces = await second.$queryRaw<Array<{ namespace: string; status: string }>>`
+      SELECT "namespace", "status" FROM "ai_translation_cache" WHERE "input_text" LIKE ${`%${fixture.ownerUserId}%`} ORDER BY "namespace"`;
+    expect(namespaces).toEqual(['copy', 'curation', 'vision'].map(stage => ({ namespace: `product-preparation-receipt-${stage}`, status: 'success' })));
+    expect(await second.$queryRaw<Array<{ count: number }>>`SELECT "consumed_count" AS count FROM "ai_usage_quota_daily" WHERE "actor_user_id" = ${fixture.ownerUserId}`).toEqual([{ count: 3 }]);
+    const apply = { binding: fixture.binding, analysisInput: finalInput, action: 'ATTRIBUTES' as const,
+      operationKey: 'stage-copy-apply-once', selectedAttributeIds: [10] };
+    const applied = await restarted.apply(fixture.identity, apply);
+    expect(await createProductPreparationWorkbenchService(preparationOptions(first)).apply(fixture.identity, apply)).toEqual({ ...applied, replayed: true });
+    const readOnly = preparationOptions(first); readOnly.loadAttributeContext = vi.fn(async () => { throw new Error('later schema unavailable'); });
+    expect(await createProductPreparationWorkbenchService(readOnly).read(fixture.identity, finalInput)).toEqual({ ...copy, replayed: true });
+    expect(readOnly.analyzeTransport).not.toHaveBeenCalled(); expect(readOnly.readImage).not.toHaveBeenCalled();
+    expect((await fixture.workflow.getDraft({ ownerUserId: fixture.ownerUserId, draftId: fixture.draft.id })).attributes.values['10'])
+      .toMatchObject({ source: 'AI', reviewed: true, suggestionProvenance: { sourceCaptureSnapshotId: fixture.snapshotId, schemaRevision } });
+  });
+  it('preserves safe UNKNOWN-stage classification across restart without blocking access to an earlier checkpoint or resubmitting', async () => {
+    const fixture = await seed(first), original = analyzeInput(fixture, 'staged-preparation-timeout');
+    const options = preparationOptions(first), transport = stageTransport(); options.analyzeStageTransport = transport;
+    const service = createProductPreparationWorkbenchService(options);
+    await service.analyze(fixture.identity, { ...original, stage: 'CURATION' });
+    transport.mockRejectedValueOnce(Object.assign(new Error('fixture-local-test'), { code: 'PRODUCT_VISION_TIMEOUT', outcome: 'UNKNOWN_OUTCOME' }));
+    const stalled = { ...original, stage: 'VISION' as const };
+    await expect(service.analyze(fixture.identity, stalled)).rejects.toMatchObject({ failureCode: 'product_vision_timeout', failureKind: 'TRANSPORT_UNKNOWN' });
+    const next = preparationOptions(second), restarted = createProductPreparationWorkbenchService(next);
+    for (const action of ['read', 'analyze'] as const) await expect(restarted[action](fixture.identity, stalled))
+      .rejects.toMatchObject({ stage: 'VISION', failureCode: 'product_vision_timeout', failureKind: 'TRANSPORT_UNKNOWN', outcome: 'UNKNOWN_OUTCOME' });
+    expect(await restarted.read(fixture.identity, { ...original, stage: 'CURATION' })).toMatchObject({ stage: 'CURATION', replayed: true });
+    await expect(restarted.analyze(fixture.identity, { ...original, stage: 'COPY' })).rejects.toMatchObject({ code: 'product_preparation_stage_required', outcome: 'NOT_SENT' });
+    expect(next.analyzeTransport).not.toHaveBeenCalled(); expect(next.readImage).not.toHaveBeenCalled();
+    const failures = await second.$queryRaw<Array<{ status: string; output: string }>>`
+      SELECT "status", "output_text" AS output FROM "ai_translation_cache" WHERE "namespace" = 'product-preparation-receipt-vision-failure'
+      AND "input_text" LIKE ${`%${fixture.ownerUserId}%`}`;
+    expect(failures).toEqual([{ status: 'failed', output: JSON.stringify({ stage: 'VISION', failureKind: 'TRANSPORT_UNKNOWN', failureCode: 'product_vision_timeout' }) }]);
+    expect(JSON.stringify(failures)).not.toContain('fixture-local-test');
+    expect(await second.$queryRaw<Array<{ count: number }>>`SELECT "consumed_count" AS count FROM "ai_usage_quota_daily" WHERE "actor_user_id" = ${fixture.ownerUserId}`).toEqual([{ count: 2 }]);
+  });
+  it('records a received invalid candidate separately from successful receipts and returns the original classification from another client', async () => {
+    const fixture = await seed(first), original = { ...analyzeInput(fixture, 'staged-received-rejection'), stage: 'CURATION' as const };
+    const options = preparationOptions(first); options.analyzeStageTransport = vi.fn(async () => ({ text: 'invalid fixture-local-test', usage: null }));
+    await expect(createProductPreparationWorkbenchService(options).analyze(fixture.identity, original))
+      .rejects.toMatchObject({ failureKind: 'RESPONSE_INVALID', failureCode: 'product_preparation_response_invalid' });
+    const next = preparationOptions(second), restarted = createProductPreparationWorkbenchService(next);
+    await expect(restarted.read(fixture.identity, original)).rejects.toMatchObject({ failureKind: 'RESPONSE_INVALID', failureCode: 'product_preparation_response_invalid' });
+    await expect(restarted.analyze(fixture.identity, original)).rejects.toMatchObject({ failureKind: 'RESPONSE_INVALID' });
+    expect(next.analyzeTransport).not.toHaveBeenCalled(); expect(next.readImage).not.toHaveBeenCalled();
+    const rows = await second.$queryRaw<Array<{ namespace: string; status: string; output: string }>>`
+      SELECT "namespace", "status", "output_text" AS output FROM "ai_translation_cache" WHERE "input_text" LIKE ${`%${fixture.ownerUserId}%`}`;
+    expect(rows).toEqual([{ namespace: 'product-preparation-receipt-curation-failure', status: 'failed',
+      output: JSON.stringify({ stage: 'CURATION', failureKind: 'RESPONSE_INVALID', failureCode: 'product_preparation_response_invalid' }) }]);
+    expect(JSON.stringify(rows)).not.toContain('fixture-local-test');
+  });
 
   it('claims once across clients while separating preparation, old vision and copy namespaces', async () => {
     const owner = `preparation_claim_${randomUUID()}`, input = { ownerUserId: owner, draftId: 'fixture-draft', operationKey: 'same-operation', clientRequestHash: hash('input') };

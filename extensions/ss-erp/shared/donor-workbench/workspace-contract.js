@@ -747,6 +747,7 @@
         if (item.type !== 'PREPARATION_CONTEXT') editorFields.push('operationKey');
         if (item.executionMode !== undefined) editorFields.push('executionMode');
         if (item.providerContext !== undefined) editorFields.push('providerContext');
+        if (item.stage !== undefined) editorFields.push('stage');
       }
       if (item.type === 'PREPARATION_APPLY') editorFields.push('analysisInput', 'operationKey', 'action', 'selectedAttributeIds');
       if(['LOGISTICS_SERVICES','LOGISTICS_QUOTE'].includes(item.type))editorFields.push('selection');
@@ -777,6 +778,7 @@
           if (item.operationKey !== undefined) preparationInput.operationKey = item.operationKey;
           if (item.executionMode !== undefined) preparationInput.executionMode = item.executionMode;
           if (item.providerContext !== undefined) preparationInput.providerContext = item.providerContext;
+          if (item.stage !== undefined) preparationInput.stage = item.stage;
           preparationApi.normalizeRequest(preparationInput, item.type === 'PREPARATION_CONTEXT');
         }
       }

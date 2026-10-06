@@ -92,7 +92,7 @@
     });
   }
 
-  function commandResult(requestId, ok, error, receipt, data, outcome, code) {
+  function commandResult(requestId, ok, error, receipt, data, outcome, code, failure) {
     postToFrame({
       contractVersion: Contract.CONTRACT_VERSION,
       type: 'COMMAND_RESULT',
@@ -103,6 +103,8 @@
       ...(data === undefined ? {} : { data: data }),
       ...(outcome ? { outcome: outcome } : {}),
       ...(code ? { code: code } : {}),
+      ...(/^[a-z0-9_]{1,100}$/u.test(failure?.failureCode||'')?{failureCode:failure.failureCode}:{}),
+      ...(['TRANSPORT_UNKNOWN','RESPONSE_INVALID','REPORT_INVALID','PERSISTENCE_FAILED'].includes(failure?.failureKind)?{failureKind:failure.failureKind}:{}),
     });
   }
 
@@ -810,6 +812,7 @@
           ...(command.operationKey === undefined ? {} : { operationKey: command.operationKey }),
           ...(command.executionMode === undefined ? {} : { executionMode: command.executionMode }),
           ...(command.providerContext === undefined ? {} : { providerContext: command.providerContext }),
+          ...(command.stage === undefined ? {} : { stage: command.stage }),
         } : {}),
         ...(command.type === 'PREPARATION_APPLY' ? { action: command.action, operationKey: command.operationKey,
           analysisInput: command.analysisInput, selectedAttributeIds: command.selectedAttributeIds } : {}),
@@ -822,11 +825,13 @@
       if (!response || !response.ok || !response.result) throw Object.assign(new Error(response && response.error || 'ERP 草稿编辑未完成'), {
         outcome: response && response.outcome || (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'PREPARATION_ANALYZE', 'PREPARATION_APPLY'].includes(command.type) ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'),
         code: response && response.code || null,
+        failureCode: response && response.failureCode || null,
+        failureKind: response && response.failureKind || null,
       });
       commandResult(command.requestId, true, '', null, response.result);
       if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true, afterMutation: true });
     } catch (error) {
-      commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code);
+      commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code, error);
     } finally {
       if (mutation) setBusy(false, currentProjection.error);
     }

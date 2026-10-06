@@ -2945,6 +2945,8 @@ if (isExtensionDeviceAuthEnabled()) {
       usageStore: createPrismaAiUsageStore(prisma),
       operationStore: createPrismaProductPreparationOperationStore({ client: prisma as never }),
       analyzeTransport: createProductVisionTransport({ maxOutputTokens: 4096 }),
+      analyzeStageTransport: createProductVisionTransport({ stream: true, maxOutputTokens: 4096,
+        maxTimeoutMs: 180000, maxImages: 24, allowTextOnly: true }),
       loadOwnedSnapshot: async ({ ownerUserId, snapshotId }) => {
         const snapshot = await prisma.sourceCaptureSnapshot.findFirst({ where: { id: snapshotId, subject: { ownerUserId } },
           select: { id: true, captureHash: true, payloadBytes: true, payload: true } });

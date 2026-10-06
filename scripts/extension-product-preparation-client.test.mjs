@@ -80,3 +80,44 @@ test('hosted preparation commands require the exact source product main document
     assert.equal(env.SS_ERP_RUNTIME_MESSAGE_POLICY.isAllowedRuntimeMessageSender(type,{...sender,frameId:2},id),false);
   }
 });
+
+test('stage commands preserve exact root identity across frame parsing, analysis and readback',async()=>{
+  const env=load(),calls=[];
+  const client=env.SS_ERP_PRODUCT_PREPARATION_CLIENT.createClient({transport:{post:async(path,input)=>{
+    calls.push({path,input});const data={...structuredClone(analysis),stage:input.stage};
+    if(input.stage==='CURATION'){data.curation=data.report.curation;delete data.report;}
+    if(input.stage==='VISION'){for(const key of ['visualDescription','productSummary','skuObservations'])data[key]=data.report[key];data.visionSourceMediaKeys=input.sourceMediaKeys;delete data.report;}
+    return{state:'response',body:{code:1,data}};
+  }}});
+  for(const stage of ['CURATION','VISION','COPY']){
+    const input={...request,stage};
+    const frame={...input,type:'PREPARATION_ANALYZE',listingWorkflowId:'draft',requestId:'request-1',contractVersion:env.SS_ERP_DONOR_WORKBENCH_CONTRACT.CONTRACT_VERSION};
+    assert.equal(env.SS_ERP_DONOR_WORKBENCH_CONTRACT.parseFrameCommand(frame).stage,stage);
+    assert.equal((await client.analyzeProductPreparation(input)).analysis.stage,stage);
+    assert.equal((await client.readProductPreparation(input)).analysis.stage,stage);
+  }
+  assert.deepEqual(calls.map(call=>call.input.stage),['CURATION','CURATION','VISION','VISION','COPY','COPY']);
+  for(const invalid of [{stage:'PUBLISH'},{stage:'VISION',executionMode:'BYOK'},{sourceMediaKeys:Array.from({length:6},(_,i)=>'media-'+i)}])
+    await assert.rejects(client.analyzeProductPreparation({...request,...invalid}));
+});
+test('staged capability and safe failure classifications survive transport without leaking provider output',async()=>{
+  const env=load();
+  const client=env.SS_ERP_PRODUCT_PREPARATION_CLIENT.createClient({transport:{post:async path=>path.endsWith('capability')
+    ?{state:'response',body:{code:1,data:{available:true,reasonCode:'READY',providerFeeNotice:'三个独立阶段可能产生费用',stagedAnalysis:true}}}
+    :{state:'response',status:409,body:{code:0,outcome:'UNKNOWN_OUTCOME',msg:'原视觉请求结果未确认',stage:'VISION',
+      failureCode:'product_vision_timeout',failureKind:'TRANSPORT_UNKNOWN'}}}});
+  assert.equal((await client.readProductPreparationCapability(binding)).capability.stagedAnalysis,true);
+  await assert.rejects(client.analyzeProductPreparation({...request,stage:'VISION'}),error=>error.outcome==='UNKNOWN_OUTCOME'
+    &&error.stage==='VISION'&&error.failureCode==='product_vision_timeout'&&error.failureKind==='TRANSPORT_UNKNOWN');
+});
+test('proven local transport refusal stays unsubmitted instead of trapping a request with no server receipt',async()=>{
+  for(const refusal of [{state:'unpaired'},{state:'scope_required',scope:'media:execute'},
+    {state:'authorization_required',status:401},Object.assign(Error('before dispatch'),{outcome:'NOT_SUBMITTED'})]){
+    const env=load(),client=env.SS_ERP_PRODUCT_PREPARATION_CLIENT.createClient({transport:{post:async()=>{
+      if(refusal instanceof Error)throw refusal;return refusal;
+    }}});
+    await assert.rejects(client.analyzeProductPreparation({...request,stage:'VISION'}),error=>error.outcome==='NOT_SUBMITTED');
+  }
+  const env=load(),client=env.SS_ERP_PRODUCT_PREPARATION_CLIENT.createClient({transport:{post:async()=>({state:'invalid_response'})}});
+  await assert.rejects(client.analyzeProductPreparation({...request,stage:'VISION'}),error=>error.outcome==='UNKNOWN_OUTCOME');
+});

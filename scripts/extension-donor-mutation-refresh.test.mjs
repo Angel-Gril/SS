@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 
 const root = 'extensions/ss-erp';
 const extensionId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-async function harness() {
+async function harness({preparation}={}) {
   const nodes = [], frameMessages = [], runtimeRequests = [], listeners = new Map();
   const pendingStatus = [], pendingBilling = [], pendingMutation = [], pendingEditor = [];
   const handoff = { snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture',
@@ -63,6 +64,7 @@ async function harness() {
           if (delayEditor) pendingEditor.push({ request, callback });
           else callback({ ok: true, result: { state: 'ready', editor: { binding: request.binding } } });
         }
+        else if(request.type.startsWith('ss-erp:source-workbench-preparation-'))callback(preparation?.(request)||{ok:true,result:{state:'ready'}});
         else if (request.type === 'ss-erp:source-listing-workbench-ai-image-suite-command'
           || request.type === 'ss-erp:source-listing-workbench-ai-image-suite-assignment') {
           if (delayMutation) pendingMutation.push(callback);
@@ -78,8 +80,10 @@ async function harness() {
   };
   environment.globalThis = environment;
   const context = vm.createContext(environment);
+  vm.runInContext(readFileSync(`${root}/shared/donor-workbench/product-preparation-client.js`, 'utf8'), context);
   vm.runInContext(readFileSync(`${root}/shared/donor-workbench/workspace-contract.js`, 'utf8'), context);
-  vm.runInContext(readFileSync(`${root}/content/donor-workbench-bridge.js`, 'utf8'), context);
+  const bridgePath=`${root}/content/donor-workbench-bridge.js`;
+  vm.runInContext(process.argv.includes('--stage-baseline')?execFileSync('git',['show','HEAD:'+bridgePath],{encoding:'utf8'}):readFileSync(bridgePath,'utf8'),context);
   const frame = nodes.find(item => item.id === 'ss-erp-donor-workbench-frame');
   nodes.find(item => item.id === 'ss-erp-donor-workbench-trigger').click();
   await flush();
@@ -306,4 +310,16 @@ test('suite and assignment keep their lock across a pre-commit refresh and relea
     assert.deepEqual(h.results('queued-read').map(item => item.ok), [true]);
     assert.equal(h.runtimeRequests.filter(item => item.type.endsWith('suite-command') || item.type.endsWith('suite-assignment')).length, 1);
   }
+});
+test('real source bridge preserves each hosted stage and safe failure classification to the workbench frame',async()=>{
+  const h=await harness({preparation:()=>({ok:false,error:'原视觉结果未确认',outcome:'UNKNOWN_OUTCOME',
+    failureCode:'product_vision_timeout',failureKind:'TRANSPORT_UNKNOWN'})});
+  h.command('PREPARATION_ANALYZE','stage-request',{binding:editorBinding,listingWorkflowId:'draft-fixture',skuKey:'sku-white',
+    sourceMediaKeys:['image-1'],operationKey:'stage-root-operation',stage:'VISION',categoryRevision:{catalogRevision:'catalog',schemaRevision:'a'.repeat(64)}});
+  await flush();
+  const requests=h.runtimeRequests.filter(request=>request.type==='ss-erp:source-workbench-preparation-analyze');
+  assert.equal(requests.length,1);assert.equal(requests[0].stage,'VISION');
+  assert.equal(h.results('stage-request')[0].failureCode,'product_vision_timeout');
+  assert.equal(h.results('stage-request')[0].failureKind,'TRANSPORT_UNKNOWN');
+  assert.equal(h.results('stage-request')[0].outcome,'UNKNOWN_OUTCOME');
 });

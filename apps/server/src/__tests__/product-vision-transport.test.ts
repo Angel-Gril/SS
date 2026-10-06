@@ -40,6 +40,125 @@ afterEach(() => {
 });
 
 describe('product vision transport', () => {
+  function sseResponse(events: string[], chunkBytes = 0) {
+    const bytes = new TextEncoder().encode(events.map(event => `data: ${event}\r\n\r\n`).join(''));
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      const size = chunkBytes || bytes.byteLength;
+      for (let offset = 0; offset < bytes.byteLength; offset += size) controller.enqueue(bytes.subarray(offset, offset + size));
+      controller.close();
+    } }), { headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
+  }
+  const delta = (text: string, finish: string | null = null) => JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: finish }] });
+  it('opts into streamed complete JSON across UTF8/chunk boundaries and returns terminal usage', async () => {
+    const fullText = '{"颜色":"红色","title":"Красный"}';
+    const fetchImpl = vi.fn<typeof fetch>(async () => sseResponse([
+      ': heartbeat', delta(fullText.slice(0, 9)), delta(fullText.slice(9), 'stop'),
+      JSON.stringify({ choices: [], usage: { prompt_tokens: 18, completion_tokens: 9, total_tokens: 27, secret: config.apiKey } }), '[DONE]',
+    ].filter(event => event !== ': heartbeat'), 1));
+    const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true, maxOutputTokens: 4096, maxTimeoutMs: 180000 });
+    await expect(analyze({ config, prompt: 'Return bound stage data', images })).resolves.toEqual({ text: fullText, usage: { promptTokens: 18, completionTokens: 9, totalTokens: 27 } });
+    const request = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(request.stream).toBe(true); expect(request.stream_options).toEqual({ include_usage: true });
+    expect(request.max_tokens).toBe(4096); expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('opts into up to 24 owned stage images and text-only copy while keeping legacy image requirements', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => sseResponse([delta(content, 'stop'), '[DONE]']));
+    const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true, maxImages: 24, allowTextOnly: true });
+    await expect(analyze({ config, prompt: 'Stage curation', images: Array.from({ length: 24 }, () => images[0]!) })).resolves.toMatchObject({ text: content });
+    await expect(analyze({ config, prompt: 'Stage copy', images: [] })).resolves.toMatchObject({ text: content });
+    expect(JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body)).messages[1].content).toHaveLength(1);
+    await expect(analyze({ config, prompt: 'Stage curation', images: Array.from({ length: 25 }, () => images[0]!) })).rejects.toMatchObject({ code: 'PRODUCT_VISION_INPUT_INVALID', outcome: 'NOT_SENT' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { options: { maxTimeoutMs: 180001 } }, { options: { maxTimeoutMs: 999 } }, { options: { maxTimeoutMs: Number.NaN } },
+    { options: { maxImages: 25 } }, { options: { maxImages: 0 } }, { options: { stream: 'true' } }, { options: { allowTextOnly: 'true' } },
+  ])('rejects invalid opted-in transport limits', ({ options }) => {
+    expect(() => createProductVisionTransport(options as Parameters<typeof createProductVisionTransport>[0])).toThrow(ProductVisionTransportError);
+  });
+  it.each([
+    { events: [delta(content)], reasonCode: 'STREAM_INCOMPLETE' },
+    { events: [delta(content, 'stop')], reasonCode: 'STREAM_INCOMPLETE' },
+    { events: [delta(content), '[DONE]'], reasonCode: 'STREAM_INCOMPLETE' },
+    { events: [delta(content, 'length'), '[DONE]'], reasonCode: 'STREAM_FINISH_INVALID' },
+    { events: [delta(content, 'tool_calls'), '[DONE]'], reasonCode: 'STREAM_FINISH_INVALID' },
+    { events: [JSON.stringify({ error: { message: config.apiKey, code: 'provider-failed' } }), '[DONE]'], reasonCode: 'STREAM_PROVIDER_ERROR' },
+    { events: [JSON.stringify({ choices: [{ index: 1, delta: { content }, finish_reason: 'stop' }] }), '[DONE]'], reasonCode: 'STREAM_EVENT_INVALID' },
+    { events: ['{invalid json', '[DONE]'], reasonCode: 'STREAM_EVENT_INVALID' },
+    { events: [delta(config.apiKey.slice(0, 10)), delta(config.apiKey.slice(10), 'stop'), '[DONE]'], reasonCode: 'SECRET_ECHO' },
+    { events: [delta(' ', 'stop'), '[DONE]'], reasonCode: 'STREAM_INCOMPLETE' },
+  ])('rejects unsafe/incomplete SSE and emits only safe reasonCode %s', async ({ events, reasonCode }) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => sseResponse(events));
+    const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true });
+    const error = await analyze({ config, prompt: 'Stage data', images }).catch(value => value);
+    expect(error).toMatchObject({ code: 'PRODUCT_VISION_RESPONSE_INVALID', outcome: 'UNKNOWN_OUTCOME', reasonCode });
+    expect(String(error)).not.toContain(config.apiKey); expect(JSON.stringify(error)).not.toContain(config.apiKey);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('accepts SSE comment/CRLF/multiline data framing and ignores reasoning instead of returning it', async () => {
+    const event = JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: config.apiKey }, finish_reason: null }] });
+    const source = `: heartbeat\r\nid: stage-1\r\ndata: ${event}\r\n\r\ndata: {"choices":\r\ndata: [{"index":0,"delta":{"content":${JSON.stringify(content)}},"finish_reason":"stop"}]}\r\n\r\ndata: [DONE]\r\n\r\n`;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(source, { headers: { 'content-type': 'text/event-stream' } }));
+    await expect(createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config, prompt: 'Stage data', images })).resolves.toEqual({ text: content, usage: null });
+  });
+  it.each([
+    { bytes: 'x'.repeat(2 * 1024 * 1024 + 1), headers: {} },
+    { bytes: 'data: [DONE]\n\n', headers: { 'content-length': String(2 * 1024 * 1024 + 1) } },
+    { bytes: `data: ${delta('x'.repeat(64 * 1024 + 1), 'stop')}\n\ndata: [DONE]\n\n`, headers: {} },
+  ])('bounds declared SSE, actual response and individual event bytes', async ({ bytes, headers }) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(bytes, { headers: new Headers({ 'content-type': 'text/event-stream', ...headers } as Record<string, string>) }));
+    await expect(createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config, prompt: 'Stage data', images }))
+      .rejects.toMatchObject({ code: 'PRODUCT_VISION_RESPONSE_TOO_LARGE', outcome: 'UNKNOWN_OUTCOME' });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('bounds combined output independently of the SSE response byte budget', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => sseResponse([delta('x'.repeat(40000)), delta('x'.repeat(40000), 'stop'), '[DONE]']));
+    await expect(createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config, prompt: 'Stage data', images }))
+      .rejects.toMatchObject({ code: 'PRODUCT_VISION_RESPONSE_TOO_LARGE', outcome: 'UNKNOWN_OUTCOME', reasonCode: 'OUTPUT_LIMIT' });
+  });
+  it('uses a dedicated 180s stream timeout without changing the legacy cap or default', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Promise<Response>(() => undefined));
+    const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true, maxTimeoutMs: 180000 });
+    const promise = analyze({ config: { ...config, timeoutMs: 180000 }, prompt: 'Stage data', images });
+    let settled = false;
+    const assertion = expect(promise.finally(() => { settled = true; })).rejects.toMatchObject({ code: 'PRODUCT_VISION_TIMEOUT', outcome: 'UNKNOWN_OUTCOME' });
+    await vi.advanceTimersByTimeAsync(120000); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(60000); await assertion;
+    expect(fetchImpl).toHaveBeenCalledOnce(); expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+  it('aborts and cancels a stalled SSE stream without submitting another request', async () => {
+    vi.useFakeTimers(); let canceled = false;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${delta(content)}\n\n`)); }, cancel() { canceled = true; } }), { headers: { 'content-type': 'text/event-stream' } }));
+    const assertion = expect(createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config: { ...config, timeoutMs: 1000 }, prompt: 'Stage data', images })).rejects.toMatchObject({ code: 'PRODUCT_VISION_TIMEOUT', outcome: 'UNKNOWN_OUTCOME' });
+    await vi.advanceTimersByTimeAsync(1000); await assertion; expect(canceled).toBe(true); expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('treats DONE as the terminal even when the Provider does not close the response connection', async () => {
+    let canceled = false;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${delta(content, 'stop')}\n\ndata: [DONE]\n\n`)); },
+      cancel() { canceled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }));
+    await expect(createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config, prompt: 'Stage data', images })).resolves.toEqual({ text: content, usage: null });
+    expect(canceled).toBe(true); expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+  it('rejects invalid UTF8, content after stop and multiple choices without leaking Provider data', async () => {
+    for (const bytes of [new Uint8Array([100, 97, 116, 97, 58, 32, 0xff, 10, 10]),
+      new TextEncoder().encode(`data: ${delta(content, 'stop')}\n\ndata: ${delta(config.apiKey)}\n\ndata: [DONE]\n\n`),
+      new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: null }, { index: 1, delta: { content: config.apiKey }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)]) {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(bytes, { headers: { 'content-type': 'text/event-stream' } }));
+      const error = await createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true })({ config, prompt: 'Stage data', images }).catch(value => value);
+      expect(error).toMatchObject({ code: 'PRODUCT_VISION_RESPONSE_INVALID', outcome: 'UNKNOWN_OUTCOME', reasonCode: 'STREAM_EVENT_INVALID' });
+      expect(JSON.stringify(error)).not.toContain(config.apiKey); expect(fetchImpl).toHaveBeenCalledOnce();
+    }
+  });
+  it('retains the 30 second default when streaming is enabled without a timeout override', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Promise<Response>(() => undefined));
+    const promise = createProductVisionTransport({ fetch: fetchImpl, lookup, stream: true, maxTimeoutMs: 180000 })({ config, prompt: 'Stage data', images });
+    const assertion = expect(promise).rejects.toMatchObject({ code: 'PRODUCT_VISION_TIMEOUT', outcome: 'UNKNOWN_OUTCOME' });
+    await vi.advanceTimersByTimeAsync(30000); await assertion; expect(fetchImpl).toHaveBeenCalledOnce();
+  });
   it('allows bounded richer product reports while retaining the original vision output limit', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => response());
     const analyze = createProductVisionTransport({ fetch: fetchImpl, lookup, maxOutputTokens: 4096 });

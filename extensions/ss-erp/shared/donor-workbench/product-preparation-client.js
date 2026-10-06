@@ -2,6 +2,7 @@
   'use strict';
   const PREFIX = '/api/extension-device/source-workbench/preparation/';
   const VERSION = 'product-preparation-analysis/v1';
+  const STAGES = ['CURATION','VISION','COPY'];
   const record = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   const exact = (value, required, optional = []) => record(value) && required.every(key => Object.hasOwn(value, key))
     && Object.keys(value).every(key => [...required, ...optional].includes(key));
@@ -28,13 +29,14 @@
   function normalizeRequest(value, contextOnly = false) {
     const fields = ['binding', 'skuKey', 'sourceMediaKeys', 'categoryRevision'];
     if (!contextOnly) fields.push('operationKey');
-    if (!exact(value, fields, contextOnly ? [] : ['executionMode', 'providerContext'])
+    if (!exact(value, fields, contextOnly ? [] : ['executionMode', 'providerContext','stage'])
       || !id(value.skuKey) || !Array.isArray(value.sourceMediaKeys) || value.sourceMediaKeys.length < 1
-      || value.sourceMediaKeys.length > 5 || new Set(value.sourceMediaKeys).size !== value.sourceMediaKeys.length
+      || value.sourceMediaKeys.length > (value.stage?24:5) || new Set(value.sourceMediaKeys).size !== value.sourceMediaKeys.length
       || !value.sourceMediaKeys.every(id) || !exact(value.categoryRevision, ['catalogRevision', 'schemaRevision'])
       || !id(value.categoryRevision.catalogRevision) || !/^[a-f0-9]{64}$/u.test(value.categoryRevision.schemaRevision)
       || !contextOnly && (!id(value.operationKey) || value.operationKey.length < 8 || value.operationKey.length > 128)) throw error('商品分析输入无效');
     if (value.executionMode !== undefined && !['ERP_HOSTED', 'BYOK'].includes(value.executionMode)) throw error('商品分析模式无效');
+    if(value.stage!==undefined&&(!STAGES.includes(value.stage)||value.executionMode==='BYOK'))throw error('商品分析阶段无效');
     if (value.executionMode === 'BYOK') {
       const p = value.providerContext;
       if (!exact(p, ['providerOrigin', 'model', 'policyRevision']) || !text(p.model, 200) || !p.model
@@ -49,7 +51,8 @@
       ...(value.providerContext ? { providerContext: Object.freeze({ ...value.providerContext }) } : {}) });
   }
   function validateAnalysis(data, input) {
-    if (!exact(data, ['binding', 'skuKey', 'sourceMediaKeys', 'operationKey', 'category', 'report', 'replayed'], ['executionMode', 'providerContext'])
+    if (!exact(data, ['binding', 'skuKey', 'sourceMediaKeys', 'operationKey', 'category', 'report', 'replayed'], ['executionMode', 'providerContext','stage'])
+      || data.stage !== input.stage
       || JSON.stringify(binding(data.binding)) !== JSON.stringify(input.binding) || data.skuKey !== input.skuKey
       || data.operationKey !== input.operationKey || JSON.stringify(data.sourceMediaKeys) !== JSON.stringify(input.sourceMediaKeys)
       || typeof data.replayed !== 'boolean' || !exact(data.category, ['categoryId', 'typeId', 'catalogRevision', 'schemaRevision'])
@@ -86,21 +89,59 @@
       || !text(report.copy.descriptionRu, 20000) || !strings(report.copy.tagsRu, 30, 100)) throw error('商品字段候选格式错误', 'UNKNOWN_OUTCOME');
     return data;
   }
+  function validateStage(data,input) {
+    if(!input.stage)return validateAnalysis(data,input);
+    if(input.stage==='COPY')return validateAnalysis(data,input);
+    const fields=input.stage==='CURATION'?['curation']:['visualDescription','productSummary','skuObservations','visionSourceMediaKeys'];
+    if(!exact(data,['binding','skuKey','sourceMediaKeys','operationKey','category','stage','replayed',...fields])
+      ||data.stage!==input.stage||JSON.stringify(binding(data.binding))!==JSON.stringify(input.binding)
+      ||data.skuKey!==input.skuKey||data.operationKey!==input.operationKey
+      ||JSON.stringify(data.sourceMediaKeys)!==JSON.stringify(input.sourceMediaKeys)||typeof data.replayed!=='boolean'
+      ||!exact(data.category,['categoryId','typeId','catalogRevision','schemaRevision'])
+      ||![data.category.categoryId,data.category.typeId].every(n=>Number.isSafeInteger(n)&&n>0)
+      ||!Object.keys(input.categoryRevision).every(key=>data.category[key]===input.categoryRevision[key])
+      ||!safe(data)||JSON.stringify(data).length>100000)throw error('商品分析阶段回执绑定错误','UNKNOWN_OUTCOME');
+    if(input.stage==='CURATION'){
+      if(!Array.isArray(data.curation)||data.curation.length!==input.sourceMediaKeys.length
+        ||!data.curation.every((row,index)=>exact(row,['sourceMediaKey','decision','reason'])
+          &&row.sourceMediaKey===input.sourceMediaKeys[index]&&['KEEP','OMIT','REVIEW'].includes(row.decision)&&text(row.reason,200)))throw error('筛图阶段范围错误','UNKNOWN_OUTCOME');
+    }else{
+      const visual=data.visualDescription;
+      if(!exact(visual,['composition','background','lighting','style','observations'])
+        ||!['composition','background','lighting','style'].every(key=>text(visual[key],60))
+        ||!exact(visual.observations,['colors','shapes','visibleComponents','visibleText'])
+        ||!Object.values(visual.observations).every(items=>strings(items,10,100))
+        ||!exact(data.productSummary,['observations','uncertainties'])||!Object.values(data.productSummary).every(items=>strings(items,20,200))
+        ||!Array.isArray(data.skuObservations)||data.skuObservations.length!==1
+        ||!data.skuObservations.every(row=>exact(row,['skuKey','observations','titleRu'])&&row.skuKey===input.skuKey&&strings(row.observations,20,200)&&text(row.titleRu,500))
+        ||!Array.isArray(data.visionSourceMediaKeys)||!data.visionSourceMediaKeys.length||data.visionSourceMediaKeys.length>8
+        ||new Set(data.visionSourceMediaKeys).size!==data.visionSourceMediaKeys.length
+        ||data.visionSourceMediaKeys.some(key=>!input.sourceMediaKeys.includes(key)))throw error('视觉阶段候选格式错误','UNKNOWN_OUTCOME');
+    }
+    return data;
+  }
   function createClient({ transport }) {
     async function send(action, input, mutating = false) {
       let response;
       try { response = await transport.post(PREFIX + action, input, { requiredScope: mutating ? 'media:execute' : 'listing:review' }); }
-      catch (cause) { throw error(cause.outcome === 'NOT_SUBMITTED' ? cause.message : '商品分析响应未核对，请读取原操作', mutating ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'); }
+      catch (cause) { throw error(cause.outcome === 'NOT_SUBMITTED' ? cause.message : '商品分析响应未核对，请读取原操作', mutating && cause.outcome!=='NOT_SUBMITTED' ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'); }
       if (response?.state !== 'response' || response.body?.code !== 1) {
-        const known = response?.body?.outcome === 'NOT_SUBMITTED' || [400,401,403,404,422,429].includes(response?.status);
-        throw error(response?.body?.msg || '商品分析暂不可用', mutating && !known ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED');
+        const known = ['unpaired','scope_required','authorization_required'].includes(response?.state)
+          || response?.body?.outcome === 'NOT_SUBMITTED' || [400,401,403,404,422,429].includes(response?.status);
+        const cause=error(response?.body?.msg || '商品分析暂不可用', mutating && !known ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED');
+        if(STAGES.includes(response?.body?.stage))cause.stage=response.body.stage;
+        if(/^[a-z0-9_]{1,100}$/u.test(response?.body?.failureCode||''))cause.failureCode=response.body.failureCode;
+        if(['TRANSPORT_UNKNOWN','RESPONSE_INVALID','REPORT_INVALID','PERSISTENCE_FAILED'].includes(response?.body?.failureKind))cause.failureKind=response.body.failureKind;
+        throw cause;
       }
       return response.body.data;
     }
     return {
       async readProductPreparationCapability(input) {
         const data = await send('capability', { binding: binding(input) });
-        if (!exact(data, ['available', 'reasonCode', 'providerFeeNotice']) || typeof data.available !== 'boolean'
+        if (!exact(data, ['available', 'reasonCode', 'providerFeeNotice'],['stagedAnalysis','stages']) || typeof data.available !== 'boolean'
+          ||data.stagedAnalysis!==undefined&&typeof data.stagedAnalysis!=='boolean'
+          ||data.stages!==undefined&&JSON.stringify(data.stages)!==JSON.stringify(STAGES)
           || !text(data.reasonCode, 100) || !text(data.providerFeeNotice)) throw error('商品分析能力回执无效');
         return { state: 'ready', capability: data };
       },
@@ -114,12 +155,12 @@
       async analyzeProductPreparation(input) {
         const normalized = normalizeRequest(input);
         if (normalized.executionMode === 'BYOK') throw error('自带 API 分析只能由扩展后台执行');
-        return { state: 'ready', analysis: validateAnalysis(await send('analyze', normalized, true), normalized) };
+        return { state: 'ready', analysis: validateStage(await send('analyze', normalized, true), normalized) };
       },
       async readProductPreparation(input) {
         const normalized = normalizeRequest(input), data = await send('read', normalized);
         if (data === null || data?.analysis === null) return { state: 'ready', analysis: null };
-        return { state: 'ready', analysis: validateAnalysis(data, normalized) };
+        return { state: 'ready', analysis: validateStage(data, normalized) };
       },
       async ingestProductPreparationCandidate(input) {
         if (!exact(input, ['analysisInput', 'report'])) throw error('自带 API 分析候选输入无效');
@@ -133,6 +174,7 @@
           || !input.selectedAttributeIds.length || input.selectedAttributeIds.length > 100
           || new Set(input.selectedAttributeIds).size !== input.selectedAttributeIds.length
           || !input.selectedAttributeIds.every(n => Number.isSafeInteger(n) && n > 0)) throw error('商品属性应用输入无效');
+        if(input.analysisInput.stage!==undefined&&input.analysisInput.stage!=='COPY')throw error('请先完成属性候选生成');
         const data = await send('apply', { ...input, binding: binding(input.binding), analysisInput: normalizeRequest(input.analysisInput) }, true);
         if (!exact(data, ['binding', 'selectedAttributeIds', 'replayed']) || !safe(data)
           || typeof data.replayed !== 'boolean' || JSON.stringify(data.selectedAttributeIds) !== JSON.stringify(input.selectedAttributeIds)
