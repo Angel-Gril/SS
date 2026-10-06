@@ -2,6 +2,16 @@
 
 ## 当前结果：默认入口已公开，原版图片交互继续对齐
 
+### 2026-10-06 `98f94f1e / 1.0.430` 工作台调度与 AI 入口双区公开发布
+
+- 最终修复提交 `98f94f1e2e1854238a54d8fc2b90e4a7b27e6b12` 已推送并双区标准部署、官网公开；U25/U26已闭合。COM/CN三服务和db/Redis健康，官网latest与四个Cloud/Local ZIP都绑定`1.0.430`。COM商品分析true/`qwen-vl-max`、CNfalse、BYOK generation/ingest/publish false，由实际配置读回确认。没有新Provider/Ozon请求或费用，没有读取供应商控制台。
+- 最终clean commit完整原生offline PASS，服务端`6960 passed`、真实PostgreSQL scope撤销7项及AI事务210项、迁移升级、lint/typecheck/Server/Web build/双包均通过。正式QA04 SHA `8701118eee1ebf2c2476b8d022a37f6f1f8676edc2f20a99276a6175a9e5fbe0`；producer明确核验服务端执行源码与425suite一致，保留原execution commit、审核和assignment/replay原件，未重新收费。此前中间preflight未完成记录保持原事实。
+- 两区候选从Git原始字节构建，使用keyring中现有ACTIVE Ed25519 `ss-erp-extension-release-2026-08-02-01`，未创建或轮换密钥；两份实际签名ZIP通过隔离MV3来源页、默认入口、透明外壳、来源拒绝和图片显示验收。Cloud ZIP SHA COM `40f55684d6c56bfdcf063689f8a5f863f384b3053be3d2f10d803fa9b09c71d7`、CN `4a46335bc75c4cd626e94c9a5b07ba21bd89cd3a7132c6c0bbc54119e6696ead`；Local ZIP SHA COM `b6b01eb5d469c2645f2193f4397ea859e802b28ec9f081e9f9199027877b5d12`、CN `ad1b69fd551e30149a56be7f3905b1da6f62b6f0fc82a71f0a1abfa9d4cb8c5d`。
+- 两区部署前和运行后backup/restore通过，COM144/CN143张表，临时恢复库已清理，deployment/runtime目录分离。初次external adapter的Git archive受Windows CRLF转换使gate与原始源码不同，标准部署正确拒绝并未切换current；逐文件与Git blob核对后，以原LF字节安装gate并将未激活release/gate移入私有证据目录，失败原件可恢复，无绕过比较。CN常规备份自动清理了一份超过七天且无部署证据引用的旧备份；本轮新备份仍保留。
+- 双区canonical VPS与REL04 canary PASS；canary SHA COM `521a6ba486c0fd8aa83839b2a332e73686b2676d88416f7def26f8845f4cf2dc`、CN `f7e19a85a9560de0d3b4f3bd0822f11d5505bb3db6173280f84224d56897e850`。原pilot owner/shop/三operation保持，仅由当前合法session读回更新准确期望，未扩大店铺权限；COM临时canary设备session由原owner清理，CN走no-shop暗态路径。
+- Website approval SHA COM `80be56a0492ce9180bd5cb1467d0d90c32fd86b9a7506e91470c62ed8790b384`、CN `03b42cd1a58fe5b3ea1334df4394c16f3f34bed08d4c67dd0d0aeeb920ff4565`；CAS严格绑定旧429approval和当前运行release封存包/签名。初次传入暂存候选路径被拒绝，无指针变化，修正实际运行路径后通过，未改产品owner。Google/Cloudflare两家公共DNS一致、原生固定公网TLS/大小/重定向验证和匿名完整Cloud/Local下载通过，distribution SHA COM `f287b0683d00371275f772a29908abff548571eff9b7fb1db4050dbacaa37007`、CN `e0b4e05e8ac60f28a14407d43c179d1c4fb798f7653e5f4835b2ee24843379c1`；final publication verifier均PASS。
+- 私有原件只在 `C:/Users/550W/AppData/Local/SS-ERP/private/release-98f94f1e-deploy430`、`release-98f94f1e-website` 与区域候选/签名目录。临时account会话及本机/远端token文件按本轮精确key清理，原用户浏览器未接管。本次验证关闭读取调度/连续入口问题；广泛真实商品AI输出质量与原工具所有功能100%一致仍不宣称通过。更新日志严格按Keep a Changelog将本轮条目从Unreleased转入公开发布日期。
+
 ### 2026-10-06 工作台读取竞态与 AI 入口修复，准备 `1.0.430`
 
 - [x] U25 读取调度：真实 bridge 行为新增四目标 RED→GREEN。editor 只读不占全局 mutation 锁，相同消息复用一个 Worker 请求；读调用等待原保存及其权威刷新，重复 projection 刷新共用一次读取。editor mutation 仍互斥，拒绝明确为 `NOT_SUBMITTED`；未知写入不重发、迟到读回和六字段 binding fence 保留。

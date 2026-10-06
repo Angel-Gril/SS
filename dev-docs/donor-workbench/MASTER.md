@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-06 `1.0.430` 工作台调度与 AI 入口已双区公开
+
+U25/U26 两项修复已发布（2/2），COM/CN 应用和公开 Cloud/Local 下载均绑定 `98f94f1e / 1.0.430`。完整发布门禁和匿名下载通过，COM分析保持开启、CN dark，Provider/Ozon/新费用均零；准确回执与限制见[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-06 工作台调度与连续分析入口修复
 
 当前新任务 U25/U26 两项本地验收完成（2/2），读取复用/等待、明确先决步骤和原候选恢复均有 owner 与隔离 Chrome 证据；准备 `1.0.430`，线上仍 `1.0.429`。唯一实现、证据和发布边界见[直接适配 owner](./direct-adaptation.md)。
@@ -54,7 +58,7 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `566f146b / 1.0.429`.
+COM/CN applications and public Cloud/Local downloads serve `98f94f1e / 1.0.430`.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads
 passed. Same-binding read failures stop automatically; explicit refresh recovers the

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-06 `98f94f1e / 1.0.430` 工作台调度与 AI 入口双区公开发布完成
+
+COM/CN 应用、官网 latest 和 Cloud/Local 下载均已切换到 `98f94f1e2e1854238a54d8fc2b90e4a7b27e6b12 / 1.0.430`。完整原生 offline/正式 QA04、签名 MV3、双区备份恢复/VPS/canary/approval/CAS、公共 DNS 和匿名完整下载均通过；COM AI 商品分析保持开启，CN dark。真实 Provider/Ozon 请求和新增费用均为零；当前证据和限制只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-06 工作台读取调度与自动 AI 入口修复，本地验收通过
 
 只读请求互斥、重复刷新互相作废、官方字段未等待读回即进入分析的根因已复现并修正；AI 入口接入同窗商品准备，已有候选先恢复。定向 owner 和隔离 Chrome 连续 AI/完整准备流程已通过，正在准备 `1.0.430` 候选；线上仍为 `566f146b / 1.0.429`。当前证据与发布边界只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
