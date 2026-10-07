@@ -46,6 +46,7 @@ import {
   type AiImageSuitePaidStoredAsset,
 } from '../services/ai-image-suite-paid-execution.js';
 import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-suite-output-normalizer.js';
+import {isDonorGpt2SuiteProvider,validDonorGpt2SuiteConfig,AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION} from '../services/ai-image-donor-gpt2-profile.js';
 import {
   aiImageSuiteProviderRequestDimensions,
   aiImageSuiteQuoteCurrency,
@@ -1149,6 +1150,7 @@ function frozenOperationContractValid(graph: LoadedExecutionGraph): boolean {
     return config.version === AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION;
   }
   const dimensions = aiImageSuiteProviderRequestDimensions(String(graph.suite.provider), String(graph.suite.model));
+  const donor = isDonorGpt2SuiteProvider(String(graph.suite.provider),String(graph.suite.model));
   if (graph.suite.provider === 'dashscope-wanx'
     && (!hasAdmittedWanxAiImageSuiteOperation(graph.job)
       || graph.reservation.currency !== 'CNY'
@@ -1164,10 +1166,10 @@ function frozenOperationContractValid(graph: LoadedExecutionGraph): boolean {
     && config.finalOutput?.profile === AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
     && config.finalOutput?.width === AI_IMAGE_SUITE_OUTPUT_WIDTH
     && config.finalOutput?.height === AI_IMAGE_SUITE_OUTPUT_HEIGHT
-    && config.finalOutput?.fit === 'contain'
+    && (donor ? validDonorGpt2SuiteConfig(config) : config.finalOutput?.fit === 'contain')
     && config.finalOutput?.background === '#ffffff'
     && config.finalOutput?.format === 'png'
-    && config.finalOutput?.normalizerVersion === AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
+    && config.finalOutput?.normalizerVersion === (donor ? AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION : AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION),
   );
 }
 
@@ -2172,7 +2174,7 @@ implements AiImageSuiteGenerationCoordinator {
         || actualCostCents > Number(graph.reservation.maximumCostMinor)
         || Number(graph.job.actualCostCents) !== actualCostCents
         || Number(graph.job.billedUnits) !== 1
-        || asset.metadata.normalizerVersion !== AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION
+        || asset.metadata.normalizerVersion !== (graph.job.operationConfig as any)?.finalOutput?.normalizerVersion
         || !/^[a-f0-9]{64}$/u.test(String(asset.metadata.normalizedSha256 || ''))
         || Number.isNaN(resultReceivedAt.getTime())
         || (metadataProviderJobId !== null && metadataProviderJobId !== graph.job.providerJobId)) {
@@ -2448,7 +2450,7 @@ implements AiImageSuiteGenerationCoordinator {
           || completion.providerResultReceivedWithoutIdentity !== !graph.job.providerJobId
           || rawMetadata?.version !== 'ai-image-suite-provider-output/v1'
           || rawMetadata?.sourceCaptureSnapshotId !== graph.suite.sourceCaptureSnapshotId
-          || rawMetadata?.normalizerVersion !== AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION
+          || rawMetadata?.normalizerVersion !== (graph.job.operationConfig as any)?.finalOutput?.normalizerVersion
           || rawMetadata?.normalizedSha256 !== asset.sha256
           || Number(rawMetadata?.actualCostCents) !== completion.actualCostCents
           || (rawMetadata?.providerJobId ?? null) !== (graph.job.providerJobId ?? null)))) {

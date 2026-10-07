@@ -1,4 +1,5 @@
 import { Queue, Worker } from 'bullmq';
+import {isDonorGpt2SuiteProvider} from '../services/ai-image-donor-gpt2-profile.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
@@ -164,8 +165,10 @@ export function resolveAiImageProvider(
     return createDashScopeWanxProvider(options);
   }
   if (provider === 'openai-images' || provider === 'custom') {
-    const operationReady = (operation: Parameters<AiImageProvider['generate']>[0]['operation']) => canRunAiImageProviderOperation({
-      capability, provider, model: config.model, baseUrl: config.baseUrl,
+    const operationReady = (operation: Parameters<AiImageProvider['generate']>[0]['operation']) =>
+      !(operation==='IMAGE_TO_IMAGE' && isDonorGpt2SuiteProvider(provider,config.model)) && canRunAiImageProviderOperation({
+      capability:(dependencies.resolveCapability || resolveAiImageProviderCapability)(provider,config.model,operation||'TEXT_TO_IMAGE'),
+      provider, model: config.model, baseUrl: config.baseUrl,
       operation: operation || 'TEXT_TO_IMAGE',
       inputTransport: !operation || operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
       resultMode: 'sync',

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {normalizeDonorGpt2ProviderOutput,AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION} from './ai-image-donor-gpt2-profile.js';
 import {
   normalizeAiImageSuiteProviderOutput,
   type NormalizedAiImageSuiteProviderOutput,
@@ -340,7 +341,9 @@ export async function executeAiImageSuitePaidProvider<T>(
       providerResultReceivedAt,
     });
     await dependencies.assertClaim();
-    normalized ||= await normalizeOutput({ buffer: raw.buffer, mimeType: raw.mimeType });
+    normalized ||= prepared.normalizerVersion === AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION
+      ? await normalizeDonorGpt2ProviderOutput({buffer:raw.buffer,mimeType:raw.mimeType})
+      : await normalizeOutput({ buffer: raw.buffer, mimeType: raw.mimeType });
     const output = await persistOutputs(input, raw, normalized, {
       providerJobId,
       actualCostCents,

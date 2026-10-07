@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildRuleBasedAiMediaPlanningArtifacts,
+  hashAiMediaPlanningJson,
   resolveRuleBasedAiMediaPlanningInput,
 } from '../services/ai-media-planning.js';
 import {
@@ -84,7 +85,79 @@ function provider(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function multiReferenceAuthority() {
+  const value = authority({ planPayload: {
+    compatibilityGroups: [{ groupKey: 'group-1', identitySignature: '{}', skuKeys: ['sku-1'] }],
+    slots: [slot('sku:sku-1:hero', { level: 'sku', key: 'sku-1' }, 'sku_hero'),
+      slot('group:group-1:scene', { level: 'compatibility_group', key: 'group-1' }, 'scene')],
+  } });
+  (value.inputSnapshot as any).candidates = [1, 2].map(index => ({
+    id: `media-${index}`, url: `https://source.example/${index}.png`, width: 900, height: 1200,
+    mimeType: 'image/png', role: 'product_main', skuKeys: ['sku-1'], contentHash: String(index).repeat(64),
+  }));
+  // The approved per-slot order is authoritative, rather than the order in
+  // the source candidate list or an alphabetic sort of candidate IDs.
+  (value.planPayload as any).slots[0].references = [reference('media-2'), reference('media-1')];
+  (value.planPayload as any).slots[1].references = [reference('media-1'), reference('media-2')];
+  return value;
+}
+
+function countProvider() {
+  return provider({ provider: 'custom', model: 'gpt-image-2-count', pricingVersion: 'donor-count-pricing/v1',
+    estimatedCostPerImageCents: 8, maximumCostPerImageCents: 8 });
+}
+
 describe('AI image suite preview', () => {
+  it('freezes the first approved reference for each count-alias SKU/group slot without changing the plan', () => {
+    const value = multiReferenceAuthority();
+    const original = structuredClone(value);
+    const preview = createAiImageSuitePreview(value, countProvider());
+    expect(value).toEqual(original);
+    expect(preview.slots.map(item => item.references.map(ref => ref.candidateId))).toEqual([['media-2'], ['media-1']]);
+    expect(preview.slots.map(item => item.ownership)).toEqual([
+      { level: 'sku', key: 'sku-1' }, { level: 'compatibility_group', key: 'group-1' },
+    ]);
+    for (const item of preview.slots) {
+      expect(item.slotSnapshot.references).toEqual([{ candidateId: item.references[0]!.candidateId,
+        evidenceIds: item.references[0]!.evidenceIds }]);
+      expect(item.referencesHash).toBe(hashAiMediaPlanningJson(item.references));
+      expect(item.slotHash).toBe(hashAiMediaPlanningJson(item.slotSnapshot));
+    }
+    expect(preview).toMatchObject({ planHash: value.planHash, itemCount: 2, maximumCostCents: 16 });
+    expect(createAiImageSuitePreview(value, countProvider())).toEqual(preview);
+  });
+
+  it('binds only the chosen reference bytes while a different approved first reference changes the count preview', () => {
+    const value = multiReferenceAuthority();
+    const original = createAiImageSuitePreview(value, countProvider());
+    const changedUnselectedSource = structuredClone(value);
+    // media-1 is the unused tail of the hero slot, but remains the chosen
+    // scene reference; therefore only the scene reference hash must change.
+    (changedUnselectedSource.inputSnapshot as any).candidates[0].contentHash = '9'.repeat(64);
+    const changedSource = createAiImageSuitePreview(changedUnselectedSource, countProvider());
+    expect(changedSource.slots[0]!.referencesHash).toBe(original.slots[0]!.referencesHash);
+    expect(changedSource.slots[1]!.referencesHash).not.toBe(original.slots[1]!.referencesHash);
+    const changedOrder = structuredClone(value);
+    (changedOrder.planPayload as any).slots[0].references.reverse();
+    const changedSelection = createAiImageSuitePreview(changedOrder, countProvider());
+    expect(changedSelection.slots[0]!.references[0]!.candidateId).toBe('media-1');
+    expect(changedSelection.slots[0]!.slotHash).not.toBe(original.slots[0]!.slotHash);
+    expect(changedSelection.previewHash).not.toBe(original.previewHash);
+  });
+
+  it('preserves all approved references for the ordinary multi-reference GPT2 profile', () => {
+    const value = multiReferenceAuthority();
+    const preview = createAiImageSuitePreview(value, provider({ provider: 'custom', model: 'gpt-image-2' }));
+    expect(preview.slots.map(item => item.references.map(ref => ref.candidateId)))
+      .toEqual([['media-2', 'media-1'], ['media-1', 'media-2']]);
+  });
+
+  it.each(['unknown', 'duplicate'])('validates even an unselected %s plan reference before freezing the single-reference subset', reason => {
+    const value = multiReferenceAuthority();
+    (value.planPayload as any).slots[0].references[1] = reference(reason === 'unknown' ? 'outside-source' : 'media-2');
+    expect(() => createAiImageSuitePreview(value, countProvider())).toThrow(reason === 'unknown' ? /frozen input/u : /duplicate references/u);
+  });
+
   it('previews exactly one hero and seven gallery jobs with bounded maximum cost', () => {
     const preview = createAiImageSuitePreview(authority(), provider());
 

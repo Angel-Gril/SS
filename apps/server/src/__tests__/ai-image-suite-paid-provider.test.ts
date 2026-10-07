@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveAiImageProviderCapability, type AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
+import { AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION, createDonorGpt2FullFrameConfig } from '../services/ai-image-donor-gpt2-profile.js';
 import type {
   OpenAiImageEditProviderOptions,
   OpenAiImageEditRequest,
@@ -164,6 +165,11 @@ function validInput(
           format: 'png',
           normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
         },
+        ...(activeSettings.provider === 'custom' && ['gpt-image-2','gpt-image-2-count'].includes(activeSettings.model) ? {
+          requestProfile: createDonorGpt2FullFrameConfig().requestProfile,
+          providerRequest: createDonorGpt2FullFrameConfig().providerRequest,
+          finalOutput: createDonorGpt2FullFrameConfig().finalOutput,
+        } : {}),
       },
     },
   };
@@ -183,6 +189,80 @@ function paidDependencies(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AI image suite paid Provider preparation', () => {
+  it('refuses a rotated count-relay credential before creating a Provider or sending its saved command',async()=>{
+    const active=settings({provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',
+      credentialRevision:{recordId:'fixture-count-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}});
+    const input=validInput(active,resolveAiImageProviderCapability(active.provider,active.model)!);
+    const createOpenAiProvider=vi.fn();const prepared=await prepareAiImageSuitePaidProviderExecution(input,{loadSettings:async()=>active,
+      loadInputBuffer:async()=>referencePng,createOpenAiProvider});
+    active.credentialRevision={...active.credentialRevision!,revision:2};
+    await expect(prepared.execute(async()=>undefined)).rejects.toMatchObject({code:'SUITE_PROVIDER_RUNTIME_CHANGED'});
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+  });
+  const donorSettings = () => settings({ provider: 'custom', model: 'gpt-image-2', baseUrl: 'https://configured-provider.example/v1' });
+  const donorCapability = (evidenceLevel: AiImageProviderCapability['evidenceLevel'] = 'sandbox-verified') => capability(evidenceLevel, {
+    provider: 'custom', model: 'gpt-image-2', operations: ['IMAGE_TO_IMAGE'], supportsMask: false,
+    ...(evidenceLevel === 'sandbox-verified' ? { sandboxEvidence: [{
+      endpointSha256: aiImageProviderEndpointSha256('custom', donorSettings().baseUrl),
+      operation: 'IMAGE_TO_IMAGE', inputTransport: 'multipart', resultMode: 'sync',
+    }] } : {}),
+  });
+
+  it('keeps donor GPT2 dark under the registered adapter-only capability before source reads or Provider creation', async () => {
+    const activeSettings = donorSettings();
+    const sourceRead = vi.fn();
+    const createOpenAiProvider = vi.fn();
+    await expect(prepareAiImageSuitePaidProviderExecution(validInput(activeSettings, donorCapability()), {
+      loadSettings: async () => activeSettings, loadInputBuffer: sourceRead, createOpenAiProvider,
+    })).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RUNTIME_UNAVAILABLE' });
+    expect(sourceRead).not.toHaveBeenCalled();
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+  });
+
+  it('preserves the frozen donor source bytes and reference shape without pre-padding its frame', async () => {
+    const activeSettings = donorSettings();
+    const activeCapability = donorCapability();
+    const input = validInput(activeSettings, activeCapability);
+    const edit = vi.fn(async (_request: OpenAiImageEditRequest) => ({ images: [{ buffer: referencePng, mimeType: 'image/png' }], actualCostCents: 8 }));
+    const createOpenAiProvider = vi.fn(() => ({ name: 'donor-image-edits', edit }));
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => activeSettings, resolveCapability: () => activeCapability,
+      loadInputBuffer: async () => referencePng, createOpenAiProvider,
+    });
+    expect(prepared.normalizerVersion).toBe(AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION);
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+    await prepared.execute(async () => undefined);
+    expect(createOpenAiProvider).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: activeSettings.baseUrl, model: 'gpt-image-2', costPerImageCents: 8,
+    }));
+    const request = edit.mock.calls[0]![0];
+    expect(request).toMatchObject({ operation: 'IMAGE_TO_IMAGE', width: 1008, height: 1344, model: 'gpt-image-2', mask: null });
+    expect(request.images[0]!.buffer).toBe(referencePng);
+    expect(await sharp(request.images[0]!.buffer).metadata()).toMatchObject({ width: 3, height: 2 });
+    expect(inputAssets(input)[0]!.sha256).toBe(createHash('sha256').update(referencePng).digest('hex'));
+    expect(input.job.operationConfig).not.toHaveProperty('referenceCanvas');
+  });
+
+  it.each([
+    ['request dimensions', (config: any) => { config.providerRequest.width = 1024; }],
+    ['quality', (config: any) => { config.providerRequest.quality = 'auto'; }],
+    ['normalizer version', (config: any) => { config.finalOutput.normalizerVersion = AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION; }],
+    ['padding recipe', (config: any) => { config.referenceCanvas = { width: 768, height: 1024 }; }],
+    ['count', (config: any) => { config.providerRequest.count = 2; }],
+  ])('rejects a changed frozen donor %s before loading bytes or constructing the Provider', async (_label, mutate) => {
+    const activeSettings = donorSettings();
+    const activeCapability = donorCapability();
+    const input = validInput(activeSettings, activeCapability);
+    mutate(input.job.operationConfig);
+    const loadInputBuffer = vi.fn();
+    const createOpenAiProvider = vi.fn();
+    await expect(prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => activeSettings, resolveCapability: () => activeCapability, loadInputBuffer, createOpenAiProvider,
+    })).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RUNTIME_CHANGED' });
+    expect(loadInputBuffer).not.toHaveBeenCalled();
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+  });
+
   it('uses Wanx single-reference transport and read-only recovery with the frozen quote', async () => {
     const source = await sharp({ create: { width: 512, height: 512, channels: 3, background: 'white' } }).png().toBuffer();
     const activeSettings = settings({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',

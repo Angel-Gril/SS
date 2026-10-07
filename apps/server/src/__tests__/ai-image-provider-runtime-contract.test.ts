@@ -8,6 +8,14 @@ import {
 } from '../services/ai-image-provider-runtime-contract.js';
 
 describe('AI image Provider runtime contract', () => {
+  it('pins the selected donor relay credential revision without freezing the API key',()=>{
+    const donor={provider:'custom',baseUrl:'https://ai.big-model-api.top/v1',model:'gpt-image-2-count',apiKey:'private-fixture-key',costPerImageCents:8,
+      credentialRevision:{recordId:'fixture-donor-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}};
+    const shape={count:1,width:1008,height:1344};const frozen=createAiImageProviderRuntimeContract(donor,shape);
+    expect(frozen).toMatchObject({contractVersion:'ai-image-provider-runtime/v2',credentialRevision:donor.credentialRevision});
+    expect(JSON.stringify(frozen)).not.toContain(donor.apiKey);
+    expect(()=>assertAiImageProviderRuntimeContract(frozen,{...donor,credentialRevision:{...donor.credentialRevision,revision:2}},{...shape,estimatedCostCents:8})).toThrow();
+  });
   const config = {
     provider: 'openai-images',
     baseUrl: 'https://api.openai.com/v1/',

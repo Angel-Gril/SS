@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import { AI_IMAGE_WANX21_EDIT_PROFILE } from './ai-image-wanx-edit-profile.js';
+import type {AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION} from './ai-image-donor-gpt2-profile.js';
 import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
@@ -59,7 +60,7 @@ export interface NormalizedAiImageSuiteProviderOutput {
   width: typeof AI_IMAGE_SUITE_OUTPUT_WIDTH;
   height: typeof AI_IMAGE_SUITE_OUTPUT_HEIGHT;
   sha256: string;
-  normalizerVersion: typeof AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION;
+  normalizerVersion: typeof AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION | typeof AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION;
   providerOutput: { width: number; height: number };
 }
 

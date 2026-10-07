@@ -1,5 +1,37 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 发布前 owner 接线收口，准备 `1.0.435`
+
+- 用户明确要求提交/部署，沿用已有推送、区域签名和双区部署授权；版本候选435，官网日志仍按Keep a Changelog保留Unreleased直到公开。
+- 独立审查发现并收口：新exact GPT2 edit能力不再遮蔽custom/*文字生图（按operation选择原fallback）；count普通I2I服务/通用Worker在job/POST前明确拒绝，避免用旧尺寸/缺少high参数冒充已验donor profile；新count正常批准计划含多参考时按该Provider已验单参考能力取原排序首图，未选图仍完整校验且原plan不改。
+- stable owner实际RED→GREEN：text/generic3项失败和worker2项失败→关联98项通过；count preview2项503→4套69项通过。两个SKU/group真实preview派生仅绑定首图hash，多参考普通gpt-image-2仍保留全部；没有新Provider请求/费用。
+- 本次部署代码将保持当前生产Provider/Key/报价和COM分析/CN dark。用户提供的是测试Key，部署不自动把它设为生产默认；新模型默认启用与官网指针是独立配置/发布结果，不能以代码部署冒充已启用。
+
+## 2026-10-08 原精铺 `gpt-image-2-count` 真实质量对照通过（本地修复，未部署）
+
+- [x] Q1 白条根因：原始1024方图没有白条，旧contain白底补到900×1200会增加上下各150px；冻结原件与实际像素相符。
+- [x] Q2 原版模型/尺寸/传参适配：用户指定的count别名严格绑定`https://ai.big-model-api.top/v1`，原1008×1344/high/multipart参考图不改字节，成品全画幅等比缩放；服务器可信槽位编辑要求前置，旧任务保留冻结版本恢复。
+- [x] Q3 真实质量：用户提供测试Key并沿用不限测试费用授权，在COM VPS独立目录执行主图与场景各一次。API models实读200且包含完整count别名；两个原始响应均为1008×1344，安全解码后900×1200，两个上下色条检测均0行，每次POST=1/download=1，没有未知重试。
+- 主图目视：移除木纹柜台、手及旁边来源物体，生成中性棚拍背景和自然阴影；透明收纳盒轮廓、两个把手和底部纹理可见，无新增文字、水印。场景目视：背景改为有纹理的暖灰台面/墙面及侧光、叶影；原手与邻近来源收纳盒仍可见，没有将背景道具声明为包装内容，未生成用途/性能文案。两图有明确背景/光照差异，商品相似性仅为目视判断，不代表真实材质、尺寸或全部商品创作质量已验证。
+- 本地capability仅晋升该精确endpoint、完整model别名的单参考`IMAGE_TO_IMAGE/multipart/sync`；其他gpt-image-2服务仍adapter-characterized，多参考/FULL_EDIT/INPAINT不从本轮推定。线上模型/Key/feature flags未切换，新公开下载未发布。该新count profile沿用`ai_image_api_key`非密record/revision元数据，冻结runtime v2，排队期间轮换拒绝后再发包；不把Key或其hash写入任务。
+- 验证：真实原生adapter/单POST guard、原始/归一化图片、目视与像素对照均保存。源码关联719项通过（91未启用数据库用例不作为数据库验收）、凭据修订/准入后续4套71项通过，TypeScript/ESLint通过；本机PostgreSQL13项原付费执行/恢复回归已经通过并清理隔离schema。后续局部元数据接线未产生新的Provider/Ozon请求。
+- 本轮GPT2仅2次真实POST，供应商测试Key计费，未查询控制台、费用/额度或账单，最终实扣未读取；ERP reservation/charge/assignment、Ozon及生产配置写入均0。正常ERP全链suite/正式发布证据不由这些隔离校准原件代替。
+- Windows本机保留仅当前用户可读、DPAPI加密的测试凭据，未提交；VPS测试Key经SSH加密stdin进入进程内存，未作为参数、文件或日志保存。代理本机DNS返回保留地址时被原网络owner拒绝，后改用VPS正常公网解析，未弱化地址校验或生产部署。
+- 私有原件：`suite-quality-434/gpt2-count-20261007184017-422290d3`；`quality-review.json` SHA `07c7d60682b076e461ea3192076ccd50159fad6e696a1659deef81c1f9cb87f7`。对照`quality-comparison.png`含来源、旧Wanx白底成品、新主图和新场景；不进入Git。两个final SHA分别`33ebd85d908c0736cad1e1ae7b43dba3bb9321ce08de5d3d4cab231e175abb02`、`571457aacd0f5e5f03030a154fee136bf1292b7537dd8b9445fdfd323cbe6248`。
+- 当前工作树未提交、推送、签名或部署，官网和应用仍`14985551 / 1.0.434`。这些记录表示本地质量修复验收完成，不表示生产默认Provider已替换或所有donor功能已一致。
+
+## 2026-10-08 套图白边与场景差异诊断、原精铺 GPT2 适配（未发布）
+
+- 用户要求定位并修复白边及场景变化小。当前真实 suite 原件 `cmuy2941d002y5o4fhkmlca95` 的两个 `AI_PROVIDER_OUTPUT` 均为1024×1024；`AI_GENERATED` 为900×1200，冻结配置明确 `fit=contain/background=#ffffff`，上下各150px白条由后处理增加，源图/原Provider方图不存在该条。白底contain是此前为避免裁坏商品而显式测试的旧行为，并非CSS或下载显示问题。
+- 实际冻结主图/场景提示词610/603字符，JSON既被声明为非指令，又承载槽位构图要求；两槽缺少直接编辑动词。新编译器将服务器可信的槽位要求放在顶层，商品事实继续隔离在JSON，敏感用途/功能事实不足时只生成中性展示候选，不猜产品功能或改品牌/材质/数量。
+- 第一候选（明确动作+768×1024预置竖画布）两次真实Wanx请求均技术成功，但照抄背景与输入白条。官方API文档确认description_edit可用strength默认0.5，单变量0.85样本仍失败；68字浅蓝背景诊断只改动小块背景，仍有白条并改变局部外观。共4次独立Provider POST，均为已授权测试，每次报价CNY0.14、累计预算CNY0.56；未读取Provider控制台或账单，不宣称供应商最终实扣。没有新ERP suite/reservation/assignment、Ozon写入或生产配置修改，失败样本全部保留。未通过的Wanx竖画布/strength方案已从当前实现移除，旧Wanx物化、transport及normalizer恢复合同保留。
+- 用户随后明确允许按原精铺模型/接口做隔离适配，并提供 `https://ai.big-model-api.top / gpt-image-2-count`。donor代码实际默认`gpt-image-2`、1008×1344、3:4、quality=high，使用multipart/images/edits原图参考；这与当前托管Wanx单参考指令编辑不是同一模型或尺寸通道。没有读取/复制原扩展已保存的密钥。
+- 新owner `ai-image-donor-gpt2-profile.ts` 固定1008×1344/high/单输出/1–16参考，显式保留该域名上的count别名；其他域名不能使用该别名。复用服务端网络、响应、密钥与未知结果owner，multipart参数按donor的实际调用（model/prompt/n/size/quality/response_format/image或image[]），不新增规划模型请求。严格单帧/MIME/magic/20MiB/16Mpixel/旋转校验后等比缩为900×1200，不补白边、不裁切或拉伸；原参考图hash/字节不改。
+- provider-runtime/hash、提示词freeze、child materialization、paid adapter/execution和恢复读取均消费新冻结profile；仅新custom GPT2通道选择full-frame normalizer，旧Wanx/OAI任务仍按原版本恢复。能力目录当前为adapter-characterized，精确endpoint真实证据缺失时生产拒绝，不能仅凭model名晋升或切换默认。单张金额、reservation/settlement和幂等规则仍由既有owner负责。
+- T2：可信提示词、旧v1冻结回放、GPT2 profile/adapter和新count别名分别有RED→GREEN；真实旧owner对新GPT2行为4项失败，当前关联754项通过（91项未启用数据库用例不计作数据库验收），别名/域名后续27项定向通过，TypeScript/ESLint通过。真实Sharp像素、原图字节、profile漂移拒绝和默认未晋升零Provider均验证；本机PostgreSQL独立schema付费执行/原任务恢复13项通过、0 skipped，隔离schema已清理。
+- 已准备Windows隐藏输入/当前用户DPAPI加密的私有测试Key录入脚本，域名匿名models返回401；GPT2真实质量测试仍等待该服务凭据。旧ERP picpi测试凭据只做过GET models可用性观察，未转发到新域名、未产生GPT2 POST，也不代表用户指定接口可用。当前实现未提交、推送、签名或部署，线上和官网仍`14985551 / 1.0.434`。
+- 私有原件在 `suite-quality-434` 与对应VPS隔离目录；源码回归原件在ignored `build/quality-fix-suite-prompts/`。它们不是正式QA04/新发布suite证据，不改写先前发布原件。
+
 ## 2026-10-07 `14985551 / 1.0.434` fresh suite 与双区官网公开发布完成
 
 - 用户授权 Agent 自行准备浏览器、真实套图与官网公开发布。实际未修改 COM 签名 ZIP 在独立 headed Chrome 9444 加载，manifest/Worker 确认为 Cloud `1.0.434`；正常配对仅 DOTH 与原四 scopes。真实 1688 收纳盒采集后创建新隔离草稿 `draft-b476456b-bf82-4efb-a8c6-e59afc59024e` 和两槽计划，实际 Web launcher/扩展 client 物理按钮执行 START→CONTINUE，没有手工写 command/binding 或复用撤销设备秘密。

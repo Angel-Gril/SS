@@ -21,6 +21,7 @@ import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
 import { assertWanxHostedEditPrompt, isWanxHostedEdit } from './ai-image-edit-provider-contract.js';
 import { assertWanxImageToImageInput, WANX_IMAGE_TO_IMAGE_PROMPT_PROFILE } from './ai-image-wanx-image-to-image.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
+import {isDonorGpt2SuiteProvider} from './ai-image-donor-gpt2-profile.js';
 import {
   parseAiImageTranslationRuntime,
   type AiImageTranslationRuntimeContract,
@@ -663,6 +664,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         provider: AI_MEDIA_WORKFLOW_PROVIDER,
         model: AI_MEDIA_WORKFLOW_MODEL,
       }, { count: input.count, width: input.width, height: input.height });
+      if (isDonorGpt2SuiteProvider(execution.provider,execution.model)) {
+        throw new AiMediaWorkflowError('PROVIDER_NOT_READY','The donor GPT2 profile requires its server-owned suite request contract');
+      }
       try {
         const capability = assertAiMediaCapability({
           provider: execution.provider,

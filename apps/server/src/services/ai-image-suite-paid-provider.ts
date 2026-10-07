@@ -4,6 +4,7 @@ import { getAiImageOperationProviderRuntimeConfig } from './ai-image-operation-r
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import {
   createOpenAiImageEditProvider,
+  createDonorGptImage2EditProvider,
   MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES,
   type BeforeAiImageProviderDispatch,
   type OpenAiImageEditProvider,
@@ -35,8 +36,10 @@ import {
   AiImageProviderRuntimeContractError,
   assertAiImageProviderRuntimeContract,
   bindAiImageProviderExecutionConfig,
+  requiresAiImageProviderCredentialRevision,
 } from './ai-image-provider-runtime-contract.js';
 import type { AiImageProviderResult } from './ai-image-jobs.js';
+import {isDonorGpt2SuiteProvider,validDonorGpt2SuiteConfig,AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION} from './ai-image-donor-gpt2-profile.js';
 
 const MAX_REFERENCE_COUNT = 16;
 const MAX_PROMPT_BYTES = 100_000;
@@ -93,6 +96,7 @@ export interface PrepareAiImageSuitePaidProviderInput {
 export interface PreparedAiImageSuitePaidProviderExecution {
   evidenceLevel: AiMediaCapabilityEvidence;
   providerRequest?: { width: number; height: number };
+  normalizerVersion?: typeof AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION;
   recover?(providerJobId: string, beforeTaskLookup: BeforeAiImageProviderDispatch): Promise<AiProviderTaskLookupResult>;
   execute(
     onProviderAccepted: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>,
@@ -169,6 +173,7 @@ function assertOperationConfig(
   const request = record(config?.providerRequest);
   const finalOutput = record(config?.finalOutput);
   const dimensions = aiImageSuiteProviderRequestDimensions(settings.provider, settings.model);
+  const donor = isDonorGpt2SuiteProvider(settings.provider,settings.model);
   if (!config
     || config.version !== AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION
     || config.outputProfile !== AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
@@ -182,10 +187,10 @@ function assertOperationConfig(
     || finalOutput.profile !== AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
     || finalOutput.width !== AI_IMAGE_SUITE_OUTPUT_WIDTH
     || finalOutput.height !== AI_IMAGE_SUITE_OUTPUT_HEIGHT
-    || finalOutput.fit !== 'contain'
+    || (donor ? !validDonorGpt2SuiteConfig(config) : finalOutput.fit !== 'contain')
     || finalOutput.background !== '#ffffff'
     || finalOutput.format !== 'png'
-    || finalOutput.normalizerVersion !== AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION) {
+    || finalOutput.normalizerVersion !== (donor ? AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION : AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION)) {
     throw new AiImageSuitePaidProviderError(
       'SUITE_PROVIDER_RUNTIME_CHANGED',
       'AI image suite paid operation contract is invalid',
@@ -255,11 +260,12 @@ export async function prepareAiImageSuitePaidProviderExecution(
   dependencies: Dependencies = {},
 ): Promise<PreparedAiImageSuitePaidProviderExecution> {
   const wanx = isWanxAiImageSuiteProvider(input.job.provider, input.job.model);
+  const credentialBound = requiresAiImageProviderCredentialRevision(input.job.provider,input.job.model);
   const frozenTaskId = input.job.providerJobId || null;
   const loadBoundSettings = async () => {
     const active = await (dependencies.loadSettings || defaultSettings)();
-    if (!wanx) return active;
-    if (active.currency !== 'CNY') {
+    if (!credentialBound) return active;
+    if (wanx && active.currency !== 'CNY') {
       throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_RUNTIME_CHANGED', 'Wanx suite currency changed');
     }
     try {
@@ -268,7 +274,7 @@ export async function prepareAiImageSuitePaidProviderExecution(
         estimatedCostCents: input.job.estimatedCostCents,
       });
     } catch {
-      throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_RUNTIME_CHANGED', 'Wanx suite runtime or credential revision changed');
+      throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_RUNTIME_CHANGED', 'AI image suite runtime or credential revision changed');
     }
   };
   const settings = await loadBoundSettings();
@@ -363,6 +369,7 @@ export async function prepareAiImageSuitePaidProviderExecution(
 
   return {
     evidenceLevel: snapshot.capability!.evidenceLevel,
+    ...(isDonorGpt2SuiteProvider(settings.provider,settings.model) ? {normalizerVersion:AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION} : {}),
     ...(wanx ? { providerRequest: dimensions, async recover(providerJobId: string, beforeTaskLookup: BeforeAiImageProviderDispatch) {
       if (!frozenTaskId || providerJobId !== frozenTaskId) {
         throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_INPUT_MISMATCH', 'Recovery must query the original accepted suite task');
@@ -378,9 +385,11 @@ export async function prepareAiImageSuitePaidProviderExecution(
       if (frozenTaskId) {
         throw new AiImageSuitePaidProviderError('SUITE_PROVIDER_INPUT_MISMATCH', 'An accepted suite task may only be recovered, never submitted again');
       }
-      const active = wanx ? await loadBoundSettings() : settings;
+      const active = credentialBound ? await loadBoundSettings() : settings;
       const createProvider = wanx
         ? dependencies.createWanxProvider || createDashScopeWanx21ImageEditProvider
+        : isDonorGpt2SuiteProvider(active.provider,active.model)
+          ? dependencies.createOpenAiProvider || createDonorGptImage2EditProvider
         : dependencies.createOpenAiProvider || createOpenAiImageEditProvider;
       const provider = createProvider({
         baseUrl: active.baseUrl,
@@ -388,7 +397,7 @@ export async function prepareAiImageSuitePaidProviderExecution(
         model: active.model,
         costPerImageCents: active.costPerImageCents,
         onProviderJobCreated: onProviderAccepted,
-        beforeProviderDispatch: wanx
+        beforeProviderDispatch: credentialBound
           ? async () => { await loadBoundSettings(); await beforeProviderDispatch?.(); }
           : beforeProviderDispatch,
       });

@@ -205,9 +205,10 @@ function textHash(value: string) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}, wanx = false): CommitAiImageSuitePromptSetInput {
+function commitInput(overrides: Partial<CommitAiImageSuitePromptSetInput> = {}, wanx = false, legacy = false): CommitAiImageSuitePromptSetInput {
   const templateKey = wanx ? 'ai_media_suite_generation_wanx' : 'image-suite-generation.base';
-  const compilerVersion = wanx ? 'ai-image-suite-prompt-compiler-wanx/v1' as const : AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION;
+  const compilerVersion = wanx ? legacy ? 'ai-image-suite-prompt-compiler-wanx/v1' as const
+    : 'ai-image-suite-prompt-compiler-wanx/v2' as const : AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION;
   const provider = wanx ? 'dashscope-wanx' : 'fake';
   const model = wanx ? 'wanx2.1-imageedit' : 'fake-image-suite-v1';
   const variablesSnapshot = {
@@ -434,6 +435,26 @@ function clientFixture(options: { latestId?: string; transactionFailure?: string
 }
 
 describe('Prisma AI image suite Prompt repository', () => {
+  it('replays authenticated v1 frozen rows but rejects a newly submitted legacy compiler', async () => {
+    const fixture = clientFixture(), current = commitInput({}, true), legacy = commitInput({}, true, true);
+    Object.assign(fixture.suite, { provider: current.provider, model: current.model });
+    fixture.tx.aiPromptRelease.findFirst.mockResolvedValue({ id: 'release-1', templateKey: current.templateKey, revisionId: 'revision-1', sequence: 1 });
+    fixture.tx.aiPromptRevision.findFirst.mockResolvedValue({ id: 'revision-1', templateKey: current.templateKey, status: 'PUBLISHED', checksum: templateChecksum });
+    const repository = new PrismaAiImageSuitePromptRepository(fixture.client);
+    await expect(repository.commitPromptSet(legacy)).resolves.toMatchObject({ kind: 'conflict' });
+    await repository.commitPromptSet(current);
+    Object.assign(fixture.promptSet, { compilerVersion: legacy.compilerVersion, promptSetHash: legacy.promptSetHash });
+    Object.assign(fixture.slotPrompts[0], { compilerVersion: legacy.compilerVersion, bindingHash: legacy.prompts[0]!.bindingHash });
+    for (const event of fixture.events.values()) {
+      Object.assign(event.payload, { compilerVersion: legacy.compilerVersion, promptSetHash: legacy.promptSetHash,
+        slotPromptHashes: [legacy.prompts[0]!.bindingHash] });
+      event.payloadHash = hashAiMediaPlanningJson(event.payload);
+    }
+    await expect(repository.findCommitReplay({ suiteId: legacy.suiteId, ownerUserId: legacy.ownerUserId,
+      actorUserId: legacy.actorUserId, expectedRevision: 2, operationKey: legacy.operationKey }))
+      .resolves.toMatchObject({ kind: 'existing', promptSetHash: legacy.promptSetHash });
+  });
+
   it('persists and replays the separately versioned Wanx compiler with its joined negative constraints', async () => {
     const fixture = clientFixture();
     const input = commitInput({}, true);

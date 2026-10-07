@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
+import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
+import { createDonorGpt2FullFrameConfig } from '../services/ai-image-donor-gpt2-profile.js';
 import {
   AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
   AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
@@ -45,6 +47,53 @@ const exactCapability = (evidenceLevel: AiImageProviderCapability['evidenceLevel
 }) satisfies AiImageProviderCapability;
 
 describe('AI image suite Provider runtime snapshot', () => {
+  it('admits only the live verified single-reference count alias and rejects another origin',()=>{
+    const correct=settings({provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',
+      credentialRevision:{recordId:'fixture-donor-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}});
+    expect(createAiImageSuiteProviderRuntimeSnapshot(correct)).toMatchObject({executionReady:true,reasonCode:'READY',capability:{maxReferences:1}});
+    expect(createAiImageSuiteProviderRuntimeSnapshot({...correct,baseUrl:'https://wrong.fixture.example/v1'}))
+      .toMatchObject({executionReady:false,reasonCode:'PROVIDER_CONFIG_INVALID'});
+  });
+  const donorSettings = (overrides: Record<string, unknown> = {}) => settings({
+    provider: 'custom', model: 'gpt-image-2', baseUrl: 'https://configured-provider.example/v1', ...overrides,
+  });
+  const donorCapability = (): AiImageProviderCapability => ({
+    ...exactCapability('sandbox-verified'), provider: 'custom', model: 'gpt-image-2', operations: ['IMAGE_TO_IMAGE'],
+    supportsMask: false, sandboxEvidence: [{
+      endpointSha256: aiImageProviderEndpointSha256('custom', donorSettings().baseUrl),
+      operation: 'IMAGE_TO_IMAGE' as const, inputTransport: 'multipart' as const, resultMode: 'sync' as const,
+    }],
+  });
+
+  it('keeps the registered donor GPT2 adapter dark while exposing the actual portrait request and a secret-free preview', () => {
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(donorSettings(), { nodeEnv: 'production' });
+    expect(snapshot).toMatchObject({ configured: true, executionReady: false, testOnly: true,
+      reasonCode: 'PROVIDER_EVIDENCE_UNVERIFIED',
+      capability: { provider: 'custom', model: 'gpt-image-2', evidenceLevel: 'adapter-characterized', maxReferences: 16 },
+      providerRuntime: { width: 1008, height: 1344, imageCount: 1 },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('secret-key-must-not-leak');
+    expect(JSON.stringify(snapshot)).not.toContain(donorSettings().baseUrl);
+  });
+
+  it('binds injected exact donor endpoint evidence to the full-frame recipe and one-image quote', () => {
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(donorSettings(), { resolveCapability: () => donorCapability() });
+    expect(snapshot).toMatchObject({ executionReady: true, testOnly: false, reasonCode: 'READY',
+      providerRuntime: { width: 1008, height: 1344, imageCount: 1, unitCostCents: 8, maximumCostCents: 8 },
+    });
+    expect(snapshot.providerConfig!.providerConfigHash).toBe(hashAiMediaPlanningJson({
+      version: 'ai-image-suite-provider-runtime/v1', providerRuntime: snapshot.providerRuntime,
+      finalOutput: createDonorGpt2FullFrameConfig().finalOutput,
+      concurrencyLimit: 2,
+    }));
+  });
+
+  it('rejects donor endpoint drift instead of inheriting evidence from another vendor', () => {
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(donorSettings({ baseUrl: 'https://another-provider.example/v1' }),
+      { resolveCapability: () => donorCapability() });
+    expect(snapshot).toMatchObject({ executionReady: false, testOnly: true, reasonCode: 'PROVIDER_EVIDENCE_UNVERIFIED' });
+  });
+
   const wanxSettings = (overrides: Record<string, unknown> = {}) => settings({
     provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
     baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY',

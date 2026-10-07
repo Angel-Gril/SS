@@ -18,6 +18,15 @@ const allowPaidDispatch = async () => ({
 });
 
 describe('AI image BullMQ worker boundary', () => {
+  it.each(['gpt-image-2','gpt-image-2-count'])('preserves %s legacy text mode but rejects generic edit before Provider POST',async model=>{
+    const calls=vi.fn(async()=>({images:[],actualCostCents:0}));
+    const provider=resolveAiImageProvider('custom',{provider:'custom',model,baseUrl:'https://ai.big-model-api.top/v1',apiKey:'fixture-key',costPerImageCents:8},undefined,{
+      createOpenAiGenerationProvider:()=>({name:'fixture-text',generate:calls}),createOpenAiEditProvider:()=>({name:'fixture-edit',edit:calls})} as any);
+    const text={operation:'TEXT_TO_IMAGE' as const,prompt:'fixture',negativePrompt:null,count:1,width:1024,height:1024,model};
+    await expect(provider.generate(text)).resolves.toMatchObject({images:[]});
+    await expect(provider.generate({...text,operation:'IMAGE_TO_IMAGE',inputImages:[]})).rejects.toMatchObject({code:'PROVIDER_NOT_READY'});
+    expect(calls).toHaveBeenCalledOnce();
+  });
   it.each([
     { provider: 'openai-images', model: 'gpt-image-1', baseUrl: 'https://api.openai.com/v1' },
     { provider: 'dashscope-wanx', model: 'wanx2.1-t2i-turbo', baseUrl: 'https://dashscope.aliyuncs.com/api/v1' },

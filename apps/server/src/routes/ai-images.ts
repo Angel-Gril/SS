@@ -1517,7 +1517,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!['fake', 'dashscope-wanx', 'openai-images', 'custom'].includes(settings.provider)) {
       throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image provider adapter is not enabled yet');
     }
-    const generationCapability = resolveProviderCapability(settings.provider, settings.model);
+    const generationCapability = resolveProviderCapability(settings.provider, settings.model,'TEXT_TO_IMAGE');
     if (settings.provider !== 'fake' && (
       !canRunAiImageProviderOperation({
         capability: generationCapability,

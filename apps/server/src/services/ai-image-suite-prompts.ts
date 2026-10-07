@@ -12,16 +12,23 @@ import {
 } from './ai-prompt-templates.js';
 import { isWanxAiImageSuiteProvider } from './ai-image-suite-provider-runtime.js';
 import { compileWanxImageToImagePrompt } from './ai-image-wanx-image-to-image.js';
+import {isDonorGpt2SuiteProvider} from './ai-image-donor-gpt2-profile.js';
 
 export { AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY } from './ai-prompt-template-registry.js';
 
 export const AI_IMAGE_SUITE_PROMPT_SET_VERSION = 'ai-image-suite-prompt-set/v1';
 export const AI_IMAGE_SUITE_SLOT_PROMPT_VERSION = 'ai-image-suite-slot-prompt/v1';
 export const AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION = 'ai-image-suite-prompt-compiler/v1';
-export const AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION = 'ai-image-suite-prompt-compiler-wanx/v1';
+export const AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION = 'ai-image-suite-prompt-compiler-wanx/v2';
+export const AI_IMAGE_SUITE_DONOR_GPT2_PROMPT_COMPILER_VERSION = 'ai-image-suite-prompt-compiler-gpt2/v1';
+export const AI_IMAGE_SUITE_LEGACY_WANX_PROMPT_COMPILER_VERSION = 'ai-image-suite-prompt-compiler-wanx/v1';
+export function isAiImageSuiteWanxPromptCompiler(version: unknown): boolean {
+  return version === AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION || version === AI_IMAGE_SUITE_LEGACY_WANX_PROMPT_COMPILER_VERSION;
+}
 export function aiImageSuitePromptCompilerVersion(provider: string, model: string) {
   return isWanxAiImageSuiteProvider(provider, model)
-    ? AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION : AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION;
+    ? AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION
+    : isDonorGpt2SuiteProvider(provider,model) ? AI_IMAGE_SUITE_DONOR_GPT2_PROMPT_COMPILER_VERSION : AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION;
 }
 export const AI_IMAGE_SUITE_SLOT_POLICY_VERSION = 'ozon-image-slot-policy/v1';
 export const AI_IMAGE_SUITE_PROMPT_MAX_SLOTS = 500;
@@ -46,6 +53,30 @@ const WANX_STANDARD_RULE_TEXT: Readonly<Record<string, string>> = Object.freeze(
   product_matches_references: '商品符合参考图',
   no_unverified_claims: '无未核实声明',
 });
+// These are server-owned editing instructions, never interpolated product
+// values. The slot/fact JSON remains untrusted data rather than instructions.
+const WANX_SLOT_EDIT_INSTRUCTIONS: Readonly<Record<string, string>> = Object.freeze({
+  sku_hero: '将原背景替换为中性棚拍背景，重新布光并重排构图；商品完整且占画面70-85%，不加文字或道具。',
+  scene: '将原背景替换为已核用途支持的真实环境，重新布光并重排构图；商品仍是主体，道具仅作背景，不暗示随附配件。',
+  detail: '重新构图为已核细节特写，调整背景与光照；保留商品上下文，不改变纹理或几何。',
+  function: '将原背景替换为已核功能的演示环境，重新布光；仅演示已核功能，不夸大性能或增加配件。',
+  fitment: '重新构图展示已核适配关系，调整背景与光照；不得虚构设备、车型或型号。',
+  spec: '重新构图为清晰规格展示，调整背景与光照；仅排版已核参数，不增加未核尺寸线或单位。',
+  package: '重新构图为清晰包装展示，调整背景与光照；仅展示已核包装内容与数量，不增删部件。',
+  poster: '重新构图为主次清晰的商品海报，替换背景并重新布光；仅使用已核简短文案，不加装饰徽标。',
+});
+const WANX_SLOT_COMPOSITION_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  sku_hero: '中性棚拍', scene: '已核用途环境', detail: '已核细节', function: '已核功能',
+  fitment: '已核适配', spec: '已核规格', package: '已核包装', poster: '商品海报',
+});
+function wanxSlotEditInstruction(goal: string, status: 'VERIFIED_FACTS' | 'NEUTRAL_FALLBACK'): string {
+  if (status === 'NEUTRAL_FALLBACK') {
+    return goal === 'scene'
+      ? '将原背景替换为暖灰展示台与柔和侧光，重排构图并保留完整主体；不演示未核用途或添加配件。'
+      : '将原背景替换为柔和中性展示背景，重新布光并重排构图；只展示参考商品，不演示未核功能、适配、规格或包装数量。';
+  }
+  return WANX_SLOT_EDIT_INSTRUCTIONS[goal]!;
+}
 function compactWanxRule(rule: string, goal: string): string {
   return rule === `goal_${goal}_is_visually_satisfied`
     ? `构图符合${goal}` : WANX_STANDARD_RULE_TEXT[rule] || rule;
@@ -272,7 +303,8 @@ export interface FrozenAiImageSuiteSlotPrompt {
 
 export interface CommitAiImageSuitePromptSetInput {
   promptSetVersion: typeof AI_IMAGE_SUITE_PROMPT_SET_VERSION;
-  compilerVersion: typeof AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION | typeof AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION;
+  compilerVersion: typeof AI_IMAGE_SUITE_PROMPT_COMPILER_VERSION | typeof AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION
+    | typeof AI_IMAGE_SUITE_LEGACY_WANX_PROMPT_COMPILER_VERSION | typeof AI_IMAGE_SUITE_DONOR_GPT2_PROMPT_COMPILER_VERSION;
   policyVersion: typeof AI_IMAGE_SUITE_SLOT_POLICY_VERSION;
   policyHash: string;
   suiteId: string;
@@ -594,19 +626,14 @@ function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
       const evidenceStatus = goalEvidenceStatus(row.goal, scopedFacts);
       if (isWanxAiImageSuiteProvider(authority.provider, authority.model)) {
         if (manifest.length !== 1) return authorityFailure('Wanx suite slots require exactly one reference');
-        const guidance: Record<string, string> = {
-          sku_hero: '中性背景棚拍主图，商品占画面70-85%，完整可见，无文字和干扰道具',
-          scene: '仅在已核实使用情境中展示主体，道具不能暗示随附配件',
-          detail: '展示一个已核实细节，保留主体上下文，不改变纹理几何',
-          function: '仅示范已核实功能，不夸大性能或增加配件',
-          fitment: '仅展示已核实适配关系，不虚构设备或型号',
-          spec: '仅排版已核规格，未核实数值不加尺寸线或单位',
-          package: '仅展示已核实包装内容与数量，不增删部件',
-          poster: '清晰主次的商品海报，仅使用已核简短文案，无装饰徽标',
-        };
-        return { row, variables: {
+        // A title or color alone cannot authorize a claimed use scene. Reuse
+        // the purpose/usage/function evidence check; absent evidence, produce
+        // a different display composition without inventing a product use.
+        const wanxEvidenceStatus = row.goal === 'scene'
+          ? goalEvidenceStatus('function', scopedFacts) : evidenceStatus;
+        return { row, editInstruction: wanxSlotEditInstruction(row.goal, wanxEvidenceStatus), variables: {
           slotSpecJson: JSON.stringify({ 目标: row.goal,
-            构图: evidenceStatus === 'NEUTRAL_FALLBACK' ? '缺少对应事实，只展示参考商品，不演示功能、适配、规格或包装数量' : guidance[row.goal],
+            构图: wanxEvidenceStatus === 'NEUTRAL_FALLBACK' ? '无用途声明的展示构图' : WANX_SLOT_COMPOSITION_LABELS[row.goal],
             新增文字: visibleTextPolicy(row.goal) === 'NO_VISIBLE_TEXT' ? '禁止' : '可选已核事实简短俄语',
             验收: slot.data.acceptanceChecks.map(rule => compactWanxRule(rule, row.goal)) }),
           referenceManifestJson: JSON.stringify({ 图序: 0, 角色: manifest[0]!.sourceRole }),
@@ -622,6 +649,7 @@ function normalizeAuthority(authority: AiImageSuitePromptAuthority) {
       }
       return {
         row,
+        editInstruction: '',
         variables: {
           slotSpecJson: JSON.stringify({
             version: AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
@@ -824,6 +852,17 @@ export function createAiImageSuitePromptService(dependencies: {
         const negative = brief?.negativePrompt ? `\n${brief.negativePrompt}` : '';
         let resolvedPrompt = `${resolved.resolvedPrompt.trim()}${direction}\n\n${IMMUTABLE_POLICY_TEXT}`;
         let resolvedNegativePrompt = `${resolved.resolvedNegativePrompt.trim()}${negative}\n\n${IMMUTABLE_NEGATIVE_POLICY_TEXT}`;
+        if (isDonorGpt2SuiteProvider(authority.provider,authority.model)) {
+          const facts = JSON.parse(item.variables.verifiedFactsJson).facts as ScopedVerifiedFact[];
+          const status = goalEvidenceStatus(row.goal,facts);
+          const instructions = compositionGuidance(row.goal,status);
+          const sceneFallback = row.goal === 'scene' && !facts.some(fact =>
+            SENSITIVE_GOAL_FACT_PATTERNS.function!.test(factDescriptor(fact)) && hasMeaningfulFactValue(fact.value));
+          const task = sceneFallback
+            ? 'Replace the original background with a warm gray display surface and soft side lighting. Do not imply an unverified use or add accessories.'
+            : instructions.join(' ');
+          resolvedPrompt = `Create a new full-frame 3:4 product photograph; change the original background and lighting while preserving the exact product. ${task}\n${resolvedPrompt}`;
+        }
         if (wanx) {
           const providerNeutralPrefix = `${AI_PROMPT_SAFETY_POLICY}\n\n`;
           const rendered = resolved.resolvedPrompt.trim();
@@ -836,8 +875,8 @@ export function createAiImageSuitePromptService(dependencies: {
             : rendered;
           try {
             const compiled = compileWanxImageToImagePrompt({
-              prompt: text.startsWith(AI_MEDIA_SUITE_WANX_SAFETY_POLICY)
-                ? `${text}${direction}` : `${AI_MEDIA_SUITE_WANX_SAFETY_POLICY}\n${text}${direction}`,
+              prompt: `${item.editInstruction}\n${text.startsWith(AI_MEDIA_SUITE_WANX_SAFETY_POLICY)
+                ? `${text}${direction}` : `${AI_MEDIA_SUITE_WANX_SAFETY_POLICY}\n${text}${direction}`}`,
               negativePrompt: `${resolved.resolvedNegativePrompt.trim()}${negative}`,
             });
             resolvedPrompt = compiled.resolvedPrompt;

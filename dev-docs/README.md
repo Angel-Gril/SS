@@ -1,5 +1,17 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 已授权提交和双区部署，准备 `1.0.435`
+
+真实两图质量修复已通过，发布前进一步收口文字生图兼容、普通I2I请求隔离及单参考计划预览。当前提交/签名/部署由本次用户明确授权；生产Provider/Key/报价保持当前配置，新模型启用与官网公开仍需各自配置和正式回执。准确事实只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+## 2026-10-08 原精铺模型真实质量对照通过，修复仍未部署
+
+用户提供测试Key后，在COM VPS隔离进程按 `ai.big-model-api.top / gpt-image-2-count` 完成两次真实单参考请求；两张原图1008×1344→全画幅900×1200均成功，上下白条0行，主图棚拍/场景背景与光照区别明确。本地后端profile、冻结、归一化及该精确端点的单参考准入已接齐，凭据轮换发包前拒绝；不扩大多参考/改图/局部重绘证据。无Ozon/ERP草稿或生产配置写入，未读供应商账单。本轮源码仍未提交、推送、签名或部署，线上仍1.0.434；完整事实见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+## 2026-10-08 套图白边/创作差异定位，原精铺模型适配未发布
+
+真实原件证实 `1.0.434` 白边由方图→900×1200的白底contain后处理产生；Wanx套图缺少可信的顶层编辑要求。4次独立质量校准均未达到换背景/无色条要求，失败结果未应用；用户随后明确批准按原精铺接口/模型适配并指定 `https://ai.big-model-api.top / gpt-image-2-count`。本地已补1008×1344高质量multipart、全画幅等比归一化、可信槽位指令和冻结/准入接线，新能力保持未晋升。真实GPT2质量验收等待该服务API Key的安全录入；线上仍1.0.434，未提交/推送/部署本轮实现。唯一证据与范围见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-07 `14985551 / 1.0.434` 双区官网公开发布完成
 
 Agent 自建 9444 专用浏览器加载实际 COM 签名包，完成新隔离 DOTH 草稿的两图真实 suite、审核、store-draft assignment 和原幂等 replay；正式 QA04、双区 REL-04 canary、website approval、CAS、完整匿名 Cloud/Local 下载和最终 publication verifier 均通过。两区 `/api/extensions/latest` 与运行应用均为 `14985551 / 1.0.434`，db/Redis 健康；COM AI 分析保持开启、CN dark。ERP 结算 CNY 0.28，Ozon 写入零，临时测试设备/账号会话已清理，用户 9222 浏览器保留。图片创作质量限制和原件摘要只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

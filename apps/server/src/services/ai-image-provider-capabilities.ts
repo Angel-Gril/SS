@@ -1,4 +1,5 @@
 import { aiImageProviderEndpointSha256 } from './ai-image-provider-runtime-contract.js';
+import {AI_IMAGE_DONOR_GPT2_COUNT_API_BASE} from './ai-image-donor-gpt2-profile.js';
 import {
   AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
   AI_IMAGE_WANX21_EDIT_MODEL,
@@ -56,6 +57,18 @@ export class AiMediaCapabilityError extends Error {
 }
 
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
+  {
+    provider:'custom',model:'gpt-image-2-count',operations:['IMAGE_TO_IMAGE'],maxReferences:1,supportsMask:false,
+    inputTransport:'multipart',resultMode:'sync',evidenceLevel:'sandbox-verified',
+    evidence:'2026-10-08 user-authorized ai.big-model-api.top single-reference hero/scene edits each completed once with original 1008x1344 frames, full-frame 900x1200 normalization and visual review; exact endpoint only, no multi-reference/full-edit/inpaint or production default change',
+    sandboxEvidence:[{endpointSha256:aiImageProviderEndpointSha256('custom',AI_IMAGE_DONOR_GPT2_COUNT_API_BASE),
+      operation:'IMAGE_TO_IMAGE',inputTransport:'multipart',resultMode:'sync'}],
+  },
+  {
+    provider:'custom',model:'gpt-image-2',operations:['IMAGE_TO_IMAGE'],maxReferences:16,supportsMask:false,
+    inputTransport:'multipart',resultMode:'sync',evidenceLevel:'adapter-characterized',
+    evidence:'User-owned donor 1008x1344 high-quality multipart profile locally adapted; no production endpoint or creative-quality acceptance yet',
+  },
   {
     provider: 'dashscope-wanx', model: AI_IMAGE_WANX21_EDIT_MODEL,
     operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'], maxReferences: 1, supportsMask: true,
@@ -174,7 +187,14 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
 export function resolveAiImageProviderCapability(
   provider: string,
   model: string,
+  operation?: AiMediaOperation,
 ): AiImageProviderCapability | null {
+  const exact = AI_IMAGE_PROVIDER_CAPABILITIES.find(entry=>entry.provider===provider&&entry.model===model);
+  // An edit-specific addition must not shadow the existing text-only fallback.
+  // Edit admission still requires exact model/endpoint evidence.
+  if (operation==='TEXT_TO_IMAGE' && exact && !exact.operations.includes(operation)) {
+    return AI_IMAGE_PROVIDER_CAPABILITIES.find(entry=>entry.provider===provider&&entry.model==='*'&&entry.operations.includes(operation)) || null;
+  }
   return (
     AI_IMAGE_PROVIDER_CAPABILITIES.find(
       (entry) => entry.provider === provider && entry.model === model,
@@ -238,7 +258,7 @@ export function supportsAiMediaOperation(
   inputCount = 0,
   maskCountOrHasMask: number | boolean = 0,
 ): boolean {
-  const capability = resolveAiImageProviderCapability(provider, model);
+  const capability = resolveAiImageProviderCapability(provider, model,operation);
   return capabilitySupportsOperation(capability, operation, inputCount, maskCountOrHasMask);
 }
 
@@ -269,7 +289,7 @@ export function assertAiMediaCapability(input: {
   maskCount?: number;
   hasMask?: boolean;
 }, resolver = resolveAiImageProviderCapability) {
-  const capability = resolver(input.provider, input.model);
+  const capability = resolver(input.provider, input.model,input.operation);
   if (!capability || capability.provider !== input.provider || (capability.model !== input.model && capability.model !== '*')) {
     throw new AiMediaCapabilityError(
       'UNSUPPORTED_PROVIDER_MODEL',

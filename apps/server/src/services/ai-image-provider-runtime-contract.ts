@@ -148,7 +148,8 @@ function safeMaximumCost(unitCostCents: number, imageCount: number): number {
 }
 
 export function requiresAiImageProviderCredentialRevision(provider: string, model: string): boolean {
-  return provider === 'dashscope-wanx' && model === AI_IMAGE_WANX21_EDIT_MODEL;
+  return (provider === 'dashscope-wanx' && model === AI_IMAGE_WANX21_EDIT_MODEL)
+    || (provider === 'custom' && model === 'gpt-image-2-count');
 }
 
 /** Config metadata only: never derive this identity from a secret or encrypted value. */

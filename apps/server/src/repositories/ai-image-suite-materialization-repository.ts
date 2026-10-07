@@ -35,12 +35,13 @@ import {
   type AiImageSuiteProviderRuntimeSnapshot,
 } from '../services/ai-image-suite-provider-runtime.js';
 import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-suite-output-normalizer.js';
+import {isDonorGpt2SuiteProvider,createDonorGpt2FullFrameConfig} from '../services/ai-image-donor-gpt2-profile.js';
 import type { AiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import { assertWanxImageToImageInput } from '../services/ai-image-wanx-image-to-image.js';
 import {
   AI_IMAGE_SUITE_PROMPT_SET_VERSION,
   AI_IMAGE_SUITE_SLOT_PROMPT_VERSION,
-  AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION,
+  isAiImageSuiteWanxPromptCompiler,
 } from '../services/ai-image-suite-prompts.js';
 import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 
@@ -325,7 +326,7 @@ function promptRowValid(prompt: any, promptSet: any, slot: any, ordinal: number)
     || String(prompt.policyHash) !== String(promptSet.policyHash)
     || !exact(prompt.resolvedPrompt, 64_000)
     || !(exact(prompt.resolvedNegativePrompt, 16_000)
-      || (prompt.compilerVersion === AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION && prompt.resolvedNegativePrompt === ''))
+      || (isAiImageSuiteWanxPromptCompiler(prompt.compilerVersion) && prompt.resolvedNegativePrompt === ''))
     || !sha256(prompt.bindingHash)
     || !sha256(prompt.variablesHash)
     || !sha256(prompt.compiledPromptHash)
@@ -521,6 +522,7 @@ function prepareSlots(
     }
     const prompt = promptBySlot.get(String(slot.id));
     if (!prompt) return null;
+    const donor = isDonorGpt2SuiteProvider(String(suite.provider),String(suite.model));
     if (isWanxAiImageSuiteProvider(String(suite.provider), String(suite.model))) {
       try {
         assertWanxImageToImageInput({ count: 1, width: providerRuntime?.width || 0, height: providerRuntime?.height || 0,
@@ -550,6 +552,8 @@ function prepareSlots(
             width: providerRuntime.width,
             height: providerRuntime.height,
           },
+          ...(donor ? {requestProfile:createDonorGpt2FullFrameConfig().requestProfile,
+            providerRequest:createDonorGpt2FullFrameConfig().providerRequest} : {}),
           finalOutput: {
             profile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
             width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
@@ -559,6 +563,7 @@ function prepareSlots(
             format: 'png',
             normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
           },
+          ...(donor ? {finalOutput:createDonorGpt2FullFrameConfig().finalOutput} : {}),
         }
         : null;
     if (!operationConfig) return null;

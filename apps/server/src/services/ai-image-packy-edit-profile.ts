@@ -8,10 +8,12 @@ export const AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT =
   'OPENAI_COMPATIBLE_DEFAULT_V1';
 export const AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT =
   'XIAOYI_GPT_IMAGE_2_MINIMAL_V2';
+export const AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT = 'DONOR_GPT_IMAGE_2_PORTRAIT_V1';
 
 export type AiImageEditMultipartDialect =
   | typeof AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT
   | typeof AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+  | typeof AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT
   | typeof AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
 
 export const AI_IMAGE_PACKY_EDIT_PROFILE = Object.freeze({
@@ -57,6 +59,9 @@ export function aiImageEditMultipartShape(dialect: AiImageEditMultipartDialect) 
   switch (dialect) {
     case AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT:
       return Object.freeze({ includeN: true, includeSize: true, fields: null });
+    case AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT:
+      return Object.freeze({ includeN: true, includeSize: true,
+        fields: Object.freeze({ quality: 'high', response_format: 'url' }) });
     case AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT:
       return Object.freeze({
         includeN: true,
@@ -76,6 +81,7 @@ export function aiImageEditMultipartDialectForRequestProfile(
   if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) {
     return AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT;
   }
+  if (requestProfile === 'DONOR_GPT_IMAGE_2_PORTRAIT_EDIT_V1') return AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT;
   if (requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE) {
     return AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
   }

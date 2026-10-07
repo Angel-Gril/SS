@@ -58,6 +58,13 @@ const paidProviderRuntime = createAiImageProviderRuntimeContract({
 }, { count: 1, width: 1024, height: 1024 });
 
 describe('AI media workflow service', () => {
+  it('rejects the donor-only count contract on generic I2I before allocating a job or reservation',async()=>{
+    const repo=repository(),settings={provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',costPerImageCents:8,
+      credentialRevision:{recordId:'fixture-count-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}};
+    const input={...createInput,...settings,estimatedCostCents:8,providerRuntimeContract:createAiImageProviderRuntimeContract(settings,{count:1,width:1024,height:1024})};
+    await expect(createAiMediaWorkflowService(repo).createImageToImage(input)).rejects.toMatchObject({code:'PROVIDER_NOT_READY'});
+    expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
   it('paginates history with a cursor bound to the owner and context', async () => {
     const createdAt = new Date('2026-07-16T00:00:00.000Z');
     const listOwned = vi.fn()

@@ -15,6 +15,7 @@ import {
 } from './ai-image-openai-url.js';
 import {
   AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_PROFILE,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
@@ -25,6 +26,7 @@ import {
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
   isAiImageXiaoyiEditOperation,
 } from './ai-image-xiaoyi-provider.js';
+import {assertDonorGpt2ImageToImageRequest,donorGpt2EditEndpoint,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
 
 export {
   isOfficialOpenAiImagesApiBase,
@@ -498,7 +500,7 @@ async function openAiInpaintDimensions(
   }
 }
 
-export async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
+export async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest, donorProfile = false) {
   if (
     request.operation !== 'IMAGE_TO_IMAGE'
     && request.operation !== 'FULL_EDIT'
@@ -513,7 +515,8 @@ export async function validateOpenAiImageEditRequest(request: OpenAiImageEditReq
     throw invalidOpenAiEditInput(`OpenAI image edit accepts at most ${MAX_OPENAI_EDIT_INPUT_IMAGES} source images`);
   }
   const size = `${request.width}x${request.height}`;
-  if (!isOpenAiCompatibleImageEditSizeSupported(request.width, request.height)) {
+  if (!(donorProfile ? request.width === 1008 && request.height === 1344
+    : isOpenAiCompatibleImageEditSizeSupported(request.width, request.height))) {
     throw invalidOpenAiEditInput('OpenAI image edit output size is not supported');
   }
   if (request.operation === 'INPAINT' && !request.mask) {
@@ -759,7 +762,12 @@ function createOpenAiImageEditProviderWithDialect(
       }
       let validated: Awaited<ReturnType<typeof validateOpenAiImageEditRequest>>;
       try {
-        validated = await validateOpenAiImageEditRequest(request);
+        if (multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT) {
+          if ('wanxEditStrength' in request) throw invalidOpenAiEditInput('Donor GPT Image 2 does not accept Wanx options');
+          assertDonorGpt2ImageToImageRequest({ model: request.model || options.model, operation: request.operation,
+            width: request.width, height: request.height, count: 1, referenceCount: request.images.length, quality: 'high' });
+        }
+        validated = await validateOpenAiImageEditRequest(request, multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT);
       } catch (error) {
         throw withProviderSubmissionRejected(error);
       }
@@ -880,6 +888,14 @@ export function createOpenAiImageEditProvider(
     options,
     AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   );
+}
+
+/** Explicit donor-compatible profile. It does not grant production capability or infer an API vendor. */
+export function createDonorGptImage2EditProvider(options: OpenAiImageEditProviderOptions): OpenAiImageEditProvider {
+  donorGpt2EditEndpoint(options.baseUrl);
+  assertDonorGpt2ProviderModel(options.baseUrl,options.model);
+  return createOpenAiImageEditProviderWithDialect(options, AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT,
+    options.model, operation => operation === 'IMAGE_TO_IMAGE');
 }
 
 export function createPackyGptImage2EditProvider(

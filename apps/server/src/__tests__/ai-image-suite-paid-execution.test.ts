@@ -118,6 +118,54 @@ function dependencies(
 }
 
 describe('AI image suite paid Provider dispatch boundary', () => {
+  it('runs the donor full-frame dispatcher with actual 1008x1344 pixels and retains one frozen charge', async () => {
+    const source = await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#df2020' } }).png().toBuffer();
+    const request = input();
+    Object.assign(request.suite, { provider: 'custom', model: 'gpt-image-2' });
+    Object.assign(request.job, { provider: 'custom', model: 'gpt-image-2' });
+    const fetch = vi.fn(async () => successfulResult({ images: [{ buffer: source, mimeType: 'image/png' }] }));
+    const uploadBuffer = validUploads();
+    const deps = dependencies({
+      prepareProvider: async () => ({ ...preparedWithFetch(fetch), normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1' }),
+      uploadBuffer,
+    });
+    await expect(executeAiImageSuitePaidProvider(request, deps)).resolves.toBe('completed');
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(deps.recordProviderOutput).toHaveBeenCalledWith(expect.objectContaining({ width: 1008, height: 1344,
+      metadata: expect.objectContaining({ normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1', actualCostCents: 8 }),
+    }));
+    expect(deps.complete).toHaveBeenCalledWith(expect.objectContaining({ actualCostCents: 8,
+      output: expect.objectContaining({ width: 900, height: 1200,
+        metadata: expect.objectContaining({ normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1' }) }),
+    }));
+    const { data, info } = await sharp(uploadBuffer.mock.calls[1]![0]).raw().toBuffer({ resolveWithObject: true });
+    expect(info).toMatchObject({ width: 900, height: 1200 });
+    for (const [x, y] of [[0, 0], [899, 0], [0, 1199], [899, 1199]]) {
+      const offset = (y! * 900 + x!) * info.channels;
+      expect(Array.from(data.subarray(offset, offset + 3))).toEqual([223, 32, 32]);
+    }
+    expect(deps.recordProviderResultEvidence).toHaveBeenCalledOnce();
+    expect(deps.complete).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an unverified donor frame while retaining known Provider cost instead of fabricating a candidate or refund', async () => {
+    const source = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: 'red' } }).png().toBuffer();
+    const request = input();
+    Object.assign(request.suite, { provider: 'custom', model: 'gpt-image-2' });
+    Object.assign(request.job, { provider: 'custom', model: 'gpt-image-2' });
+    const deps = dependencies({ prepareProvider: async () => ({
+      ...preparedWithFetch(async () => successfulResult({ images: [{ buffer: source, mimeType: 'image/png' }] })),
+      normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1',
+    }) });
+    await expect(executeAiImageSuitePaidProvider(request, deps)).rejects.toMatchObject({
+      code: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', providerResultReceived: true,
+      actualCostCents: 8, providerJobId: 'provider-request-1',
+    });
+    expect(deps.recordProviderResultEvidence).toHaveBeenCalledOnce();
+    expect(deps.uploadBuffer).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
   it('recovers an accepted Wanx task through its original lookup and never submits or re-marks dispatch', async () => {
     const request = input();
     Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });

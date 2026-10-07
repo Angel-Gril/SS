@@ -30,7 +30,9 @@ import {
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE } from './ai-image-wanx-edit-profile.js';
+import {AI_IMAGE_DONOR_GPT2_PROFILE,isDonorGpt2SuiteProvider,createDonorGpt2FullFrameConfig,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
 import type { AiImageProviderCredentialRevision, AiImageProviderCurrency } from './ai-image-provider-runtime-contract.js';
+import {requiresAiImageProviderCredentialRevision} from './ai-image-provider-runtime-contract.js';
 
 export const AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH =
   AI_IMAGE_SUITE_PROVIDER_OUTPUT_WIDTH;
@@ -61,6 +63,8 @@ export function isWanxAiImageSuiteProvider(provider: string, model: string): boo
 export function aiImageSuiteProviderRequestDimensions(provider: string, model: string) {
   return isWanxAiImageSuiteProvider(provider, model)
     ? { width: AI_IMAGE_WANX21_EDIT_PROFILE.width, height: AI_IMAGE_WANX21_EDIT_PROFILE.height }
+    : isDonorGpt2SuiteProvider(provider, model)
+      ? {width:AI_IMAGE_DONOR_GPT2_PROFILE.width,height:AI_IMAGE_DONOR_GPT2_PROFILE.height}
     : { width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH, height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT };
 }
 
@@ -225,7 +229,7 @@ function paidConfig(
   const providerConfigHash = hashAiMediaPlanningJson({
     version: AI_IMAGE_SUITE_PROVIDER_RUNTIME_VERSION,
     providerRuntime,
-    finalOutput: {
+    finalOutput: isDonorGpt2SuiteProvider(providerRuntime.provider,providerRuntime.model) ? createDonorGpt2FullFrameConfig().finalOutput : {
       profile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
       width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
       height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
@@ -314,12 +318,14 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
 
   let providerRuntime: AiImageProviderRuntimeContract;
   try {
+    if (isDonorGpt2SuiteProvider(provider,model)) assertDonorGpt2ProviderModel(rawSettings.baseUrl,model);
     providerRuntime = createAiImageProviderRuntimeContract({
       provider,
       model,
       baseUrl: rawSettings.baseUrl,
       costPerImageCents: rawSettings.costPerImageCents,
       ...(wanx ? { currency: 'CNY', credentialRevision: rawSettings.credentialRevision } : {}),
+      ...(!wanx && requiresAiImageProviderCredentialRevision(provider,model) ? {credentialRevision:rawSettings.credentialRevision} : {}),
     }, {
       count: 1,
       ...aiImageSuiteProviderRequestDimensions(provider, model),

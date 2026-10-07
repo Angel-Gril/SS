@@ -14,6 +14,13 @@ import {
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 
 describe('AI image provider capability matrix', () => {
+  it.each(['gpt-image-2','gpt-image-2-count'])('preserves legacy text generation while resolving exact %s edits',model=>{
+    expect(supportsAiMediaOperation('custom',model,'TEXT_TO_IMAGE',0)).toBe(true);
+    expect(assertAiMediaCapability({provider:'custom',model,operation:'TEXT_TO_IMAGE',inputCount:0}))
+      .toMatchObject({model:'*',operations:['TEXT_TO_IMAGE'],inputTransport:'none',evidenceLevel:'adapter-characterized'});
+    expect(resolveAiImageProviderCapability('custom',model)?.model).toBe(model);
+    expect(supportsAiMediaOperation('custom',model,'FULL_EDIT',1)).toBe(false);
+  });
   it('records only operations implemented by current adapters', () => {
     expect(resolveAiImageProviderCapability('dashscope-wanx', 'wanx2.1-t2i-turbo')).toMatchObject({
       model: 'wanx2.1-t2i-turbo',

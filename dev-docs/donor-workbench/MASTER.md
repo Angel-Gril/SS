@@ -1,5 +1,13 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-08 套图质量修复本地验收完成（3/3），尚未发布
+
+根因、原精铺模型/尺寸接线、真实两图质量对照已完成3/3；精确count端点单参考transport已验证，白条0行并产生明显不同的主图/场景。本轮没有生产配置或Ozon/草稿写入，官网仍1.0.434。实现、私有原件和单样本限制见[直接适配 owner](./direct-adaptation.md)。
+
+## 2026-10-08 原精铺生图模型与尺寸适配（本地，质量待验收）
+
+当前新增质量任务：根因与失败样本定位完成，GPT2 adapter/full-frame/冻结接线本地完成；真实模型质量仍待安全配置后验收，不能算已发布。用户选择 `ai.big-model-api.top / gpt-image-2-count`，官网仍1.0.434。准确事实仅维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-07 `1.0.434` 双区公开发布完成
 
 两区应用、官网和 Cloud/Local 下载均为 `14985551 / 1.0.434`。Agent 自建专用签名包浏览器、真实两图 suite/审核/assignment/replay、正式 QA04、双区 canary/approval/CAS/distribution 全部通过；COM AI 分析开启、CN dark，ERP CNY0.28、Ozon写入零。准确事实、图片质量限制与旧 allowlist 误判更正见[直接适配 owner](./direct-adaptation.md)。

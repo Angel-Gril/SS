@@ -3,7 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
   aiImageSuitePromptCompilerVersion,
-  AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION,
+  isAiImageSuiteWanxPromptCompiler,
   AI_IMAGE_SUITE_PROMPT_SET_VERSION,
   AI_IMAGE_SUITE_SLOT_POLICY_VERSION,
   AI_IMAGE_SUITE_SLOT_PROMPT_VERSION,
@@ -476,7 +476,7 @@ function persistedSlotValid(row: any, set: any, payload: any, ordinal: number): 
     || hashAiMediaPlanningJson(row.variablesSnapshot) !== String(row.variablesHash)
     || !exact(row.resolvedPrompt, 64_000)
     || !(exact(row.resolvedNegativePrompt, 16_000)
-      || (row.compilerVersion === AI_IMAGE_SUITE_WANX_PROMPT_COMPILER_VERSION && row.resolvedNegativePrompt === ''))
+      || (isAiImageSuiteWanxPromptCompiler(row.compilerVersion) && row.resolvedNegativePrompt === ''))
     || hashAiMediaPlanningJson({
       resolvedPrompt: String(row.resolvedPrompt),
       resolvedNegativePrompt: String(row.resolvedNegativePrompt),

@@ -287,10 +287,13 @@ export function createAiImageSuitePreview(
     providerConfig.provider,
     providerConfig.model,
   );
-  const useSingleOrderedReference = providerCapability?.operations.includes('IMAGE_TO_IMAGE')
-    && providerCapability.maxReferences === 1
-    && providerCapability.inputTransport === 'base64'
-    && providerCapability.resultMode === 'async';
+  // The approved plan defines reference order; the exact Provider capability
+  // defines how many can be sent. A single-reference limit is independent of
+  // whether the adapter uses multipart/base64 or synchronous/asynchronous I/O.
+  const useSingleOrderedReference = providerCapability?.provider === providerConfig.provider
+    && providerCapability.model === providerConfig.model
+    && providerCapability.operations.includes('IMAGE_TO_IMAGE')
+    && providerCapability.maxReferences === 1;
   const payload = planPayloadSchema.safeParse(authority.planPayload);
   const input = inputSnapshotSchema.safeParse(authority.inputSnapshot);
   if (!payload.success || !input.success) {
