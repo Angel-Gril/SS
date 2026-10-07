@@ -1,5 +1,11 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-07 当前 commit fresh suite 尝试：草稿/计划已建立，执行被既有 device allowlist 正确拦截
+
+- 在 COM `14985551 / 1.0.434` 上创建了新的隔离草稿 `draft-50d15af7-af9b-46c1-87ae-bfc3085f10ea`，绑定 DOTH、来源快照 `e983ec8a-10db-477f-a7c8-d8ce21f396f3`，仅选择一个 SKU；计划 `cmuxwxo4o001z5o4fwbblavor` 已生成两槽（hero + scene）并审核为 `APPROVED`。
+- 尝试从临时配对设备执行 `START` 时，服务端返回 `command_context_forbidden`：该设备 session 不在 COM 受限 pilot 的既有两条 session allowlist 中。没有绕过策略、没有手工写 binding、没有 Provider POST 或费用；临时 device/account sessions 已撤销并清理。
+- 该隔离草稿和已批准计划没有 suite、job、reservation、settlement 或 assignment，不能作为正式 normal suite/QA04 证据。继续执行需要复用原已授权 DOTH device session，或由 owner 明确更新 pilot allowlist；当前不扩大权限。
+
 ## 2026-10-07 `14985551 / 1.0.434` 双区受控部署完成，官网门禁待正式 QA04
 
 - clean commit `149855518f39e0475571e8ab6fc382530a177b7f` 已推送并使用区域独立 Cloud/Local 候选、现有 Ed25519 key `ss-erp-extension-release-2026-08-02-01` 签名。COM/CN 均已通过标准部署入口切换 current、重启 API/Worker/Web 并返回 `/ready`；两区都运行 `1.0.434`。COM 保持原 hosted pilot owner/shop/两活动设备/`IMAGE_TO_IMAGE,SUITE,IMAGE_TRANSLATE` 范围，CN 保持 direct/RDS dark。
