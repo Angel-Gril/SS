@@ -1,5 +1,11 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 435完整门禁失败保留，最终候选436
+
+- `5483f06e`已推送，435两区候选原签名/验签通过，但完整preflight在`AI media provider foundation contract`拒绝`custom:gpt-image-2-count`与`custom:gpt-image-2`，因为静态review map没有这两条新记录。没有部署或覆盖原候选/日志，不能声称435完整门禁通过。
+- 发布review owner现按真实已授权证据明确count只有精确Big Model端点、单参考I2I/multipart/sync；通用gpt-image-2仅adapter-characterized且没有sandbox evidence。增加端点/引用数/操作漂移拒绝验证，定向完整foundation contract真实RED→GREEN；没有删除检查或扩成wildcard准入，public matrix同步当前协议。
+- 最终新候选436从随后clean commit生成，435中间原件保留且未部署。Provider/Key/价格仍保持原生产配置，未新增Provider/Ozon请求；授权提交/双区部署继续有效。
+
 ## 2026-10-08 发布前 owner 接线收口，准备 `1.0.435`
 
 - 用户明确要求提交/部署，沿用已有推送、区域签名和双区部署授权；版本候选435，官网日志仍按Keep a Changelog保留Unreleased直到公开。

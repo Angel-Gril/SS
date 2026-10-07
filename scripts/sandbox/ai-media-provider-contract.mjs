@@ -13,6 +13,17 @@ const reviewedWanxEndpoint = createHash('sha256')
   .update('https://dashscope.aliyuncs.com/api/v1')
   .digest('hex');
 const reviewedPaidDerivedCapabilities = new Map([
+  ['custom:gpt-image-2-count',{
+    operations:new Set(['IMAGE_TO_IMAGE']),inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:false,allowTextToImage:false,
+    // Two independently retained hero/scene POST/download/normalization samples
+    // at the operator-selected endpoint. This does not enable a default or
+    // attest generic edit, full-edit, inpaint, or multiple-reference requests.
+    sandboxEvidence:new Set([`${createHash('sha256').update('https://ai.big-model-api.top/v1').digest('hex')}:IMAGE_TO_IMAGE:multipart:sync`]),
+  }],
+  ['custom:gpt-image-2',{
+    operations:new Set(['IMAGE_TO_IMAGE']),inputTransport:'multipart',resultMode:'sync',maxReferences:16,supportsMask:false,allowTextToImage:false,
+    sandboxEvidence:null,
+  }],
   ['dashscope-wanx:wanx2.1-imageedit', {
     operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),
     inputTransport: 'base64',

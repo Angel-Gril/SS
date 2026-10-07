@@ -84,6 +84,16 @@ for (const [label, capability] of [
 }
 
 const root = process.cwd();
+const donorEndpoint=createHash('sha256').update('https://ai.big-model-api.top/v1').digest('hex');
+const donorReview={operations:new Set(['IMAGE_TO_IMAGE']),inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:false,allowTextToImage:false,
+  sandboxEvidence:new Set([`${donorEndpoint}:IMAGE_TO_IMAGE:multipart:sync`])};
+assert.equal(reviewedPaidDerivedCapabilityMatches({provider:'custom',model:'gpt-image-2-count',operations:['IMAGE_TO_IMAGE'],inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:false,
+  evidenceLevel:'sandbox-verified',sandboxEvidence:[{endpointSha256:donorEndpoint,operation:'IMAGE_TO_IMAGE',inputTransport:'multipart',resultMode:'sync'}]},donorReview),true);
+for(const changed of [
+  {maxReferences:2},{supportsMask:true},{operations:['IMAGE_TO_IMAGE','FULL_EDIT']},
+  {sandboxEvidence:[{endpointSha256:'b'.repeat(64),operation:'IMAGE_TO_IMAGE',inputTransport:'multipart',resultMode:'sync'}]},
+])assert.equal(reviewedPaidDerivedCapabilityMatches({provider:'custom',model:'gpt-image-2-count',operations:['IMAGE_TO_IMAGE'],inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:false,
+  evidenceLevel:'sandbox-verified',sandboxEvidence:[{endpointSha256:donorEndpoint,operation:'IMAGE_TO_IMAGE',inputTransport:'multipart',resultMode:'sync'}],...changed},donorReview),false);
 const wanxCapability = {
   provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
   operations: ['FULL_EDIT', 'INPAINT'], inputTransport: 'base64', resultMode: 'async',
