@@ -1,8 +1,12 @@
 # SS ERP 内部开发真源
 
-## 2026-10-07 当前 commit fresh suite 尝试被既有 pilot device allowlist 拦截
+## 2026-10-07 `14985551 / 1.0.434` 双区官网公开发布完成
 
-`14985551 / 1.0.434` 已创建新的 DOTH 隔离草稿和两槽计划，但执行设备不在 COM 既有两条 pilot session allowlist 中，服务端正确拒绝 START。没有 Provider/Ozon 请求、费用或权限扩大；临时 session 已清理。正式 fresh normal suite 仍需复用原已授权 DOTH device session。
+Agent 自建 9444 专用浏览器加载实际 COM 签名包，完成新隔离 DOTH 草稿的两图真实 suite、审核、store-draft assignment 和原幂等 replay；正式 QA04、双区 REL-04 canary、website approval、CAS、完整匿名 Cloud/Local 下载和最终 publication verifier 均通过。两区 `/api/extensions/latest` 与运行应用均为 `14985551 / 1.0.434`，db/Redis 健康；COM AI 分析保持开启、CN dark。ERP 结算 CNY 0.28，Ozon 写入零，临时测试设备/账号会话已清理，用户 9222 浏览器保留。图片创作质量限制和原件摘要只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+## 2026-10-07 专用 Cloud `1.0.434` 已加载，撤回无证据的 session allowlist 归因
+
+Agent 已自行启动独立 9444 Chrome 并加载未修改的 COM 签名 Cloud `1.0.434`，保留用户 9222 浏览器；正常接口配对、真实 1688 采集、新隔离 DOTH 草稿和两槽计划审核通过。先前手工 START 含服务端 strict schema 不允许的 `authorityHash`，`command_context_forbidden` 不能证明 session allowlist 拒绝；当前原范围 pilot 只读核验也通过。真实 START/CONTINUE 尚未执行，正式发布仍待完整离线回执与 fresh suite，详见[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-07 `14985551 / 1.0.434` 双区应用部署完成，官网仍待正式 QA04
 

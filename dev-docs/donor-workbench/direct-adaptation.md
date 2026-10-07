@@ -1,10 +1,33 @@
 # 旧扩展直接适配 SS ERP
 
-## 2026-10-07 当前 commit fresh suite 尝试：草稿/计划已建立，执行被既有 device allowlist 正确拦截
+## 2026-10-07 `14985551 / 1.0.434` fresh suite 与双区官网公开发布完成
+
+- 用户授权 Agent 自行准备浏览器、真实套图与官网公开发布。实际未修改 COM 签名 ZIP 在独立 headed Chrome 9444 加载，manifest/Worker 确认为 Cloud `1.0.434`；正常配对仅 DOTH 与原四 scopes。真实 1688 收纳盒采集后创建新隔离草稿 `draft-b476456b-bf82-4efb-a8c6-e59afc59024e` 和两槽计划，实际 Web launcher/扩展 client 物理按钮执行 START→CONTINUE，没有手工写 command/binding 或复用撤销设备秘密。
+- fresh suite `cmuy2941d002y5o4fhkmlca95` 成功 2/2、每槽 attempt=1；审核前 PENDING UI/数据库、START/CONTINUE 请求和原始响应、两张 Blob 预览字节/截图及逐槽审核均完整保存。两槽批准后 assignment owner 将草稿 r1/v1→r2/v2，新增两条 assignment；原幂等键 replay=true，仍为两条。两个原 job 各结算一次 CNY0.14，总 CNY0.28，pending/queue 为零、Ozon publish attempts=0，未读取 Provider 控制台。
+- 真实图片目视保留收纳盒主体、把手和纹理，无文字/水印；存在上下白边、场景与构图变化很小。仅批准隔离草稿链路测试，不宣称创意效果或 donor 功能质量100%一致，未提交 Ozon。
+- clean `14985551` native offline 原件和完整日志通过：server 6999 passed/373既有skipped，完整 preflight/build、独立 PostgreSQL 门禁及 Cloud/Local verifier 619/615、零 failure。首次依赖装配失败和 Windows CRLF 造成的旧测试片段匹配失败均保留；隔离 worktree 校正为 Git 原始字节并确认 staged为空后重跑，未修改产品代码或 producer。正式 QA04 SHA `868fe80ac33d8b9547a4d23583caefda29e3f065afbebc62342b6a9f9b865860`，正常 suite execution commit 真实为 `14985551`。
+- 新双区 REL-04 canary、website approval、CAS 和最终 distribution/publication verifier 全部通过。COM 首次 canary 使用临时 unpacked ID 被 EXTENSION_CORS_ORIGIN_MISMATCH 拒绝，原件保留，正式探针改用生产既有官方 extension origin后通过；未改 CORS/权限。早于 CAS 完成的下载观察读到旧 pointer并失败，保留原件后顺序重验，正式双区 Cloud/Local 匿名完整下载通过。官网公开和应用均实读为 `149855518f39e0475571e8ab6fc382530a177b7f / 1.0.434`。
+- 发布后两区 `/ready` db/Redis=ok；COM AI 分析仍true，原 BYOK flags关闭、仅原DOTH范围；CN保持direct/RDS dark。当前临时测试设备由正常 DELETE owner撤销，两区 publication账号session及本轮测试账号session按原创建key清理、私有凭据文件移除；独立9444浏览器关闭，用户9222保留，原两活动设备未撤销。
+- 发布证据只在私有 `release-14985551-fresh434`、区域candidate/signature和VPS canonical目录，不进入Git；本次文档/CHANGELOG提交不改变部署实现commit，不需要重新生图、签名或部署。
+
+| 正式原件 SHA-256 | COM | CN |
+| --- | --- | --- |
+| REL-04 canary | `9e53fc6497534305b4f57effebf16b006567265cbc0c97ddbfdd43b95a77359f` | `45b19b8818d281c50a4ed20820a2a4ffa6c37fcfc756da599ebfac05014fc6da` |
+| Website approval/CAS | `86a2e8cee95c987fd8f8630eef87522fc5307aeffcedb65f69a08f1417f3310b` | `25ece3a29e6506257c2a4b06177c95c4234d2aa6152731e4e7be83626a9c1e0c` |
+| 完整下载 distribution | `b9ff95a1581d3aa267c49c69dc5e80216f194fb893540c978edd60d3d3134762` | `02cc8818a1b236d52bb879dcb552e9d9a74de341de321ef5fba67ec31abce346` |
+
+## 2026-10-07 独立 Cloud `1.0.434` 浏览器接续与旧拒绝归因更正
+
+- 用户要求 Agent 自行准备浏览器。已从 COM 原签名 ZIP（SHA `1929a89332df8124209e73282d73f82791cc89dcbc5b746b8989e0e68b485251`）解包，在新 profile 的有界面 Chrome 9444 通过 `Extensions.loadUnpacked` 加载；实际 Worker manifest 为 Cloud `1.0.434`，用户 9222 浏览器未关闭或改装。
+- 通过正常 pairing owner 建立仅 DOTH、原四 scopes 的测试设备；原 hosted-pilot owner/shop/operations/revision 保持，当前三活动设备均在原店铺范围，正式 pilot verifier 通过。真实 1688 收纳盒采集、新快照 `06b7d937-a3e6-4881-bf7e-377f53313a4a`、隔离草稿 `draft-b476456b-bf82-4efb-a8c6-e59afc59024e` r1/v1 和两槽计划 `cmuy0ynz0002o5o4fzc8cgehg` 审核通过；使用实际签名包的 launcher/runtime client，没有复制旧 device 凭据或手写 binding。
+- 源码裁决：`extension-ai-image-suite.ts` 的 START strict schema 不允许 `authorityHash`；`extension-command-grants.ts` 在解析失败时返回该拒绝码，而 shipped `listing-workflow-client.js` 刻意不把 witness hash 放入 command。所以下面的旧“device allowlist 拒绝”归因撤回，不能要求用户更新生产策略来解决一个不合法的手工 command。
+- 当前费用为零、Provider/Ozon 请求为零。正式离线原件需要重新保存；第一次依赖装配尝试失败，第二次因 Windows CRLF 影响既有源码片段测试失败，日志均保留。当前隔离 clean `14985551` 已恢复 Git 原始字节并核验、刷新索引后没有 staged 内容；Seller 定向测试通过。完整 native offline 回执、真实 suite/QA04 和官网公开门禁仍在执行准备中。私有原件在 `release-14985551-fresh434`，不进入 Git。
+
+### 上一轮草稿/计划记录（拒绝原因已更正）
 
 - 在 COM `14985551 / 1.0.434` 上创建了新的隔离草稿 `draft-50d15af7-af9b-46c1-87ae-bfc3085f10ea`，绑定 DOTH、来源快照 `e983ec8a-10db-477f-a7c8-d8ce21f396f3`，仅选择一个 SKU；计划 `cmuxwxo4o001z5o4fwbblavor` 已生成两槽（hero + scene）并审核为 `APPROVED`。
-- 尝试从临时配对设备执行 `START` 时，服务端返回 `command_context_forbidden`：该设备 session 不在 COM 受限 pilot 的既有两条 session allowlist 中。没有绕过策略、没有手工写 binding、没有 Provider POST 或费用；临时 device/account sessions 已撤销并清理。
-- 该隔离草稿和已批准计划没有 suite、job、reservation、settlement 或 assignment，不能作为正式 normal suite/QA04 证据。继续执行需要复用原已授权 DOTH device session，或由 owner 明确更新 pilot allowlist；当前不扩大权限。
+- 尝试从临时配对设备执行手工 `START` 时，服务端返回 `command_context_forbidden`。该拒绝不能证明设备 session 不在 pilot allowlist；手工 command 的 `authorityHash` 不符合 strict schema。没有 Provider POST 或费用；临时 device/account sessions 已撤销并清理。
+- 该隔离草稿当时没有 suite、job、reservation、settlement 或 assignment，不能作为正式 normal suite/QA04 证据。后续撤销设备后的计划状态未重新确认；当前改用新专用 profile 的合法配对、真实 launcher 和 shipped client 接续，不扩大 pilot 权限。
 
 ## 2026-10-07 `14985551 / 1.0.434` 双区受控部署完成，官网门禁待正式 QA04
 

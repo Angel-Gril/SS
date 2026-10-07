@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-07 `1.0.434` 双区公开发布完成
+
+两区应用、官网和 Cloud/Local 下载均为 `14985551 / 1.0.434`。Agent 自建专用签名包浏览器、真实两图 suite/审核/assignment/replay、正式 QA04、双区 canary/approval/CAS/distribution 全部通过；COM AI 分析开启、CN dark，ERP CNY0.28、Ozon写入零。准确事实、图片质量限制与旧 allowlist 误判更正见[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-06 `1.0.432` 类目/属性与过程入口修复已双区公开
 
 应用、官网和四个 Cloud/Local 下载均绑定 `21bbd220 / 1.0.432`，最终完整发布门禁与实际签名包的类目确认自动继续验收通过。COM 商品分析开启、CN dark，Provider/Ozon/新增费用零；原件和边界见[直接适配 owner](./direct-adaptation.md)。431中间候选未部署。
@@ -70,7 +74,7 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `21bbd220 / 1.0.432`.
+COM/CN applications and public Cloud/Local downloads serve `14985551 / 1.0.434`.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads
 passed. Same-binding read failures stop automatically; explicit refresh recovers the
