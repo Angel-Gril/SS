@@ -718,6 +718,15 @@ preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root')
     attributeSuggestionReviewed=attributeSuggestionContext();
     status('已按 AI 候选依据保存选中属性，请补齐未确认事实。','ok');
   },
+  onSourceChanged:async()=>{
+    await command('COLLECT');
+    await command('REFRESH');
+    editor=null; editorLoadKey=''; editorReadFailureKey=''; selectedDraftSkuKeys=null; selectedDraftShopId='';
+    unsavedListingFields.clear(); lastSave=null; referenceKeys.clear(); referenceSelectionInitialized=false;
+    translationKeys.clear(); translationSelectionContext=''; mediaStateBinding='';
+    render();
+    status('来源商品已重新采集；请选择 SKU 创建新草稿后继续。','ok');
+  },
   saveCopy:async(value,replayRequest,beforeDispatch)=>{
     if(replayRequest){lastSave=replayRequest;return saveEditor('COPY_CANDIDATE',value,true);}
     return saveEditor('COPY_CANDIDATE',value,false,beforeDispatch);
@@ -1125,7 +1134,12 @@ function draftSkuChoices() {
   const selected = data || previousSameDraft ? (data || previousSameDraft).selectedSkuKeys
     : selectedDraftShopId === draft.shopId && selectedDraftSkuKeys ? [...selectedDraftSkuKeys] : [];
   const byKey = new Map(projection.skus.map((sku) => [sku.key, sku]));
-  const rows = selected.map((key) => byKey.get(key)).filter(Boolean);
+  const rows = selected.map((key) => {
+    const exact = byKey.get(key);
+    if (exact) return exact;
+    const resolved = Workflow.resolveProjectionSkuForDraftKey(projection.skus, key);
+    return resolved ? { ...resolved, key } : null;
+  }).filter(Boolean);
   for (const copy of (data || previousSameDraft)?.offerRows?.rows || []) {
     const source = byKey.get(copy.sourceSkuKey);
     if (source) rows.push({ ...source, key: copy.rowKey, sourceSkuKey: copy.sourceSkuKey, label: `${source.label} · 复制行` });

@@ -6,6 +6,17 @@ const identity = binding => JSON.stringify(['snapshotId','supplyGoodsId','shopId
 const phases = [['analysis','商品 AI 分析'],['curation','图片筛选建议'],['vision','商品视觉 JSON'],['candidates','属性与俄文文案候选']];
 const stagedPhases=[['CURATION','AI 图片筛选'],['VISION','商品视觉分析'],['COPY','属性与俄文文案生成']];
 
+export function preparationFailureMessage(failure) {
+  if (failure?.code === 'product_preparation_media_invalid') {
+    return '来源商品图片已变化：当前页面与 ERP 草稿快照不一致。请重新采集商品并新建草稿后继续。';
+  }
+  if (failure?.code === 'product_preparation_context_stale' || failure?.code === 'product_preparation_snapshot_invalid') {
+    return '来源商品快照已变化：请重新采集商品并新建草稿后继续。';
+  }
+  const label = { CURATION: 'AI 图片筛选', VISION: '商品视觉分析', COPY: '属性与俄文文案生成' }[failure?.stage] || '商品 AI 分析';
+  return `${label}尚未完成，请检查设置或继续手工编辑。`;
+}
+
 export function preparationStageProjection(view,{stagedAnalysis=false,elapsedSeconds=0,missing=false,opening=false}={}){
   if(!stagedAnalysis)return phases.map(([id,label])=>({id,label,status:view.receipt?'COMPLETE':id==='analysis'&&view.busy?'RUNNING':'PENDING',
     message:view.receipt?'分析已完成 · 待确认':id==='analysis'&&view.busy?`正在分析 · 已等待 ${elapsedSeconds} 秒`:missing?'等待商品准备':opening?'正在读取分析准备':'待分析'}));
@@ -32,12 +43,12 @@ export function renderPreparationProcess(target, state) {
 
 export function createPreparationAnalysisView({root, runtime, command, getBinding, getSkuKey, getCategoryRevision, getMedia,
   getAttributeNames=()=>new Map(), getPrerequisites, getBusy, getRecoveryBusy=getBusy, getCopyCandidates, onCuration, onVisual, onAttributes, saveCopy, approveCopy,
-  onCompleted=()=>{}, onMessage=()=>{}, report}) {
+  onSourceChanged=async()=>{}, onCompleted=()=>{}, onMessage=()=>{}, report}) {
   let safeKeys=[],rawKeys=[],mediaToken='',capability=null,opening=false,applying=false,loadedIdentity='',restoreComplete=false;
   let prepareTask=null,analysisTask=null,prepareError='',preparePhase='';
   let stagedEnabled=false,lastCuration='',lastVision='',heartbeat=null,heartbeatStage='',heartbeatStartedAt=0,elapsedSeconds=0;
   let mode='ERP_HOSTED',profileId='',analysisModel='qwen-vl-plus',profiles=[],inputDirty=false,lastReceipt='',copyCandidate=null,settingsChanged=false;
-  const modal=make('div','settings-modal');modal.id='precision-preparation-analysis-modal';modal.hidden=true;
+  const modal=make('div','settings-modal precision-preparation-analysis-shell');modal.id='precision-preparation-analysis-modal';modal.hidden=true;
   const dialog=make('div','settings-dialog precision-preparation-analysis-dialog'),head=make('div','settings-head');
   head.append(make('div','settings-title','采集与 AI · 检查商品准备候选'));
   const close=make('button','ghost','关闭');close.id='precision-preparation-analysis-close';close.type='button';close.addEventListener('click',()=>{modal.hidden=true;});head.append(close);
@@ -64,7 +75,8 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
   const retry=make('button','ghost','重新读取分析准备');retry.id='precision-preparation-analysis-retry';retry.type='button';
   const recoverSave=make('button','ghost','核对原候选保存');recoverSave.id='precision-preparation-save-recover';
   const manual=make('button','ghost','保留当前结果，继续手工编辑');manual.id='precision-preparation-analysis-manual';manual.type='button';
-  start.id='precision-preparation-analysis-start';recover.id='precision-preparation-analysis-recover';curation.id='precision-preparation-curation-confirm';foot.append(start,retry,recover,recoverSave,curation,manual);
+  const sourceReset=make('button','ghost','重新采集并新建草稿');sourceReset.id='precision-preparation-source-reset';sourceReset.type='button';sourceReset.hidden=true;
+  start.id='precision-preparation-analysis-start';recover.id='precision-preparation-analysis-recover';curation.id='precision-preparation-curation-confirm';foot.append(start,retry,recover,recoverSave,curation,sourceReset,manual);
   body.append(notice,stateText,stageList,images,summary,visualDetails,attrSection,copySection);dialog.append(head,body,foot);modal.append(dialog);root.append(modal);
 
   const safeBinding=()=>{try{return getBinding();}catch{return null;}};
@@ -95,8 +107,8 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     onState:view=>{
       sync();
       if(view.busy&&view.operation)onMessage(`正在${view.stage?stageLabel(view.stage):'分析当前商品'}，请等待原请求结果。`,'warn');
-      else if(view.status==='RECOVERY_REQUIRED')onMessage(`${view.stage?stageLabel(view.stage):'当前商品分析'}结果未确认；可核对原请求或继续手工编辑。`,'warn');
-      else if(view.status==='WAITING_INPUT'&&view.failure)onMessage(`${stageLabel(view.stage)}尚未提交，请检查当前准备条件。`,'warn');
+    else if(view.status==='RECOVERY_REQUIRED')onMessage(`${view.stage?stageLabel(view.stage):'当前商品分析'}结果未确认；可核对原请求或继续手工编辑。`,'warn');
+      else if(view.status==='WAITING_INPUT'&&view.failure)onMessage(preparationFailureMessage(view.failure),'warn');
     },
   });
   const selectedImages=()=>[...images.querySelectorAll('input[data-analysis-source]:checked')].map(input=>input.value);
@@ -131,8 +143,10 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     visualDetails.hidden=!visionData;attrSection.hidden=copySection.hidden=!view.receipt;
     const required=prerequisites(),missing=required.find(step=>!step[2]);
     start.hidden=valid||Boolean(view.operation)||view.manuallyContinued===true;start.disabled=working||!restoreComplete||!capability?.available||selectedImages().length<1||selectedImages().length>(staged?24:5);
-    retry.hidden=valid||Boolean(view.operation)||pendingSave||Boolean(restoreComplete&&capability?.available&&!missing&&!prepareError);
+    retry.hidden=valid||Boolean(view.operation)||pendingSave||Boolean(restoreComplete&&capability?.available&&!missing&&!prepareError&&!view.failure);
     retry.disabled=opening||applying||view.busy;
+    sourceReset.hidden=!['product_preparation_media_invalid','product_preparation_context_stale','product_preparation_snapshot_invalid'].includes(view.failure?.code);
+    sourceReset.disabled=opening||applying||view.busy||getRecoveryBusy();
     recover.hidden=!view.operation;recover.disabled=working||!view.current;
     recover.textContent=view.stage?`核对原${stageLabel(view.stage)}`:'核对原分析';
     manual.hidden=view.manuallyContinued===true||valid||!staged&&!view.operation&&!view.failure;manual.disabled=working||typeof session.continueManually!=='function';
@@ -300,6 +314,12 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     const result=await session.continueManually();
     if(!result.manuallyContinued)throw new Error('未能保留当前结果，请先核对原操作');
     modal.hidden=true;onMessage('当前 AI 结果已保留；未完成阶段保持未完成，请继续手工编辑。');onCompleted('analysis-manual');
+  });});
+  sourceReset.addEventListener('click',event=>{if(!event.isTrusted||sourceReset.disabled)return;void action(async()=>{
+    await onSourceChanged();
+    session.reset();
+    modal.hidden=true;
+    onCompleted('source-reset');
   });});
   save.addEventListener('click',event=>{if(event.isTrusted&&!save.disabled)void action(async()=>{
     await session.updateDraft(editedCopy());

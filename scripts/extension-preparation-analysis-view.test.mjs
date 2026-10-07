@@ -17,6 +17,24 @@ test('stage projection retains completed curation and shows only the actual visi
   assert.match(rows[1].message,/17 秒/);assert.ok(rows.every(row=>!row.message.includes('%')));
 });
 
+test('source media and snapshot drift produce an actionable message instead of a generic wait state', async () => {
+  const { preparationFailureMessage } = await load();
+  assert.match(preparationFailureMessage({ code: 'product_preparation_media_invalid' }), /来源商品图片已变化/);
+  assert.match(preparationFailureMessage({ code: 'product_preparation_context_stale' }), /重新采集商品并新建草稿/);
+  assert.match(preparationFailureMessage({ stage: 'VISION', code: 'provider_unavailable' }), /商品视觉分析尚未完成/);
+});
+
+test('stale source analysis exposes explicit re-collect action and resets its local session', async () => {
+  const f = await fixture({ capability: stagedCapability, analyze: input => {
+    throw Object.assign(new Error('来源图片已变化'), { code: 'product_preparation_media_invalid' });
+  }});
+  await assert.rejects(f.view.run(), /来源图片已变化/);
+  assert.equal(f.element('source-reset').hidden, false);
+  f.element('source-reset').click();
+  await tick(); await tick();
+  assert.equal(f.view.state().status, 'IDLE');
+});
+
 test('unknown copy stage keeps earlier results visible and manual continuation never reports AI completion', async () => {
   const {preparationStageProjection}=await load();
   const value={status:'RECOVERY_REQUIRED',stage:'COPY',busy:false,operation:{operationKey:'original-operation'},stageResults:{CURATION:{curation:[]},VISION:{visualDescription:{}}}};

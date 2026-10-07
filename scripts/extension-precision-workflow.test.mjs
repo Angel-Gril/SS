@@ -72,6 +72,17 @@ test('collector fallback reads all skuItems and source image arrays without fabr
   assert.equal(projection.media.length, 2);
 });
 
+test('legacy draft SKU keys resolve to the current capture row while preserving the draft key', () => {
+  const skus = [
+    { key: 'sku:6261116830598|规格=中号塑料收纳盒|中号塑料收纳盒', sourceSkuId: '6261116830598', label: '中号塑料收纳盒' },
+    { key: 'sku:6261116830599|规格=大号塑料收纳盒|大号塑料收纳盒', sourceSkuId: '6261116830599', label: '大号塑料收纳盒' },
+  ];
+  assert.equal(api.resolveProjectionSkuForDraftKey(skus, skus[0].key), skus[0]);
+  assert.equal(api.resolveProjectionSkuForDraftKey(skus, 'sku:6261116830598|中号塑料收纳盒').key, skus[0].key);
+  assert.equal(api.resolveProjectionSkuForDraftKey(skus, '6261116830598').key, skus[0].key);
+  assert.equal(api.resolveProjectionSkuForDraftKey(skus, 'sku:missing|未知'), null);
+});
+
 test('start selects SKUs, collects and creates an exact shop draft in one session', async () => {
   const run = fixture();
   const draft = await run.session.start({ shopId: 'doth', selectSkus: async (raw) => ({ ...raw, sku_matrix: [raw.sku_matrix[1], raw.sku_matrix[7]] }) });

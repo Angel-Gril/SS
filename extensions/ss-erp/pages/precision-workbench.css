@@ -142,6 +142,16 @@
 .precision-preparation-stage[data-stage-status="COMPLETE"] span:last-child { color: #16865d; }
 .precision-preparation-stage[data-stage-status="RECOVERY_REQUIRED"] span:last-child { color: var(--warn); }
 .precision-preparation-analysis-dialog { width: 1080px; max-width: 100%; grid-template-rows: auto minmax(0,1fr) auto; }
+.precision-preparation-analysis-shell { background: transparent; padding: 0; align-items: stretch; justify-content: stretch; pointer-events: none; }
+.precision-preparation-analysis-shell .precision-preparation-analysis-dialog { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; pointer-events: auto; }
+#editor-category-modal,
+#precision-attribute-suggestions-modal,
+#precision-copy-modal,
+#precision-pricing-modal { background: transparent; padding: 0; align-items: stretch; justify-content: stretch; pointer-events: none; }
+#editor-category-modal > .settings-dialog,
+#precision-attribute-suggestions-modal > .settings-dialog,
+#precision-copy-modal > .settings-dialog,
+#precision-pricing-modal > .settings-dialog { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; pointer-events: auto; }
 .precision-preparation-analysis-dialog .settings-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
 .precision-preparation-analysis-dialog .settings-foot { flex-wrap: wrap; gap: 8px; }
 .precision-preparation-bar button,

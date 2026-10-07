@@ -118,6 +118,16 @@ export function createPreparationAnalysisSession({ getContext, analyze, read, pe
   }
   return {
     state, checkpoint, current,
+    reset() {
+      if (busy) throw new Error('请等待当前分析结束后重新采集');
+      context = null; operation = null; application = null; analysisInput = null;
+      receipt = null; draft = null; status = 'IDLE'; rootOperationKey = null;
+      stage = null; stageResults = {}; stageStartedAt = null; failure = null;
+      manuallyContinued = false;
+      review = { curationConfirmed: false, visualApplied: false, copySaved: false, attributesApplied: false };
+      selections = { curationMediaKeys: null, visualDescription: null };
+      publish();
+    },
     restore(value) {
       if (busy || !value || value.version !== 1 || forbidden(value) || !value.context
         || contextToken(value.context) !== contextToken(getContext())) return false;

@@ -35,6 +35,25 @@
     return [projection.source.platform, projection.source.sourceProductId, projection.source.canonicalUrl].join('|');
   }
 
+  // Existing drafts can contain a legacy key built from the source SKU id and
+  // a shortened specification string. Keep that draft key for server writes,
+  // but resolve it to the current capture row for projection and rendering.
+  function resolveProjectionSkuForDraftKey(skus, draftKey) {
+    if (!Array.isArray(skus) || typeof draftKey !== 'string') return null;
+    var normalized = draftKey.normalize('NFKC').trim();
+    if (!normalized) return null;
+    var exact = skus.find(function (sku) { return sku && sku.key === normalized; });
+    if (exact) return exact;
+    var sourceSkuId = normalized;
+    var prefixed = normalized.match(/^sku:([^|]+)/u);
+    if (prefixed) sourceSkuId = prefixed[1].normalize('NFKC').trim();
+    var matches = skus.filter(function (sku) {
+      return sku && typeof sku.sourceSkuId === 'string'
+        && sku.sourceSkuId.normalize('NFKC').trim() === sourceSkuId;
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   function createSession(options) {
     var getProjection = options.getProjection;
     var send = options.send;
@@ -219,5 +238,10 @@
     };
   }
 
-  root.SS_ERP_PRECISION_WORKFLOW = { createSession: createSession, toDonorData: toDonorData, listingForShop: listingForShop };
+  root.SS_ERP_PRECISION_WORKFLOW = {
+    createSession: createSession,
+    toDonorData: toDonorData,
+    listingForShop: listingForShop,
+    resolveProjectionSkuForDraftKey: resolveProjectionSkuForDraftKey,
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
