@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-07 `14985551 / 1.0.434` 双区受控部署完成，官网门禁待正式 QA04
+
+- clean commit `149855518f39e0475571e8ab6fc382530a177b7f` 已推送并使用区域独立 Cloud/Local 候选、现有 Ed25519 key `ss-erp-extension-release-2026-08-02-01` 签名。COM/CN 均已通过标准部署入口切换 current、重启 API/Worker/Web 并返回 `/ready`；两区都运行 `1.0.434`。COM 保持原 hosted pilot owner/shop/两活动设备/`IMAGE_TO_IMAGE,SUITE,IMAGE_TRANSLATE` 范围，CN 保持 direct/RDS dark。
+- COM/CN 目标绑定备份恢复均完成，分别读回 `144` / `143` 张 public 表并清理临时库；部署与 runtime 备份目录分离。COM/CN 部署后 canonical VPS verifier 均为 `0 failure / 1 warning`，唯一 warning 是既有远端备份未配置。正式 evidence 保存在 operator-private `/var/lib/ss-erp-donor-deploy-evidence/149855518f39e0475571e8ab6fc382530a177b7f/vps-verification.canonical.json`；本地只读归档 SHA 分别为 COM `502d02d7018280a40f16e729abe04f08cc00d91881aa1dc143c75d39f1f0e63d`、CN `5777c31570ba135671f578c1c6c23a42e75d20a6eb8cc6a593d6f7da548b5f62`。
+- 同 commit `pnpm qa:04:offline` 已通过（server `6999 passed / 373 skipped`，扩展 Cloud/Local `626/616`，无 Provider/Ozon 请求）。这只是 offline rehearsal；正式 `QA04_FINAL_ACCEPTANCE` 仍需绑定本 commit 的 fresh normal ERP suite evidence。由于本 commit 对 `apps/server`/`packages/shared`/迁移有实质变化，不能复用旧 `761e003c` 或更早 suite/QA04，也没有执行 Provider/Ozon 请求来补造证据。
+- 因正式 QA04 和新的 normal suite 尚未完成，本轮未执行 REL-04 COM/CN canary、website approval、distribution probe、CAS 或官网 pointer 切换；官网仍保持旧公开版本。没有新增 Provider/Ozon 写入或费用。
+
+
 ## 2026-10-07 工作台连续分析入口与来源变化提示收口（本地）
 
 - 真实 9444 验收暴露两处可用性问题：旧草稿的 SKU key 与当前采集 key 格式不同，导致草稿读回后表格误显示 0 SKU；当前 1688 页面有 9 张图而草稿快照只绑定 8 张，分析入口把快照外图片一起提交后被服务端正确拒绝，界面此前只显示通用等待状态。

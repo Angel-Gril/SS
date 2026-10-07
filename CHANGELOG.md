@@ -24,6 +24,7 @@
 ### Verified
 
 - COM pilot 在 `7de20515 / 1.0.433` 完成一次真实三阶段托管商品分析和阶段幂等回读；结果仍是待人工确认候选，未执行 Ozon 发布。
+- `14985551 / 1.0.434` 已完成 COM hosted-pilot、CN direct/RDS dark 双区受控部署、备份恢复和 canonical VPS 验证；正式 QA04、REL-04 canary 与官网公开门禁仍待完成，故保留在 Unreleased。
 
 ## [1.0.432] - 2026-10-06
 

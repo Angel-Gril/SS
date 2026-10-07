@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-07 `14985551 / 1.0.434` 双区应用部署完成，官网仍待正式 QA04
+
+COM/CN 已按标准入口部署 clean commit `149855518f39e0475571e8ab6fc382530a177b7f / 1.0.434`；COM 保持受限 hosted pilot，CN 保持 direct/RDS dark。双区备份恢复、canonical VPS evidence、`pnpm qa:04:offline` 与签名包校验通过，未产生 Provider/Ozon 请求或费用。正式 fresh normal ERP suite、QA04、REL-04 canary、website approval、CAS、distribution probe 尚未完成，因此官网 pointer 仍保持旧版本。准确证据与限制见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-06 `21bbd220 / 1.0.432` 类目与属性读回修复双区公开完成
 
 COM/CN 应用、官网 latest 和 Cloud/Local 下载均已公开 `21bbd220cad4ee9d97f0e51db59d6a7afdaeecc4 / 1.0.432`。类目确认后等待真实草稿读回、被替代属性请求不阻断新版本、过程窗口当前步骤入口与统一按钮均有定向及签名包浏览器证据；正式 QA04、双区备份恢复/VPS/canary/approval/CAS、匿名完整下载和发布后验收通过。COM 商品分析保持开启、CN dark；无新增 Provider/Ozon 请求或费用，临时会话已清理。准确原件和限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
