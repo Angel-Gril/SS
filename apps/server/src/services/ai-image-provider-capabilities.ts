@@ -192,7 +192,7 @@ export function resolveAiImageProviderCapability(
   const exact = AI_IMAGE_PROVIDER_CAPABILITIES.find(entry=>entry.provider===provider&&entry.model===model);
   // An edit-specific addition must not shadow the existing text-only fallback.
   // Edit admission still requires exact model/endpoint evidence.
-  if (operation==='TEXT_TO_IMAGE' && exact && !exact.operations.includes(operation)) {
+  if (provider==='custom' && operation==='TEXT_TO_IMAGE' && exact && !exact.operations.includes(operation)) {
     return AI_IMAGE_PROVIDER_CAPABILITIES.find(entry=>entry.provider===provider&&entry.model==='*'&&entry.operations.includes(operation)) || null;
   }
   return (

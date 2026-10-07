@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 文字生图 fallback 兼容边界修正，最终候选437
+
+436完整检查的7077项通过、2项Wanx隔离回归失败，暴露fallback误适用全部Provider。已限定仅custom恢复原文字生图兼容，Wanx图片编辑仍不继承文字生图；原2项RED→关联123项GREEN，未部署436、未新增费用。最终437继续验证/双区部署，旧候选与失败日志保留；见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 Provider 发布审查目录收口，最终候选 `1.0.436`
 
 435中间候选已签但完整preflight在静态Provider审查目录拒绝新注册项，未部署。现已按实际证据补齐count精确端点单参考记录和通用GPT2未晋升记录，保留扩大引用/操作/端点时拒绝的回归；最终候选436继续绑定新clean commit验证和双区部署。当前线上和官网仍1.0.434，未新增Provider请求；事实见[直接适配 owner](donor-workbench/direct-adaptation.md)。

@@ -1,5 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 436全量发现Wanx fallback回归，最终437收口
+
+- 436完整preflight通过静态Provider审查目录，后端7077 passed/373既有skipped，但两项既有Wanx IMAGE_TO_IMAGE/FULL_EDIT测试失败：操作aware fallback误对所有Provider开放，令wanx2.1-imageedit继承TEXT_TO_IMAGE。失败原件保留，未部署436，不能声称完整门禁通过。
+- 根因修复只将fallback限制为`provider=custom`，保留所需自定义文字模型兼容，Wanx原拒绝边界恢复；原两项实际RED→5套关联GREEN。未修改旧测试期望、引用数、证据或金额。最终候选437绑定后续新commit，不覆盖435/436原签名或失败日志，没有新增Provider/Ozon请求。
+
 ## 2026-10-08 435完整门禁失败保留，最终候选436
 
 - `5483f06e`已推送，435两区候选原签名/验签通过，但完整preflight在`AI media provider foundation contract`拒绝`custom:gpt-image-2-count`与`custom:gpt-image-2`，因为静态review map没有这两条新记录。没有部署或覆盖原候选/日志，不能声称435完整门禁通过。
