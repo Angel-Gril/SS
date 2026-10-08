@@ -1,5 +1,15 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 `5ebe68b1 / 1.0.440` 双区部署与 COM 套图默认模型切换完成
+
+- 用户本轮明确授权把提供的域名/模型/Key接入COM，并指定ERP预扣CNY0.10/张。`7c1950fd`专用套图配置、`dd5d35ff`独立Worker验收及`5ebe68b1e01364160f96c870bdcbe1bb0e76875c`SQL前向兼容修复均已提交推送。438/439候选未部署，原失败/签名原件保留，最终440从clean commit独立构建、区域签名/验签与标准部署完成。
+- COM实际套图runtime已读回：provider=`custom`、base=`https://ai.big-model-api.top/v1`、model=`gpt-image-2-count`、currency=CNY、单图10minor、两图20minor、Key record revision1、executionReady=true、Provider请求1008×1344。Key仅从当前Windows用户DPAPI解密经SSH stdin进入远程内存，通过现有 `/api/admin/system-config/batch` 超级管理员账号session和expectedRevision原子保存六项；数据库加密前缀已确认，响应/审计/原件无明文Key，临时session实际删除后才写成功回执。
+- 套图以独立family默认使用新服务；普通IMAGE_TO_IMAGE/FULL_EDIT/INPAINT/文字生图原配置未改变，普通IMAGE_TO_IMAGE读回仍Wanx/CNY14minor，避免未接齐donor普通请求被错误开启。商品分析qwen-vl-max保持开启，原DOTH单owner/单shop/两合法device及三操作pilot不扩大；CN套图inherit实际disabled、AI分析/套图/BYOK关闭，direct/RDS dark保持。
+- 真实 `/ready` 与current确认两区均为上述5ebe68b1、API/Worker/Web active、db/Redis=ok。目标备份恢复COM144/CN143表及临时恢复库清理通过，新迁移已部署；迁移更新函数/约束但未重写业务数据。CN迁移阶段API/Worker暂时停止、公开ready短时502，标准部署完成后已恢复200，不能把中途停机称全程无中断。
+- 正式canonical VPS两区PASS/FULL/0failures/1warning，唯一warning为既有远端备份未配置。COM SHA=`04f8c13296cf31d1d0243e15d34b5a4b61779cedd7918e75cff1160055e6c187`，CN SHA=`4d06d2edd2b7e23a6edc44fb57dcca293b867d344029f6001994eefadc527384`。实际两区签名ZIP隔离Chrome安装、默认精铺入口、透明shell和来源拒绝也通过，Cloud/Local verifier620/616均0failure。配置读回及VPS验收原件在私有`release-5ebe68b1-deploy440`；服务器切换前加密快照和expectedRevision回滚路径保留。
+- 本次仅Provider GET models验证Key/完整model可用，没有新生图POST/费用、Ozon/草稿/assignment写入。此前两张GPT2真实质量样本只证明该精确Providerprofile，不冒充440新真实ERP suite。440部署验证沿用439未改变runtime/Web的完整7120/build基线，并完成新增SQL/静态门禁及211项真实Postgres/升级回放；没有生成440正式native offline/QA04。
+- 官网公开下载实读仍`14985551 / 1.0.434`，本轮未执行官网approval/canary/CAS/distribution。后续公开仍需适用于count/CNY10的新正式suite evidence owner与完整原件，旧Wanx/CNY14的QA04不能伪装成新模型证据。本次用户要求的“COM套图模型域名Key与CNY0.10配置切换”完成；公开下载及新生产全链创作质量尚未完成。
+
 ## 2026-10-08 SQL 冻结合同兼容闭环，最终候选440准备部署
 
 - 439的native offline已通过lint、类型、完整preflight/build、后端7120 passed/373既有skipped、命令撤权PostgreSQL；完整AI Media实库在210项中拒绝6个Wanx prompt freeze，原因是最终SQL仅认可Wanx compiler/v1，新服务还会被旧CNY分支误当Wanx。439未部署或写入生产模型；失败原件保留在`release-dd5d35ff-deploy439/qa04-offline.log`，不能把此前成功步骤冒充完整QA04。
