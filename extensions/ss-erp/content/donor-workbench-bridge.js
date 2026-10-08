@@ -1051,10 +1051,7 @@
   }
 
   function openErpEntry(message, sender, respond) {
-    if (!sender || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !sender.tab
-      || !Number.isSafeInteger(sender.tab.id) || typeof sender.documentId !== 'string' || sender.documentId.length < 1
-      || sender.tab.url !== location.href
-      || sender.url !== undefined && sender.url !== location.href && sender.url !== chrome.runtime.getURL('background/service-worker.js')
+    if (!isWorkerSender(sender)
       || Object.keys(message).length !== 2 || !/^[a-f0-9]{48}$/u.test(message.nonce || '')
       || busy || entryRequest || !frame) { respond({ ok: false }); return false; }
     var request = { requestId: 'erp-entry-' + (++entrySequence), context: null, respond: respond,
@@ -1074,6 +1071,13 @@
       } catch { if (entryRequest === request) finishErpEntry(false); }
     })();
     return true;
+  }
+
+  function isWorkerSender(sender) {
+    return Boolean(sender && sender.id === chrome.runtime.id && !sender.tab && !sender.documentId
+      && (sender.frameId === undefined || sender.frameId === 0)
+      && (!sender.url || sender.url === chrome.runtime.getURL('background/service-worker.js'))
+      && (!sender.origin || sender.origin === extensionOrigin));
   }
 
   globalThis.addEventListener('message', function (event) {
@@ -1136,9 +1140,7 @@
 
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (message && message.type === 'ss-erp:precision-erp-workbench-current') {
-      if (Object.keys(message).length !== 1 || !sender || sender.id !== chrome.runtime.id || sender.tab || sender.documentId
-        || sender.url && sender.url !== chrome.runtime.getURL('background/service-worker.js')
-        || sender.origin && sender.origin !== extensionOrigin || !open || !frameReady || entryRequest || !entryContext
+      if (Object.keys(message).length !== 1 || !isWorkerSender(sender) || !open || !frameReady || entryRequest || !entryContext
         || !entryBindingCurrent(entryContext.context)) { sendResponse({ ok: false }); return false; }
       sendResponse({ ok: true, workflowId: entryContext.context.workflowId,
         draftRevision: entryContext.context.draftRevision, draftVersion: entryContext.context.draftVersion });

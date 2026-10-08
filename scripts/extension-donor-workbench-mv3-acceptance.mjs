@@ -40,6 +40,7 @@ const {
   mediaChannelProbe: PROBE_MEDIA_CHANNEL,
   mediaChannelOnly: MEDIA_CHANNEL_ONLY,
 } = selectAcceptanceMode(process.argv.slice(2));
+const PROBE_ERP_ENTRY = process.argv.includes('--erp-entry-probe');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function assertPrecisionFrameObservation(value, { extensionId, sourceUrl }) {
@@ -356,6 +357,122 @@ async function probeMediaChannel(cdp, options) {
   return receipt;
 }
 
+async function probeErpPrecisionEntry(cdp, { workerSession, iframeEvaluate, extensionId }) {
+  const invoke = async expression => {
+    const result = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, workerSession);
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result.result.value;
+  };
+  const product = await iframeEvaluate(`JSON.parse(document.getElementById('source-output').textContent)`);
+  const skuKey = product.sku_matrix.at(-1)?.row_id;
+  assert.ok(skuKey, 'the actual collector must supply the ERP entry SKU');
+  const context = { contractVersion: 'extension-byok-workbench-launch-context/v1', sourcePlatform: SOURCE_PLATFORM,
+    sourceProductId: '990499606077', sourceCaptureSnapshotId: 'isolated-erp-entry-snapshot', supplyGoodsId: 'isolated-erp-entry-goods',
+    shopId: 'isolated-erp-entry-shop', workflowId: 'isolated-erp-entry-target-draft', draftRevision: 3, draftVersion: 2,
+    skuKey, slotKey: `sku:${skuKey}:hero`, assignmentMode: 'APPEND', assignmentOrdinal: 0 };
+  const handoff = { snapshotId: context.sourceCaptureSnapshotId, supplyGoodsId: context.supplyGoodsId, snapshotVersion: 1,
+    sourceProductId: context.sourceProductId, platform: context.sourcePlatform,
+    path: `/collect/source?supplyGoodsId=${context.supplyGoodsId}&snapshotId=${context.sourceCaptureSnapshotId}&snapshotVersion=1&sourceProductId=${context.sourceProductId}&platform=${context.sourcePlatform}&section=listing` };
+  const sourceTabs = await invoke(`(async()=>{const tabs=await chrome.tabs.query({});return tabs.filter(tab=>tab.url===${JSON.stringify(PRODUCT_URL)}).map(tab=>({id:tab.id,url:tab.url}));})()`);
+  assert.equal(sourceTabs.length, 1, 'ERP entry must target one actual source tab');
+  const tabId = sourceTabs[0].id;
+  const fixture = { context, handoff, tabId, runtimeId: extensionId, sourceUrl: PRODUCT_URL };
+  const receipt = { contractVersion: 'ss-erp-precision-erp-entry-mv3-probe/v1', ok: false,
+    evidencePlane: 'ACTUAL_CHROME_MV3_WITH_ISOLATED_DEVICE_AND_SERVER_FIXTURES',
+    authorityAndServerAcceptance: false, providerRequests: 0, ozonRequests: 0,
+    targetDraft: context.workflowId, targetSku: skuKey, sameShopDecoyDraft: 'isolated-erp-entry-decoy-draft' };
+  await invoke(`(() => {
+    const fixture=${JSON.stringify(fixture)};
+    const trace={authorityReads:0,bindingReads:0,claims:0,currentReads:0,focuses:0,sourceSenders:[],outgoing:[],editorReads:[]};
+    globalThis.__ssErpEntryProbe={fixture,trace,originalClient:getSourceListingWorkflowClient,
+      originalDevice:readExtensionDeviceStatus,originalShops:globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS,
+      originalLauncher:erpSourcePrecisionLauncher};
+    const context=fixture.context;
+    const binding={snapshotId:context.sourceCaptureSnapshotId,supplyGoodsId:context.supplyGoodsId,shopId:context.shopId,
+      listingWorkflowId:context.workflowId,draftRevision:context.draftRevision,draftVersion:context.draftVersion};
+    const listing=id=>({id,shopId:context.shopId,stage:'MEDIA_REVIEW',status:'ACTIVE',runState:'ACTIVE',revision:3,draftVersion:2,
+      selectedSkuCount:1,mediaAssignmentCount:0,validationStatus:'NOT_RUN',blockerCount:0,warningCount:0,blockers:[],warnings:[],updatedAt:'2026-10-09T00:00:00.000Z'});
+    const status={state:'ready',status:{snapshot:{id:context.sourceCaptureSnapshotId,version:1,current:true},
+      listing:{items:[listing('isolated-erp-entry-decoy-draft'),listing(context.workflowId)],truncated:false},media:{items:[],actionableCount:0}}};
+    const editorFor=input=>({contractVersion:'extension-listing-editor/v1',binding:{...input},selectedSkuKeys:[context.skuKey],category:null,
+      pricing:{items:[{skuKey:context.skuKey,price:'30.00',oldPrice:'35.00',currencyCode:'CNY',vat:'0',
+        offerId:input.listingWorkflowId===context.workflowId?'probe-target-offer':'probe-decoy-offer'}]},packaging:[],fieldIssues:[],copy:{titleRu:input.listingWorkflowId===context.workflowId?'Изолированный целевой товар':'Другой черновик',descriptionRu:null,pendingCandidates:[]},
+      mediaAssignments:[],stage:'MEDIA_REVIEW',validation:{status:'NOT_RUN'},blockers:[],
+      freshness:{category:'STALE',attributes:'STALE',content:'CURRENT',media:'STALE',pricing:'STALE',validation:'STALE'}});
+    const fixtureClient={
+      async getStatus(){return structuredClone(status);},
+      async readDraftEditor(input){trace.editorReads.push(input.listingWorkflowId);return{state:'ready',editor:editorFor(input)};},
+      async getMediaLaunch(){return{state:'disabled',context:null,capability:{enabled:false,reason:'isolated fixture',revision:'fixture-v1'}};},
+      async getAiImageSuite(){return{state:'disabled',projection:null};},
+      async getMediaHistory(input){return{state:'ready',history:{contractVersion:'extension-source-media-history/v1',
+        context:{snapshotId:input.snapshotId,supplyGoodsId:input.supplyGoodsId,shopId:input.shopId,listingWorkflowId:input.listingWorkflowId,
+          revision:input.revision,draftVersion:input.draftVersion},snapshot:{id:input.snapshotId,version:1,capturedAt:'2026-10-09T00:00:00.000Z'},items:[],nextCursor:null}};},
+      async readProductVisionCapability(){return{state:'ready',capability:{ready:false,enabled:false,reasonCode:'fixture_disabled',reason:'isolated fixture'}};},
+      async readProductPreparationCapability(){return{state:'ready',capability:{ready:false,enabled:false,reasonCode:'fixture_disabled',reason:'isolated fixture'}};},
+      async readDraftCopyCapability(){return{state:'ready',capability:{ready:false,enabled:false,reasonCode:'fixture_disabled',reason:'isolated fixture'}};},
+    };
+    getSourceListingWorkflowClient=()=>fixtureClient;
+    readExtensionDeviceStatus=async()=>({state:'paired',ownerUserId:'isolated-erp-owner',sessionId:'isolated-erp-device',
+      endpoint:'https://ss-erp.com',scopes:['listing:review','listing:write','media:execute'],expiresAt:'2099-01-01T00:00:00.000Z'});
+    globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS=async()=>({ok:true,data:[{id:context.shopId,name:'Isolated ERP shop',status:'ACTIVE'}]});
+    const observe=function(message,sender){if(message?.type==='ss-erp:precision-erp-launch-claim'){
+      trace.claims++;trace.sourceSenders.push({id:sender.id,url:sender.url,origin:sender.origin,frameId:sender.frameId,documentId:sender.documentId,tabId:sender.tab?.id});}};
+    chrome.runtime.onMessage.addListener(observe);globalThis.__ssErpEntryProbe.observe=observe;
+    const sourceTabs={query:chrome.tabs.query.bind(chrome.tabs),create:chrome.tabs.create.bind(chrome.tabs),get:chrome.tabs.get.bind(chrome.tabs),
+      update:async(...args)=>{trace.focuses++;return chrome.tabs.update(...args);},
+      sendMessage:async(tabId,message,options)=>{trace.outgoing.push(message.type);const response=await chrome.tabs.sendMessage(tabId,message,options);
+        trace.openResponse=response;return response;}};
+    erpSourcePrecisionLauncher=SS_ERP_ERP_SOURCE_PRECISION_LAUNCH.createLauncher({runtimeId:chrome.runtime.id,tabs:sourceTabs,
+      sessionStorage:chrome.storage.session,resolveProductUrl:precisionSourceProductUrl,
+      verifyErpSourceAuthority:async()=>{trace.authorityReads++;return true;},
+      verifySourceDocument:async({tabId,documentId,context})=>{trace.currentReads++;
+        const current=await chrome.tabs.sendMessage(tabId,{type:'ss-erp:precision-erp-workbench-current'},{frameId:0,documentId});
+        return current?.ok===true&&current.workflowId===context.workflowId&&current.draftRevision===context.draftRevision&&current.draftVersion===context.draftVersion;},
+      loadBinding:async actual=>{trace.bindingReads++;
+        if(JSON.stringify(actual)!==JSON.stringify(context))throw Error('isolated entry binding mismatch');
+        return{context:structuredClone(context),handoff:structuredClone(fixture.handoff)};},persistHandoff:persistSourceWorkflowHandoff});
+    return true;
+  })()`);
+  try {
+    const opened = await invoke(`(async()=>{const fixture=__ssErpEntryProbe.fixture;
+      return await getErpSourcePrecisionLauncher().open({context:fixture.context,sourceTabId:fixture.tabId,sourceDocumentId:'isolated-erp-source-document',
+        erpSourceAuthority:{provenance:'ERP_SOURCE',ownerUserId:'isolated-erp-owner',deviceSessionId:'isolated-erp-device',
+          apiOrigin:'https://ss-erp.com',webOrigin:'https://app.ss-erp.com',grantSha256:'b'.repeat(64)}});})()`);
+    assert.deepEqual(opened, { state: 'workbench_focused', tabId });
+    receipt.opened = opened;
+    receipt.ui = await until(async () => {
+      const value = await iframeEvaluate(`({shop:document.getElementById('erp-shop-select').value,
+        imageSkus:[...document.querySelectorAll('.image-manager-summary-item')].map(row=>row.dataset.imageSkuKey),
+        selectedSku:document.querySelector('.image-manager-summary-item.is-active')?.dataset.imageSkuKey||'',
+        editorInputs:[...document.querySelectorAll('#product-editor input')].map(input=>input.value)})`);
+      return value.shop === context.shopId && value.imageSkus.length === 1 && value.imageSkus[0] === context.skuKey
+        && value.editorInputs.includes('probe-target-offer') && !value.editorInputs.includes('probe-decoy-offer') ? value : null;
+    }, 'ERP target draft and selected SKU appear in the actual iframe');
+    receipt.trace = await invoke(`structuredClone(__ssErpEntryProbe.trace)`);
+    assert.equal(receipt.trace.claims, 1, 'the real source content must claim the nonce once');
+    assert.equal(receipt.trace.currentReads, 1, 'the original claiming document must pass an actual Chrome current read');
+    assert.equal(receipt.trace.focuses, 1);
+    assert.ok(receipt.trace.editorReads.includes(context.workflowId), 'the actual UI must read the targeted second draft');
+    assert.equal(receipt.trace.sourceSenders[0].frameId, 0);
+    assert.equal(receipt.trace.sourceSenders[0].tabId, tabId);
+    assert.ok(receipt.trace.sourceSenders[0].documentId);
+    assert.deepEqual(receipt.trace.outgoing, ['ss-erp:precision-erp-workbench-open']);
+    receipt.ok = true;
+  } catch (error) {
+    receipt.failure = error.message;
+    receipt.trace = await invoke(`structuredClone(__ssErpEntryProbe.trace)`);
+    receipt.failedUi = await iframeEvaluate(`({status:document.getElementById('status-text')?.textContent,
+      log:document.getElementById('ai-output')?.textContent,byok:document.getElementById('precision-byok-state')?.textContent,
+      sourceSkus:JSON.parse(document.getElementById('source-output')?.textContent||'{}').sku_matrix?.map(row=>row.row_id)})`);
+  } finally {
+    await invoke(`(() => {const probe=__ssErpEntryProbe;chrome.runtime.onMessage.removeListener(probe.observe);
+      getSourceListingWorkflowClient=probe.originalClient;readExtensionDeviceStatus=probe.originalDevice;
+      globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS=probe.originalShops;erpSourcePrecisionLauncher=probe.originalLauncher;
+      delete globalThis.__ssErpEntryProbe;return true;})()`);
+  }
+  return receipt;
+}
+
 async function run() {
   const artifacts = await mkdtemp(path.join(os.tmpdir(), 'ss-erp-donor-mv3-evidence-'));
   const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-donor-mv3-profile-')));
@@ -377,6 +494,7 @@ async function run() {
     retiredFrameInterceptions: [],
     ...(MEDIA_CHANNEL_ONLY ? { acceptanceScope: 'opened-precision-ui-and-transport' } : {}),
     ...(PROBE_MEDIA_CHANNEL ? { mediaChannelProbe: { status: 'not_verified', ok: false } } : {}),
+    ...(PROBE_ERP_ENTRY ? { erpEntryProbe: { status: 'not_verified', ok: false } } : {}),
     pageErrors: [], blockedRequests: [], productionMutations: 0, providerRequests: 0, ozonRequests: 0,
   };
   let cdp;
@@ -639,6 +757,11 @@ async function run() {
       const image=document.querySelector('.precision-source-tile img');
       return Boolean(image?.complete && image.naturalWidth>0);
     })()`), 'rendered precision source image');
+
+    if (PROBE_ERP_ENTRY) {
+      summary.erpEntryProbe = await probeErpPrecisionEntry(cdp, { workerSession, iframeEvaluate, extensionId: summary.extensionId });
+      assert.equal(summary.erpEntryProbe.ok, true);
+    }
 
     if (PROBE_MEDIA_CHANNEL) {
       summary.mediaChannelProbe = await probeMediaChannel(cdp, {

@@ -131,6 +131,7 @@ test('precision BYOK registration recovery and stable controls use real DOM', as
     await cdp.run('window.firstInitialization=fixture.editor.initialize();window.secondInitialization=fixture.editor.initialize();');
     assert.equal(await cdp.evaluate('fixture.calls.filter(call=>call==="register").length'), 1);
     assert.equal(await cdp.evaluate('fixture.editor.state().initializing'), true);
+    assert.equal(await cdp.evaluate('fixture.editor.hasPendingMedia()'), false, 'read-only initialization must not refuse a precise ERP draft entry');
     await cdp.run('fixture.resolveRegistration();await Promise.all([firstInitialization,secondInitialization]);');
     assert.equal(await cdp.evaluate('fixture.editor.state().registered'), true);
     assert.equal(await cdp.evaluate('fixture.editor.initialize()'), true);
@@ -181,6 +182,7 @@ test('precision BYOK registration recovery and stable controls use real DOM', as
     assert.equal(await cdp.evaluate('document.getElementById("precision-byok-generation-prompt").value'), '保留已编辑方向');
     assert.match(await cdp.evaluate('document.getElementById("precision-byok-generation-meta").textContent'), /CANDIDATE_READY/u);
     assert.equal(await cdp.evaluate('document.getElementById("precision-byok-generation-show-preview").disabled'), false);
+    assert.equal(await cdp.evaluate('fixture.editor.hasPendingMedia()'), true, 'an unbound candidate must prevent losing its original context');
   });
   await t.test('state renders retain selected source and its actual DOM nodes', async () => {
     await fixture(cdp);

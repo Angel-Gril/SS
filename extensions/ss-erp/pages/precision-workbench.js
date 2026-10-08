@@ -104,8 +104,8 @@ function command(type, fields = {}) {
 
 const session = Workflow.createSession({ getProjection: () => projection, send: command });
 const erpEntry = createPrecisionErpEntry({ session, getProjection: () => projection,
-  isBusy: () => saveBusy || Boolean(lastSave) || mediaMutationBusy || publishBusy || session.isActive()
-    || unsavedListingFields.size > 0 || preparation?.isRunning() || byok.isBusy(),
+    isBusy: () => saveBusy || Boolean(lastSave) || mediaMutationBusy || publishBusy || session.isActive()
+    || unsavedListingFields.size > 0 || preparation?.isRunning() || byok.hasPendingMedia(),
   applySelection: context => {
     selectedShopId = context.shopId;
     selectedSkuKey = context.skuKey;

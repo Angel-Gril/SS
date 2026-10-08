@@ -197,9 +197,9 @@ function erpEntryFixture({ changedRevision = false } = {}) {
     captureV2: { skus: [{ key: 'sku-1', sourceSkuId: 'sku-1' }], media: [] } });
   return { ...state, context };
 }
-const workerSender = { id: runtimeId, frameId: 0, documentId: 'source-doc-1',
-  url: 'https://detail.1688.com/offer/845581683597.html', origin: 'https://detail.1688.com',
-  tab: { id: 7, url: 'https://detail.1688.com/offer/845581683597.html' } };
+// Chrome tabs.sendMessage from the Worker carries extension sender identity,
+// not the tab/document/frame of its receiving content script.
+const workerSender = { id: runtimeId, url: `chrome-extension://${runtimeId}/background/service-worker.js` };
 const erpOpen = { type: 'ss-erp:precision-erp-workbench-open', nonce: 'a'.repeat(48) };
 
 test('ERP entry waits for the actual precision frame to confirm the exact draft before reporting opened', async () => {
@@ -249,4 +249,18 @@ test('a frame declining to replace unsaved edits is not reported as opened', asy
     data: { contractVersion: 'ss-erp-donor-workbench/v1', type: 'ENTRY_ACCEPTED', requestId: 'entry-declined',
       entryRequestId: entry.requestId, workflowId: state.context.workflowId, draftRevision: 3, draftVersion: 2, accepted: false } });
   assert.equal(response?.ok, false);
+});
+
+test('an id-only native Worker sender is accepted while content-script sender fields are refused', async () => {
+  const state = erpEntryFixture(); let result;
+  assert.equal(state.runtimeListener(erpOpen, { id: runtimeId }, value => { result = value; }), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(result, undefined);
+  assert.equal(state.frame.hidden, false);
+  for (const extra of [{ frameId: 1 }, { documentId: 'source-document' },
+    { tab: { id: 7, url: 'https://detail.1688.com/offer/845581683597.html' } }, { origin: 'https://detail.1688.com' }]) {
+    const denied = erpEntryFixture(); let response;
+    denied.runtimeListener(erpOpen, { ...workerSender, ...extra }, value => { response = value; });
+    assert.equal(response?.ok, false); assert.equal(denied.runtimeRequests.length, 0);
+  }
 });

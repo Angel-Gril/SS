@@ -361,6 +361,14 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
       await act(async () => { modal.hidden = false; await refresh(); state.textContent = '接口和密钥在当前扩展会话配置；图片模型与商品分析模型分别选择。'; });
     },
     setMode(value) { mode = value; onModeChange(value); render(); },
+    // ERP entry must wait for a pending media mutation, candidate, unknown
+    // outcome, or unsaved media edit, but read-only registration/profile
+    // initialization does not replace a draft or change its owner.
+    hasPendingMedia: () => {
+      const flowView = flow?.state() || flowState;
+      return busy || Boolean(flowView?.busy || flowView?.candidate || flowView?.readbackRequired
+        || flowView?.generationUnknown || editBusy || editStateValue?.candidate);
+    },
     isBusy: () => busy || initializing || Boolean(flow?.state().busy),
     invalidate() { flow?.invalidate(); generationError = ''; render(); },
     state: () => ({ registered, initializing, available, selectedProfileId: selectedId, hasKey: selectedState?.hasKey === true }),

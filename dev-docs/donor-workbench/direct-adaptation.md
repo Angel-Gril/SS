@@ -7,6 +7,12 @@
 - UI 直接复用已有精铺 iframe/CSS/同窗编辑及图片交互。ERP 只读启动和来源页只读采集不自动发起 AI、扣费或上架；取消/关闭保留草稿，刷新及 iframe 重载保留精确选择，完整来源文档重载需从 ERP 重新启动。来源登录/验证码、重定向、草稿变化或不完整回执均明确失败，不能提示已打开。
 - T2：实际 workflow/bridge/launcher 行为已先 RED 后 GREEN；新增 T3 隔离浏览器入口验收路径，实测层与 fixture 数据层分别报告。本次只改扩展入口/适配，不改服务端权限、金额、模型、schema 或部署策略。定向验收覆盖旧页不被新 ERP WORKBENCH 启动打开、同店多草稿命中指定项、刷新/iframe 重载不换草稿、过期/错来源/错版本/未知结果拒绝、普通 source/popup 入口不回归。源码和测试已通过，尚未签名、推送或部署；官网任务继续保留原授权，候选必须重新绑定最终提交。
 
+### 2026-10-09 真实 MV3 ERP 精铺入口验收
+
+- 修复了后台 `tabs.sendMessage` 到来源页时错误套用 content-script sender 形状的问题；现在 Worker sender 仅按扩展身份校验，来源页仍按真实 tab/document/source URL 校验。只读 BYOK 初始化不再阻止 ERP 入口，未保存媒体、候选、未知回执和实际 mutation 仍会阻止切换。
+- 独立 Chrome MV3 `--erp-entry-probe` 真实通过：实际 Worker → `tabs.sendMessage` → 来源 bridge → 单次 nonce claim → 精确店铺/草稿/SKU → ACK → focus；同店诱饵草稿未被选中，`claims=1/currentReads=1/focuses=1`，Provider/Ozon/网络写入均为0。证据在临时隔离目录，`authorityAndServerAcceptance=false`，它是入口运行验收，不替代正式 QA04。
+- 真实 MV3 完整默认入口也通过：精铺 iframe、普通商品、popup、伪造页面命令拒绝、登录/错误 URL 拒绝、透明 shell 和无额外遮罩均通过。此前 17fc5ee6 的签名候选已失效，修复需绑定新的 clean commit 后重新签名。
+
 ## 2026-10-08 count真实suite预览阻塞修复，444候选准备
 
 - 在b3282d37/443实际签名Chrome/正常DOTH设备上，新suite`cmuzk0oz500115o3frxjnuyim`两图已真实成功、attempt1、原件1008×1344/成品900×1200、两笔CNY0.10结算；START/CONTINUE、PENDING UI/实库原件完整保存。候选预览实际409，旧authority-prisma只接受旧`ai-image-suite-output-normalizer/v1`，assignment消费者也有同类旧检查；本次不能宣称443套图新模型预览/应用或官网发布通过。
