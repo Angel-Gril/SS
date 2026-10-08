@@ -3,6 +3,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAiImageProviderRuntimeConfig } from '../workers/ai-image-generation.js';
+import { getAiImageSuiteProviderRuntimeConfig } from '../services/ai-image-suite-runtime-config.js';
 import {
   aiImageSuiteProviderRuntimeMatches,
   createAiImageSuiteProviderRuntimeSnapshot,
@@ -38,7 +39,7 @@ function standaloneRuntimeEvidence() {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   });
   return runInNewContext(compiled.outputText, {
-    getAiImageProviderRuntimeConfig,
+    getAiImageSuiteProviderRuntimeConfig,
     createAiImageSuiteProviderRuntimeSnapshot,
     aiImageSuiteProviderRuntimeMatches,
   }) as (suite: Parameters<typeof aiImageSuiteProviderRuntimeMatches>[0]) => Promise<string | null>;
@@ -46,7 +47,7 @@ function standaloneRuntimeEvidence() {
 
 async function frozenEditingSuite() {
   const snapshot = createAiImageSuiteProviderRuntimeSnapshot(
-    await getAiImageProviderRuntimeConfig('IMAGE_TO_IMAGE'),
+    await getAiImageSuiteProviderRuntimeConfig(),
     { nodeEnv: 'production' },
   );
   expect(snapshot.executionReady).toBe(true);
@@ -67,6 +68,30 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('standalone suite worker runtime selection', () => {
+  const dedicated = (price = '10') => [...configuration(), ...Object.entries({
+    ai_image_suite_provider: 'custom', ai_image_suite_base_url: 'https://ai.big-model-api.top/v1',
+    ai_image_suite_model: 'gpt-image-2-count', ai_image_suite_api_key: 'synthetic-dedicated-suite-key',
+    ai_image_suite_cost_cents: price, ai_image_suite_currency: 'CNY',
+  }).map(([key, value]) => ({ key, value, id: `config-${key}`, revision: 1,
+    updatedAt: new Date('2026-10-08T00:00:00.000Z') }))];
+
+  it('uses the dedicated CNY count runtime while ordinary image operations retain their own model', async () => {
+    db.findMany.mockResolvedValue(dedicated());
+    const suite = await frozenEditingSuite();
+    expect(suite).toMatchObject({ provider: 'custom', model: 'gpt-image-2-count', estimatedCostCents: 10 });
+    expect(await getAiImageProviderRuntimeConfig('IMAGE_TO_IMAGE')).toMatchObject({
+      provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', costPerImageCents: 14,
+    });
+    await expect(standaloneRuntimeEvidence()(suite)).resolves.toBe('sandbox-verified');
+  });
+
+  it('rejects a changed dedicated quote instead of validating it against the ordinary image price', async () => {
+    db.findMany.mockResolvedValue(dedicated());
+    const suite = await frozenEditingSuite();
+    db.findMany.mockResolvedValue(dedicated('11'));
+    await expect(standaloneRuntimeEvidence()(suite)).resolves.toBeNull();
+  });
+
   it('uses the frozen editing runtime when the same provider has a separate T2I model and price', async () => {
     const suite = await frozenEditingSuite();
     expect(await getAiImageProviderRuntimeConfig('TEXT_TO_IMAGE')).toMatchObject({

@@ -1,5 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 独立 Worker 测试接线收口，最终候选439
+
+- `7c1950fd` 已提交推送、438双区签名/安装与部署材料准备完成，但完整 native offline 在后端全量拒绝：7114 passed/373既有skipped、独立 Worker 4项失败。实际 Worker 回调改用专用 suite loader，抽取回调的 VM 测试仍只注入旧全局 loader，因此 ReferenceError；没有部署438或保存生产配置。
+- 原4项失败已定向复现后更新 VM 注入，使测试执行实际新 loader，并增加独立 CNY count 与全局普通图片隔离、独立报价变化拒绝两个回归；5套101项及定向 lint通过。修复只改验收接线，不弱化旧断言、凭据或报价合同。438原签名、备份和失败日志保留，最终439从后续新clean commit重新构建与验证。
+
 ## 2026-10-08 COM 默认套图模型切换准备（尚未生产写入）
 
 - 用户明确授权使用提供的 `https://ai.big-model-api.top / gpt-image-2-count` 与测试 Key 作为 COM 后端托管套图配置，并指定 ERP 单张预扣价为 CNY0.10；这是 ERP 用户收费，不代表供应商实际账单。商品分析继续 qwen-vl-max，CN 保持 direct/RDS dark。
