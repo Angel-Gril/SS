@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createPrismaExtensionHostedAiImagePlanBindingStore,
@@ -24,6 +26,28 @@ import {
 } from '../services/hosted-suite-listing-draft-assignment.js';
 import { createPrismaSourceListingWorkflowRepository } from '../services/source-listing-workflow-prisma.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
+import { createAiMediaPlanningService } from '../services/ai-media-planning.js';
+import { createAiImageSuiteCandidateService } from '../services/ai-image-suite-candidates.js';
+import { PrismaAiImageSuiteCandidateRepository } from '../repositories/ai-image-suite-candidate-repository.js';
+import { createSourceProductCaptureV2Submission, type SourceProductCaptureV2Submission } from 'shared';
+import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
+import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
+import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-repository.js';
+import { PrismaAiImageSuiteReferenceRepository } from '../repositories/ai-image-suite-reference-repository.js';
+import { PrismaAiImageSuitePromptRepository } from '../repositories/ai-image-suite-prompt-repository.js';
+import { PrismaAiImageSuiteMaterializationRepository } from '../repositories/ai-image-suite-materialization-repository.js';
+import { PrismaAiImageSuiteExecutionRepository, PrismaAiImageSuiteGenerationCoordinator } from '../repositories/ai-image-suite-execution-repository.js';
+import { createAiImageSuiteProviderRuntimeSnapshot, aiImageSuiteProviderRuntimeMatches } from '../services/ai-image-suite-provider-runtime.js';
+import { createAiImageSuitePreview } from '../services/ai-image-suite.js';
+import { createAiImageSuiteReferenceService } from '../services/ai-image-suite-references.js';
+import { createAiImageSuitePromptService } from '../services/ai-image-suite-prompts.js';
+import { createAiImageSuiteMaterializationService } from '../services/ai-image-suite-materialization.js';
+import { createAiImageSuiteExecutionService } from '../services/ai-image-suite-execution.js';
+import { AiPromptTemplateRegistryService } from '../services/ai-prompt-template-registry.js';
+import { PrismaAiPromptTemplateStore } from '../services/ai-prompt-template-prisma.js';
+import { executeAiImageSuitePaidProvider } from '../services/ai-image-suite-paid-execution.js';
+import { prepareAiImageSuitePaidProviderExecution } from '../services/ai-image-suite-paid-provider.js';
+import { createDonorGptImage2EditProvider, type FetchLike } from '../services/ai-image-providers.js';
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
@@ -73,6 +97,134 @@ interface HostedAssignmentFixture {
     ExtensionHostedCandidatePreviewBinding,
   ];
   input: AssignHostedSuiteOutputToListingDraftInput;
+}
+
+// The count case uses all normal owners and leaves every database trigger
+// active. Only storage and HTTP transport are synthetic; pricing, reservation,
+// settlement, prompt freezing, execution, review and assignment remain real.
+async function seedCountHostedAssignmentFixture(client: PrismaClient): Promise<HostedAssignmentFixture> {
+  const prefix = `count_assign_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  const ownerUserId = `${prefix}_owner`, shopId = `${prefix}_shop`, goodsId = `${prefix}_goods`;
+  const subjectId = `${prefix}_subject`, snapshotId = `${prefix}_snapshot`, deviceSessionId = `${prefix}_session`;
+  const submission = await createSourceProductCaptureV2Submission(JSON.parse(readFileSync(new URL(
+    '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json', import.meta.url), 'utf8'))
+    .capture as SourceProductCaptureV2Submission['capture']);
+  const sourceProfile = buildSourceProductProfileFromCapture(submission.capture, {
+    itemId: submission.captureHash, captureHash: submission.captureHash,
+  });
+  const skuKey = submission.capture.skus[0]!.key, mediaKey = submission.capture.media[0]!.key;
+  await client.user.create({ data: { id: ownerUserId, phone: `${prefix}_phone`, passwordHash: 'integration-test' } });
+  await client.shop.create({ data: { id: shopId, userId: ownerUserId, platform: 'OZON', name: prefix, apiKeyEncrypted: 'integration-test' } });
+  await client.supplyGoods.create({ data: { id: goodsId, userId: ownerUserId, title: prefix, sourcePlatform: '1688', sourceProductId: prefix } });
+  await client.sourceCaptureSubject.create({ data: { id: subjectId, ownerUserId, sourcePlatform: '1688', sourceProductId: prefix, legacySupplyGoodsId: goodsId } });
+  await client.sourceCaptureSnapshot.create({ data: { id: snapshotId, subjectId, version: 1,
+    schemaVersion: 'source-product-capture-v2', captureHash: submission.captureHash, payloadBytes: submission.payloadBytes,
+    payload: submission.capture as never, stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'count-assignment-integration',
+    completeness: {}, truncations: [], hasEstimatedValues: false, profile: {}, profileHash: sourceProfile.hash,
+    actorUserId: ownerUserId, ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only', capturedAt: new Date() } });
+  const listing = createSourceListingWorkflowService({ repository: createPrismaSourceListingWorkflowRepository({ client: client as never }) });
+  const draft = await listing.createDraft({ ownerUserId, actorUserId: ownerUserId, shopId, supplyGoodsId: goodsId,
+    sourceCaptureSnapshotId: snapshotId, sourceCaptureHash: submission.captureHash, selectedSkuKeys: [skuKey] });
+  await client.extensionDevicePairingCode.create({ data: { id: `${prefix}_pairing`, deploymentId: 'count-assignment-integration',
+    actorUserId: ownerUserId, ownerUserId, codeDigest: digest(prefix), shopIds: [shopId], scopes: ['media:read', 'listing:write'],
+    status: 'CLAIMED', expiresAt: new Date(Date.now() + 86_400_000), claimedAt: new Date() } });
+  await client.extensionDeviceSession.create({ data: { id: deviceSessionId, pairingCodeId: `${prefix}_pairing`,
+    deploymentId: 'count-assignment-integration', deviceId: `${prefix}_device`, actorUserId: ownerUserId, ownerUserId,
+    scopes: ['media:read', 'listing:write'], currentJti: `${prefix}_jti`, expiresAt: new Date(Date.now() + 86_400_000) } });
+  await client.extensionDeviceShopGrant.create({ data: { sessionId: deviceSessionId, shopId, status: 'ACTIVE' } });
+  const sourceBytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#dbe9f2' } }).jpeg().toBuffer();
+  const outputBytes = await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#247852' } }).png().toBuffer();
+  const stored = new Map<string, Buffer>();
+  const uploadBuffer = async (buffer: Buffer, filename: string) => {
+    const key = `${ownerUserId}/${digest(buffer)}/${filename}`; stored.set(key, buffer);
+    return { backend: 'oss' as const, key, url: `https://count-storage.example/${key}` };
+  };
+  const settings = { provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+    apiKey: 'synthetic-integration-key', costPerImageCents: 10, currency: 'CNY' as const, concurrencyLimit: 2,
+    credentialRevision: { recordId: `${prefix}_credential`, revision: 7, updatedAt: new Date().toISOString() } };
+  const runtime = createAiImageSuiteProviderRuntimeSnapshot(settings);
+  expect(runtime.executionReady).toBe(true);
+  const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), { sourcePreparation: {
+    download: async url => ({ sourceUrl: url, finalUrl: url, contentType: 'image/jpeg', buffer: sourceBytes, redirectCount: 0 }),
+    getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+  } });
+  const planned = await planning.createRuleBased({ ownerUserId, actorUserId: ownerUserId, sourceSubjectId: subjectId,
+    sourceCaptureSnapshotId: snapshotId, context: { type: 'collect', id: goodsId }, idempotencyKey: `${prefix}_plan`,
+    selectedSkuKeys: [skuKey], candidateMediaKeys: [mediaKey], galleryGoals: ['scene'] });
+  const approved = await planning.review({ planId: planned.plan.id, ownerUserId, actorUserId: ownerUserId,
+    expectedRevision: planned.plan.revision, operationKey: `${prefix}_approve`, decision: 'APPROVE', note: null });
+  const suites = new PrismaAiImageSuiteRepository(client);
+  const planAuthority = await suites.loadApprovedAuthority({ ownerUserId, actorUserId: ownerUserId, planId: planned.plan.id });
+  const preview = createAiImageSuitePreview(planAuthority!, runtime.providerConfig!);
+  const claimed = await suites.claimApproved({ ownerUserId, actorUserId: ownerUserId, planId: planned.plan.id,
+    expectedPlanRevision: approved.plan.revision, idempotencyKey: `${prefix}_suite`, expectedPreviewHash: preview.previewHash, providerConfig: runtime.providerConfig! });
+  const suiteId = claimed.suite!.id;
+  await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(client),
+    preparationLease: { runExclusive: async (_scope, work) => work({ ensureOwned: async () => undefined }), isReady: async () => true },
+    download: async () => { throw new Error('Frozen source must be reused'); }, getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+  }).internalize({ suiteId, ownerUserId, actorUserId: ownerUserId, expectedRevision: 1, operationKey: `${prefix}_refs` });
+  await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(client),
+    templateResolver: new AiPromptTemplateRegistryService(new PrismaAiPromptTemplateStore(client), { getLegacyPrompt: async () => 'unused' }),
+  }).freeze({ suiteId, ownerUserId, actorUserId: ownerUserId, expectedRevision: 2, operationKey: `${prefix}_prompts` });
+  const controls = async () => ({ dailyLimit: 100, globalDailyBudgetCents: 100_000 });
+  await createAiImageSuiteMaterializationService(new PrismaAiImageSuiteMaterializationRepository(client, {
+    getCostControls: controls, getProviderRuntime: async () => runtime,
+  })).materialize({ suiteId, ownerUserId, actorUserId: ownerUserId, expectedRevision: 3, operationKey: `${prefix}_materialize` });
+  const execution = new PrismaAiImageSuiteExecutionRepository(client, {
+    runtimeReady: async suite => aiImageSuiteProviderRuntimeMatches(suite, runtime), getCostControls: controls,
+  });
+  await createAiImageSuiteExecutionService(execution).dispatch({ suiteId, ownerUserId, actorUserId: ownerUserId,
+    expectedRevision: 4, operationKey: `${prefix}_dispatch` });
+  let posts = 0;
+  const fixtureFetch: FetchLike = async (url, options = {}) => {
+    if (options.method === 'POST') {
+      expect(String(url)).toBe('https://ai.big-model-api.top/v1/images/edits'); posts++;
+      return new Response(JSON.stringify({ data: [{ url: `https://count-results.example/${posts}.png` }] }), {
+        status: 200, headers: { 'x-request-id': `${prefix}_provider_${posts}` },
+      });
+    }
+    expect(String(url)).toMatch(/^https:\/\/count-results\.example\/[12]\.png$/u);
+    return new Response(new Uint8Array(outputBytes), { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(outputBytes.length) } });
+  };
+  const prepareProvider = (input: Parameters<typeof prepareAiImageSuitePaidProviderExecution>[0]) => prepareAiImageSuitePaidProviderExecution(input, {
+    loadSettings: async () => settings, loadInputBuffer: async source => { const bytes = stored.get(source.storageKey!); if (!bytes) throw new Error('Missing frozen source'); return bytes; },
+    createOpenAiProvider: options => createDonorGptImage2EditProvider({ ...options, fetch: fixtureFetch }),
+  });
+  const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, {
+    runtimeReady: async suite => aiImageSuiteProviderRuntimeMatches(suite, runtime), getRuntimeEvidence: async () => runtime.capability!.evidenceLevel,
+    outputStorageReady: async () => true, getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'READY', reason: 'isolated count fixture' }), uploadBuffer,
+    executePaidProvider: (input, dependencies) => executeAiImageSuitePaidProvider(input, { ...dependencies, prepareProvider }),
+  });
+  const tasks = await execution.listQueueableTasks(suiteId);
+  expect(tasks).toHaveLength(2);
+  for (const task of tasks) {
+    const claim = await coordinator.revalidateAndClaim(task);
+    if (claim.kind !== 'ready') throw new Error('Count test claim was refused');
+    await expect(coordinator.execute(task, claim)).resolves.toMatchObject({ kind: 'completed' });
+  }
+  expect(posts).toBe(2);
+  const complete = await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId }, include: { slots: { include: {
+    childWorkflow: { include: { jobs: { include: { assets: true } } } },
+  }, orderBy: { ordinal: 'asc' } } } });
+  expect(complete.status).toBe('SUCCEEDED');
+  const planBinding = createExtensionHostedAiImagePlanBindingRecord({ planId: planned.plan.id,
+    identity: { ownerUserId, actorUserId: ownerUserId, deviceSessionId }, binding: { snapshotId, supplyGoodsId: goodsId,
+      shopId, listingWorkflowId: draft.id, draftRevision: draft.revision, draftVersion: draft.draftVersion },
+    selectedSkuKeys: [skuKey], candidateMediaKeys: [mediaKey] });
+  await createPrismaExtensionHostedAiImagePlanBindingStore(client).bind(planBinding);
+  const items = complete.slots.map(slot => ({ skuKey, slotKey: slot.slotKey, suiteSlotId: slot.id,
+    expectedSuiteSlotRevision: slot.revision, childWorkflowId: slot.childWorkflowId!, expectedChildWorkflowRevision: slot.childWorkflow!.revision,
+    outputAssetId: slot.childWorkflow!.jobs[0]!.assets.find(asset => asset.kind === 'AI_GENERATED')!.id }));
+  const input: AssignHostedSuiteOutputToListingDraftInput = { ownerUserId, actorUserId: ownerUserId, deviceSessionId, shopId,
+    listingWorkflowId: draft.id, expectedDraftRevision: draft.revision, expectedDraftVersion: draft.draftVersion, sourceCaptureSnapshotId: snapshotId,
+    assignmentStartOrdinal: 0, planId: planned.plan.id, planVersionId: complete.planVersionId, expectedPlanRevision: approved.plan.revision,
+    suiteId, expectedSuiteRevision: complete.revision, idempotencyKey: `${prefix}_assignment`, items };
+  return { ownerUserId, listingWorkflowId: draft.id, jobIds: tasks.map(task => task.jobId) as [string, string], input,
+    candidateBindings: items.map(item => ({ snapshotId, supplyGoodsId: goodsId, shopId, listingWorkflowId: draft.id,
+      draftRevision: draft.revision, draftVersion: draft.draftVersion, planId: input.planId, planVersionId: input.planVersionId,
+      planRevision: input.expectedPlanRevision, suiteId, suiteRevision: complete.revision, slotId: item.suiteSlotId,
+      slotRevision: item.expectedSuiteSlotRevision, workflowId: item.childWorkflowId, workflowRevision: item.expectedChildWorkflowRevision,
+      outputAssetId: item.outputAssetId })) as HostedAssignmentFixture['candidateBindings'] };
 }
 
 async function seedHostedAssignmentFixture(
@@ -721,13 +873,14 @@ function preserveFailedTransactionState(
 function assignmentService(
   client: PrismaClient,
   preserveFailure = false,
+  now = ASSIGNMENT_TIME,
 ) {
   const repository = createPrismaHostedSuiteListingDraftAssignmentRepository(
     client as unknown as HostedSuiteListingDraftAssignmentPrismaClient,
   );
   return createHostedSuiteListingDraftAssignmentService(
     preserveFailure ? preserveFailedTransactionState(repository) : repository,
-    { now: () => ASSIGNMENT_TIME },
+    { now: () => now },
   );
 }
 
@@ -814,6 +967,44 @@ describePostgres('hosted suite listing-draft assignment PostgreSQL atomicity', (
   }, 30_000);
 
   afterAll(async () => client?.$disconnect());
+
+  it('loads real count portrait authority, reviews both pending outputs, atomically applies CNY10 and replays without more charges', async () => {
+    const fixture = await seedCountHostedAssignmentFixture(client);
+    const loader = createPrismaExtensionHostedAiImageAuthorityLoader(client);
+    const reviewer = createAiImageSuiteCandidateService(new PrismaAiImageSuiteCandidateRepository(client));
+    const repository = createPrismaHostedSuiteListingDraftAssignmentRepository(client as unknown as HostedSuiteListingDraftAssignmentPrismaClient);
+    for (const [index, binding] of fixture.candidateBindings.entries()) {
+      await expect(loader.loadCandidateAuthority({ ownerUserId: fixture.ownerUserId,
+        deviceSessionId: fixture.input.deviceSessionId, binding })).resolves.toMatchObject({
+        workflow: { reviewStatus: 'PENDING' }, output: { metadata: { normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1' } },
+      });
+      const approved = await reviewer.review({ suiteId: fixture.input.suiteId, slotId: binding.slotId,
+        ownerUserId: fixture.ownerUserId, actorUserId: fixture.ownerUserId, expectedWorkflowRevision: binding.workflowRevision,
+        operationKey: `count-review-${randomUUID()}`, outputAssetId: binding.outputAssetId, decision: 'APPROVE', note: null, production: true });
+      fixture.input.items[index]!.expectedChildWorkflowRevision = approved.review.workflowRevision;
+      await expect(loader.loadCandidateAuthority({ ownerUserId: fixture.ownerUserId,
+        deviceSessionId: fixture.input.deviceSessionId, binding: { ...binding, workflowRevision: approved.review.workflowRevision } })).resolves.toMatchObject({
+        workflow: { reviewStatus: 'APPROVED' },
+      });
+    }
+    const load = () => repository.transaction(transaction => transaction.loadAuthority(fixture.input));
+    const authority = await load();
+    expect(authority!.slots).toHaveLength(2);
+    for (const slot of authority!.slots) {
+      expect(slot.currentJob).toMatchObject({ provider: 'custom', model: 'gpt-image-2-count', actualCostMinor: 10,
+        operationConfig: { providerRuntime: { contractVersion: 'ai-image-provider-runtime/v3', currency: 'CNY', unitCostCents: 10 } } });
+      expect(slot.rawOutputAsset).toMatchObject({ ownerUserId: fixture.ownerUserId, aiImageJobId: slot.currentJob!.id,
+        kind: 'AI_PROVIDER_OUTPUT', width: 1008, height: 1344, metadata: { normalizedSha256: slot.outputAsset!.sha256 } });
+    }
+    const charges = await client.aiCostSettlement.findMany({ where: { ownerUserId: fixture.ownerUserId }, orderBy: { id: 'asc' } });
+    expect(charges).toHaveLength(2); expect(charges.reduce((sum, row) => sum + (row.actualCostMinor || 0), 0)).toBe(20);
+    const service = assignmentService(client, false, new Date(Date.now() + 1_000));
+    await expect(service.assign(fixture.input)).resolves.toMatchObject({ replayed: false, boundDraftRevision: 2, assignments: [{ assignmentOrdinal: 0 }, { assignmentOrdinal: 1 }] });
+    const after = await persistedState(client, fixture);
+    await expect(service.assign(fixture.input)).resolves.toMatchObject({ replayed: true });
+    expect(await persistedState(client, fixture)).toEqual(after);
+    expect(await client.aiCostSettlement.findMany({ where: { ownerUserId: fixture.ownerUserId }, orderBy: { id: 'asc' } })).toEqual(charges);
+  }, 30_000);
 
   it('commits two slots once through the deferred draft fence and replays the exact batch', async () => {
     const fixture = await seedHostedAssignmentFixture(client, 'success');

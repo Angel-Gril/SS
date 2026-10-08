@@ -18,6 +18,8 @@ import {
   type ExtensionHostedAiImageAuthorityPrismaClient,
 } from '../services/extension-hosted-ai-image-authority-prisma.js';
 import { deriveSourceListingSkuCopyKey } from '../services/source-listing-sku-copies.js';
+import { createDonorGpt2FullFrameConfig } from '../services/ai-image-donor-gpt2-profile.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 const captureFixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
@@ -241,7 +243,56 @@ const candidateInput = () => ({
   binding: { ...binding },
 });
 
+function countGraphRow(): Record<string, any> {
+  const frame = createDonorGpt2FullFrameConfig();
+  return graphRow({
+    jobProvider: 'custom', jobModel: 'gpt-image-2-count', jobProviderJobId: 'provider-task-1', jobActualCostCents: 10,
+    jobOperationConfig: { version: 'ai-image-suite-child-operation/v2', outputProfile: frame.finalOutput.profile,
+      width: 900, height: 1200, slotPromptId: 'prompt-1', promptBindingHash: 'a'.repeat(64), referenceSetHash: 'b'.repeat(64),
+      requestProfile: frame.requestProfile, providerRequest: frame.providerRequest, finalOutput: frame.finalOutput,
+      providerRuntime: createAiImageProviderRuntimeContract({ provider: 'custom', model: 'gpt-image-2-count',
+        baseUrl: 'https://ai.big-model-api.top/v1', costPerImageCents: 10, currency: 'CNY',
+        credentialRevision: { recordId: 'credential-1', revision: 7, updatedAt: '2026-10-08T00:00:00.000Z' } },
+      { count: 1, width: 1008, height: 1344 }) },
+    outputMetadata: { version: 'ai-image-suite-output/v1', normalizerVersion: frame.finalOutput.normalizerVersion,
+      sourceCaptureSnapshotId: 'snapshot-1', suiteId: 'suite-1', slotId: 'slot-1', attempt: 1, providerOutputAssetId: 'raw-1' },
+    rawOutputId: 'raw-1', rawOutputOwnerUserId: 'owner-1', rawOutputJobId: 'job-1', rawOutputKind: 'AI_PROVIDER_OUTPUT',
+    rawOutputSnapshotId: 'snapshot-1', rawOutputStorageBackend: 'oss', rawOutputStorageKey: 'owners/owner-1/ai/raw-1.png',
+    rawOutputMimeType: 'image/png', rawOutputSizeBytes: 190_000, rawOutputWidth: 1008, rawOutputHeight: 1344,
+    rawOutputSha256: 'c'.repeat(64), rawOutputMetadata: { version: 'ai-image-suite-provider-output/v1',
+      normalizerVersion: frame.finalOutput.normalizerVersion, sourceCaptureSnapshotId: 'snapshot-1', providerJobId: 'provider-task-1',
+      actualCostCents: 10, normalizedSha256: 'a'.repeat(64), providerResultReceivedAt: '2026-10-08T01:00:00.000Z' },
+  });
+}
+
 describe('Prisma extension hosted AI image authority loader', () => {
+  it('previews a count full-frame suite candidate without relabeling its normalization or exposing private runtime', async () => {
+    const { loader, query } = fixture([[bindingRow()], [countGraphRow()]]);
+    const authority = await loader.loadCandidateAuthority(candidateInput());
+    expect(authority?.output.metadata).toMatchObject({ normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1' });
+    expect(JSON.stringify(authority)).not.toMatch(/credential|provider-task|gpt-image-2|ai\.big-model|promptBinding/iu);
+    expect(query.mock.calls[1]![0]).toContain('job."operation_config_json"');
+    expect(query.mock.calls[1]![0]).toContain('LEFT JOIN "media_assets" raw_output');
+  });
+
+  it('refuses count suite metadata without its exact frozen runtime and raw output lineage', async () => {
+    const mutators: Array<(row: Record<string, any>) => void> = [
+      row => { row.jobOperationConfig = null; }, row => { row.jobModel = 'other-model'; },
+      row => { row.jobOperationConfig.providerRuntime.baseUrlSha256 = 'd'.repeat(64); },
+      row => { row.jobOperationConfig.providerRuntime.currency = 'USD'; },
+      row => { row.jobOperationConfig.providerRequest.quality = 'standard'; },
+      row => { row.jobOperationConfig.finalOutput.fit = 'contain'; },
+      row => { row.outputMetadata.normalizerVersion = 'ai-image-suite-output-normalizer/v1'; },
+      row => { row.rawOutputWidth = 1024; }, row => { row.rawOutputOwnerUserId = 'other-owner'; },
+      row => { row.rawOutputMetadata.normalizedSha256 = 'd'.repeat(64); },
+      row => { row.rawOutputMetadata.providerJobId = 'other-task'; }, row => { row.rawOutputSnapshotId = 'other-snapshot'; },
+    ];
+    for (const mutate of mutators) {
+      const row = countGraphRow(); mutate(row);
+      const { loader } = fixture([[bindingRow()], [row]]);
+      await expect(loader.loadCandidateAuthority(candidateInput())).resolves.toBeNull();
+    }
+  });
   it('adds server-owned copied offers to planning authority without changing the captured source hash or canonical database selection', async () => {
     const operationKey = 'hosted-copy-operation', rowKey = deriveSourceListingSkuCopyKey('listing-workflow-1', operationKey);
     const row = planRow();

@@ -485,6 +485,25 @@ beforeEach(() => {
 });
 
 describe('Prisma hosted suite listing draft atomic batch repository', () => {
+  it('projects frozen job configuration and original output lineage for count candidates', async () => {
+    const rows = [authorityRow(0), authorityRow(1)].map(row => ({ ...row,
+      jobOperationConfig: { providerRuntime: { currency: 'CNY' } }, jobProviderJobId: 'fixture-provider-identity',
+      rawAssetId: 'fixture-original', rawAssetOwnerUserId: 'owner-1', rawAssetJobId: row.jobId,
+      rawAssetKind: 'AI_PROVIDER_OUTPUT', rawAssetSnapshotId: 'snapshot-1', rawAssetStorageBackend: 'oss',
+      rawAssetStorageKey: 'private/raw.png', rawAssetMimeType: 'image/png', rawAssetSizeBytes: 123,
+      rawAssetWidth: 1008, rawAssetHeight: 1344, rawAssetSha256: 'f'.repeat(64), rawAssetMetadata: { version: 'raw-fixture' },
+    }));
+    const { repository, query } = fixture({ authorityRows: [rows] });
+    const loaded = await repository.transaction(tx => tx.loadAuthority(command()));
+    expect(loaded?.slots[0]?.currentJob).toMatchObject({ operationConfig: rows[0]!.jobOperationConfig,
+      providerJobId: 'fixture-provider-identity' });
+    expect(loaded?.slots[0]?.rawOutputAsset).toMatchObject({ id: 'fixture-original', ownerUserId: 'owner-1',
+      width: 1008, height: 1344, sha256: 'f'.repeat(64), metadata: { version: 'raw-fixture' } });
+    const sql = String(query.mock.calls.find(([value]) => String(value).includes('FROM "users" actor_account'))?.[0]);
+    expect(sql).toContain('job."operation_config_json" AS "jobOperationConfig"');
+    expect(sql).toContain('raw_output."id" = asset."metadata"->>\'providerOutputAssetId\'');
+    expect(sql).toContain('raw_output."ai_image_job_id" = job."id"');
+  });
   it('uses a serializable transaction and reads every replay row in batch order', async () => {
     const records = recordsFor();
     const { client, repository, query } = fixture({

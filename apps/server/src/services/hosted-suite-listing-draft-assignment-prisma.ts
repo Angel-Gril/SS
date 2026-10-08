@@ -193,6 +193,8 @@ const AUTHORITY_SQL = `
     job."operation"::text AS "jobOperation",
     job."provider" AS "jobProvider",
     job."model" AS "jobModel",
+    job."operation_config_json" AS "jobOperationConfig",
+    job."provider_job_id" AS "jobProviderJobId",
     job."request_fingerprint" AS "jobRequestFingerprint",
     job."actual_cost_cents" AS "jobActualCostMinor",
     job."billed_units" AS "jobBilledUnits",
@@ -228,7 +230,20 @@ const AUTHORITY_SQL = `
     asset."width" AS "assetWidth",
     asset."height" AS "assetHeight",
     asset."sha256" AS "assetSha256",
-    asset."metadata" AS "assetMetadata"
+    asset."metadata" AS "assetMetadata",
+    raw_output."id" AS "rawAssetId",
+    raw_output."owner_user_id" AS "rawAssetOwnerUserId",
+    raw_output."ai_image_job_id" AS "rawAssetJobId",
+    raw_output."kind"::text AS "rawAssetKind",
+    raw_output."source_capture_snapshot_id" AS "rawAssetSnapshotId",
+    raw_output."storage_backend" AS "rawAssetStorageBackend",
+    raw_output."storage_key" AS "rawAssetStorageKey",
+    raw_output."mime_type" AS "rawAssetMimeType",
+    raw_output."size_bytes" AS "rawAssetSizeBytes",
+    raw_output."width" AS "rawAssetWidth",
+    raw_output."height" AS "rawAssetHeight",
+    raw_output."sha256" AS "rawAssetSha256",
+    raw_output."metadata" AS "rawAssetMetadata"
   FROM "users" actor_account
   JOIN "extension_device_sessions" session
     ON session."id" = $3
@@ -294,6 +309,11 @@ const AUTHORITY_SQL = `
   LEFT JOIN "media_assets" asset
     ON asset."id" = child."selected_output_asset_id"
    AND asset."owner_user_id" = child."owner_user_id"
+  LEFT JOIN "media_assets" raw_output
+    ON raw_output."id" = asset."metadata"->>'providerOutputAssetId'
+   AND raw_output."owner_user_id" = asset."owner_user_id"
+   AND raw_output."ai_image_job_id" = job."id"
+   AND raw_output."source_capture_snapshot_id" = asset."source_capture_snapshot_id"
   WHERE actor_account."id" = $2
     AND actor_account."status" = 'ACTIVE'::"UserStatus"
   ORDER BY suite_slot."ordinal" ASC, suite_slot."id" ASC
@@ -531,6 +551,8 @@ function nullableJob(row: Record<string, unknown>) {
     operation: text(row.jobOperation),
     provider: text(row.jobProvider),
     model: text(row.jobModel),
+    operationConfig: row.jobOperationConfig,
+    providerJobId: nullableText(row.jobProviderJobId),
     requestFingerprint: nullableText(row.jobRequestFingerprint),
     actualCostMinor: nullableInteger(row.jobActualCostMinor),
     billedUnits: integer(row.jobBilledUnits),
@@ -660,6 +682,9 @@ function authorityFromRows(
       costReservation: nullableReservation(row),
       costSettlement: nullableSettlement(row),
       outputAsset: nullableAsset(row),
+      rawOutputAsset: nullableAsset(Object.fromEntries(Object.entries(row)
+        .filter(([key]) => key.startsWith('rawAsset'))
+        .map(([key, value]) => ['asset' + key.slice('rawAsset'.length), value]))),
     } satisfies HostedSuiteListingDraftAssignmentSlotAuthority;
   });
   if (slots.some((slot) => !slot)) return null;

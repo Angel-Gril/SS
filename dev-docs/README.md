@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 count候选预览/应用修复准备444
+
+443正式freshsuite已真实两图成功/CNY0.20，但preview被旧normalizer检查409，不能公开。Preview/assignment消费者已接冻结runtime和真实raw验证，108定向及215实库/升级回放通过；尚未部署修复或执行官网CAS。旧失败输出/原件保留，新444继续同一发布授权，准确事实见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 官网443切换准备：count正式QA04合同与新隔离草稿
 
 正式QA04新增精确count/CNY10 schema4，完整59项及count主Agent回归通过，ERP/扩展运行源未变，目标仍b3282d37/443。目标native offline、签名专用Chrome、正常DOTH配对/1688采集/隔离草稿/两槽计划已准备；尚未发起新生图，官网仍434。截图旧独立工作台重复入口已核实，界面退役不由后台合同验收冒充；准确边界与后续证据仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。

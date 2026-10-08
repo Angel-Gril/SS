@@ -6,8 +6,8 @@ import {
 } from './ai-image-suite-materialization.js';
 import {
   AI_IMAGE_SUITE_OUTPUT_NORMALIZER_MAX_INPUT_BYTES,
-  AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
 } from './ai-image-suite-output-normalizer.js';
+import { admittedAiImageSuiteOutputNormalizer, type AiImageSuiteRawOutputAuthority } from './ai-image-suite-output-admission.js';
 
 export const HOSTED_SUITE_LISTING_DRAFT_ASSIGNMENT_VERSION =
   'hosted-suite-listing-draft-assignment/v2' as const;
@@ -104,6 +104,8 @@ export interface HostedSuiteListingDraftJobAuthority {
   actualCostMinor: number | null;
   billedUnits: number;
   appliedAt: Date | null;
+  operationConfig?: unknown;
+  providerJobId?: string | null;
 }
 
 export interface HostedSuiteListingDraftReservationAuthority {
@@ -164,6 +166,7 @@ export interface HostedSuiteListingDraftAssignmentSlotAuthority {
   costReservation: HostedSuiteListingDraftReservationAuthority | null;
   costSettlement: HostedSuiteListingDraftSettlementAuthority | null;
   outputAsset: HostedSuiteListingDraftOutputAuthority | null;
+  rawOutputAsset?: AiImageSuiteRawOutputAuthority | null;
 }
 
 export interface HostedSuiteListingDraftAssignmentAuthority {
@@ -1137,8 +1140,11 @@ function assertOutputAuthority(
     && metadata.attempt === suiteSlot.attempt
     && isExactIdentifier(metadata.providerOutputAssetId, 500)
     && metadata.providerOutputAssetId !== outputAsset.id
-    && (metadata.normalizerVersion === undefined
-      || metadata.normalizerVersion === AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION)
+    && admittedAiImageSuiteOutputNormalizer({ provider: currentJob.provider, model: currentJob.model,
+      operationConfig: currentJob.operationConfig, providerJobId: currentJob.providerJobId,
+      actualCostCents: currentJob.actualCostMinor, ownerUserId: input.ownerUserId, jobId: currentJob.id,
+      sourceCaptureSnapshotId: input.sourceCaptureSnapshotId, outputSha256: outputAsset.sha256,
+      metadata, rawOutput: slot.rawOutputAsset, allowLegacyUnversioned: true }) !== null
     && (metadata.sourceCaptureSnapshotId === undefined
       || metadata.sourceCaptureSnapshotId === input.sourceCaptureSnapshotId);
   if (!valid) {

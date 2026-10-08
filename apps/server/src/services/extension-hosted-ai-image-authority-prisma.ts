@@ -16,12 +16,12 @@ import type {
 import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_NORMALIZER_MAX_INPUT_BYTES,
-  AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
 } from './ai-image-suite-output-normalizer.js';
 import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
 import { projectSourceCaptureForDraft, sourceListingEditorSkuKeysForDraft } from './source-listing-sku-copies.js';
 import { frozenHostedPlanReferenceSelectionMatches } from './hosted-plan-reference-selection.js';
+import { admittedAiImageSuiteOutputNormalizer, type AiImageSuiteRawOutputAuthority } from './ai-image-suite-output-admission.js';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_IDENTIFIER_LENGTH = 1_024;
@@ -209,6 +209,10 @@ SELECT
   job."workflow_attempt" AS "jobWorkflowAttempt",
   job."execution_mode" AS "jobExecutionMode",
   job."status"::text AS "jobStatus",
+  job."provider" AS "jobProvider",
+  job."model" AS "jobModel",
+  job."operation_config_json" AS "jobOperationConfig",
+  job."provider_job_id" AS "jobProviderJobId",
   job."actual_cost_cents" AS "jobActualCostCents",
   job."billed_units" AS "jobBilledUnits",
   reservation."status"::text AS "reservationStatus",
@@ -251,7 +255,20 @@ SELECT
   output."width" AS "outputWidth",
   output."height" AS "outputHeight",
   output."sha256" AS "outputSha256",
-  output."metadata" AS "outputMetadata"
+  output."metadata" AS "outputMetadata",
+  raw_output."id" AS "rawOutputId",
+  raw_output."owner_user_id" AS "rawOutputOwnerUserId",
+  raw_output."ai_image_job_id" AS "rawOutputJobId",
+  raw_output."kind"::text AS "rawOutputKind",
+  raw_output."source_capture_snapshot_id" AS "rawOutputSnapshotId",
+  raw_output."storage_backend" AS "rawOutputStorageBackend",
+  raw_output."storage_key" AS "rawOutputStorageKey",
+  raw_output."mime_type" AS "rawOutputMimeType",
+  raw_output."size_bytes" AS "rawOutputSizeBytes",
+  raw_output."width" AS "rawOutputWidth",
+  raw_output."height" AS "rawOutputHeight",
+  raw_output."sha256" AS "rawOutputSha256",
+  raw_output."metadata" AS "rawOutputMetadata"
 FROM "extension_hosted_ai_image_plan_bindings" b
 JOIN "source_listing_workflows" listing
   ON listing."id" = b."listing_workflow_id"
@@ -302,6 +319,11 @@ JOIN "media_assets" output
   ON output."id" = $18
  AND output."owner_user_id" = job."owner_user_id"
  AND output."ai_image_job_id" = job."id"
+LEFT JOIN "media_assets" raw_output
+  ON raw_output."id" = output."metadata" ->> 'providerOutputAssetId'
+ AND raw_output."owner_user_id" = job."owner_user_id"
+ AND raw_output."ai_image_job_id" = job."id"
+ AND raw_output."source_capture_snapshot_id" = output."source_capture_snapshot_id"
 WHERE b."owner_user_id" = $1
   AND b."device_session_id" = $2
   AND b."listing_workflow_id" = $3
@@ -643,6 +665,18 @@ function candidateAuthorityFromRow(
   const storageKey = graphText(row, 'outputStorageKey', 2_000);
   const outputSha256 = exactHash(row.outputSha256);
   const metadata = record(row.outputMetadata);
+  const rawOutput: AiImageSuiteRawOutputAuthority | null = row.rawOutputId ? {
+    id: String(row.rawOutputId), ownerUserId: String(row.rawOutputOwnerUserId), aiImageJobId: graphText(row, 'rawOutputJobId'),
+    kind: String(row.rawOutputKind), sourceCaptureSnapshotId: graphText(row, 'rawOutputSnapshotId'),
+    storageBackend: String(row.rawOutputStorageBackend), storageKey: graphText(row, 'rawOutputStorageKey', 2_000),
+    mimeType: String(row.rawOutputMimeType), sizeBytes: Number(row.rawOutputSizeBytes),
+    width: exactInteger(row.rawOutputWidth), height: exactInteger(row.rawOutputHeight), sha256: exactHash(row.rawOutputSha256),
+    metadata: record(row.rawOutputMetadata),
+  } : null;
+  const normalizerVersion = metadata ? admittedAiImageSuiteOutputNormalizer({ provider: row.jobProvider, model: row.jobModel,
+    operationConfig: row.jobOperationConfig, providerJobId: row.jobProviderJobId, actualCostCents,
+    ownerUserId: stored.ownerUserId, jobId: jobId || '', sourceCaptureSnapshotId: stored.snapshotId,
+    outputSha256, metadata, rawOutput }) : null;
   if (!planId || !planVersionId || !suiteId || !slotId || !workflowId || !jobId || !outputId
     || !sourceSubjectId || !sourceCaptureHash || !slotKey
     || !slotOwnershipLevel || !slotOwnershipKey
@@ -746,7 +780,7 @@ function candidateAuthorityFromRow(
     || width !== AI_IMAGE_SUITE_OUTPUT_WIDTH
     || height !== AI_IMAGE_SUITE_OUTPUT_HEIGHT
     || metadata.version !== 'ai-image-suite-output/v1'
-    || metadata.normalizerVersion !== AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION
+    || normalizerVersion === null
     || metadata.suiteId !== suiteId
     || metadata.slotId !== slotId
     || metadata.attempt !== slotAttempt) return null;
@@ -834,7 +868,7 @@ function candidateAuthorityFromRow(
       sha256: outputSha256,
       metadata: {
         version: 'ai-image-suite-output/v1',
-        normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
+        normalizerVersion,
         suiteId,
         slotId,
         attempt: slotAttempt,

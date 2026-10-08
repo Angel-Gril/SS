@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 count真实suite预览阻塞修复，444候选准备
+
+- 在b3282d37/443实际签名Chrome/正常DOTH设备上，新suite`cmuzk0oz500115o3frxjnuyim`两图已真实成功、attempt1、原件1008×1344/成品900×1200、两笔CNY0.10结算；START/CONTINUE、PENDING UI/实库原件完整保存。候选预览实际409，旧authority-prisma只接受旧`ai-image-suite-output-normalizer/v1`，assignment消费者也有同类旧检查；本次不能宣称443套图新模型预览/应用或官网发布通过。
+- 新owner `ai-image-suite-output-admission.ts`仅在count精确endpoint、冻结v3/CNY、single-reference/high/1008portrait/fullframe、同owner/job/snapshot/rawProvider身份与normalizedSHA相符时认可新normalizer。Preview与assignment实际SQL同时读取冻结operationConfig、Providerjob与输出原件，不把任意元数据或旧normalizer冒充count。旧模型/输出兼容保留，原device/shop/review/draft/费用边界保持。
+- T2两个consumer正例旧逻辑RED→GREEN，Prisma投影新例RED→GREEN、4套108项通过。真实Postgres完整215项及升级回放通过，新增count真实owner链全程trigger开启，PENDING预览→review→assignment原子写回→原幂等replay，原两笔CHARGE不变。测试曾先出现列名operation_config误写，继而旧simplifiedseed缺frozenprompt图而review拒绝；失败日志保留，修正实际列并改用完整业务owner新fixture后通过，没有禁trigger或跳过审核。类型/定向lint/diff通过。
+- 443这次已产生两图请求，ERP总CNY0.20、Ozon0；失败预览未重发Provider，已保存原两张私有raw与SHA。新444需要部署后用新隔离suite取得samecommit正式证据，不改旧任务、binding或本次原件。旧独立UI重复入口诊断仍单独记录，不在本次服务端发布修复中改界面或假称精铺全链通过。
+
 ## 2026-10-08 官网443发布准备：count正式证据合同已补齐
 
 - 用户明确要求继续切换官网公开下载。当前公开434/运行443；本轮新增release verifier schema4，只接受精确count endpoint、CNY10单图/20双图、冻结Key修订和报价hash、1008×1344原件、900×1200成品、审核前PENDING实库/UI、preview/review/assignment与原请求replay。旧Wanx schema1/2/3的14/28金额及历史证据合同保持，不改旧原件或放宽source比较。

@@ -11,6 +11,8 @@ import {
   type HostedSuiteListingDraftAssignmentRepository,
   type HostedSuiteListingDraftAssignmentSlotAuthority,
 } from '../services/hosted-suite-listing-draft-assignment.js';
+import { createDonorGpt2FullFrameConfig } from '../services/ai-image-donor-gpt2-profile.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 const NOW = new Date('2026-07-27T08:00:00.000Z');
 const SNAPSHOT_HASH = 'a'.repeat(64);
@@ -355,6 +357,60 @@ async function preparedBatch() {
 }
 
 describe('hosted suite listing-draft atomic batch assignment', () => {
+  const countAuthority = () => {
+    const changed = clonedAuthority(), frame = createDonorGpt2FullFrameConfig();
+    changed.suite.provider = 'custom'; changed.suite.model = 'gpt-image-2-count';
+    for (const slot of changed.slots) {
+      const job = slot.currentJob! as typeof slot.currentJob & { operationConfig?: unknown; providerJobId?: string };
+      job!.provider = 'custom'; job!.model = 'gpt-image-2-count'; job!.actualCostMinor = 10;
+      job!.providerJobId = 'provider-' + job!.id;
+      job!.operationConfig = { version: 'ai-image-suite-child-operation/v2', outputProfile: frame.finalOutput.profile,
+        width: 900, height: 1200, slotPromptId: 'prompt-' + job!.id, promptBindingHash: 'a'.repeat(64), referenceSetHash: 'b'.repeat(64),
+        requestProfile: frame.requestProfile, providerRequest: frame.providerRequest, finalOutput: frame.finalOutput,
+        providerRuntime: createAiImageProviderRuntimeContract({ provider: 'custom', model: 'gpt-image-2-count',
+          baseUrl: 'https://ai.big-model-api.top/v1', costPerImageCents: 10, currency: 'CNY',
+          credentialRevision: { recordId: 'credential-1', revision: 7, updatedAt: '2026-07-27T07:00:00.000Z' } },
+        { count: 1, width: 1008, height: 1344 }) };
+      slot.costReservation!.provider = job!.provider; slot.costReservation!.model = job!.model;
+      slot.costSettlement!.actualCostMinor = 10;
+      Object.assign(slot.outputAsset!.metadata!, { normalizerVersion: frame.finalOutput.normalizerVersion,
+        sourceCaptureSnapshotId: 'snapshot-1' });
+      (slot as any).rawOutputAsset = { id: slot.outputAsset!.metadata!.providerOutputAssetId,
+        ownerUserId: 'owner-1', aiImageJobId: job!.id, kind: 'AI_PROVIDER_OUTPUT', sourceCaptureSnapshotId: 'snapshot-1',
+        storageBackend: 'oss', storageKey: 'owners/owner-1/raw.png', mimeType: 'image/png', sizeBytes: 190_000,
+        width: 1008, height: 1344, sha256: 'e'.repeat(64), metadata: { version: 'ai-image-suite-provider-output/v1',
+          normalizerVersion: frame.finalOutput.normalizerVersion, sourceCaptureSnapshotId: 'snapshot-1',
+          providerJobId: job!.providerJobId, actualCostCents: 10, normalizedSha256: slot.outputAsset!.sha256,
+          providerResultReceivedAt: '2026-07-27T07:55:00.000Z' } };
+    }
+    return changed;
+  };
+
+  it('applies approved count full-frame outputs through the existing atomic assignment owner', async () => {
+    const { service, committed } = serviceFor({ authority: countAuthority() });
+    await expect(service.assign(command())).resolves.toMatchObject({ replayed: false, boundDraftRevision: 6 });
+    expect(committed()!.records).toHaveLength(2);
+  });
+
+  it('rejects count output labels without exact portrait runtime and same-job raw evidence before any mutation', async () => {
+    const mutators: Array<(slot: any) => void> = [
+      slot => { slot.currentJob.operationConfig = null; },
+      slot => { slot.currentJob.operationConfig.providerRequest.width = 1024; },
+      slot => { slot.currentJob.operationConfig.providerRequest.quality = 'standard'; },
+      slot => { slot.currentJob.operationConfig.providerRuntime.baseUrlSha256 = 'd'.repeat(64); },
+      slot => { slot.currentJob.operationConfig.providerRuntime.currency = 'USD'; },
+      slot => { slot.outputAsset.metadata.normalizerVersion = 'ai-image-suite-output-normalizer/v1'; },
+      slot => { slot.rawOutputAsset = null; }, slot => { slot.rawOutputAsset.height = 1024; },
+      slot => { slot.rawOutputAsset.ownerUserId = 'owner-2'; }, slot => { slot.rawOutputAsset.aiImageJobId = 'other-job'; },
+      slot => { slot.rawOutputAsset.metadata.normalizedSha256 = 'f'.repeat(64); },
+    ];
+    for (const mutate of mutators) {
+      const changed = countAuthority(); mutate(changed.slots[0]);
+      const { service, transaction } = serviceFor({ authority: changed });
+      await expect(service.assign(command())).rejects.toMatchObject({ code: 'HOSTED_LISTING_ASSIGNMENT_CANDIDATE_INVALID' });
+      expect(transaction.commit).not.toHaveBeenCalled();
+    }
+  });
   it('appends two approved outputs in immutable order and creates one new draft', async () => {
     const { service, committed } = serviceFor();
     const result = await service.assign(command());
