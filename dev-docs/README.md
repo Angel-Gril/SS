@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 SQL 套图合同兼容完成，最终候选440
+
+439完整构建及7120后端测试通过后，native offline发现旧SQL拒绝新版Wanx/count冻结；前向兼容迁移已取得真实Postgres RED→GREEN、211项AI Media及升级回放通过，原身份/金额/引用/恢复guard保留。尚未部署或写入生产模型；最终440继续原授权COM新模型/CNY0.10，CN dark。官网仍434，完整QA04不由分项验证替代，准确事实见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 独立 Worker 验收接线修正，最终候选439
 
 438完整检查发现独立 Worker VM仍注入旧全局读取函数，4项失败已复现并修正，独立CNY/普通图片隔离回归也通过。没有部署438或保存生产模型配置，最终439从新提交继续同一授权部署；原签名和失败证据保留。准确范围见[直接适配 owner](donor-workbench/direct-adaptation.md)。

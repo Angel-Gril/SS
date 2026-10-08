@@ -51,7 +51,9 @@ import { createAiImageSuiteProviderRuntimeSnapshot, aiImageSuiteProviderRuntimeM
 import { executeAiImageSuitePaidProvider, recoverAiImageSuitePaidProvider } from '../services/ai-image-suite-paid-execution.js';
 import { prepareAiImageSuitePaidProviderExecution } from '../services/ai-image-suite-paid-provider.js';
 import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
-import type { FetchLike } from '../services/ai-image-providers.js';
+import { createDonorGptImage2EditProvider, type FetchLike } from '../services/ai-image-providers.js';
+import { getAiImageSuiteProviderRuntimeConfig } from '../services/ai-image-suite-runtime-config.js';
+import { setConfig } from '../config/system-config-schema.js';
 import { createAiProviderReconciliationAdminService } from '../services/ai-provider-reconciliation-admin.js';
 import { createAiCostReconciliationAdminService } from '../services/ai-cost-reconciliation-admin.js';
 import { reserveAiCost, markAiCostUnknown } from '../services/ai-cost-ledger.js';
@@ -340,6 +342,210 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
   afterAll(async () => {
     await client?.$disconnect();
   });
+
+  it('runs normal donor count planning, frozen CNY 10 pricing and two full-frame settlements with database guards active', async () => {
+    const owner = `count_suite_owner_${suffix}`;
+    const goods = `count_suite_goods_${suffix}`;
+    const subject = `count_suite_subject_${suffix}`;
+    const snapshot = `count_suite_snapshot_${suffix}`;
+    const sourceCapture = structuredClone(sourceFixture.capture);
+    const submission = await createSourceProductCaptureV2Submission(sourceCapture);
+    const sourceProfile = buildSourceProductProfileFromCapture(sourceCapture, {
+      itemId: submission.captureHash, captureHash: submission.captureHash,
+    });
+    await client.user.create({ data: { id: owner, phone: `count_suite_${suffix}`, passwordHash: 'integration-test' } });
+    await client.supplyGoods.create({ data: { id: goods, userId: owner, title: 'Count suite test product',
+      sourcePlatform: '1688', sourceProductId: `count-suite-${suffix}` } });
+    await client.sourceCaptureSubject.create({ data: { id: subject, ownerUserId: owner, sourcePlatform: '1688',
+      sourceProductId: `count-suite-${suffix}`, legacySupplyGoodsId: goods } });
+    await client.sourceCaptureSnapshot.create({ data: {
+      id: snapshot, subjectId: subject, version: 1, schemaVersion: 'source-product-capture-v2',
+      captureHash: submission.captureHash, payloadBytes: submission.payloadBytes, payload: sourceCapture as never,
+      stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
+      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {}, profileHash: sourceProfile.hash,
+      actorUserId: owner, ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only', capturedAt: new Date(),
+    } });
+    const sourceBytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#dbe9f2' } }).jpeg().toBuffer();
+    const outputBytes = await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#247852' } }).png().toBuffer();
+    const stored = new Map<string, Buffer>();
+    const uploadBuffer = async (buffer: Buffer, filename: string) => {
+      const key = `${owner}/${createHash('sha256').update(buffer).digest('hex')}/${filename}`;
+      stored.set(key, buffer);
+      return { backend: 'oss' as const, key, url: `https://suite-storage.example/${key}` };
+    };
+    const external = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      throw new Error('Real Provider calls are forbidden in the PostgreSQL count fixture');
+    });
+    try {
+      await setConfig('ai_image_suite_model', 'gpt-image-2-count');
+      await setConfig('ai_image_suite_base_url', 'https://ai.big-model-api.top/v1');
+      await setConfig('ai_image_suite_api_key', 'synthetic-count-postgres-key');
+      await setConfig('ai_image_suite_cost_cents', 10);
+      await setConfig('ai_image_suite_currency', 'CNY');
+      await setConfig('ai_image_suite_provider', 'custom');
+      const settings = await getAiImageSuiteProviderRuntimeConfig();
+      const runtime = createAiImageSuiteProviderRuntimeSnapshot({ ...settings, concurrencyLimit: 2 });
+      expect(runtime.executionReady).toBe(true);
+      const keyRecord = await client.systemConfig.findUniqueOrThrow({ where: { key: 'ai_image_suite_api_key' } });
+      expect(keyRecord.value).not.toBe(settings.apiKey);
+      expect(runtime.providerRuntime).toMatchObject({
+        contractVersion: 'ai-image-provider-runtime/v3', provider: 'custom', model: 'gpt-image-2-count', currency: 'CNY',
+        unitCostCents: 10, maximumCostCents: 10, width: 1008, height: 1344,
+        credentialRevision: { recordId: keyRecord.id, revision: keyRecord.revision, updatedAt: keyRecord.updatedAt.toISOString() },
+      });
+      expect(JSON.stringify(runtime.providerRuntime)).not.toContain(settings.apiKey);
+      const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client), {
+        sourcePreparation: {
+          download: async (url: string) => ({ sourceUrl: url, finalUrl: url, contentType: 'image/jpeg', buffer: sourceBytes, redirectCount: 0 }),
+          getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+        },
+      });
+      const planned = await planning.createRuleBased({ ownerUserId: owner, actorUserId: owner, sourceSubjectId: subject,
+        sourceCaptureSnapshotId: snapshot, context: { type: 'collect', id: goods }, idempotencyKey: `count-plan-${suffix}`,
+        selectedSkuKeys: [sourceCapture.skus[0]!.key], candidateMediaKeys: [sourceCapture.media[0]!.key], galleryGoals: ['scene'] });
+      const approved = await planning.review({ planId: planned.plan.id, ownerUserId: owner, actorUserId: owner,
+        expectedRevision: planned.plan.revision, operationKey: `count-plan-review-${suffix}`, decision: 'APPROVE', note: null });
+      const suites = new PrismaAiImageSuiteRepository(client);
+      const authority = await suites.loadApprovedAuthority({ ownerUserId: owner, actorUserId: owner, planId: planned.plan.id });
+      expect(authority).not.toBeNull();
+      expect(await suites.loadApprovedAuthority({ ownerUserId, actorUserId: ownerUserId, planId: planned.plan.id })).toBeNull();
+      expect((authority!.inputSnapshot as any).candidates[0].contentHash).toBe(createHash('sha256').update(sourceBytes).digest('hex'));
+      const preview = createAiImageSuitePreview(authority!, runtime.providerConfig!);
+      expect(preview).toMatchObject({ itemCount: 2, estimatedCostCents: 20, maximumCostCents: 20 });
+      const claimed = await suites.claimApproved({ ownerUserId: owner, actorUserId: owner, planId: planned.plan.id,
+        expectedPlanRevision: approved.plan.revision, idempotencyKey: `count-suite-${suffix}`,
+        expectedPreviewHash: preview.previewHash, providerConfig: runtime.providerConfig! });
+      expect(claimed.kind).toBe('created');
+      const countSuiteId = claimed.suite!.id;
+      await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(client),
+        preparationLease: passThroughPreparationLease, download: async () => { throw new Error('Frozen source bytes must be reused'); },
+        getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
+      }).internalize({ suiteId: countSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 1, operationKey: `count-refs-${suffix}` });
+      await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(client),
+        templateResolver: new AiPromptTemplateRegistryService(new PrismaAiPromptTemplateStore(client), { getLegacyPrompt: async () => 'unused' }),
+      }).freeze({ suiteId: countSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 2, operationKey: `count-prompts-${suffix}` });
+      const controls = async () => ({ dailyLimit: 100, globalDailyBudgetCents: 100_000 });
+      const materialize = createAiImageSuiteMaterializationService(new PrismaAiImageSuiteMaterializationRepository(client, {
+        getCostControls: controls, getProviderRuntime: async () => runtime,
+      }));
+      await materialize.materialize({ suiteId: countSuiteId, ownerUserId: owner, actorUserId: owner,
+        expectedRevision: 3, operationKey: `count-materialize-${suffix}` });
+      const children = await client.aiImageJob.findMany({ where: { workflow: { suiteSlot: { suiteId: countSuiteId } } },
+        include: { costReservation: true, workflow: { include: { inputs: true } } }, orderBy: { id: 'asc' } });
+      expect(children).toHaveLength(2);
+      for (const job of children) {
+        expect(job).toMatchObject({ ownerUserId: owner, estimatedCostCents: 10, requestedImageCount: 1, width: 900, height: 1200,
+          costReservation: { ownerUserId: owner, currency: 'CNY', estimatedCostMinor: 10, maximumCostMinor: 10, status: 'RESERVED' },
+          operationConfig: { providerRequest: { count: 1, width: 1008, height: 1344, quality: 'high' },
+            finalOutput: { width: 900, height: 1200, fit: 'full-frame', normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1' },
+            providerRuntime: runtime.providerRuntime } });
+        expect(job.workflow!.inputs).toHaveLength(1);
+        expect(job.workflow!.inputs[0]).toMatchObject({ ownerUserId: owner, assetSha256: (job.inputAssets as any[])[0].sha256 });
+        const databaseRuntimeValid = async (operationConfig: unknown, assets: unknown = job.inputAssets) => {
+          const [result] = await client.$queryRawUnsafe<Array<{ valid: boolean }>>(
+            'SELECT ai_media_gpt2_count_suite_runtime_valid($1::text, $2::jsonb, $3::integer, $4::text, $5::jsonb, $6::text, $7::text, $8::text, $9::integer) AS valid',
+            job.operation, JSON.stringify(operationConfig), job.estimatedCostCents, runtime.providerConfig!.pricingVersion,
+            JSON.stringify(assets), job.provider, job.model, runtime.providerConfig!.providerConfigHash, runtime.providerConfig!.concurrencyLimit,
+          );
+          return result!.valid;
+        };
+        expect(await databaseRuntimeValid(job.operationConfig)).toBe(true);
+        for (const [field, value] of [['quality', 'auto'], ['width', 1024], ['count', 2]] as const) {
+          const forged = structuredClone(job.operationConfig) as any;
+          forged.providerRequest[field] = value;
+          expect(await databaseRuntimeValid(forged)).toBe(false);
+          await expect(client.aiImageJob.update({ where: { id: job.id }, data: { operationConfig: forged } })).rejects.toThrow();
+        }
+        for (const mutate of [
+          (config: any) => { config.providerRuntime.baseUrlSha256 = aiImageProviderEndpointSha256('custom', 'https://unverified.example/v1'); },
+          (config: any) => { config.providerRuntime.credentialRevision.extra = 'unexpected-field'; },
+          (config: any) => { config.finalOutput.fit = 'contain'; },
+          (config: any) => { config.providerRuntime.currency = 'USD'; },
+        ]) {
+          const forged = structuredClone(job.operationConfig);
+          mutate(forged);
+          expect(await databaseRuntimeValid(forged)).toBe(false);
+        }
+        expect(await databaseRuntimeValid(job.operationConfig, [...job.inputAssets as any[], ...(job.inputAssets as any[])])).toBe(false);
+        const foreign = structuredClone(job.inputAssets) as any[];
+        foreign[0].sha256 = '0'.repeat(64);
+        await expect(client.aiImageJob.update({ where: { id: job.id }, data: { inputAssets: foreign } })).rejects.toThrow();
+        await expect(client.aiCostReservation.update({ where: { id: job.costReservation!.id }, data: { currency: 'USD' } })).rejects.toThrow();
+      }
+      const execution = new PrismaAiImageSuiteExecutionRepository(client, {
+        runtimeReady: async (suite) => aiImageSuiteProviderRuntimeMatches(suite, runtime), getCostControls: controls,
+      });
+      await createAiImageSuiteExecutionService(execution).dispatch({ suiteId: countSuiteId, ownerUserId: owner,
+        actorUserId: owner, expectedRevision: 4, operationKey: `count-dispatch-${suffix}` });
+      await setConfig('ai_image_suite_cost_cents', 99); // Accepted children retain their confirmed CNY 10 price.
+      const frozenSource = (children[0]!.inputAssets as any[])[0];
+      const frozenBytes = stored.get(frozenSource.storageKey)!;
+      expect(frozenBytes).toBeDefined();
+      expect(createHash('sha256').update(frozenBytes).digest('hex')).toBe(frozenSource.sha256);
+      const posts: FormData[] = [];
+      const fixtureFetch: FetchLike = async (url, options = {}) => {
+        if (options.method !== 'POST') {
+          expect(String(url)).toMatch(/^https:\/\/count-results\.example\/[12]\.png$/u);
+          expect(new Headers(options.headers).has('authorization')).toBe(false);
+          return new Response(new Uint8Array(outputBytes), { status: 200,
+            headers: { 'content-type': 'image/png', 'content-length': String(outputBytes.length) } });
+        }
+        expect(String(url)).toBe('https://ai.big-model-api.top/v1/images/edits');
+        expect(options.method).toBe('POST');
+        const form = options.body as FormData;
+        expect(form.get('model')).toBe('gpt-image-2-count');
+        expect(form.get('size')).toBe('1008x1344');
+        expect(form.get('quality')).toBe('high');
+        expect(form.get('response_format')).toBe('url');
+        expect(Buffer.from(await (form.get('image') as Blob).arrayBuffer())).toEqual(frozenBytes);
+        posts.push(form);
+        return new Response(JSON.stringify({ data: [{ url: `https://count-results.example/${posts.length}.png` }] }), {
+          status: 200, headers: { 'x-request-id': `count-fixture-${posts.length}-${suffix}` },
+        });
+      };
+      const prepareProvider = (input: Parameters<typeof prepareAiImageSuitePaidProviderExecution>[0]) => prepareAiImageSuitePaidProviderExecution(input, {
+        loadSettings: getAiImageSuiteProviderRuntimeConfig,
+        loadInputBuffer: async (input) => { const bytes = stored.get(input.storageKey!); if (!bytes) throw new Error('Frozen reference is missing'); return bytes; },
+        createOpenAiProvider: (options) => createDonorGptImage2EditProvider({ ...options, fetch: fixtureFetch }),
+      });
+      const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, {
+        runtimeReady: async (suite) => aiImageSuiteProviderRuntimeMatches(suite, runtime),
+        getRuntimeEvidence: async () => runtime.capability!.evidenceLevel, outputStorageReady: async () => true,
+        getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'READY', reason: 'isolated count fixture' }), uploadBuffer,
+        executePaidProvider: (input, dependencies) => executeAiImageSuitePaidProvider(input, { ...dependencies, prepareProvider }),
+      });
+      const tasks = await execution.listQueueableTasks(countSuiteId);
+      expect(tasks).toHaveLength(2);
+      for (const task of tasks) {
+        const claim = await coordinator.revalidateAndClaim(task);
+        expect(claim.kind).toBe('ready');
+        if (claim.kind !== 'ready') throw new Error('Count fixture failed its claim');
+        await expect(coordinator.execute(task, claim)).resolves.toMatchObject({ kind: 'completed' });
+        await expect(coordinator.revalidateAndClaim(task)).resolves.toEqual({ kind: 'ignored' });
+      }
+      const complete = await client.aiMediaSuite.findUniqueOrThrow({ where: { id: countSuiteId }, include: { slots: true } });
+      const settled = await client.aiImageJob.findMany({ where: { id: { in: tasks.map((task) => task.jobId) } },
+        include: { assets: true, costReservation: { include: { settlements: true } } } });
+      expect(complete.status, JSON.stringify(settled.map((job) => ({ status: job.status, code: job.errorCode, message: job.errorMessage })))).toBe('SUCCEEDED');
+      expect(complete.slots.every((slot) => slot.status === 'SUCCEEDED')).toBe(true);
+      for (const job of settled) {
+        expect(job).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 10, billedUnits: 1,
+          costReservation: { currency: 'CNY', status: 'SETTLED' } });
+        const charges = job.costReservation!.settlements.filter((settlement) => settlement.kind === 'CHARGE');
+        expect(charges).toHaveLength(1);
+        expect(charges[0]!.actualCostMinor).toBe(10);
+        expect(job.assets).toEqual(expect.arrayContaining([
+          expect.objectContaining({ ownerUserId: owner, kind: 'AI_PROVIDER_OUTPUT', width: 1008, height: 1344 }),
+          expect.objectContaining({ ownerUserId: owner, kind: 'AI_GENERATED', width: 900, height: 1200 }),
+        ]));
+      }
+      expect(posts).toHaveLength(2);
+      expect(external).not.toHaveBeenCalled();
+    } finally {
+      external.mockRestore();
+      await client.systemConfig.deleteMany({ where: { key: { startsWith: 'ai_image_suite_' } } });
+    }
+  }, 30_000);
 
   it('runs normal Wanx planning through one accepted task, fenced read-only recovery and one CNY settlement', async () => {
     const owner = `wanx_suite_owner_${suffix}`;

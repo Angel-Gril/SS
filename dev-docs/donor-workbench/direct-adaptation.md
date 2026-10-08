@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 SQL 冻结合同兼容闭环，最终候选440准备部署
+
+- 439的native offline已通过lint、类型、完整preflight/build、后端7120 passed/373既有skipped、命令撤权PostgreSQL；完整AI Media实库在210项中拒绝6个Wanx prompt freeze，原因是最终SQL仅认可Wanx compiler/v1，新服务还会被旧CNY分支误当Wanx。439未部署或写入生产模型；失败原件保留在`release-dd5d35ff-deploy439/qa04-offline.log`，不能把此前成功步骤冒充完整QA04。
+- 新前向兼容迁移只精确更新4个SQL guard及Wanx compiler值检查，保留原身份、引用、金额、graph和原任务恢复逻辑；精确count endpoint/单参考/1008×1344/high/full-frame900×1200、凭据修订、CNYv3及旧USDv2分别重算runtime/config/price hash，不以CNY推定Provider或放宽其他model。迁移全事务、严格旧定义片段匹配，未修改历史migration或现有数据。
+- 真实本机隔离schema取得count旧guard RED→新guard GREEN，两图各CNY10一次结算；活动价99仍消费已冻结10，原claim重放不重复执行，尺寸/quality/引用/币种/endpoint/凭据元数据篡改均拒绝。完整同file24项、完整AI Media Postgres211项均0skip；populated upgrade按原门禁在升级前后各运行5项套图与1项迁移回放，未选fixture保持skipped且不计为验收，隔离schema已清理。仅Provider transport使用fixture，真实Provider/Ozon/生产写入0。新静态guard门禁与preflight进程退出检查、server类型和定向lint通过。
+- 最终候选440采用上述新提交；runtime服务和Web源码相对439完整构建未改变，仅增加SQL owner/实库回归及薄门禁注册。部署验证使用已完成的完整构建/7120基线与本次受影响数据库/脚本门禁，不宣称最终提交已有正式native offline或QA04证据。官网仍434，COM模型切换仍待双区部署后按原配置mutation owner保存CNY0.10。
+
 ## 2026-10-08 独立 Worker 测试接线收口，最终候选439
 
 - `7c1950fd` 已提交推送、438双区签名/安装与部署材料准备完成，但完整 native offline 在后端全量拒绝：7114 passed/373既有skipped、独立 Worker 4项失败。实际 Worker 回调改用专用 suite loader，抽取回调的 VM 测试仍只注入旧全局 loader，因此 ReferenceError；没有部署438或保存生产配置。
