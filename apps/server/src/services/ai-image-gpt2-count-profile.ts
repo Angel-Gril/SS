@@ -7,10 +7,13 @@ import { normalizeOpenAiImagesApiBase } from './ai-image-openai-url.js';
 import type { AiImageProviderRequest } from './ai-image-jobs.js';
 import type { OpenAiImageEditRequest } from './ai-image-providers.js';
 
-export const AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE = 'GPT_IMAGE_2_COUNT_ORDINARY_EDIT_V1' as const;
-export const AI_IMAGE_GPT2_COUNT_GENERATION_REQUEST_PROFILE = 'GPT_IMAGE_2_COUNT_GENERATION_V1' as const;
-export const AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT = 'GPT_IMAGE_2_COUNT_ORDINARY_V1' as const;
-export const AI_IMAGE_GPT2_COUNT_ORDINARY_NORMALIZER_VERSION = 'gpt2-count-ordinary-output-normalizer/v1' as const;
+import { AI_IMAGE_GPT2_COUNT_ORDINARY_NORMALIZER_VERSION } from './ai-image-gpt2-count-contract.js';
+export {
+  AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_GPT2_COUNT_GENERATION_REQUEST_PROFILE,
+  AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT,
+  AI_IMAGE_GPT2_COUNT_ORDINARY_NORMALIZER_VERSION,
+} from './ai-image-gpt2-count-contract.js';
 
 // Adapter candidates are not evidence of production capability. The capability
 // owner admits only operations/canvases independently verified on this endpoint.

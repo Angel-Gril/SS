@@ -1,5 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 普通 count 协议标识依赖收口，最终候选443
+
+- 442完整preflight通过早期合同/类型与安装包验证，但后端全量7172 passed/377 skipped、离线账单CLI17项失败：原轻量multipart合同新增导入完整图片profile，令独立无依赖checkout在CLI启动前解析Sharp失败。17项定向真实复现后把四个非密协议标识拆为无外部依赖的contract模块，原profile重导出兼容原消费者；未改图片请求/币种/shape/网络边界或CLI断言，没有真实读取供应商账单。
+- 4套84项（含原25项独立CLI）GREEN、类型/lint通过。之前214项真实Postgres、287项普通操作回归和3次Provider校准保持各自原commit证据，不伪造443完整native preflight/QA04。443的源码仅为协议标识依赖调整，标准部署会从最终clean commit重新构建；保留442签名、备份与失败日志，未部署441/442或替换普通生产模型。
+
 ## 2026-10-08 最终普通 count 候选442类型收口
 
 - 441签名原件已保存但完整preflight在server类型检查拒绝新增raw/final完成检查对nullable metadata的读取；已补可空判断，类型检查通过，不删除原件或修改旧签名。没有部署441或切换两区普通模型配置。

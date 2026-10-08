@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 普通 count 最终候选443准备部署
+
+442全量7172项通过但17个离线CLI因图片profile依赖被拒；协议标识已拆为无依赖合同，原CLI及图片关联84项、类型/lint通过，图片行为不变。最终443继续已授权双区部署与普通Wanx配置替换；旧失败候选未部署，证据边界见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 普通 count 最终候选442
 
 完整本机AI Media实库214项通过，候选441在类型检查发现新增成品metadata可空判断遗漏，已修正并通过类型检查；未部署441或替换生产普通模型配置。最终442继续已授权的双区部署与全部Wanx新请求配置切换，准确记录见[直接适配 owner](donor-workbench/direct-adaptation.md)。
