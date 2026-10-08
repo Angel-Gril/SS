@@ -117,3 +117,76 @@ export function suiteFlowFixture(f, png) {
   };
   return { ...f, manifest, changeMapped };
 }
+
+// A separate schema keeps historical Wanx/CNY14 fixtures immutable in meaning.
+export function countSuiteFlowFixture(f, png) {
+  const result = suiteFlowFixture(f, png), manifest = result.manifest;
+  const providerProfile = 'BIG_MODEL_GPT_IMAGE_2_COUNT_SUITE_CNY10_V1';
+  const normalizerVersion = 'ai-image-donor-gpt2-output-normalizer/v1';
+  const finalOutput = { profile: 'ozon-suite-3x4-900x1200/v1', width: 900, height: 1200,
+    fit: 'full-frame', background: '#ffffff', format: 'png', normalizerVersion };
+  const providerRuntime = { contractVersion: 'ai-image-provider-runtime/v3', provider: 'custom', model: 'gpt-image-2-count',
+    baseUrlSha256: hash('https://ai.big-model-api.top/v1'), unitCostCents: 10, imageCount: 1, width: 1008, height: 1344,
+    maximumCostCents: 10, currency: 'CNY', credentialRevision: { recordId: 'private-credential', revision: 7,
+      updatedAt: '2026-09-16T10:21:00.000Z' } };
+  const sorted = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+    : Array.isArray(value) ? `[${value.map(sorted).join(',')}]`
+      : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${sorted(value[key])}`).join(',')}}`;
+  const pricingVersion = 'ai-image-suite-price-cny/v1:' + hash(sorted({ version: 'ai-image-suite-price-cny/v1',
+    provider: 'custom', model: 'gpt-image-2-count', unitCostCents: 10, currency: 'CNY' })).slice(0, 32);
+  const suiteRuntime = { provider: 'custom', model: 'gpt-image-2-count',
+    providerConfigHash: hash(sorted({ version: 'ai-image-suite-provider-runtime/v1', providerRuntime, finalOutput,
+      concurrencyLimit: 1 })), pricingVersion, estimatedCostPerImageCents: 10, maximumCostPerImageCents: 10,
+    concurrencyLimit: 1, itemCount: 2, estimatedCostCents: 20, maximumCostCents: 20 };
+  manifest.rawProviderImages = [f.put('suite-raw-hero.png', png(1008, 1344, 73)), f.put('suite-raw-scene.png', png(1008, 1344, 79))];
+  for (const phase of ['generated', 'restored']) f.change(f.input.normalErp[phase], database => {
+    database.suiteRuntime = suiteRuntime;
+    database.rows.forEach((row, index) => {
+      row.workflow.inputAssets[0].ownerSha256 = row.job.ownerSha256;
+      Object.assign(row.job, { provider: 'custom', model: 'gpt-image-2-count', actualCostCents: 10,
+        pricing: { currency: 'CNY', unitCostCents: 10, requestedImageCount: 1, maximumCostCents: 10 },
+        operationConfig: { version: 'ai-image-suite-child-operation/v2', outputProfile: finalOutput.profile,
+          width: 900, height: 1200, slotPromptId: 'prompt-' + index, promptBindingHash: hash('prompt-binding-' + index),
+          referenceSetHash: hash('reference-set'), providerRuntime,
+          requestProfile: 'DONOR_GPT_IMAGE_2_PORTRAIT_EDIT_V1', providerRequest: { count: 1, width: 1008, height: 1344, quality: 'high' }, finalOutput } });
+      row.cost.maximumCostMinor = 10; row.cost.charges[0].actualCostMinor = 10;
+      const raw = manifest.rawProviderImages[index], rawId = 'private-suite-raw-' + index;
+      row.rawOutput = { id: rawId, idSha256: hash(rawId), jobIdSha256: row.job.idSha256, ownerSha256: row.job.ownerSha256, kind: 'AI_PROVIDER_OUTPUT',
+        sha256: raw.sha256, width: 1008, height: 1344, mimeType: 'image/png', sizeBytes: readFileSync(raw.path).length,
+        storageBackend: 'oss', metadata: { version: 'ai-image-suite-provider-output/v1', sourceCaptureSnapshotId: 'private-snapshot',
+          providerJobId: 'provider-' + index, actualCostCents: 10, providerResultReceivedAt: `2026-09-16T10:30:5${index}.000Z`,
+          normalizerVersion, normalizedSha256: row.outputs[0].sha256 } };
+      row.outputs[0].metadata = { version: 'ai-image-suite-output/v1', normalizerVersion, sourceCaptureSnapshotId: 'private-snapshot',
+        suiteId: 'private-suite', slotId: 'suite-slot-' + index, attempt: 1, providerOutputAssetId: rawId };
+      row.outputs[0].ownerSha256 = row.job.ownerSha256;
+    });
+  });
+  result.changeMapped('generatedUi', value => { Object.assign(value.projection.quote, { estimatedCostCents: 20, maximumCostCents: 20, pricingVersion }); });
+  result.changeMapped('startRequest', value => { Object.assign(value.body.command, {
+    acceptedEstimatedCostCents: 20, acceptedMaximumCostCents: 20, acceptedPricingVersion: pricingVersion }); });
+  const binding = f.get(manifest.workbench), ownerSha256 = binding.ownerSha256;
+  const pilot = observedAt => ({ kind: 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE', observedAt,
+    gitCommit: f.targetGitCommit, version: '1.0.443', region: 'COM', providerRequests: 0, ozonWrites: 0,
+    result: { expectation: 'hosted-pilot', ownerSha256, shopIds: [binding.shopId], deviceCount: 2,
+      allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'], rolloutRevision: 11, sourcePolicyRevision: 'pilot-11' } });
+  f.input.normalErp.controllerStatus = f.put('count-suite-controller.json', {
+    schemaVersion: 1, kind: 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL', gitCommit: f.targetGitCommit,
+    version: '1.0.443', region: 'COM', ownerSha256, currency: 'CNY', unitCostCents: 10, maximumTaskCostCents: 20, providerProfile,
+    configurationChanged: false, pending: { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 },
+    before: pilot('2026-09-16T10:23:00.000Z'), after: pilot('2026-09-16T10:36:00.000Z'),
+  });
+  const applied = f.get(f.input.normalErp.applied);
+  manifest.replayRequest = f.put('suite-replay-request.json', { ...f.get(manifest.applyRequest), at: '2026-09-16T10:35:03.000Z' });
+  manifest.replayResponse = f.put('suite-replay-response.json', { at: '2026-09-16T10:35:04.000Z', status: 200,
+    body: { code: 1, data: { ...applied.response.body.data, replayed: true } } });
+  Object.assign(manifest, { schemaVersion: 4, providerProfile, executionGitCommit: f.targetGitCommit,
+    executionOfflineQa04: structuredClone(f.input.offline) });
+  f.input.normalErp.acceptance = f.put('count-suite-inputs.json', manifest);
+  const changeMapped = (key, mutate, index) => {
+    const ref = index === undefined ? manifest[key] : manifest[key][index]; f.change(ref, mutate);
+    f.change(f.input.normalErp.acceptance, value => {
+      if (index === undefined) value[key].sha256 = ref.sha256; else value[key][index].sha256 = ref.sha256;
+    });
+  };
+  return { ...result, changeMapped };
+}

@@ -1,5 +1,6 @@
 import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
 import { isRestrictedAiMediaHostedPilotOperations } from './verify-ai-media-pilot-policy.mjs';
+import { COUNT_SUITE_PROFILE, verifyCountSuiteRecord } from './qa04-count-suite-profile.mjs';
 
 const CODE = 'QA04_SUITE_INVALID';
 const check = condition => requireThat(condition, CODE);
@@ -21,16 +22,21 @@ const sourceDraftJson = value => value === null || typeof value !== 'object' ? J
 // This variant consumes only original local records. It cannot create tasks,
 // rewrite old evidence, bridge historical execution, or grant production access.
 export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
+  const countProfile = manifest.schemaVersion === 4;
   const derivedGeneratedPhase = manifest.schemaVersion === 3;
-  const explicitExecution = manifest.schemaVersion === 2 || derivedGeneratedPhase;
+  const explicitExecution = manifest.schemaVersion === 2 || derivedGeneratedPhase || countProfile;
+  const unitCost = countProfile ? 10 : 14, taskCost = unitCost * 2;
+  const provider = countProfile ? 'custom' : 'dashscope-wanx', model = countProfile ? 'gpt-image-2-count' : 'wanx2.1-imageedit';
   exactKeys(manifest, ['schemaVersion', 'kind', 'operation', 'source', 'referenceImage', 'secondImage', 'workbench', 'generatedUi',
     'submitted', 'startRequest', 'startResponse', 'continueRequest', 'continueResponse', 'applyRequest', 'queue', 'browser', 'previews', 'reviews',
     ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : []),
-    ...(derivedGeneratedPhase ? ['databaseEvidenceMode'] : [])], CODE);
+    ...(derivedGeneratedPhase ? ['databaseEvidenceMode'] : []),
+    ...(countProfile ? ['providerProfile', 'rawProviderImages', 'replayRequest', 'replayResponse'] : [])], CODE);
   check((manifest.schemaVersion === 1 || explicitExecution)
     && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
   if (derivedGeneratedPhase) check(manifest.databaseEvidenceMode === 'POST_APPLICATION_EVENT_DERIVATION_V1');
   const executionCommit = explicitExecution ? manifest.executionGitCommit : input.targetGitCommit;
+  if (countProfile) check(manifest.providerProfile === COUNT_SUITE_PROFILE && executionCommit === input.targetGitCommit);
   const executionOfflineRefs = explicitExecution ? manifest.executionOfflineQa04 : input.offline;
   check(/^[a-f0-9]{40}$/u.test(executionCommit));
   if (explicitExecution) exactKeys(executionOfflineRefs, ['receipt', 'log'], CODE);
@@ -43,6 +49,13 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   const controllerRecord = read(refs.controllerStatus), controller = controllerRecord?.result?.qualification ?? controllerRecord;
   const source = imageEvidence(reader, manifest.source, CODE), reference = imageEvidence(reader, manifest.referenceImage, CODE);
   const images = [pngEvidence(reader, refs.image, CODE), pngEvidence(reader, manifest.secondImage, CODE)];
+  const rawImages = countProfile ? (() => {
+    check(Array.isArray(manifest.rawProviderImages) && manifest.rawProviderImages.length === 2);
+    const values = manifest.rawProviderImages.map(ref => imageEvidence(reader, ref, CODE));
+    check(values.every(image => image.width === 1008 && image.height === 1344 && image.bytes <= 20 * 1024 * 1024)
+      && values[0].sha256 !== values[1].sha256);
+    return values;
+  })() : [];
   const previews = manifest.previews.map(read), reviews = manifest.reviews.map(read);
   check(images.every(image => image.width === 900 && image.height === 1200) && images[0].sha256 !== images[1].sha256);
   const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit, binding.launchedAt) : null;
@@ -67,7 +80,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && equal(projection.binding, { shopId: binding.shopId, workflowId: binding.draftId, draftRevision: binding.revision, draftVersion: binding.draftVersion })
     && text(plan?.id) && text(plan.versionId) && positive(plan.revision) && isSha256(plan.previewHash)
     && projection.quote?.currency === 'CNY' && projection.quote.itemCount === 2
-    && projection.quote.estimatedCostCents === 28 && projection.quote.maximumCostCents === 28
+    && projection.quote.estimatedCostCents === taskCost && projection.quote.maximumCostCents === taskCost
     && text(projection.quote.pricingVersion));
   for (const value of [ui, submitted, applied]) check(value.extensionVersion === binding.extensionVersion);
   check(submitted.gitCommit === commit && submitted.suiteId === suiteId && submitted.startExecutePosts === 1
@@ -101,7 +114,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && text(start.body.idempotencyKey) && start.body.command?.version === 'extension-ai-image-suite-execute-command/v1'
     && start.body.command.action === 'START' && start.body.command.expectedPreviewHash === plan.previewHash
     && start.body.command.acceptedPricingVersion === projection.quote.pricingVersion
-    && start.body.command.acceptedEstimatedCostCents === 28 && start.body.command.acceptedMaximumCostCents === 28
+    && start.body.command.acceptedEstimatedCostCents === taskCost && start.body.command.acceptedMaximumCostCents === taskCost
     && start.body.command.snapshotId === binding.snapshotId && start.body.command.supplyGoodsId === binding.collectId
     && start.body.command.draftRevision === binding.revision && start.body.command.planId === plan.id
     && start.body.command.planVersionId === plan.versionId && start.body.command.planRevision === plan.revision);
@@ -137,6 +150,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       && time(approved.createdAt) > time(ui.at) && time(approved.createdAt) <= time(review.at));
   };
   const originalRows = pair(generated.rows), restoredRows = pair(restored.rows), seenJobs = [], seenProviders = [], seenCharges = [], seenOutputs = [], seenReservations = [];
+  const countRows = [];
   const rows = [];
   for (const [phase, database] of [['generated', generated], ['restored', restored]]) {
     native(database, 'REAL_ERP_JOB_DATABASE_READBACK');
@@ -152,16 +166,16 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     for (const row of database.rows) {
       const job = row.job, flow = row.workflow, cost = row.cost, output = single(row.outputs), charge = single(cost?.charges);
       check(text(job?.id) && job.idSha256 === sha256(job.id) && job.ownerSha256 === owner && job.status === 'SUCCEEDED'
-        && job.operation === 'IMAGE_TO_IMAGE' && job.provider === 'dashscope-wanx' && job.model === 'wanx2.1-imageedit'
+        && job.operation === 'IMAGE_TO_IMAGE' && job.provider === provider && job.model === model
         && job.attemptCount === 1 && job.requestedImageCount === 1 && job.width === 900 && job.height === 1200
         && job.providerReconciliationStatus === 'NOT_REQUIRED' && isSha256(job.providerJobIdSha256)
-        && job.actualCostCents === 14 && job.billedUnits === 1 && job.errorCode === null
-        && equal(job.pricing, { currency: 'CNY', unitCostCents: 14, requestedImageCount: 1, maximumCostCents: 14 }));
+        && job.actualCostCents === unitCost && job.billedUnits === 1 && job.errorCode === null
+        && equal(job.pricing, { currency: 'CNY', unitCostCents: unitCost, requestedImageCount: 1, maximumCostCents: unitCost }));
       check(time(job.startedAt) >= time(offline.completedAt) && time(job.startedAt) >= time(start.at)
         && time(job.completedAt) > time(job.startedAt) && time(job.completedAt) <= time(database.observedAt));
-      check(cost.status === 'SETTLED' && cost.currency === 'CNY' && cost.maximumCostMinor === 14 && cost.settlementCount === 1
+      check(cost.status === 'SETTLED' && cost.currency === 'CNY' && cost.maximumCostMinor === unitCost && cost.settlementCount === 1
         && cost.jobIdSha256 === job.idSha256 && isSha256(cost.idSha256) && charge.kind === 'CHARGE' && charge.currency === 'CNY'
-        && charge.actualCostMinor === 14 && charge.billedUnits === 1 && charge.jobIdSha256 === job.idSha256 && isSha256(charge.chargeIdSha256));
+        && charge.actualCostMinor === unitCost && charge.billedUnits === 1 && charge.jobIdSha256 === job.idSha256 && isSha256(charge.chargeIdSha256));
       const slot = slots.find(slot => slot.workflowId === flow?.id), image = images.find(image => image.sha256 === output.sha256);
       check(slot && image && flow.idSha256 === sha256(flow.id) && flow.operation === 'IMAGE_TO_IMAGE' && flow.status === 'SUCCEEDED'
         && flow.contextType === 'collect' && flow.contextId === binding.collectId && flow.contextSlotKey === slot.slotKey
@@ -172,6 +186,12 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       check(output.idSha256 === sha256(output.id) && output.jobIdSha256 === job.idSha256 && output.kind === 'AI_GENERATED'
         && output.width === image.width && output.height === image.height && output.mimeType === image.mimeType
         && output.sizeBytes === image.bytes && output.storageBackend === 'oss');
+      if (countProfile) {
+        const verified = verifyCountSuiteRecord(row, database, { rawImages, binding, suiteId, slot, quote: projection.quote });
+        if (phase === 'generated') countRows.push(verified);
+        else check(equal(originalRows.find(value => value.job.id === job.id)?.rawOutput, row.rawOutput)
+          && equal(generated.suiteRuntime, database.suiteRuntime));
+      }
       const frozen = single(job.frozenInputs), selected = single(flow.inputs), sourceAsset = single(flow.inputAssets);
       check(frozen.role === 'REFERENCE' && frozen.ordinal === 0 && frozen.assetId === lineage.assetId
         && frozen.sha256 === reference.sha256 && frozen.sizeBytes === reference.bytes
@@ -202,6 +222,11 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   }
   unique(seenJobs); unique(seenProviders); unique(seenCharges); unique(seenOutputs); unique(seenReservations);
   unique(restoredRows.map(row => row.job.id));
+  if (countProfile) {
+    check(equal(countRows[0].runtime, countRows[1].runtime) && countRows[0].referenceSetHash === countRows[1].referenceSetHash);
+    unique(countRows.map(row => row.slotPromptId)); unique(countRows.map(row => row.raw.id));
+    unique(countRows.map(row => row.raw.sha256));
+  }
   check(rows.every(row => time(ui.at) >= time(row.job.completedAt)) && time(ui.at) <= time(applied.at)
     && (derivedGeneratedPhase
       ? time(applied.at) <= time(generated.observedAt) && time(generated.observedAt) <= time(restored.observedAt)
@@ -222,6 +247,14 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && result.shopId === binding.shopId && result.listingWorkflowId === binding.draftId && result.sourceDraftRevision === before.revision
     && result.sourceDraftVersion === before.draftVersion && result.boundDraftRevision === after.revision && result.boundDraftVersion === after.draftVersion);
   const returned = pair(result.assignments);
+  if (countProfile) {
+    const request = read(manifest.replayRequest), response = read(manifest.replayResponse);
+    success(response);
+    check(request.method === applyRequest.method && request.path === applyRequest.path && equal(request.body, applyRequest.body)
+      && response.body.data?.replayed === true && equal(response.body.data, { ...result, replayed: true })
+      && time(request.at) >= time(applied.at) && time(response.at) >= time(request.at)
+      && time(response.at) <= time(restored.observedAt) && time(response.at) <= time(queue.observedAt));
+  }
   unique(items.map(item => item.suiteSlotId)); unique(returned.map(item => item.assignmentId));
   check(applyRequest.method === 'POST' && applyRequest.path === '/api/extension-device/source-workbench/ai-image-suite/listing-assignments'
     && command?.contractVersion === result.contractVersion && command.shopId === binding.shopId && command.listingWorkflowId === binding.draftId
@@ -334,11 +367,13 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       : equal(beforePilot.result, afterPilot.result);
     check((controller.schemaVersion === 1 || targetCleanup) && controller.gitCommit === cleanupCommit && controller.version === afterPilot.version
       && controller.region === 'COM' && controller.ownerSha256 === owner && controller.currency === 'CNY'
-      && controller.maximumTaskCostCents === 28 && controller.configurationChanged === false
+      && controller.maximumTaskCostCents === taskCost && controller.configurationChanged === false
       && equal(controller.pending, expectedPending)
       && samePilot
       && time(beforePilot.observedAt) <= time(binding.launchedAt)
       && time(afterPilot.observedAt) >= time(applied.at));
+    if (countProfile) check(controller.schemaVersion === 1 && controller.unitCostCents === unitCost
+      && controller.providerProfile === COUNT_SUITE_PROFILE);
     if (targetCleanup) {
       check(controller.executionGitCommit === commit);
       // Later maintenance is evidence about the current runtime, never a
@@ -361,6 +396,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       check(time(afterPilot.observedAt) <= time(restored.observedAt));
     }
   } else {
+    check(!countProfile);
     check(controller?.schemaVersion === 1 && controller.kind === 'SS_ERP_COMPLETION_BOOTSTRAP_RECEIPT'
       && controller.action === 'restore' && controller.phase === 'restored' && controller.caseId === 'suite'
       && controller.commit === commit && controller.ownerSha256 === owner && controller.currency === 'CNY'
@@ -387,8 +423,9 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && time(browser.completedAt) >= time(derivedGeneratedPhase ? applied.at : restored.observedAt) && time(browser.completedAt) <= time(now));
   const sourceBridge = verifySource(commit, input.targetGitCommit);
   return { executionCommit: commit, completedAt: browser.completedAt, operation: 'IMAGE_TO_IMAGE', workflowKind: 'SUITE',
-    provider: 'dashscope-wanx', model: 'wanx2.1-imageedit', currency: 'CNY', unitCostMinor: 14,
-    successfulImages: 2, actualCostMinor: 28, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
+    provider, model, currency: 'CNY', unitCostMinor: unitCost,
+    successfulImages: 2, actualCostMinor: taskCost, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
+    ...(countProfile ? { providerProfile: COUNT_SUITE_PROFILE, verifiedIdempotencyReplay: true } : {}),
     configurationRestored: true, image: images[0], images, source, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
     sourceSha256: source.sha256, referenceSha256: reference.sha256,
     ...(derivedGeneratedPhase ? { generatedPhaseEvidence: manifest.databaseEvidenceMode } : {}),
@@ -399,5 +436,6 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       ...Object.fromEntries(Object.entries(manifest).filter(([, value]) => isRecord(value) && isSha256(value.sha256)).map(([key, ref]) => [`${key}Sha256`, ref.sha256])),
       previewSha256: manifest.previews.map(ref => ref.sha256), reviewSha256: manifest.reviews.map(ref => ref.sha256),
       startResponseSha256: manifest.startResponse.sha256, continueRequestSha256: manifest.continueRequest.sha256,
-      continueResponseSha256: manifest.continueResponse.sha256 } };
+      continueResponseSha256: manifest.continueResponse.sha256,
+      ...(countProfile ? { rawProviderImageSha256: manifest.rawProviderImages.map(ref => ref.sha256) } : {}) } };
 }

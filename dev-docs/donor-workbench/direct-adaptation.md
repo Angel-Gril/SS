@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 官网443发布准备：count正式证据合同已补齐
+
+- 用户明确要求继续切换官网公开下载。当前公开434/运行443；本轮新增release verifier schema4，只接受精确count endpoint、CNY10单图/20双图、冻结Key修订和报价hash、1008×1344原件、900×1200成品、审核前PENDING实库/UI、preview/review/assignment与原请求replay。旧Wanx schema1/2/3的14/28金额及历史证据合同保持，不改旧原件或放宽source比较。
+- owner仅在`scripts/qa04-count-suite-profile.mjs`及正式suite producer/fixture/tests；没有修改ERP、扩展运行代码或生产配置，所以现有b3282d37签名候选仍是目标。正式工具的新提交/测试在私有operator绑定，使用公开writeQa04FinalAcceptance(repositoryRoot=clean b3282d37 checkout)验证目标Git身份，不修改provenance或重新标记候选；不得把工具提交当作生产运行提交。
+- T2正例实际RED→GREEN及40+拒绝变体通过；完整QA04 59项、主Agent4项count专用回归通过。当前b3282d37 native offline原件真实已通过，独立headed9444加载实际未修改COM签名443，经正常pair owner只授DOTH/原四scopes；1688真实采集、新隔离r1/v1草稿和两槽APPROVED计划准备完成，旧9222浏览器保留。当前新Provider POST/费用/Ozon0；START/CONTINUE尚未执行，正式QA04/网站canary/approval/CAS/distribution仍待后续原件。
+- 用户截图是ERP launcher仍明确打开的旧`ai-image-workbench.html`。该页保留BYOK/hosted两种控制，hostedActive时旧通用图像操作被明确锁定；它未收到来源素材projection时显示空素材库。新source入口实际为`precision-workbench.html`，同窗SKU图片表/审核/应用已经存在；因此独立旧页与日常精铺重复，当前验收旧页只证明后台合同，不能代表精铺主入口体验已统一。公开入口与界面的退役需要迁移其残留consumer/session策略后再做，不删除审核/草稿/执行owner；本轮截图为诊断，不改UI实现。
+
 ## 2026-10-08 `b3282d37 / 1.0.443` 双区部署、全部普通 Wanx 新请求配置替换完成
 
 - 实施`c738201a`、可空metadata收口`7b0a796f`与轻量合同依赖修复`b3282d37cdcee7bf4d58bf362bdbbeced3a2aacb`均已提交推送，最终COM/CN同一443签名release已走标准部署。441/442没有部署，原失败/签名/备份均保留；443的两区实际Cloud ZIP安装和默认精铺/透明shell/来源拒绝验收通过（私有截图目录Bb2lQW/jsHpRC），Cloud/Local verifier620/616均0failure。

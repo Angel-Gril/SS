@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 官网443切换准备：count正式QA04合同与新隔离草稿
+
+正式QA04新增精确count/CNY10 schema4，完整59项及count主Agent回归通过，ERP/扩展运行源未变，目标仍b3282d37/443。目标native offline、签名专用Chrome、正常DOTH配对/1688采集/隔离草稿/两槽计划已准备；尚未发起新生图，官网仍434。截图旧独立工作台重复入口已核实，界面退役不由后台合同验收冒充；准确边界与后续证据仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 `b3282d37 / 1.0.443` 双区部署与普通 Wanx 配置替换完成
 
 COM/CN同commit标准部署、签名MV3安装、备份恢复、canonicalVPS及publicready已通过。两区普通TEXT/I2I/FULL_EDIT/INPAINT和suite均配置提供的custom/count服务及加密Key，CNY0.10/张、旧Wanx文字override清空；模型/价格/Keyrevision实际读回通过，原店铺/feature权限不扩大，CN功能仍dark、COM商品分析保留非Wanx的qwen-vl-max。最终server7189项与214项实库通过，本轮3次真实合成图Provider校准、Ozon0。官网仍434，新正式QA04/CAS未执行；证据与限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

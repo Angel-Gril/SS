@@ -8,7 +8,7 @@ import test from 'node:test';
 import { deflateSync } from 'node:zlib';
 import { QA04_OFFLINE_STEPS } from './qa04-offline-gate.mjs';
 import { evidenceReader, imageEvidence } from './qa04-final-evidence.mjs';
-import { suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
+import { countSuiteFlowFixture, suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
 
 let subject = {};
 try { subject = await import('./qa04-final-acceptance.mjs'); }
@@ -1024,6 +1024,106 @@ test('derives current-source suite acceptance from two original jobs, PNGs, revi
   assert.equal(proof.images.length, 2); assert.equal(proof.configurationRestored, true);
   assert.equal(result.report.provenance.fullProductionMv3Verified, false);
   assert.doesNotMatch(JSON.stringify(result.report), /private-suite|private-draft|private-source/u);
+});
+
+test('count suite v4 binds exact CNY10 runtime, raw portrait bytes, pending review, assignment and original replay', t => {
+  const f = countSuiteFlowFixture(fixture(t), png), proof = f.verify().report.provenance.normalErp;
+  assert.equal(proof.provider, 'custom'); assert.equal(proof.model, 'gpt-image-2-count');
+  assert.equal(proof.currency, 'CNY'); assert.equal(proof.unitCostMinor, 10); assert.equal(proof.actualCostMinor, 20);
+  assert.equal(proof.providerProfile, 'BIG_MODEL_GPT_IMAGE_2_COUNT_SUITE_CNY10_V1');
+  assert.equal(proof.verifiedIdempotencyReplay, true);
+  assert.equal(proof.evidence.rawProviderImageSha256.length, 2);
+  assert.doesNotMatch(JSON.stringify(proof), /private-suite|private-credential|provider-0/u);
+});
+
+test('count suite v4 refuses endpoint, model, frozen price, credential, request and normalization drift', t => {
+  const f = countSuiteFlowFixture(fixture(t), png), ref = f.input.normalErp.generated, original = readFileSync(ref.path);
+  const changes = [
+    value => { value.rows[0].job.provider = 'dashscope-wanx'; },
+    value => { value.rows[0].job.model = 'gpt-image-2'; },
+    value => { value.rows[0].job.actualCostCents = 14; },
+    value => { value.rows[0].job.operationConfig.providerRuntime.currency = 'USD'; },
+    value => { value.rows[0].job.operationConfig.providerRuntime.baseUrlSha256 = hash('https://another.example/v1'); },
+    value => { value.rows[0].job.operationConfig.providerRuntime.contractVersion = 'ai-image-provider-runtime/v2'; },
+    value => { delete value.rows[0].job.operationConfig.providerRuntime.credentialRevision; },
+    value => { value.rows[1].job.operationConfig.providerRuntime.credentialRevision.revision += 1; },
+    value => { value.rows[0].job.operationConfig.providerRequest.quality = 'standard'; },
+    value => { value.rows[0].job.operationConfig.providerRequest.width = 1024; },
+    value => { value.rows[0].job.operationConfig.requestProfile = 'OZON_PORTRAIT_SINGLE_V1'; },
+    value => { value.rows[0].job.operationConfig.finalOutput.fit = 'contain'; },
+    value => { value.rows[0].job.operationConfig.finalOutput.normalizerVersion = 'ai-image-suite-output-normalizer/v1'; },
+    value => { value.suiteRuntime.pricingVersion = 'ai-image-suite-price-cny/v1:' + 'a'.repeat(32); },
+    value => { value.suiteRuntime.providerConfigHash = hash('forged'); },
+    value => { value.suiteRuntime.estimatedCostCents = 28; },
+    value => { value.rows[0].job.frozenInputs.push({ ...value.rows[0].job.frozenInputs[0], ordinal: 1 }); },
+  ];
+  for (const mutate of changes) {
+    f.change(ref, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(ref, f.put('suite-generated-db.json', original));
+  }
+});
+
+test('count suite v4 refuses unrelated raw bytes, raw/final lineage, replay and execution relabeling', t => {
+  const f = countSuiteFlowFixture(fixture(t), png), ref = f.input.normalErp.generated, original = readFileSync(ref.path);
+  for (const mutate of [
+    value => { value.rows[0].workflow.inputAssets[0].ownerSha256 = hash('other-owner'); },
+    value => { value.rows[0].rawOutput.ownerSha256 = hash('other-owner'); },
+    value => { value.rows[0].outputs[0].ownerSha256 = hash('other-owner'); },
+    value => { value.rows[0].rawOutput.sha256 = value.rows[1].rawOutput.sha256; },
+    value => { value.rows[0].rawOutput.width = 1024; },
+    value => { value.rows[0].rawOutput.metadata.normalizedSha256 = hash('wrong'); },
+    value => { value.rows[0].rawOutput.metadata.providerJobId = 'different-provider-task'; },
+    value => { value.rows[0].outputs[0].metadata.providerOutputAssetId = value.rows[1].rawOutput.id; },
+    value => { value.rows[0].outputs[0].metadata.sourceCaptureSnapshotId = 'other-snapshot'; },
+  ]) {
+    f.change(ref, mutate); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(ref, f.put('suite-generated-db.json', original));
+  }
+  const response = f.manifest.replayResponse, responseOriginal = readFileSync(response.path);
+  f.changeMapped('replayResponse', value => { value.body.data.replayed = false; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  Object.assign(response, f.put('suite-replay-response.json', responseOriginal));
+  f.change(f.input.normalErp.acceptance, value => { value.replayResponse = response; value.executionGitCommit = f.erpCommit; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('count suite v4 keeps the exact cost control, accepted quote, reference bytes and pending evidence mandatory', t => {
+  const f = countSuiteFlowFixture(fixture(t), png);
+  const acceptance = f.input.normalErp.acceptance, manifestOriginal = readFileSync(acceptance.path);
+  for (const mutate of [
+    value => { value.providerProfile = 'CUSTOM_PROVIDER_ANY_PRICE'; },
+    value => { value.schemaVersion = 1; },
+    value => { delete value.executionOfflineQa04; },
+    value => { value.rawProviderImages = [value.rawProviderImages[0]]; },
+    value => { value.rawProviderImages[0] = f.put('wrong-raw-dimensions.png', png(1024, 1024, 81)); },
+  ]) {
+    f.change(acceptance, mutate); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(acceptance, f.put('count-suite-inputs.json', manifestOriginal));
+  }
+  const controller = f.input.normalErp.controllerStatus, controllerOriginal = readFileSync(controller.path);
+  for (const mutate of [
+    value => { value.unitCostCents = 14; }, value => { value.maximumTaskCostCents = 28; },
+    value => { value.currency = 'USD'; }, value => { value.configurationChanged = true; },
+    value => { value.pending.suites = 1; }, value => { value.after.result.shopIds.push('other-shop'); },
+  ]) {
+    f.change(controller, mutate); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(controller, f.put('count-suite-controller.json', controllerOriginal));
+  }
+  for (const [key, mutate] of [
+    ['generatedUi', value => { value.projection.quote.maximumCostCents = 28; }],
+    ['startRequest', value => { value.body.command.acceptedMaximumCostCents = 28; }],
+    ['replayRequest', value => { value.body.idempotencyKey = 'another-request'; }],
+    ['replayResponse', value => { value.body.data.assignments[0].assetId = 'other-output'; }],
+  ]) {
+    const ref = f.manifest[key], original = readFileSync(ref.path);
+    f.changeMapped(key, mutate); assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(ref, f.put(path.basename(ref.path), original));
+    f.change(acceptance, value => { value[key] = ref; });
+  }
+  const generated = f.input.normalErp.generated;
+  f.change(generated, value => { value.rows[0].workflow.reviewStatus = 'APPROVED'; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
 });
 
 test('suite v2 bridges a JPEG source execution with removed completed queue jobs and unchanged restricted pilot', t => {
