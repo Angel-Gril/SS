@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 `b3282d37 / 1.0.443` 双区部署与普通 Wanx 配置替换完成
+
+COM/CN同commit标准部署、签名MV3安装、备份恢复、canonicalVPS及publicready已通过。两区普通TEXT/I2I/FULL_EDIT/INPAINT和suite均配置提供的custom/count服务及加密Key，CNY0.10/张、旧Wanx文字override清空；模型/价格/Keyrevision实际读回通过，原店铺/feature权限不扩大，CN功能仍dark、COM商品分析保留非Wanx的qwen-vl-max。最终server7189项与214项实库通过，本轮3次真实合成图Provider校准、Ozon0。官网仍434，新正式QA04/CAS未执行；证据与限制仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 普通 count 最终候选443准备部署
 
 442全量7172项通过但17个离线CLI因图片profile依赖被拒；协议标识已拆为无依赖合同，原CLI及图片关联84项、类型/lint通过，图片行为不变。最终443继续已授权双区部署与普通Wanx配置替换；旧失败候选未部署，证据边界见[直接适配 owner](donor-workbench/direct-adaptation.md)。

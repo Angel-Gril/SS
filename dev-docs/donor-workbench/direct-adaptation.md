@@ -1,5 +1,15 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 `b3282d37 / 1.0.443` 双区部署、全部普通 Wanx 新请求配置替换完成
+
+- 实施`c738201a`、可空metadata收口`7b0a796f`与轻量合同依赖修复`b3282d37cdcee7bf4d58bf362bdbbeced3a2aacb`均已提交推送，最终COM/CN同一443签名release已走标准部署。441/442没有部署，原失败/签名/备份均保留；443的两区实际Cloud ZIP安装和默认精铺/透明shell/来源拒绝验收通过（私有截图目录Bb2lQW/jsHpRC），Cloud/Local verifier620/616均0failure。
+- 最终clean原始Git字节checkout实际server全量7189 passed/377 skipped（373既有+4新增实库用例只在真实PG阶段启用）；本机完整AI Media PostgreSQL214项实际执行且0skip，populated upgrade原所选fixture通过，schema清理。最终3个协议标识源文件的类型/lint与84项关联通过，Providerreview基础门禁通过；两区标准部署重新完整server/Web构建及签名验证通过。没有443正式native offline/QA04，不用之前失败preflight或分项通过冒充发布正式回执。
+- 两区配置切换各通过现有超级管理员真实account-session、expectedRevision的batch mutation一次原子保存14项；新普通TEXT/I2I/FULL_EDIT/INPAINT与suite全部读回custom / `https://ai.big-model-api.top/v1` / `gpt-image-2-count` / CNY10minor，旧`ai_image_text_to_image_model`已清空以继承count，两图suite20minor且runtime executionReady=true。COM普通Key revision26、CN普通Key revision1；Key在两区数据库加密保存，DPAPI解密仅进程内经SSH stdin传输，GET models确认同端点完整模型/Key有效，没有复制到artifact/Git/扩展包。各临时管理员Redis session实际删除后才输出成功回执。
+- 两区预先确认无活跃普通图片任务，保留加密配置before/after及CAS回滚路径；切换不会把旧任务重标为count。原身份/店铺/费用/发布/feature政策全部逐项保持，COM原DOTH受限pilot未扩大，商品分析继续qwen-vl-max；qwen-vl-max不是Wanx，给定服务未列出文字/视觉model，不把图片模型误作商品分析模型。CN已配置新图片服务但功能开关仍dark，不把“配置/部署就绪”称为向用户开放。
+- 两区current、API/Worker/Web以及local/publicready均为上述b3282d37、statusready、db/Redisok。切换中API/Worker按标准部署暂时停机，两区最终已恢复。目标与日常恢复演练COM144/CN143表通过，临时恢复库清理，备份目录分离保持；canonical VPS均PASS/FULL/0failure/1warning，唯一warning为既有远端备份未配置。COM SHA`6d9eb6c433a110d776b06fd7e9cc6a2119b459a61fece666aca78759fcef7342`；CN SHA`c2b919eab77f9afc5ad8cf1c593b83e032488454a27825bcb5de40a7712cc798`。
+- 本轮真实Provider总3次独立合成图POST（TEXT/FULL_EDIT/INPAINT各1）及对应安全下载，图片目视与请求原件保留；无未知重试、供应商控制台/账单读取，供应商实扣未读取。ERP真实生产job/reservation/assignment与Ozon写入0；配置切换后的Provider仅GET models，没有再次付费生成。参考I2I传输沿用之前独立hero/scene样本，不推定所有商品创作质量。
+- 本轮用户要求的“全部普通Wanx生图/改图配置替换、COM/CN部署成功”完成，运行443；官网两区实读仍`14985551 / 1.0.434`，未执行新正式QA04、websiteapproval/canary/CAS/distribution。后续官网公开应单独补齐count/CNY10正式证据owner及完整fresh suite，不能复用旧Wanx/CNY14回执。部署/配置原件唯一保留在私有`release-b3282d37-deploy443`，CHANGELOG继续Unreleased。
+
 ## 2026-10-08 普通 count 协议标识依赖收口，最终候选443
 
 - 442完整preflight通过早期合同/类型与安装包验证，但后端全量7172 passed/377 skipped、离线账单CLI17项失败：原轻量multipart合同新增导入完整图片profile，令独立无依赖checkout在CLI启动前解析Sharp失败。17项定向真实复现后把四个非密协议标识拆为无外部依赖的contract模块，原profile重导出兼容原消费者；未改图片请求/币种/shape/网络边界或CLI断言，没有真实读取供应商账单。
