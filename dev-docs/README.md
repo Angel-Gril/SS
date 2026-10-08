@@ -1,8 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 `136aa330 / 1.0.437` 已推送、签名并双区部署
+
+GPT2套图质量修复及发布前兼容收口已完成提交/推送、区域签名、完整preflight/build、双区标准部署、备份恢复、实际签名包MV3及canonical VPS验收；两区应用均运行`136aa330 / 1.0.437`，db/Redis正常。COM AI分析开启、CN direct/RDS dark保持；生产Provider/Key修订/价格读回完全不变，COM默认仍Wanx。官网公开下载仍1.0.434，本轮未执行正式QA04/网站canary/approval/CAS/distribution，也没有新增Provider/Ozon请求。当前准确证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 文字生图 fallback 兼容边界修正，最终候选437
 
-436完整检查的7077项通过、2项Wanx隔离回归失败，暴露fallback误适用全部Provider。已限定仅custom恢复原文字生图兼容，Wanx图片编辑仍不继承文字生图；原2项RED→关联123项GREEN，未部署436、未新增费用。最终437继续验证/双区部署，旧候选与失败日志保留；见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+436完整检查的7077项通过、2项Wanx隔离回归失败，暴露fallback误适用全部Provider。已限定仅custom恢复原文字生图兼容，Wanx图片编辑仍不继承文字生图；原2项RED→关联132项GREEN，未部署436、未新增费用。最终437的后续部署见最新记录，旧候选与失败日志保留；见[直接适配 owner](donor-workbench/direct-adaptation.md)。
 
 ## 2026-10-08 Provider 发布审查目录收口，最终候选 `1.0.436`
 

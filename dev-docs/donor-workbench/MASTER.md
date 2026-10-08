@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-08 `1.0.437` 应用双区部署完成，官网仍1.0.434
+
+质量修复代码最终`136aa330 / 1.0.437`已提交、推送、签名及COM/CN标准部署，完整preflight/build、签名包MV3、备份恢复和canonical VPS通过。默认Provider/Key/价格保持，COM分析开启/CN dark；本轮新增费用/Ozon零。公开指针未切换，正式官网门禁仍待单独完成。唯一详细事实见[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-08 套图质量修复本地验收完成（3/3），尚未发布
 
 根因、原精铺模型/尺寸接线、真实两图质量对照已完成3/3；精确count端点单参考transport已验证，白条0行并产生明显不同的主图/场景。本轮没有生产配置或Ozon/草稿写入，官网仍1.0.434。实现、私有原件和单样本限制见[直接适配 owner](./direct-adaptation.md)。
@@ -82,7 +86,10 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications and public Cloud/Local downloads serve `14985551 / 1.0.434`.
+COM/CN applications run `136aa330 / 1.0.437`; public Cloud/Local downloads remain `14985551 / 1.0.434`.
+The newest application deployment preserves the previous Provider credentials, prices and rollout policy.
+Its canonical VPS and signed-package installation checks passed; its website publication gates have not run.
+The following public-distribution facts describe the completed `1.0.434` baseline.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads
 passed. Same-binding read failures stop automatically; explicit refresh recovers the

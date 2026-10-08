@@ -1,5 +1,22 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 `136aa330 / 1.0.437` 已提交、推送、签名与双区应用部署
+
+- 用户明确请求提交/部署，实施提交`5483f06e`、发布review目录补齐`48fe945e`、Wanx isolation最终修复`136aa3304620a87436e55e987909868afa848fda`均已推送到`feat/ai-media-prompt-registry`。435/436中间候选保留但未部署；最终版本437，CHANGELOG仍Unreleased，日期不冒充官网公开发布日期。
+- 最终clean Git原始LF字节隔离检出上的`pnpm preflight --build`完整通过：server7079 passed/373既有skipped，source扩展611 pass/0failure/0warning，server/sandbox/web类型、lint、Web/server build和全部对应script合同通过。此前Provider静态review缺项、custom fallback误扩大至Wanx两个失败均保留原件并从最终新提交重新验证；没有修改失败断言或跳过门禁。
+- COM/CN区域独立Cloud/Local候选同一commit构建并由现有Ed25519 key签名和独立验签。实际两个Cloud签名ZIP隔离Chrome/MV3普通默认精铺入口、来源拒绝和透明iframe验收通过，证据`ss-erp-donor-mv3-evidence-M3bOo3`/`ss-erp-donor-mv3-evidence-Y0njMB`；这证明包安装行为，不把合成页面冒充新生产suite。
+- 两区标准部署已成功：current和API/Worker/Web均为上述136aa330；public/local`/ready` db/Redis=ok，迁移无新增schema变更。COM原DOTH单owner/单店/两活动device的受限pilot及IMAGE_TO_IMAGE/SUITE/IMAGE_TRANSLATE保持，商品分析true/qwen-vl-max；CN direct/RDS dark、分析false、BYOK flags关闭。
+- 部署级和日常备份目录保持`/var/backups/ss-erp`与`/var/backups/ss-erp-runtime`分离。部署前和部署后恢复演练COM144/CN143张表通过，临时恢复库清理。部署耗时令最初部署proof超120分钟，正式VPS verifier正确拒绝；重新真实备份/恢复生成新target attestation后通过，没有放宽时限或改写旧proof。COM恢复使用原本机maintenance路径，CN使用已授权RDS maintenance；一次遗漏本机参数导致CREATEDB拒绝，零创建后修正参数成功。
+- 第一次部署在target gate raw-bytes比较处失败，预安装gate由git archive继承Windows CRLF，而正式部署package是Git blob原始LF。逐个脚本SHA证明差异仅CRLF后，将本轮gate和未激活release移动到私有`failed-gate-crlf-*`/`failed-unactivated-release-*`保留，从摘要验证的LF目录安装准确gate，再走原标准部署；未覆盖旧serving release或绕过同commit目录拒绝。失败回执全部保留。
+- 发布后配置逐项before/after相等：COM Provider=`dashscope-wanx`、model=`wanx2.1-imageedit`、单图成本14minorCNY、Key record revision25；CN providerdisabled/成本0。测试GPT2 Key仍仅私有DPAPI/此前隔离进程使用，没有设为生产默认、进入Git或包；本次部署新增Provider POST、费用、Ozon、ERP草稿写入均0。
+- 正式canonical VPS两区均PASS/FULL/0failures/1warning；唯一warning为既有远端备份未配置。回执SHA COM`c90ae8c6f0d711d40e54135bfc0eb1ded155d2543e8b9bd953cf48dbbaa51c28`、CN`310d1c148b5d58b6833b12463aa97abb8076f50a312eaa72aeb0c71ef402bbc8`。双区服务健康、备份证明和rollback旧公开pointer均读回，不提前宣布模型默认切换。
+- 尚未执行本提交fresh normal suite、正式QA04、REL04网站canary、website approval、CAS/distribution；官网均仍`14985551 / 1.0.434`。先前两图GPT2隔离质量原件不能替代本提交正式ERP suite。当前目标“提交、推送、签名、双区应用部署”完成；新生产默认模型/价格配置与官网公开属于未完成结果。私有部署原件在`release-136aa330-deploy437`，不进入Git；本次事实同步提交不重签或重部署。
+
+| 正式签名摘要 | COM | CN |
+| --- | --- | --- |
+| Release evidence | `ba4eb28186b6ab45e312af9c4c5b37e42a03a78022dfbc1c3140cf41854b7657` | `81e5f9579008697b81207415531624be950de98780693a98ca80e1f8f666bfd1` |
+| Release signature | `0ea0be052e5751422a22ac74a0215cdc91bb72921eb3ba711030d735b144dc6f` | `c12067cef60b97e2f1bd4c4496f3dcfbeca87a35cdd287f738f1b028b78a95b7` |
+
 ## 2026-10-08 436全量发现Wanx fallback回归，最终437收口
 
 - 436完整preflight通过静态Provider审查目录，后端7077 passed/373既有skipped，但两项既有Wanx IMAGE_TO_IMAGE/FULL_EDIT测试失败：操作aware fallback误对所有Provider开放，令wanx2.1-imageedit继承TEXT_TO_IMAGE。失败原件保留，未部署436，不能声称完整门禁通过。
