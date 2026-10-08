@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 普通 count 最终候选442
+
+完整本机AI Media实库214项通过，候选441在类型检查发现新增成品metadata可空判断遗漏，已修正并通过类型检查；未部署441或替换生产普通模型配置。最终442继续已授权的双区部署与全部Wanx新请求配置切换，准确记录见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 普通 count 生图/改图接线完成，441双区候选准备
 
 用户授权清除普通Wanx新请求配置并双区部署。指定count服务已接普通TEXT/I2I/FULL_EDIT/INPAINT、明确CNY报价、raw真实尺寸与规范成品及mask外区保护；三次真实合成图传输校准、8项实库/287项定向与类型/lint通过。普通文字/视觉分析不是Wanx，保留qwen-vl-max。当前尚未提交或部署，后续配置与发布边界仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

@@ -1221,7 +1221,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           const final = data.assets[0];
           if (!raw || final?.metadata?.rawProviderOutputAssetId !== raw.id
             || final.width !== job.width || final.height !== job.height
-            || final.metadata.normalizerVersion !== 'gpt2-count-ordinary-output-normalizer/v1') {
+            || final.metadata?.normalizerVersion !== 'gpt2-count-ordinary-output-normalizer/v1') {
             throw Object.assign(new Error('Count completion requires the exact original output and normalized canvas'), {
               code: 'INVALID_EDIT_OUTPUT_GRAPH',
             });

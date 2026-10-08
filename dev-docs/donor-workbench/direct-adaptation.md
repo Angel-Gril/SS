@@ -1,5 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 最终普通 count 候选442类型收口
+
+- 441签名原件已保存但完整preflight在server类型检查拒绝新增raw/final完成检查对nullable metadata的读取；已补可空判断，类型检查通过，不删除原件或修改旧签名。没有部署441或切换两区普通模型配置。
+- 普通count的完整本机AI Media/PostgreSQL214项通过、0skip；populated upgrade按原所选fixture回放通过。结合已完成287定向/8项普通实库、真实三次合成图请求与类型/lint，最终442继续同一双区部署与CNY0.10配置授权。
+
 ## 2026-10-08 普通生图/改图清除 Wanx 配置，441双区候选准备
 
 - 用户明确要求把普通改图残留Wanx也切到指定服务，并要求COM/CN部署成功；沿用提供的Key/完整model/域名及CNY0.10单张价。商品分析qwen-vl-max不是Wanx、也不是图片生成模型；该服务GET models未列出文字/视觉model，故分析功能保持现配置，不把gpt-image-2-count误填为视觉分析模型。两区新图片配置将使用custom/count，CN原功能dark不由配置变更自动开放。
