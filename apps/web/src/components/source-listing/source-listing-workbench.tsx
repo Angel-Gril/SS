@@ -909,7 +909,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       if (epoch !== erpSourceLaunchEpochRef.current) return;
       setErpSourceLaunchNotice(result.state === 'choice_required'
         ? '请选择具体 SKU 后再打开扩展工作台。'
-        : result.state === 'editor_opened' ? '已打开扩展图片编辑器。' : '已打开扩展图片工作台。');
+        : result.state === 'editor_opened' ? '已打开扩展图片编辑器。' : '已在来源商品页打开精铺工作台。');
     } catch (error) {
       if (epoch !== erpSourceLaunchEpochRef.current) return;
       setErpSourceLaunchNotice(error instanceof ErpSourceImageLaunchError
@@ -1904,14 +1904,14 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           <section className="space-y-3 border p-3" aria-label="扩展图片工具">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-medium">扩展图片工作台</div>
+                <div className="font-medium">精铺工作台</div>
                 <div className="text-xs text-muted-foreground">使用当前已保存草稿创建套图，或编辑选中的来源原图。</div>
               </div>
               <Button type="button" size="sm" variant="outline" data-testid="erp-source-open-workbench"
                 disabled={!erpSourceReady || erpSourceDirty || Boolean(erpSourceLaunchAction)}
                 onClick={() => void openErpSourceImage('WORKBENCH')}>
                 {erpSourceLaunchAction === 'WORKBENCH' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                打开扩展图片工作台
+                打开精铺工作台
               </Button>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">

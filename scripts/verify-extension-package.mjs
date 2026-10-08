@@ -750,6 +750,8 @@ const requiredDonorWorkbenchFiles = [
   'pages/precision-workbench.js',
   'pages/precision-workbench.css',
   'shared/donor-workbench/precision-workflow.js',
+  'shared/erp-adapter/erp-source-precision-launch.js',
+  'pages/donor/erp-entry.js',
   'shared/donor-workbench/precision-byok-flow.js',
   'shared/donor-workbench/precision-byok-edit-flow.js',
   'content/donor/adapter-1688.js',

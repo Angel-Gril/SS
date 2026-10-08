@@ -8,6 +8,7 @@ import { createPricingTool } from './donor/pricing-tool.js';
 import { createVisionTool } from './donor/vision-tool.js';
 import { createAttributeSuggestions } from './donor/attribute-suggestions.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
+import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
@@ -102,6 +103,18 @@ function command(type, fields = {}) {
 }
 
 const session = Workflow.createSession({ getProjection: () => projection, send: command });
+const erpEntry = createPrecisionErpEntry({ session, getProjection: () => projection,
+  isBusy: () => saveBusy || Boolean(lastSave) || mediaMutationBusy || publishBusy || session.isActive()
+    || unsavedListingFields.size > 0 || preparation?.isRunning() || byok.isBusy(),
+  applySelection: context => {
+    selectedShopId = context.shopId;
+    selectedSkuKey = context.skuKey;
+    selectedDraftShopId = context.shopId;
+    editor = null; editorLoadKey = ''; editorReadFailureKey = '';
+    render();
+  },
+  acknowledge: fields => command('ENTRY_ACCEPTED', fields), report,
+});
 let preparation;
 let preparationAnalysis;
 let preparationSchemaContext='',preparationSchemaRevision=null;
@@ -1290,7 +1303,7 @@ function render() {
     shopSelectSignature = nextShopSignature;
     select.replaceChildren(...projection.shops.map((shop) => { const option = make('option', '', shop.name); option.value = shop.id; return option; }));
   }
-  if (!projection.shops.some((shop) => shop.id === selectedShopId)) selectedShopId = projection.shops[0]?.id || '';
+  if (!projection.shops.some((shop) => shop.id === selectedShopId) && !session.hasPinnedDraft()) selectedShopId = projection.shops[0]?.id || '';
   select.value = selectedShopId;
   element('store-switch-btn').textContent = projection.shops.find((shop) => shop.id === selectedShopId)?.name || '选择店铺';
   listing();
@@ -1496,7 +1509,9 @@ const queueClose=make('button','ghost','关闭');queueClose.addEventListener('cl
 prepareShops.addEventListener('click',event=>{if(!event.isTrusted||preparation.isRunning())return;queueBody.replaceChildren();for(const shop of projection.shops){const label=make('label'),input=make('input');input.type='checkbox';input.value=shop.id;input.checked=shop.id===selectedShopId;label.append(input,make('span','',shop.name));queueBody.append(label);}queueModal.hidden=false;});
 queueStart.addEventListener('click',event=>{if(!event.isTrusted)return;const shops=[...queueBody.querySelectorAll('input:checked')].map(input=>input.value);queueModal.hidden=true;void(async()=>{if(!shops.length)throw Error('请选择至少一个已授权店铺');selectedShopId=shops[0];render();if(!await ensureCurrentDraft())return;await preparation.start(shops);})().catch(report).finally(render);});
 trusted('store-switch-btn', () => openModal('shop-modal'));
-trusted('shop-confirm-btn', () => { selectedShopId = element('erp-shop-select').value; element('shop-modal').hidden = true; render(); });
+trusted('shop-confirm-btn', () => { const next = element('erp-shop-select').value;
+  if (next !== selectedShopId) session.clearPinnedDraft();
+  selectedShopId = next; element('shop-modal').hidden = true; render(); });
 trusted('settings-btn', () => {
   const draft = listing(); const info = element('basic-info');
   const values = [['商品标题', projection.source.title], ['来源平台', projection.source.platform], ['来源类目', projection.source.categoryName || '未提供'],
@@ -1652,6 +1667,7 @@ window.addEventListener('message', (event) => {
     }
     projection = Contract.parseProjection(event.data.projection);
     sourceReady = Boolean(projection.source.sourceProductId && projection.skus.length);
+    void erpEntry.accept(event.data.entryContext);
     render();
   } else if (event.data.type === 'COMMAND_RESULT') {
     const task = pending.get(event.data.requestId);

@@ -134,3 +134,67 @@ test('a concurrent start cannot create a second collection or draft', async () =
   await pending;
   assert.equal(run.commands.filter((command) => command.type === 'CREATE_DRAFT').length, 1);
 });
+
+function pinnedFixture() {
+  const run = fixture();
+  const source = run.getProjection();
+  const context = { contractVersion: 'extension-byok-workbench-launch-context/v1', sourcePlatform: '1688',
+    sourceProductId: source.source.sourceProductId, sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    shopId: 'doth', workflowId: 'erp-selected-draft', draftRevision: 3, draftVersion: 2, skuKey: 'sku-7',
+    slotKey: 'sku:sku-7:hero', assignmentMode: 'APPEND', assignmentOrdinal: 0 };
+  const drafts = ['first-same-shop', context.workflowId].map(id => ({ id, shopId: 'doth', revision: 3,
+    draftVersion: 2, selectedSkuCount: 1, mediaAssignmentCount: 0, stage: 'MEDIA_REVIEW', runState: 'ACTIVE' }));
+  run.setProjection(contract.createProjection({ platform: '1688', product: product(), shops: source.shops,
+    handoff: { platform: '1688', sourceProductId: source.source.sourceProductId, snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1' },
+    workbench: { state: 'ready', status: { snapshot: { current: true }, listing: { items: drafts }, media: { items: [] } } } }));
+  return { ...run, context };
+}
+
+test('ERP entry selects the exact workflow when a shop has several drafts', () => {
+  const run = pinnedFixture();
+  assert.equal(run.session.pinDraft(run.context).id, run.context.workflowId);
+  assert.equal(run.session.currentDraft('doth').id, run.context.workflowId);
+});
+
+test('a missing pinned ERP draft never substitutes another draft or creates a replacement', async () => {
+  const run = pinnedFixture();
+  run.session.pinDraft(run.context);
+  const next = copy(run.getProjection());
+  next.workbench.status.listing.items = next.workbench.status.listing.items.slice(0, 1);
+  run.setProjection(next);
+  assert.equal(run.session.currentDraft('doth'), null);
+  await assert.rejects(run.session.start({ shopId: 'doth', selectSkus: async () => { throw Error('must not choose new SKUs'); } }), /草稿/);
+  assert.deepEqual(run.commands.map(item => item.type), ['REFRESH']);
+});
+
+test('a pinned ERP draft survives fresh projections and its own saved revision advances', () => {
+  const run = pinnedFixture();
+  run.session.pinDraft(run.context);
+  const next = copy(run.getProjection());
+  next.workbench.status.listing.items.reverse();
+  next.workbench.status.listing.items[0].revision += 1;
+  next.workbench.status.listing.items[0].draftVersion += 1;
+  run.setProjection(next);
+  assert.equal(run.session.currentDraft('doth').id, run.context.workflowId);
+  assert.equal(run.session.currentDraft('doth').revision, 4);
+});
+
+test('pinning rejects wrong source, snapshot, shop and draft version without selecting the first draft', () => {
+  for (const change of [value => { value.sourceProductId = 'other'; }, value => { value.sourceCaptureSnapshotId = 'other'; },
+    value => { value.shopId = 'bini'; }, value => { value.draftRevision++; }, value => { value.draftVersion++; }]) {
+    const run = pinnedFixture(), context = copy(run.context);
+    change(context);
+    assert.throws(() => run.session.pinDraft(context), /草稿|来源|快照/);
+    assert.equal(run.session.currentDraft(context.shopId), null);
+  }
+});
+
+test('changing the pinned source snapshot or revoking its shop blocks readback until a new entry', () => {
+  for (const change of [next => { next.handoff.snapshotId = 'new-snapshot'; }, next => { next.source.sourceProductId = 'other'; },
+    next => { next.shops = []; }, next => { next.workbench.status.snapshot.current = false; }]) {
+    const run = pinnedFixture();
+    run.session.pinDraft(run.context);
+    const next = copy(run.getProjection()); change(next); run.setProjection(next);
+    assert.equal(run.session.currentDraft('doth'), null);
+  }
+});

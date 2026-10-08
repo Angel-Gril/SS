@@ -4,7 +4,7 @@
   var CONTRACT_VERSION = 'ss-erp-donor-workbench/v1';
   var COMMAND_TYPES = new Set([
     'PREPARATION_CAPABILITY', 'PREPARATION_CONTEXT', 'PREPARATION_ANALYZE', 'PREPARATION_READ', 'PREPARATION_APPLY',
-    'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH',
+    'READY', 'CLOSE', 'REFRESH', 'COLLECT', 'CREATE_DRAFT', 'OPEN_MEDIA_WORKBENCH', 'ENTRY_ACCEPTED',
     'OPEN_EMBEDDED_MEDIA',
     'LOAD_MEDIA_HISTORY', 'PREPARE_MEDIA_MUTATION', 'EXECUTE_MEDIA_TASK', 'LOAD_BILLING',
     'EXECUTE_HOSTED_SUITE', 'ASSIGN_HOSTED_SUITE',
@@ -655,6 +655,15 @@
 
   function parseFrameCommand(value) {
     var item = record(value);
+    if (item && item.type === 'ENTRY_ACCEPTED') {
+      var entryRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'entryRequestId',
+        'workflowId', 'draftRevision', 'draftVersion', 'accepted']);
+      if (!text(item.entryRequestId, 120) || !text(item.workflowId, 200) || typeof item.accepted !== 'boolean'
+        || !['draftRevision', 'draftVersion'].every(function (key) { return Number.isSafeInteger(item[key]) && item[key] > 0; })) {
+        throw new TypeError('invalid precision entry acknowledgement');
+      }
+      return Object.freeze(Object.assign({}, item, { requestId: entryRequestId }));
+    }
     if (item && ['WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES'].includes(item.type)) {
       var watermarkRequestId = commandBase(item, ['contractVersion', 'type', 'requestId', 'request']);
       var watermark = record(item.request);

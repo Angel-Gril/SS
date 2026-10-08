@@ -1,6 +1,7 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
 try { importScripts('../shared/contracts/ai-image-workbench-v1.js'); } catch (e) { console.warn('[SS ERP] AI image workbench contract load error:', e); }
 try { importScripts('../shared/erp-adapter/erp-source-image-launch.js'); } catch (e) { console.warn('[SS ERP] ERP source image launcher load error:', e); }
+try { importScripts('../shared/erp-adapter/erp-source-precision-launch.js'); } catch (e) { console.warn('[SS ERP] ERP precision launcher load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-authorization.js'); } catch (e) { console.warn('[SS ERP] runtime message authorization load error:', e); }
 try { importScripts('../shared/byok/profile-schema.js'); } catch (e) { console.warn('[SS ERP] BYOK profile schema load error:', e); }
@@ -3100,6 +3101,50 @@ async function openAuthoritativeSourceAiWorkbench(message, sender, embedded = fa
 }
 
 let erpSourceImageLauncher = null;
+let erpSourcePrecisionLauncher = null;
+function getErpSourcePrecisionLauncher() {
+  if (erpSourcePrecisionLauncher) return erpSourcePrecisionLauncher;
+  const factory = globalThis.SS_ERP_ERP_SOURCE_PRECISION_LAUNCH;
+  if (!factory) throw new Error('精铺 ERP 入口模块未加载');
+  erpSourcePrecisionLauncher = factory.createLauncher({
+    runtimeId: chrome.runtime.id, tabs: chrome.tabs, sessionStorage: chrome.storage.session,
+    resolveProductUrl: precisionSourceProductUrl,
+    verifyErpSourceAuthority: async ({ erpSourceAuthority, sourceTabId, sourceDocumentId }) => {
+      await assertErpSourceDeviceAuthority(erpSourceAuthority);
+      const response = await chrome.tabs.sendMessage(sourceTabId, { type: 'ss-erp:erp-source-launch-current' },
+        { frameId: 0, documentId: sourceDocumentId });
+      return response?.ok === true && response.origin === erpSourceAuthority.webOrigin;
+    },
+    verifySourceDocument: async ({ tabId, documentId, context }) => {
+      const response = await chrome.tabs.sendMessage(tabId, { type: 'ss-erp:precision-erp-workbench-current' },
+        { frameId: 0, documentId });
+      return response?.ok === true && response.workflowId === context.workflowId
+        && response.draftRevision === context.draftRevision && response.draftVersion === context.draftVersion;
+    },
+    loadBinding: async (context) => {
+      const client = getSourceListingWorkflowClient();
+      const result = await client.getStatus({ snapshotId: context.sourceCaptureSnapshotId, supplyGoodsId: context.supplyGoodsId });
+      const listing = currentSourceListingContext(result, context.workflowId);
+      if (result?.state !== 'ready' || result.status?.snapshot?.current !== true || !listing
+        || listing.shopId !== context.shopId || listing.revision !== context.draftRevision || listing.draftVersion !== context.draftVersion) {
+        throw new Error('精铺启动草稿已变化');
+      }
+      const binding = { snapshotId: context.sourceCaptureSnapshotId, supplyGoodsId: context.supplyGoodsId,
+        shopId: context.shopId, listingWorkflowId: context.workflowId, draftRevision: context.draftRevision, draftVersion: context.draftVersion };
+      const read = await client.readDraftEditor(binding);
+      if (read?.state !== 'ready' || !read.editor || !Object.keys(binding).every(key => read.editor.binding[key] === binding[key])
+        || ![...read.editor.selectedSkuKeys, ...(read.editor.offerRows?.rows || []).map(row => row.rowKey)].includes(context.skuKey)) {
+        throw new Error('精铺启动 SKU 或草稿版本已变化');
+      }
+      const handoff = createSourceWorkflowHandoff({ supplyGoodsId: context.supplyGoodsId,
+        snapshotId: context.sourceCaptureSnapshotId, snapshotVersion: result.status.snapshot.version }, context.sourceProductId, context.sourcePlatform);
+      if (!handoff) throw new Error('精铺启动快照不可用');
+      return { context, handoff };
+    },
+    persistHandoff: persistSourceWorkflowHandoff,
+  });
+  return erpSourcePrecisionLauncher;
+}
 function getErpSourceImageLauncher() {
   if (erpSourceImageLauncher) return erpSourceImageLauncher;
   const api = globalThis.SS_ERP_ERP_SOURCE_IMAGE_LAUNCH;
@@ -3129,7 +3174,7 @@ function getErpSourceImageLauncher() {
       return response.body.data;
     },
     resolveWorkbench: (request) => getByokWorkbenchLaunchClient().resolve(request),
-    openWorkbench: (request) => getByokWorkbenchSessionManager().open(request),
+    openWorkbench: (request) => getErpSourcePrecisionLauncher().open(request),
     openEditor: openErpSourceMediaEditor,
   });
   return erpSourceImageLauncher;
@@ -6578,6 +6623,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (globalThis.SS_ERP_PREPARATION_RUNTIME_HANDLER?.TYPES.includes(message.type)) {
     void getPreparationRuntimeHandler().handle(message, sender).then(sendResponse);
+    return true;
+  }
+  if (message.type === 'ss-erp:precision-erp-launch-claim') {
+    void getErpSourcePrecisionLauncher().claim(message, sender).then(result => sendResponse({ ok: true, result }))
+      .catch(() => sendResponse({ ok: false, error: 'ERP 精铺启动授权已失效，请从原草稿重新打开' }));
     return true;
   }
   if (message.type === SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE) {

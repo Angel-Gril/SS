@@ -28,6 +28,9 @@
   var historyEpoch = 0;
   var billingEpoch = 0;
   var hostedAuthorityRefresh = null;
+  var entryContext = null;
+  var entryRequest = null;
+  var entrySequence = 0;
   var currentHistory = {
     state: 'idle', listingWorkflowId: '', error: '', context: null,
     items: [], nextCursor: null, receipt: null,
@@ -85,10 +88,21 @@
   }
 
   function publishProjection() {
+    if (entryContext && !entryRequest && currentProjection.handoff?.snapshotId === entryContext.context.sourceCaptureSnapshotId
+      && currentProjection.handoff?.supplyGoodsId === entryContext.context.supplyGoodsId
+      && currentProjection.workbench.status.snapshot.current === true) {
+      var selected = currentProjection.workbench.status.listing.items.find(function (draft) {
+        return draft.id === entryContext.context.workflowId && draft.shopId === entryContext.context.shopId;
+      });
+      if (selected && selected.revision >= entryContext.context.draftRevision && selected.draftVersion >= entryContext.context.draftVersion) {
+        entryContext = { ...entryContext, context: { ...entryContext.context, draftRevision: selected.revision, draftVersion: selected.draftVersion } };
+      }
+    }
     postToFrame({
       contractVersion: Contract.CONTRACT_VERSION,
       type: 'PROJECTION',
       projection: currentProjection,
+      ...(entryContext ? { entryContext: entryContext } : {}),
     });
   }
 
@@ -907,14 +921,14 @@
     finally { setBusy(false, ''); }
   }
 
-  function showFrame() {
+  function showFrame(options) {
     if (!frame || !trigger) return;
     open = true;
     frame.hidden = false;
     trigger.hidden = true;
     setLegacySurfaceHidden(true);
     publishProjection();
-    void loadProjection({ force: true });
+    if (!options || options.preserveProjection !== true) void loadProjection({ force: true });
     globalThis.clearTimeout(frameLoadTimer);
     frameLoadTimer = globalThis.setTimeout(function () {
       if (!open || !frame || frameReady) return;
@@ -998,6 +1012,7 @@
   }
 
   function unmount() {
+    finishErpEntry(false);
     refreshEpoch += 1;
     hideFrame();
     if (host) host.remove();
@@ -1006,12 +1021,76 @@
     frame = null;
   }
 
+  function entryBindingCurrent(context) {
+    return context && context.contractVersion === 'extension-byok-workbench-launch-context/v1'
+      && currentProjection.source.platform === context.sourcePlatform
+      && currentProjection.source.sourceProductId === context.sourceProductId
+      && currentProjection.handoff?.snapshotId === context.sourceCaptureSnapshotId
+      && currentProjection.handoff?.supplyGoodsId === context.supplyGoodsId
+      && currentProjection.workbench.state === 'ready' && currentProjection.workbench.status.snapshot.current === true
+      && currentProjection.shops.some(function (shop) { return shop.id === context.shopId; })
+      && currentProjection.workbench.status.listing.items.some(function (draft) {
+        return draft.id === context.workflowId && draft.shopId === context.shopId
+          && draft.revision === context.draftRevision && draft.draftVersion === context.draftVersion;
+      });
+  }
+
+  function finishErpEntry(accepted) {
+    var request = entryRequest;
+    if (!request) return;
+    entryRequest = null;
+    globalThis.clearTimeout(request.timer);
+    if (accepted) request.respond({ ok: true, state: 'WORKBENCH_OPENED', workflowId: request.context.workflowId,
+      draftRevision: request.context.draftRevision, draftVersion: request.context.draftVersion });
+    else {
+      entryContext = request.previousContext;
+      if (!request.previouslyOpen) hideFrame();
+      publishProjection();
+      request.respond({ ok: false, error: '精铺工作台未确认指定草稿，请核对原页面、未保存编辑或当前草稿后重新打开' });
+    }
+  }
+
+  function openErpEntry(message, sender, respond) {
+    if (!sender || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !sender.tab
+      || !Number.isSafeInteger(sender.tab.id) || typeof sender.documentId !== 'string' || sender.documentId.length < 1
+      || sender.tab.url !== location.href
+      || sender.url !== undefined && sender.url !== location.href && sender.url !== chrome.runtime.getURL('background/service-worker.js')
+      || Object.keys(message).length !== 2 || !/^[a-f0-9]{48}$/u.test(message.nonce || '')
+      || busy || entryRequest || !frame) { respond({ ok: false }); return false; }
+    var request = { requestId: 'erp-entry-' + (++entrySequence), context: null, respond: respond,
+      previouslyOpen: open, previousContext: entryContext, timer: 0 };
+    entryRequest = request;
+    request.timer = globalThis.setTimeout(function () { if (entryRequest === request) finishErpEntry(false); }, 20000);
+    void (async function () {
+      try {
+        var claim = await sendRuntimeMessage({ type: 'ss-erp:precision-erp-launch-claim', nonce: message.nonce });
+        if (entryRequest !== request) return;
+        if (!claim?.ok || !claim.result?.context) throw new Error('ERP 精铺启动授权未通过');
+        request.context = claim.result.context;
+        if (await loadProjection({ force: true, afterMutation: true }) !== true || entryRequest !== request
+          || !entryBindingCurrent(request.context)) throw new Error('ERP 草稿启动上下文已变化');
+        entryContext = { requestId: request.requestId, context: request.context };
+        showFrame({ preserveProjection: true });
+      } catch { if (entryRequest === request) finishErpEntry(false); }
+    })();
+    return true;
+  }
+
   globalThis.addEventListener('message', function (event) {
     if (!frame || event.source !== frame.contentWindow || event.origin !== extensionOrigin) return;
     var command;
     try {
       command = Contract.parseFrameCommand(event.data);
     } catch {
+      return;
+    }
+    if (command.type === 'ENTRY_ACCEPTED') {
+      var entry = entryRequest;
+      var matches = entry && entry.context && command.entryRequestId === entry.requestId
+        && command.workflowId === entry.context.workflowId && command.draftRevision === entry.context.draftRevision
+        && command.draftVersion === entry.context.draftVersion;
+      if (matches) finishErpEntry(command.accepted && entryBindingCurrent(entry.context));
+      commandResult(command.requestId, Boolean(matches), matches ? '' : 'ERP 启动回执已失效');
       return;
     }
     if (command.type === 'READY') {
@@ -1056,6 +1135,16 @@
   });
 
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (message && message.type === 'ss-erp:precision-erp-workbench-current') {
+      if (Object.keys(message).length !== 1 || !sender || sender.id !== chrome.runtime.id || sender.tab || sender.documentId
+        || sender.url && sender.url !== chrome.runtime.getURL('background/service-worker.js')
+        || sender.origin && sender.origin !== extensionOrigin || !open || !frameReady || entryRequest || !entryContext
+        || !entryBindingCurrent(entryContext.context)) { sendResponse({ ok: false }); return false; }
+      sendResponse({ ok: true, workflowId: entryContext.context.workflowId,
+        draftRevision: entryContext.context.draftRevision, draftVersion: entryContext.context.draftVersion });
+      return false;
+    }
+    if (message && message.type === 'ss-erp:precision-erp-workbench-open') return openErpEntry(message, sender, sendResponse);
     if (message && message.type === 'ss-erp:precision-workbench-open') {
       if (Object.keys(message).length !== 1 || !sender || sender.id !== chrome.runtime.id || sender.tab
         || sender.url !== chrome.runtime.getURL('pages/popup.html') || !precisionEnabled || !frame || !trigger) {

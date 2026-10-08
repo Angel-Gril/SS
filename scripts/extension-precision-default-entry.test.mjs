@@ -176,3 +176,77 @@ test('translation capability without a usable launch context is unavailable', as
   const result = await translationStatus(value => { value.launch.state = 'not_ready'; value.launch.context = null; return value; });
   assert.equal(result.data?.available, false);
 });
+
+function erpEntryFixture({ changedRevision = false } = {}) {
+  const context = { contractVersion: 'extension-byok-workbench-launch-context/v1', sourcePlatform: '1688',
+    sourceProductId: '845581683597', sourceCaptureSnapshotId: 'snapshot-erp', supplyGoodsId: 'goods-erp', shopId: 'doth',
+    workflowId: 'draft-erp', draftRevision: 3, draftVersion: 2, skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentMode: 'APPEND', assignmentOrdinal: 0 };
+  const handoff = { snapshotId: context.sourceCaptureSnapshotId, supplyGoodsId: context.supplyGoodsId,
+    sourceProductId: context.sourceProductId, platform: context.sourcePlatform };
+  const listings = ['first-same-shop', context.workflowId].map(id => ({ id, shopId: 'doth',
+    revision: context.draftRevision + (changedRevision ? 1 : 0), draftVersion: context.draftVersion, stage: 'MEDIA_REVIEW',
+    runState: 'ACTIVE', selectedSkuCount: 1, mediaAssignmentCount: 0 }));
+  const state = harness(undefined, {}, (request, callback) => {
+    if (request.type === 'ss-erp:precision-erp-launch-claim') callback({ ok: true, result: { context, handoff } });
+    else if (request.type === 'spb-self-hosted:get-ozon-shops') callback({ ok: true, data: [{ id: 'doth', name: 'DOTH' }] });
+    else if (request.type === 'ss-erp:source-listing-workbench-status') callback({ ok: true, handoff,
+      result: { state: 'ready', status: { snapshot: { current: true }, listing: { items: listings }, media: { items: [] } } } });
+    else callback({ ok: false });
+  });
+  state.environment.SS_ERP_DONOR_1688_CAPTURE.collect = async () => ({ productId: context.sourceProductId,
+    captureV2: { skus: [{ key: 'sku-1', sourceSkuId: 'sku-1' }], media: [] } });
+  return { ...state, context };
+}
+const workerSender = { id: runtimeId, frameId: 0, documentId: 'source-doc-1',
+  url: 'https://detail.1688.com/offer/845581683597.html', origin: 'https://detail.1688.com',
+  tab: { id: 7, url: 'https://detail.1688.com/offer/845581683597.html' } };
+const erpOpen = { type: 'ss-erp:precision-erp-workbench-open', nonce: 'a'.repeat(48) };
+
+test('ERP entry waits for the actual precision frame to confirm the exact draft before reporting opened', async () => {
+  const state = erpEntryFixture(); let response;
+  assert.equal(state.runtimeListener(erpOpen, workerSender, value => { response = value; }), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(response, undefined, 'an iframe element is not an opened-and-bound acknowledgement');
+  assert.equal(state.frame.hidden, false);
+  const entry = state.frameMessages.filter(item => item.type === 'PROJECTION').at(-1).entryContext;
+  assert.equal(entry.context.workflowId, state.context.workflowId);
+  state.listeners.get('message')({ source: state.frame.contentWindow, origin: new URL(state.frame.src).origin,
+    data: { contractVersion: 'ss-erp-donor-workbench/v1', type: 'ENTRY_ACCEPTED', requestId: 'entry-ack',
+      entryRequestId: entry.requestId, workflowId: state.context.workflowId, draftRevision: 3, draftVersion: 2, accepted: true } });
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true, state: 'WORKBENCH_OPENED', workflowId: 'draft-erp', draftRevision: 3, draftVersion: 2 });
+  const mutations = state.runtimeRequests.filter(item => !['ss-erp:precision-erp-launch-claim', 'spb-self-hosted:get-ozon-shops', 'ss-erp:source-listing-workbench-status'].includes(item.type));
+  assert.equal(mutations.length, 0);
+  state.listeners.get('message')({ source: state.frame.contentWindow, origin: new URL(state.frame.src).origin,
+    data: { contractVersion: 'ss-erp-donor-workbench/v1', type: 'READY', requestId: 'iframe-reload' } });
+  assert.equal(state.frameMessages.filter(item => item.type === 'PROJECTION').at(-1).entryContext.context.workflowId, 'draft-erp');
+});
+
+test('ERP entry rejects spoofed page/popup messages before claiming a launch', () => {
+  for (const sender of [{ ...workerSender, id: 'other' }, { ...workerSender, tab: { id: 3 } },
+    { ...workerSender, url: `chrome-extension://${runtimeId}/pages/popup.html` }]) {
+    const state = erpEntryFixture(); let response;
+    state.runtimeListener(erpOpen, sender, value => { response = value; });
+    assert.equal(response?.ok, false);
+    assert.equal(state.runtimeRequests.length, 0);
+    assert.equal(state.frame.hidden, true);
+  }
+});
+
+test('ERP entry rejects a changed draft projection and never shows a different same-shop draft', async () => {
+  const state = erpEntryFixture({ changedRevision: true }); let response;
+  state.runtimeListener(erpOpen, workerSender, value => { response = value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(response?.ok, false);
+  assert.equal(state.frame.hidden, true);
+});
+
+test('a frame declining to replace unsaved edits is not reported as opened', async () => {
+  const state = erpEntryFixture(); let response;
+  state.runtimeListener(erpOpen, workerSender, value => { response = value; });
+  await new Promise(resolve => setImmediate(resolve));
+  const entry = state.frameMessages.filter(item => item.type === 'PROJECTION').at(-1).entryContext;
+  state.listeners.get('message')({ source: state.frame.contentWindow, origin: new URL(state.frame.src).origin,
+    data: { contractVersion: 'ss-erp-donor-workbench/v1', type: 'ENTRY_ACCEPTED', requestId: 'entry-declined',
+      entryRequestId: entry.requestId, workflowId: state.context.workflowId, draftRevision: 3, draftVersion: 2, accepted: false } });
+  assert.equal(response?.ok, false);
+});

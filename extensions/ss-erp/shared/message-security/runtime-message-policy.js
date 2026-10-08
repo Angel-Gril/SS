@@ -133,6 +133,7 @@
   ]);
 
   var SOURCE_AI_WORKBENCH_LAUNCH_TYPES = setOf([
+    'ss-erp:precision-erp-launch-claim',
     'ss-erp:precision-media-open',
     'ss-erp:source-ai-workbench-open',
   ]);

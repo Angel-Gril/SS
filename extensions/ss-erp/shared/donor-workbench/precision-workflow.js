@@ -61,6 +61,37 @@
     var needsRecovery = false;
     var pendingMutation = null;
     var recoveredDraft = null;
+    var pinnedDraft = null;
+    function pinnedReadback(projection, exactRevision) {
+      var pin = pinnedDraft;
+      if (!pin || pin.invalid || projection.source.platform !== pin.sourcePlatform
+        || projection.source.sourceProductId !== pin.sourceProductId
+        || projection.handoff?.snapshotId !== pin.sourceCaptureSnapshotId
+        || projection.handoff?.supplyGoodsId !== pin.supplyGoodsId
+        || projection.workbench.state !== 'ready' || projection.workbench.status.snapshot.current !== true
+        || !projection.shops.some(function (shop) { return shop.id === pin.shopId; })) return null;
+      return projection.workbench.status.listing.items.find(function (draft) {
+        return draft.id === pin.workflowId && draft.shopId === pin.shopId
+          && (exactRevision ? draft.revision === pin.draftRevision && draft.draftVersion === pin.draftVersion
+            : draft.revision >= pin.draftRevision && draft.draftVersion >= pin.draftVersion);
+      }) || null;
+    }
+    function pinDraft(context) {
+      if (active || needsRecovery || pendingMutation) throw new Error('原草稿写入尚未核对，请完成当前操作后重新打开');
+      pinnedDraft = { invalid: true };
+      var identifiers = ['sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId', 'shopId', 'workflowId'];
+      if (!context || context.contractVersion !== 'extension-byok-workbench-launch-context/v1'
+        || !identifiers.every(function (key) { return typeof context[key] === 'string' && context[key].length > 0
+          && context[key].length <= 200 && context[key] === context[key].normalize('NFKC').trim(); })
+        || !['draftRevision', 'draftVersion'].every(function (key) { return Number.isSafeInteger(context[key]) && context[key] > 0; })) {
+        throw new Error('ERP 草稿启动上下文无效，请从原草稿重新打开');
+      }
+      pinnedDraft = Object.fromEntries(identifiers.concat(['draftRevision', 'draftVersion']).map(function (key) { return [key, context[key]]; }));
+      var draft = pinnedReadback(getProjection(), true);
+      if (!draft) throw new Error('ERP 来源、快照或指定草稿已变化，请从原草稿重新打开');
+      recoveredDraft = null;
+      return draft;
+    }
     function unknown(message) {
       var error = new Error(message);
       error.outcome = 'UNKNOWN_OUTCOME';
@@ -98,6 +129,7 @@
     }
     function currentDraft(shopId) {
       var projection = getProjection();
+      if (pinnedDraft) return pinnedDraft.shopId === shopId ? pinnedReadback(projection, false) : null;
       if (!projection.shops.some(function (shop) { return shop.id === shopId; })) {
         if (recoveredDraft && recoveredDraft.shopId === shopId) recoveredDraft = null;
         return null;
@@ -147,6 +179,7 @@
           if (!projection.source.sourceProductId || !projection.skus.length) throw new Error('尚未读取到商品 SKU');
           if (!projection.shops.some(function (shop) { return shop.id === input.shopId; })) throw new Error('请先选择已授权店铺');
           var existing = currentDraft(input.shopId);
+          if (pinnedDraft && !existing) throw new Error('ERP 指定草稿尚未读回，不会创建或替换成其他草稿');
           if (needsRecovery) throw unknown('原草稿不在当前读取结果中，请核对原草稿，不会替换成其他 SKU 草稿');
           if (existing) return existing;
           var selected = await input.selectSkus(toDonorData(projection));
@@ -233,6 +266,9 @@
         } finally { active = false; }
       },
       currentDraft: currentDraft,
+      pinDraft: pinDraft,
+      hasPinnedDraft: function () { return Boolean(pinnedDraft); },
+      clearPinnedDraft: function () { if (active || needsRecovery) throw new Error('请先完成原草稿操作'); pinnedDraft = null; },
       isActive: function () { return active; },
       needsRecovery: function () { return needsRecovery; },
     };
