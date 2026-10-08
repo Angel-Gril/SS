@@ -25,6 +25,7 @@ import {
 } from '../services/ai-image-edit-input-reader.js';
 import {
   createOpenAiImageEditProvider,
+  createGptImage2CountEditProvider,
   withProviderSubmissionRejected,
   type BeforeAiImageProviderDispatch,
 } from '../services/ai-image-providers.js';
@@ -64,6 +65,7 @@ export interface AiImageEditDispatchAuthorization {
 export interface AiImageEditProviderResolverDependencies {
   resolveCapability?: typeof resolveAiImageProviderCapability;
   createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
+  createCountEditProvider?: typeof createGptImage2CountEditProvider;
   createWanxEditProvider?: typeof createDashScopeWanx21ImageEditProvider;
   beforeProviderDispatch?: BeforeAiImageProviderDispatch;
 }
@@ -246,6 +248,7 @@ export function resolveAiImageEditProvider(
   const capability = (dependencies.resolveCapability || resolveAiImageProviderCapability)(
     provider,
     model,
+    operation,
   );
   if (!canRunAiImageProviderOperation({
     capability,
@@ -260,7 +263,9 @@ export function resolveAiImageEditProvider(
   }
   const createEditProvider = contract.kind === 'wanx21'
     ? dependencies.createWanxEditProvider || createDashScopeWanx21ImageEditProvider
-    : dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider;
+    : contract.kind === 'gpt2-count'
+      ? dependencies.createCountEditProvider || createGptImage2CountEditProvider
+      : dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider;
   const editProvider = createEditProvider({
     baseUrl: contract.baseUrl,
     apiKey: config.apiKey,

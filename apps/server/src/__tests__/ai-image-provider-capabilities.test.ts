@@ -14,12 +14,26 @@ import {
 import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 
 describe('AI image provider capability matrix', () => {
-  it.each(['gpt-image-2','gpt-image-2-count'])('preserves legacy text generation while resolving exact %s edits',model=>{
+  it.each(['gpt-image-2'])('preserves legacy text generation while resolving exact %s edits',model=>{
     expect(supportsAiMediaOperation('custom',model,'TEXT_TO_IMAGE',0)).toBe(true);
     expect(assertAiMediaCapability({provider:'custom',model,operation:'TEXT_TO_IMAGE',inputCount:0}))
       .toMatchObject({model:'*',operations:['TEXT_TO_IMAGE'],inputTransport:'none',evidenceLevel:'adapter-characterized'});
     expect(resolveAiImageProviderCapability('custom',model)?.model).toBe(model);
     expect(supportsAiMediaOperation('custom',model,'FULL_EDIT',1)).toBe(false);
+  });
+  it('admits verified ordinary count edits only at their actual endpoint with one matching mask', () => {
+    const capability = resolveAiImageProviderCapability('custom', 'gpt-image-2-count');
+    expect(capability).toMatchObject({ operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+      maxReferences: 1, supportsMask: true, evidenceLevel: 'sandbox-verified' });
+    for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const) {
+      expect(hasExactAiMediaSandboxEvidence({ capability, provider: 'custom', model: 'gpt-image-2-count',
+        baseUrl: 'https://ai.big-model-api.top/v1', operation, inputTransport: 'multipart', resultMode: 'sync' })).toBe(true);
+      expect(hasExactAiMediaSandboxEvidence({ capability, provider: 'custom', model: 'gpt-image-2-count',
+        baseUrl: 'https://unverified.fixture.example/v1', operation, inputTransport: 'multipart', resultMode: 'sync' })).toBe(false);
+    }
+    expect(supportsAiMediaOperation('custom', 'gpt-image-2-count', 'INPAINT', 1, 1)).toBe(true);
+    expect(supportsAiMediaOperation('custom', 'gpt-image-2-count', 'INPAINT', 1, 0)).toBe(false);
+    expect(supportsAiMediaOperation('custom', 'gpt-image-2-count', 'FULL_EDIT', 2, 0)).toBe(false);
   });
   it('records only operations implemented by current adapters', () => {
     expect(resolveAiImageProviderCapability('dashscope-wanx', 'wanx2.1-t2i-turbo')).toMatchObject({

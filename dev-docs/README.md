@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 普通 count 生图/改图接线完成，441双区候选准备
+
+用户授权清除普通Wanx新请求配置并双区部署。指定count服务已接普通TEXT/I2I/FULL_EDIT/INPAINT、明确CNY报价、raw真实尺寸与规范成品及mask外区保护；三次真实合成图传输校准、8项实库/287项定向与类型/lint通过。普通文字/视觉分析不是Wanx，保留qwen-vl-max。当前尚未提交或部署，后续配置与发布边界仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 双区 `5ebe68b1 / 1.0.440` 部署及 COM 新套图模型生效
 
 COM已通过现有管理员配置owner切换托管套图到提供的 `ai.big-model-api.top / gpt-image-2-count`、加密Key及CNY0.10/张；单张10minor/两张20minor/执行就绪实际读回通过，普通图片操作原配置与qwen-vl-max分析保留。CN保持direct/RDS dark，两区服务、备份恢复、签名MV3与canonical VPS通过。无新生图POST/费用或Ozon写入；官网仍1.0.434，新提交正式QA04与公开pointer尚未执行。唯一准确证据/验证限制见[直接适配 owner](donor-workbench/direct-adaptation.md)。

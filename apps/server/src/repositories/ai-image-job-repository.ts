@@ -1130,7 +1130,9 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         if (
           !job
           || job.ownerUserId !== asset.ownerUserId
-          || !['FULL_EDIT', 'INPAINT'].includes(String(job.operation))
+          || !(['FULL_EDIT', 'INPAINT'].includes(String(job.operation))
+            || (job.provider === 'custom' && job.model === 'gpt-image-2-count'
+              && ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'].includes(String(job.operation))))
           || !['RUNNING', 'CANCEL_REQUESTED'].includes(String(job.status))
         ) {
           throw Object.assign(new Error('Provider output cannot be persisted for the current job'), {
@@ -1197,7 +1199,9 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         return false;
       }
       if (job.status !== 'RUNNING') return false;
-      if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation))) {
+      const countOrdinary = job.provider === 'custom' && job.model === 'gpt-image-2-count'
+        && ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'].includes(String(job.operation));
+      if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation)) || countOrdinary) {
         const providerOutputCount = await tx.mediaAsset.count({
           where: { aiImageJobId: id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
         });
@@ -1209,6 +1213,19 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           throw Object.assign(new Error('Edit completion requires one raw output and one final candidate'), {
             code: 'INVALID_EDIT_OUTPUT_GRAPH',
           });
+        }
+        if (countOrdinary) {
+          const raw = await tx.mediaAsset.findFirst({
+            where: { aiImageJobId: id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
+          });
+          const final = data.assets[0];
+          if (!raw || final?.metadata?.rawProviderOutputAssetId !== raw.id
+            || final.width !== job.width || final.height !== job.height
+            || final.metadata.normalizerVersion !== 'gpt2-count-ordinary-output-normalizer/v1') {
+            throw Object.assign(new Error('Count completion requires the exact original output and normalized canvas'), {
+              code: 'INVALID_EDIT_OUTPUT_GRAPH',
+            });
+          }
         }
       }
       const providerJobId = job.providerJobId;

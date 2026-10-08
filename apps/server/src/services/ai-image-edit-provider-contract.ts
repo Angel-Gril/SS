@@ -9,13 +9,19 @@ import {
   type AiPromptRenderingProfile,
 } from './ai-image-edit-prompt-contract.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE, normalizeAiImageWanx21EditApiBase } from './ai-image-wanx-edit-profile.js';
+import { AI_IMAGE_DONOR_GPT2_COUNT_MODEL } from './ai-image-donor-gpt2-profile.js';
+import { assertGptImage2CountProviderIdentity, isGptImage2CountOrdinarySizeSupported } from './ai-image-gpt2-count-profile.js';
 
 export function isWanxHostedEdit(provider: string | undefined, model: string | undefined): boolean {
   return provider === 'dashscope-wanx' && model === AI_IMAGE_WANX21_EDIT_MODEL;
 }
 
+export function isGptImage2CountHostedProvider(provider: string | undefined, model: string | undefined): boolean {
+  return provider === 'custom' && model === AI_IMAGE_DONOR_GPT2_COUNT_MODEL;
+}
+
 export interface AiImageEditProviderContract {
-  kind: 'wanx21' | 'openai-compatible';
+  kind: 'wanx21' | 'openai-compatible' | 'gpt2-count';
   baseUrl: string;
   inputTransport: 'base64' | 'multipart';
   resultMode: 'async' | 'sync';
@@ -24,6 +30,11 @@ export interface AiImageEditProviderContract {
 
 export function resolveAiImageEditProviderContract(provider: string, model: string, baseUrl = ''): AiImageEditProviderContract | null {
   try {
+    if (isGptImage2CountHostedProvider(provider, model)) {
+      const canonicalBase = canonicalAiImageProviderBaseUrl(provider, baseUrl);
+      assertGptImage2CountProviderIdentity(canonicalBase, model);
+      return { kind: 'gpt2-count', baseUrl: canonicalBase, inputTransport: 'multipart', resultMode: 'sync' };
+    }
     if (isWanxHostedEdit(provider, model)) {
       const canonicalBase = canonicalAiImageProviderBaseUrl(provider, baseUrl);
       // Keep runtime/approval identity identical to the URL actually used by the adapter.
@@ -41,6 +52,7 @@ export function resolveAiImageEditProviderContract(provider: string, model: stri
 
 export function isAiImageEditProviderCanvasSupported(provider: string, model: string, width: number, height: number): boolean {
   if (provider === 'fake') return true;
+  if (isGptImage2CountHostedProvider(provider, model)) return isGptImage2CountOrdinarySizeSupported(width, height);
   if (isWanxHostedEdit(provider, model)) {
     return width === AI_IMAGE_WANX21_EDIT_PROFILE.width && height === AI_IMAGE_WANX21_EDIT_PROFILE.height;
   }

@@ -10,7 +10,7 @@ import {
   type CreateAiMediaWorkflowInput,
   type CreateAiImageTranslationWorkflowInput,
 } from '../services/ai-media-workflows.js';
-import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { aiImageProviderEndpointSha256, createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import { buildAiImageTranslationRuntime } from '../services/ai-image-translation-runtime-contract.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 
@@ -58,12 +58,30 @@ const paidProviderRuntime = createAiImageProviderRuntimeContract({
 }, { count: 1, width: 1024, height: 1024 });
 
 describe('AI media workflow service', () => {
-  it('rejects the donor-only count contract on generic I2I before allocating a job or reservation',async()=>{
-    const repo=repository(),settings={provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',costPerImageCents:8,
+  it('rejects the donor-only generic GPT2 contract on generic I2I before allocating a job or reservation',async()=>{
+    const repo=repository(),settings={provider:'custom',model:'gpt-image-2',baseUrl:'https://ai.big-model-api.top/v1',costPerImageCents:8,
       credentialRevision:{recordId:'fixture-count-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}};
     const input={...createInput,...settings,estimatedCostCents:8,providerRuntimeContract:createAiImageProviderRuntimeContract(settings,{count:1,width:1024,height:1024})};
     await expect(createAiMediaWorkflowService(repo).createImageToImage(input)).rejects.toMatchObject({code:'PROVIDER_NOT_READY'});
     expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
+
+  it('accepts a separately verified count ordinary edit without borrowing the suite request', async () => {
+    const repo = repository();
+    const settings = { provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+      currency: 'CNY' as const, costPerImageCents: 10,
+      credentialRevision: { recordId: 'fixture-count-key', revision: 1, updatedAt: '2026-10-08T00:00:00.000Z' } };
+    const capability = () => ({ ...resolveAiImageProviderCapability('openai-images', 'gpt-image-1')!, provider: 'custom', model: settings.model,
+      operations: ['IMAGE_TO_IMAGE' as const], maxReferences: 1, evidenceLevel: 'sandbox-verified' as const,
+      sandboxEvidence: [{ endpointSha256: aiImageProviderEndpointSha256(settings.provider, settings.baseUrl), operation: 'IMAGE_TO_IMAGE' as const,
+        inputTransport: 'multipart' as const, resultMode: 'sync' as const }] });
+    const input = { ...createInput, ...settings, width: 900, height: 1200, estimatedCostCents: 10,
+      providerRuntimeContract: createAiImageProviderRuntimeContract(settings, { count: 1, width: 900, height: 1200 }) };
+    await expect(createAiMediaWorkflowService(repo, { resolveCapability: capability }).createImageToImage(input)).resolves.toMatchObject({ jobId: 'job-1' });
+    expect(repo.createImageToImage).toHaveBeenCalledWith(input);
+    await expect(createAiMediaWorkflowService(repo, { resolveCapability: capability }).createImageToImage({ ...input, width: 999,
+      providerRuntimeContract: createAiImageProviderRuntimeContract(settings, { count: 1, width: 999, height: 1200 }) })).rejects.toBeDefined();
+    expect(repo.createImageToImage).toHaveBeenCalledOnce();
   });
   it('paginates history with a cursor bound to the owner and context', async () => {
     const createdAt = new Date('2026-07-16T00:00:00.000Z');

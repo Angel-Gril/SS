@@ -12,6 +12,8 @@ import {
   createDashScopeWanxProvider,
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
+  createGptImage2CountGenerationProvider,
+  createGptImage2CountEditProvider,
 } from '../services/ai-image-providers.js';
 import {
   resolveAiImageProviderCapability,
@@ -33,7 +35,9 @@ import {
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 import { createDashScopeWanx21ImageEditProvider } from '../services/ai-image-wanx-edit-provider.js';
 import { assertWanxImageToImageInput } from '../services/ai-image-wanx-image-to-image.js';
-import { isWanxHostedEdit } from '../services/ai-image-edit-provider-contract.js';
+import { isGptImage2CountHostedProvider, isWanxHostedEdit, resolveAiImageEditProviderContract } from '../services/ai-image-edit-provider-contract.js';
+import { isGptImage2CountOrdinarySizeSupported } from '../services/ai-image-gpt2-count-profile.js';
+import { getFrozenAiImageTaskPrice } from '../services/ai-image-task-cost.js';
 import { getAiImageOperationProviderRuntimeConfig } from '../services/ai-image-operation-runtime-config.js';
 import { assertFrozenWanxImageToImageJob } from '../services/ai-image-wanx-image-to-image.js';
 
@@ -105,6 +109,8 @@ export interface AiImageProviderResolverDependencies {
   resolveCapability?: typeof resolveAiImageProviderCapability;
   createOpenAiGenerationProvider?: typeof createOpenAiImagesProvider;
   createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
+  createCountGenerationProvider?: typeof createGptImage2CountGenerationProvider;
+  createCountEditProvider?: typeof createGptImage2CountEditProvider;
   createWanxEditProvider?: typeof createDashScopeWanx21ImageEditProvider;
   beforeProviderDispatch?: () => Promise<void>;
 }
@@ -165,8 +171,12 @@ export function resolveAiImageProvider(
     return createDashScopeWanxProvider(options);
   }
   if (provider === 'openai-images' || provider === 'custom') {
+    const countProvider = isGptImage2CountHostedProvider(provider, config.model);
+    if (countProvider && !resolveAiImageEditProviderContract(provider, config.model, config.baseUrl)) {
+      return createDisabledAiImageProvider();
+    }
     const operationReady = (operation: Parameters<AiImageProvider['generate']>[0]['operation']) =>
-      !(operation==='IMAGE_TO_IMAGE' && isDonorGpt2SuiteProvider(provider,config.model)) && canRunAiImageProviderOperation({
+      !(operation==='IMAGE_TO_IMAGE' && isDonorGpt2SuiteProvider(provider,config.model) && !countProvider) && canRunAiImageProviderOperation({
       capability:(dependencies.resolveCapability || resolveAiImageProviderCapability)(provider,config.model,operation||'TEXT_TO_IMAGE'),
       provider, model: config.model, baseUrl: config.baseUrl,
       operation: operation || 'TEXT_TO_IMAGE',
@@ -174,12 +184,13 @@ export function resolveAiImageProvider(
       resultMode: 'sync',
     });
     if (!operationReady('TEXT_TO_IMAGE') && !operationReady('IMAGE_TO_IMAGE')) return createDisabledAiImageProvider();
-    const generation = (
-      dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider
-    )(options);
-    const edit = (
-      dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider
-    )(options);
+    const ordinaryOptions = { ...options, beforeProviderDispatch: dependencies.beforeProviderDispatch };
+    const generation = countProvider
+      ? (dependencies.createCountGenerationProvider || createGptImage2CountGenerationProvider)(ordinaryOptions)
+      : (dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider)(options);
+    const edit = countProvider
+      ? (dependencies.createCountEditProvider || createGptImage2CountEditProvider)(ordinaryOptions)
+      : (dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider)(options);
     const assertReady = (request: Parameters<AiImageProvider['generate']>[0]) => {
       const operation = request.operation || 'TEXT_TO_IMAGE';
       if (!operationReady(operation)) {
@@ -187,6 +198,12 @@ export function resolveAiImageProvider(
           'PROVIDER_NOT_READY',
           `OpenAI ${operation} endpoint or request protocol is not supported`,
         );
+      }
+      if (countProvider && (request.model !== config.model || request.count !== 1
+        || !isGptImage2CountOrdinarySizeSupported(request.width, request.height)
+        || (operation === 'IMAGE_TO_IMAGE' ? request.inputImages?.length !== 1 || Boolean(request.mask)
+          : Boolean(request.inputImages?.length || request.mask)))) {
+        throw new AiImageJobError('INVALID_MEDIA_INPUT', 'GPT Image 2 count request must match its one-image ordinary operation contract');
       }
     };
     return {
@@ -382,7 +399,12 @@ export async function processAiImageQueueJob(
     const onProviderJobCreated = repository.recordProviderJobId
       ? (providerJobId: string, providerAcceptedAt: Date) => repository.recordProviderJobId!(jobId, providerJobId, providerAcceptedAt)
       : undefined;
-    const beforeProviderDispatch = operation === 'IMAGE_TO_IMAGE' && isWanxHostedEdit(persisted.provider, persisted.model)
+    const countProvider = isGptImage2CountHostedProvider(persisted.provider, persisted.model);
+    if (paidJob && countProvider && persisted.costReservation?.currency !== getFrozenAiImageTaskPrice({ ...persisted, costReservation: undefined }).currency) {
+      await failBeforeDispatch('AI_IMAGE_COST_RESERVATION_REQUIRED', 'Paid count generation requires the exact frozen reservation currency');
+      return;
+    }
+    const beforeProviderDispatch = countProvider || (operation === 'IMAGE_TO_IMAGE' && isWanxHostedEdit(persisted.provider, persisted.model))
       ? async () => {
         const [currentConfig, authorization, currentJob] = await Promise.all([
           (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)(operation),
@@ -393,7 +415,15 @@ export async function processAiImageQueueJob(
           || currentJob.requestFingerprint !== persisted.requestFingerprint) {
           throw new AiImageJobError('AI_IMAGE_DISPATCH_REVOKED', 'Reference generation authority changed before Provider dispatch');
         }
-        assertFrozenWanxImageToImageJob(currentJob);
+        if (!countProvider) assertFrozenWanxImageToImageJob(currentJob);
+        if (countProvider && (currentJob.provider !== persisted.provider || currentJob.model !== persisted.model
+          || currentJob.operation !== persisted.operation || currentJob.width !== persisted.width || currentJob.height !== persisted.height
+          || currentJob.requestedImageCount !== 1 || currentJob.costReservation?.status !== 'RESERVED'
+          || currentJob.costReservation.currency !== getFrozenAiImageTaskPrice(currentJob).currency
+          || Number(currentJob.costReservation.estimatedCostMinor) !== persisted.estimatedCostCents
+          || Number(currentJob.costReservation.maximumCostMinor) !== persisted.estimatedCostCents)) {
+          throw new AiImageJobError('AI_IMAGE_DISPATCH_REVOKED', 'Count generation inputs or frozen reservation changed before Provider dispatch');
+        }
         bindAiImageProviderExecutionConfig(persisted.operationConfig, currentConfig, {
           count: persisted.requestedImageCount, width: persisted.width, height: persisted.height,
           estimatedCostCents: persisted.estimatedCostCents,

@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 普通生图/改图清除 Wanx 配置，441双区候选准备
+
+- 用户明确要求把普通改图残留Wanx也切到指定服务，并要求COM/CN部署成功；沿用提供的Key/完整model/域名及CNY0.10单张价。商品分析qwen-vl-max不是Wanx、也不是图片生成模型；该服务GET models未列出文字/视觉model，故分析功能保持现配置，不把gpt-image-2-count误填为视觉分析模型。两区新图片配置将使用custom/count，CN原功能dark不由配置变更自动开放。
+- 新普通count请求profile独立于suite portrait：TEXT/I2I/FULL_EDIT/INPAINT单输出、单来源（文字除外）、high/url，INPAINT必须同来源画布的透明PNG mask；端点/model精确绑定，原SSRF/响应大小/接受持久化/未知结果和最后发包授权继续复用。普通图片currency显式配置默认inherit保持旧USD/CNY任务；文字报价补齐count非密凭据revision。
+- 独立真实校准3次Provider POST：FULL_EDIT900×1200返回896×1200并完成暖黄换背景、INPAINT900×1200返回896×1200并修改左上指定区域、TEXT1024×1024返回同尺寸红收纳盒；各一次没有重试。原件/输入/请求hash保留在COM私有`count-ordinary-*`，仅合成图无客户数据；供应商实际费用未读取，ERP预扣/生产job/Ozon写入0。不能把这些输入校准冒充新版正常ERP公开QA04或所有商品质量一致。
+- 新输出owner保留Provider原字节、896真实尺寸和SHA，再显式归一化到900并存独立成品；mask操作在规范画布上合成，外区逐像素等于原来源。仅接受实测4列rounding或精确请求尺寸，其他偏差拒绝。普通TEXT/I2I原件repo仅对精确count放开，完成必须一原件一成品且精确关联；套图合同/历史恢复不改变。
+- T2新factory37用例33RED、normalizer7RED→全部关联GREEN；普通保存原件PG实际INVALID_STATE RED→GREEN，手工FULL/INPAINT/普通TEXT两实库文件8项0skip通过，每job一次CNY10预扣/结算、审核/应用/原请求重放与mask外区保留，隔离schema已清理。合并13套287项、server类型、定向lint和Provider静态review通过；当前修复尚未提交、签名或部署，线上5ebe68b1/440，官网434。
+
 ## 2026-10-08 `5ebe68b1 / 1.0.440` 双区部署与 COM 套图默认模型切换完成
 
 - 用户本轮明确授权把提供的域名/模型/Key接入COM，并指定ERP预扣CNY0.10/张。`7c1950fd`专用套图配置、`dd5d35ff`独立Worker验收及`5ebe68b1e01364160f96c870bdcbe1bb0e76875c`SQL前向兼容修复均已提交推送。438/439候选未部署，原失败/签名原件保留，最终440从clean commit独立构建、区域签名/验签与标准部署完成。

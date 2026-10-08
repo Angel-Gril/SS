@@ -30,7 +30,7 @@ export async function getAiImageOperationProviderRuntimeConfig(
     : [] as const;
   const { values, revisions } = await getStrictConfigSnapshot([
     'ai_image_provider', 'ai_image_base_url', 'ai_image_api_key',
-    'ai_image_model', 'ai_image_generation_cost_cents',
+    'ai_image_model', 'ai_image_generation_cost_cents', 'ai_image_currency',
     ...textKeys,
   ] as const, { includeRevisions: true });
   const provider = values.ai_image_provider;
@@ -48,7 +48,9 @@ export async function getAiImageOperationProviderRuntimeConfig(
     costPerImageCents: textModel
       ? values.ai_image_text_to_image_cost_cents
       : values.ai_image_generation_cost_cents,
-    ...(provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}),
+    ...(values.ai_image_currency !== 'inherit'
+      ? { currency: values.ai_image_currency }
+      : provider === 'dashscope-wanx' ? { currency: 'CNY' as const } : {}),
     ...(credentialBound
       ? { credentialRevision: credentialRevision(revisions.ai_image_api_key) } : {}),
   };

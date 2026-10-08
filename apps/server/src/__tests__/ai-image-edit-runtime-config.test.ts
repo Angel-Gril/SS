@@ -53,6 +53,27 @@ describe('hosted edit credential snapshot', () => {
     expect(JSON.stringify(config.credentialRevision)).not.toContain(values.ai_image_api_key);
   });
 
+  it('reads explicit CNY pricing and count credential revision in the same ordinary-operation snapshot', async () => {
+    db.findMany.mockResolvedValue([...rows.map(row => ({ ...row, value: ({
+      ai_image_provider: 'custom', ai_image_model: 'gpt-image-2-count', ai_image_base_url: 'https://ai.big-model-api.top/v1',
+      ai_image_generation_cost_cents: '10',
+    } as Record<string, string>)[row.key] ?? row.value })), { key: 'ai_image_currency', value: 'CNY' }]);
+    for (const operation of ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const) {
+      expect(await getAiImageOperationProviderRuntimeConfig(operation)).toMatchObject({
+        provider: 'custom', model: 'gpt-image-2-count', currency: 'CNY', costPerImageCents: 10,
+        credentialRevision: { recordId: 'record-ai_image_api_key', revision: 3 },
+      });
+    }
+    expect(db.findMany).toHaveBeenCalledTimes(4);
+    expect(db.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('preserves inherited legacy custom pricing when no explicit currency exists', async () => {
+    db.findMany.mockResolvedValue(rows.map(row => row.key === 'ai_image_provider' ? { ...row, value: 'custom' }
+      : row.key === 'ai_image_model' ? { ...row, value: 'admin-configured-model' } : row));
+    expect(await getAiImageOperationProviderRuntimeConfig('FULL_EDIT')).not.toHaveProperty('currency');
+  });
+
   it('selects the text model and its own price without changing any edit operation', async () => {
     db.findMany.mockResolvedValue([
       ...rows,

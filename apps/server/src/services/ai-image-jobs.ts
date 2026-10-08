@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 import {
   AiMediaCapabilityError,
   assertAiMediaCapability,
@@ -8,6 +9,12 @@ import { AiImageJobError } from './ai-image-job-error.js';
 import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
 import { assertFrozenWanxImageToImageJob } from './ai-image-wanx-image-to-image.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL } from './ai-image-wanx-edit-profile.js';
+import { validateAiImageEditCandidate } from './ai-image-compositor.js';
+import {
+  AI_IMAGE_GPT2_COUNT_GENERATION_REQUEST_PROFILE,
+  AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE,
+  normalizeGptImage2CountEditOutput,
+} from './ai-image-gpt2-count-profile.js';
 
 export { AiImageJobError } from './ai-image-job-error.js';
 
@@ -455,6 +462,14 @@ export async function runAiImageJob(
     if (operation === 'IMAGE_TO_IMAGE' && job.provider === 'dashscope-wanx' && job.model === AI_IMAGE_WANX21_EDIT_MODEL) {
       assertFrozenWanxImageToImageJob(job);
     }
+    const countOutputProfile = job.provider === 'custom' && job.model === 'gpt-image-2-count';
+    if (countOutputProfile && job.requestedImageCount !== 1) {
+      throw new AiImageJobError('INVALID_MEDIA_INPUT', 'GPT Image 2 count ordinary jobs require one output');
+    }
+    if (countOutputProfile && (!deps.repository.recordProviderOutput || !deps.repository.recordProviderDispatchStarted
+      || !deps.repository.recordProviderJobId || !deps.repository.markSubmissionUncertain)) {
+      throw new AiImageJobError('PROVIDER_NOT_READY', 'GPT Image 2 count raw output and paid dispatch persistence must be installed before submission');
+    }
     getFrozenAiImageTaskPrice(job);
     try {
       assertAiMediaCapability({
@@ -520,8 +535,52 @@ export async function runAiImageJob(
     }
     if (!latest || latest.status !== 'RUNNING') return;
 
+    if (countOutputProfile && (!Array.isArray(generated.images) || generated.images.length !== 1)) {
+      throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'GPT Image 2 count must return exactly one image');
+    }
+
     const assets: AiImageAssetInput[] = [];
     for (const image of generated.images) {
+      if (countOutputProfile) {
+        if (!Buffer.isBuffer(image.buffer) || !image.buffer.length || image.buffer.length > 20 * 1024 * 1024) {
+          throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'GPT Image 2 count raw output exceeds its image byte contract');
+        }
+        const metadata = await sharp(image.buffer, { animated: false, failOn: 'warning', limitInputPixels: 12_000_000 }).metadata();
+        const raw = await validateAiImageEditCandidate({ buffer: image.buffer, expectedWidth: metadata.width!, expectedHeight: metadata.height! });
+        if (raw.mimeType !== String(image.mimeType).split(';')[0]!.trim().toLowerCase().replace(/^image\/jpg$/u, 'image/jpeg')) {
+          throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'GPT Image 2 count output MIME does not match its decoded bytes');
+        }
+        const requestProfile = operation === 'TEXT_TO_IMAGE'
+          ? AI_IMAGE_GPT2_COUNT_GENERATION_REQUEST_PROFILE : AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE;
+        const rawStored = await deps.uploadBuffer(image.buffer, `ai-${job.id}-provider-raw-${raw.sha256}.${raw.extension}`, raw.mimeType,
+          { category: 'ai-generated', ownerId: job.ownerUserId });
+        const persistedRaw = await deps.repository.recordProviderOutput!(job.id, {
+          ownerUserId: job.ownerUserId, jobId: job.id, kind: 'AI_PROVIDER_OUTPUT', url: rawStored.url,
+          storageBackend: rawStored.backend, storageKey: rawStored.key || rawStored.filename || null,
+          mimeType: raw.mimeType, sizeBytes: image.buffer.length, sha256: raw.sha256, width: raw.width, height: raw.height,
+          metadata: { outputRole: 'PROVIDER_RAW', operation, requestProfile, providerOutputFormat: raw.format },
+        });
+        const afterRaw = await deps.repository.getById(job.id);
+        if (afterRaw?.status === 'CANCEL_REQUESTED' || afterRaw?.status === 'CANCELLED') {
+          if (paidProviderResultReceived && !acceptedProviderEvidence.providerJobId) {
+            await deps.repository.markCancelled(job.id, { providerSubmissionUncertain: true });
+          } else await deps.repository.markCancelled(job.id);
+          return;
+        }
+        if (!afterRaw || afterRaw.status !== 'RUNNING') return;
+        const normalized = await normalizeGptImage2CountEditOutput(image, job.width, job.height);
+        const stored = await deps.uploadBuffer(normalized.buffer, `ai-${job.id}-normalized-${normalized.sha256}.png`, normalized.mimeType,
+          { category: 'ai-generated', ownerId: job.ownerUserId });
+        assets.push({
+          ownerUserId: job.ownerUserId, jobId: job.id, kind: 'AI_GENERATED', url: stored.url,
+          storageBackend: stored.backend, storageKey: stored.key || stored.filename || null,
+          mimeType: normalized.mimeType, sizeBytes: normalized.buffer.length, sha256: normalized.sha256,
+          width: normalized.width, height: normalized.height,
+          metadata: { rawProviderOutputAssetId: persistedRaw.id, normalizerVersion: normalized.normalizerVersion,
+            providerOutput: normalized.providerOutput, requestProfile },
+        });
+        continue;
+      }
       const filename = image.filename || `ai-${job.id}-${randomUUID()}.${extensionForMime(image.mimeType)}`;
       const stored = await deps.uploadBuffer(image.buffer, filename, image.mimeType, {
         category: 'ai-generated',

@@ -18,7 +18,7 @@ import {
   type AiImageProviderRuntimeContract,
 } from './ai-image-provider-runtime-contract.js';
 import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
-import { assertWanxHostedEditPrompt, isWanxHostedEdit } from './ai-image-edit-provider-contract.js';
+import { assertWanxHostedEditPrompt, isAiImageEditProviderCanvasSupported, isGptImage2CountHostedProvider, isWanxHostedEdit } from './ai-image-edit-provider-contract.js';
 import { assertWanxImageToImageInput, WANX_IMAGE_TO_IMAGE_PROMPT_PROFILE } from './ai-image-wanx-image-to-image.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
 import {isDonorGpt2SuiteProvider} from './ai-image-donor-gpt2-profile.js';
@@ -664,8 +664,12 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         provider: AI_MEDIA_WORKFLOW_PROVIDER,
         model: AI_MEDIA_WORKFLOW_MODEL,
       }, { count: input.count, width: input.width, height: input.height });
-      if (isDonorGpt2SuiteProvider(execution.provider,execution.model)) {
+      if (isDonorGpt2SuiteProvider(execution.provider,execution.model) && !isGptImage2CountHostedProvider(execution.provider, execution.model)) {
         throw new AiMediaWorkflowError('PROVIDER_NOT_READY','The donor GPT2 profile requires its server-owned suite request contract');
+      }
+      if (isGptImage2CountHostedProvider(execution.provider, execution.model)
+        && !isAiImageEditProviderCanvasSupported(execution.provider, execution.model, input.width, input.height)) {
+        throw new AiMediaWorkflowError('INVALID_REQUEST', 'Count reference generation requires a supported output canvas');
       }
       try {
         const capability = assertAiMediaCapability({
@@ -828,6 +832,10 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         provider: AI_IMAGE_EDIT_PROVIDER,
         model: AI_IMAGE_EDIT_MODEL,
       }, { count: 1, width: input.width, height: input.height });
+      if (isGptImage2CountHostedProvider(execution.provider, execution.model)
+        && !isAiImageEditProviderCanvasSupported(execution.provider, execution.model, input.width, input.height)) {
+        throw new AiMediaWorkflowError('INVALID_REQUEST', 'Count editing requires a supported unchanged source canvas');
+      }
       try {
         const capability = assertAiMediaCapability({
           provider: execution.provider,

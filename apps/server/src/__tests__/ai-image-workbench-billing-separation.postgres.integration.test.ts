@@ -1,8 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import { PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import type { CreateAiImageJobInput } from '../services/ai-image-jobs.js';
+import { createAiImageJob, runAiImageJob } from '../services/ai-image-jobs.js';
+import { createGptImage2CountGenerationProvider } from '../services/ai-image-providers.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { resolveAiImageProvider } from '../workers/ai-image-generation.js';
+
+vi.mock('node:dns/promises', () => ({ lookup: vi.fn() }));
+vi.mock('../lib/redis.js', () => ({ redisDisabled: true, redis: {} }));
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
@@ -22,11 +31,69 @@ describePostgres('dual-mode AI billing separation PostgreSQL boundary', () => {
   beforeAll(async () => {
     if (!databaseUrl) throw new Error('AI_MEDIA_TEST_DATABASE_URL is required');
     assertIsolatedSchema(databaseUrl);
+    vi.mocked(lookup).mockResolvedValue([{ address: '8.8.8.8', family: 4 }] as never);
     client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     await client.$connect();
   });
 
   afterAll(async () => client?.$disconnect());
+
+  it('persists an ordinary count TEXT_TO_IMAGE raw/final pair and settles CNY0.10 only once', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `count_text_owner_${suffix}`;
+    await client.user.create({ data: { id: ownerUserId, phone: `count_text_${suffix}`, passwordHash: 'integration-test', role: 'USER' } });
+    const runtime = { provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+      apiKey: 'synthetic-count-text-key', costPerImageCents: 10, currency: 'CNY' as const,
+      credentialRevision: { recordId: 'fixture-count-text-key-record', revision: 3, updatedAt: '2026-10-08T00:00:00.000Z' } };
+    const repository = new PrismaAiImageJobRepository(client);
+    const input: CreateAiImageJobInput = { ownerUserId, actorUserId: ownerUserId, idempotencyKey: `count-text-${suffix}`,
+      prompt: 'Synthetic count studio photograph', provider: runtime.provider, model: runtime.model, count: 1,
+      width: 1024, height: 1024, estimatedCostCents: 10, requestFingerprint: createHash('sha256').update(`count-text-${suffix}`).digest('hex'),
+      operationConfig: createAiImageProviderRuntimeContract(runtime, { count: 1, width: 1024, height: 1024 }) };
+    const created = await createAiImageJob(input, repository, 5, 1_000_000);
+    expect(created).toMatchObject({ replayed: false, job: { operation: 'TEXT_TO_IMAGE', status: 'QUEUED',
+      costReservation: { status: 'RESERVED', currency: 'CNY', estimatedCostMinor: 10, maximumCostMinor: 10 } } });
+    const rawOutput = await sharp({ create: { width: 1024, height: 1024, channels: 4,
+      background: { r: 230, g: 180, b: 120, alpha: 1 } } }).png().toBuffer();
+    const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://ai.big-model-api.top/v1/images/generations');
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(String(init!.body))).toMatchObject({ model: 'gpt-image-2-count', n: 1,
+        size: '1024x1024', quality: 'high', response_format: 'url' });
+      return new Response(JSON.stringify({ id: `fixture-count-text-request-${suffix}`, data: [{ b64_json: rawOutput.toString('base64') }] }),
+        { headers: { 'content-type': 'application/json' } });
+    });
+    const provider = resolveAiImageProvider(runtime.provider, runtime,
+      (providerJobId, acceptedAt) => repository.recordProviderJobId(created.job.id, providerJobId, acceptedAt),
+      { createCountGenerationProvider: options => createGptImage2CountGenerationProvider({ ...options, fetch, timeoutMs: 10_000 }) });
+    const uploads = new Map<string, Buffer>();
+    const uploadBuffer = async (buffer: Buffer, filename: string) => { uploads.set(filename, buffer);
+      return { url: `/uploads/${filename}`, backend: 'local', key: filename }; };
+    await runAiImageJob(created.job.id, 1, { repository, provider, uploadBuffer });
+    const succeeded = await client.aiImageJob.findUniqueOrThrow({ where: { id: created.job.id } });
+    expect(succeeded).toMatchObject({ status: 'SUCCEEDED', actualCostCents: 10, billedUnits: 1,
+      providerJobId: `fixture-count-text-request-${suffix}` });
+    expect(JSON.stringify(succeeded.operationConfig)).not.toContain(runtime.apiKey);
+    const assets = await client.mediaAsset.findMany({ where: { aiImageJobId: created.job.id } });
+    const raw = assets.find(asset => asset.kind === 'AI_PROVIDER_OUTPUT')!;
+    const final = assets.find(asset => asset.kind === 'AI_GENERATED')!;
+    expect(assets).toHaveLength(2);
+    expect(raw).toMatchObject({ width: 1024, height: 1024, sha256: digest(rawOutput), sizeBytes: rawOutput.length });
+    expect(final).toMatchObject({ width: 1024, height: 1024 });
+    expect(final.metadata).toMatchObject({ rawProviderOutputAssetId: raw.id,
+      providerOutput: { width: 1024, height: 1024 }, requestProfile: 'GPT_IMAGE_2_COUNT_GENERATION_V1' });
+    const finalBytes = [...uploads.entries()].find(([filename]) => filename.includes('-normalized-'))![1];
+    expect(await sharp(finalBytes).metadata()).toMatchObject({ width: 1024, height: 1024 });
+    expect(digest(finalBytes)).toBe(final.sha256);
+    await runAiImageJob(created.job.id, 2, { repository, provider, uploadBuffer });
+    expect(await createAiImageJob(input, repository, 5, 1_000_000)).toMatchObject({ replayed: true, job: { id: created.job.id } });
+    expect(fetch).toHaveBeenCalledOnce();
+    const reservation = await client.aiCostReservation.findUniqueOrThrow({ where: { jobId: created.job.id }, include: { settlements: true } });
+    expect(reservation).toMatchObject({ status: 'SETTLED', currency: 'CNY', estimatedCostMinor: 10, maximumCostMinor: 10 });
+    expect(reservation.settlements).toEqual([expect.objectContaining({ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 })]);
+    expect(await client.aiCostReservation.count({ where: { jobId: created.job.id } })).toBe(1);
+  });
 
   it('ignores a forged BYOK label and requires one reservation and settlement for hosted work', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);

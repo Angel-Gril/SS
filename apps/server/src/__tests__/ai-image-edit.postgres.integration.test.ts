@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import { Prisma, PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
@@ -10,13 +11,19 @@ import { runAiImageEditJob } from '../services/ai-image-edit.js';
 import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
 import { createFakeAiImageProvider } from '../services/ai-image-jobs.js';
 import { createAiMediaWorkflowService } from '../services/ai-media-workflows.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import { createGptImage2CountEditProvider } from '../services/ai-image-providers.js';
+import { processAiImageEditQueueJob, resolveAiImageEditProvider } from '../workers/ai-image-edit.js';
+
+vi.mock('node:dns/promises', () => ({ lookup: vi.fn() }));
+vi.mock('../lib/redis.js', () => ({ redisDisabled: true, redis: {} }));
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
 const describePostgres = enabled ? describe : describe.skip;
 const client = enabled ? new PrismaClient({ datasources: { db: { url: databaseUrl } } }) : null;
 
-const digest = (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex');
+const digest = (buffer: Buffer | string) => createHash('sha256').update(buffer).digest('hex');
 
 async function rgbaPng(width: number, height: number, pixels: number[]) {
   return sharp(Buffer.from(pixels), { raw: { width, height, channels: 4 } }).png().toBuffer();
@@ -259,9 +266,131 @@ function assertIsolatedSchema() {
 describePostgres('AI image edit PostgreSQL workflow', () => {
   beforeAll(async () => {
     assertIsolatedSchema();
+    vi.mocked(lookup).mockResolvedValue([{ address: '8.8.8.8', family: 4 }] as never);
     await client!.$connect();
   });
   afterAll(async () => client!.$disconnect());
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)('closes ordinary count %s with one CNY0.10 settlement and honest raw/final canvases', async operation => {
+    // Real PostgreSQL and shipped owners; only Provider HTTP/storage bytes are synthetic.
+    // This proves transaction/dispatch compatibility, not model quality or supplier pricing.
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `count_edit_owner_${suffix}`, goodsId = `count_edit_goods_${suffix}`;
+    const subjectId = `count_edit_subject_${suffix}`, snapshotId = `count_edit_snapshot_${suffix}`;
+    const sourceAssetId = `count_edit_source_${suffix}`, maskAssetId = `count_edit_mask_${suffix}`;
+    const source = await sharp({ create: { width: 900, height: 1200, channels: 4,
+      background: { r: 10, g: 20, b: 30, alpha: 1 } } }).png().toBuffer();
+    const rawOutput = await sharp({ create: { width: 896, height: 1200, channels: 4,
+      background: { r: 200, g: 150, b: 100, alpha: 1 } } }).png().toBuffer();
+    const maskPixels = Buffer.alloc(900 * 1200 * 4);
+    for (let pixel = 0; pixel < 900 * 1200; pixel += 1) {
+      maskPixels.fill(pixel % 900 < 450 ? 0 : 255, pixel * 4, pixel * 4 + 3);
+      maskPixels[pixel * 4 + 3] = 255;
+    }
+    const mask = await sharp(maskPixels, { raw: { width: 900, height: 1200, channels: 4 } }).png().toBuffer();
+    await client!.user.create({ data: { id: ownerUserId, phone: `count_edit_${suffix}`, passwordHash: 'integration-test' } });
+    await client!.supplyGoods.create({ data: { id: goodsId, userId: ownerUserId, title: 'Count edit synthetic fixture',
+      sourcePlatform: '1688', sourceProductId: `count_edit_product_${suffix}`, images: ['https://cdn.example/original.png'] } });
+    await client!.sourceCaptureSubject.create({ data: { id: subjectId, ownerUserId, sourcePlatform: '1688',
+      sourceProductId: `count_edit_product_${suffix}`, legacySupplyGoodsId: goodsId } });
+    await client!.sourceCaptureSnapshot.create({ data: { id: snapshotId, subjectId, version: 1,
+      schemaVersion: 'source-product-capture-v2', captureHash: digest(`count-capture-${suffix}`), payloadBytes: 2,
+      payload: {}, stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
+      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {}, profileHash: digest(`count-profile-${suffix}`),
+      actorUserId: ownerUserId, ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only', capturedAt: new Date() } });
+    await client!.mediaAsset.create({ data: { id: sourceAssetId, ownerUserId, kind: 'SOURCE_ORIGINAL',
+      sourceCaptureSnapshotId: snapshotId, sourceMediaKey: 'main-count', sourceUrl: 'https://source.example/count.png',
+      url: `/uploads/${sourceAssetId}.png`, storageBackend: 'local', storageKey: `${sourceAssetId}.png`, mimeType: 'image/png',
+      sizeBytes: source.length, width: 900, height: 1200, sha256: digest(source), metadata: { pixelOrientationNormalized: true } } });
+    if (operation === 'INPAINT') await client!.mediaAsset.create({ data: { id: maskAssetId, ownerUserId, kind: 'EDIT_MASK',
+      sourceCaptureSnapshotId: snapshotId, sourceMediaKey: `edit-mask:${sourceAssetId}:${digest(mask)}`,
+      url: `/uploads/${maskAssetId}.png`, storageBackend: 'local', storageKey: `${maskAssetId}.png`, mimeType: 'image/png',
+      sizeBytes: mask.length, width: 900, height: 1200, sha256: digest(mask), metadata: {
+        contractVersion: 'ai-image-edit-policy/1.0', maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+        sourceAssetId, sourceSha256: digest(source) } } });
+    const runtime = { provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+      apiKey: 'synthetic-count-dispatch-key', costPerImageCents: 10, currency: 'CNY' as const,
+      credentialRevision: { recordId: 'fixture-count-key-record', revision: 3, updatedAt: '2026-10-08T00:00:00.000Z' } };
+    const workflowService = createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(client!));
+    const creationInput = { ownerUserId, actorUserId: ownerUserId, operation, sourceAssetId, width: 900, height: 1200,
+      ...(operation === 'INPAINT' ? { maskAssetId, maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS } : {}),
+      prompt: 'Edit the selected background', negativePrompt: null, resolvedPrompt: 'Synthetic frozen count edit',
+      resolvedNegativePrompt: 'Preserve product identity', templateKey: operation === 'INPAINT' ? 'inpaint.base' : 'full-image-edit.base',
+      templateReleaseId: `count-edit-release-${suffix}`, templateChecksum: digest(`count-template-${suffix}`), templateSnapshot: { sequence: 1 },
+      dailyLimit: 20, provider: runtime.provider, model: runtime.model, estimatedCostCents: 10, globalDailyBudgetCents: 1_000_000,
+      providerRuntimeContract: createAiImageProviderRuntimeContract(runtime, { count: 1, width: 900, height: 1200 }),
+      idempotencyKey: `count-edit-create-${suffix}`, context: { type: 'collect' as const, id: goodsId } };
+    const created = await workflowService.createImageEdit(creationInput);
+    expect(created.replayed).toBe(false);
+    expect(await workflowService.createImageEdit(creationInput)).toMatchObject({ jobId: created.jobId, replayed: true });
+    const reserved = await client!.aiCostReservation.findUniqueOrThrow({ where: { jobId: created.jobId } });
+    expect(reserved).toMatchObject({ status: 'RESERVED', currency: 'CNY', estimatedCostMinor: 10, maximumCostMinor: 10 });
+    const queued = await client!.aiImageJob.findUniqueOrThrow({ where: { id: created.jobId } });
+    expect(queued.operationConfig).toMatchObject({ providerRuntime: { contractVersion: 'ai-image-provider-runtime/v3',
+      currency: 'CNY', unitCostCents: 10, width: 900, height: 1200, credentialRevision: runtime.credentialRevision } });
+    expect(JSON.stringify(queued.operationConfig)).not.toContain(runtime.apiKey);
+    const uploads = new Map<string, Buffer>();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://ai.big-model-api.top/v1/images/edits');
+      expect(init?.method).toBe('POST');
+      const form = init!.body as FormData;
+      expect(form.get('model')).toBe('gpt-image-2-count');
+      expect(form.get('n')).toBe('1');
+      expect(form.get('quality')).toBe('high');
+      expect(form.get('size')).toBe('900x1200');
+      if (operation === 'INPAINT') {
+        const alphaMask = Buffer.from(await (form.get('mask') as Blob).arrayBuffer());
+        const pixels = await sharp(alphaMask).ensureAlpha().raw().toBuffer();
+        expect([...pixels.subarray(0, 4)]).toEqual([255, 255, 255, 255]);
+        expect(pixels[450 * 4 + 3]).toBe(0);
+      }
+      return new Response(JSON.stringify({ id: `count-edit-request-${suffix}`, data: [{ b64_json: rawOutput.toString('base64') }] }),
+        { headers: { 'content-type': 'application/json' } });
+    });
+    const execute = () => processAiImageEditQueueJob(created.jobId, 1, { repository: new PrismaAiImageJobRepository(client!), nodeEnv: 'test',
+      getProviderConfig: async () => runtime,
+      getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'synthetic-fixture', reason: 'Synthetic local fixture' }),
+      acquireLease: async () => true, renewLease: async () => true, releaseLease: async () => {},
+      loadInputBuffer: async asset => asset.role === 'MASK' ? mask : source,
+      uploadBuffer: async (buffer: Buffer, filename: string) => { uploads.set(filename, buffer);
+        return { url: `/uploads/${filename}`, backend: 'local', key: filename }; },
+      resolveProvider: (provider, model, operation, config, onCreated, nodeEnv, dependencies) => resolveAiImageEditProvider(
+        provider, model, operation, config, onCreated, nodeEnv, { ...dependencies,
+          createCountEditProvider: options => createGptImage2CountEditProvider({ ...options, fetch, timeoutMs: 10_000 }) }) });
+    await execute();
+    const succeeded = await workflowService.get(created.workflow.id, ownerUserId);
+    expect(succeeded).toMatchObject({ status: 'SUCCEEDED', reviewStatus: 'PENDING', operation });
+    const assets = await client!.mediaAsset.findMany({ where: { aiImageJobId: created.jobId } });
+    const raw = assets.find(asset => asset.kind === 'AI_PROVIDER_OUTPUT')!;
+    const final = assets.find(asset => asset.kind === 'AI_GENERATED')!;
+    expect(raw).toMatchObject({ width: 896, height: 1200, sha256: digest(rawOutput), sizeBytes: rawOutput.length });
+    expect(final).toMatchObject({ width: 900, height: 1200, sourceCaptureSnapshotId: snapshotId });
+    expect(final.metadata).toMatchObject({ providerOutputAssetId: raw.id, providerOutput: { width: 896, height: 1200 } });
+    const finalBytes = [...uploads.entries()].find(([filename]) => filename.endsWith('-final.png'))![1];
+    expect(await sharp(finalBytes).metadata()).toMatchObject({ width: 900, height: 1200 });
+    expect(digest(finalBytes)).toBe(final.sha256);
+    if (operation === 'INPAINT') {
+      const originalPixels = await sharp(source).ensureAlpha().raw().toBuffer();
+      const finalPixels = await sharp(finalBytes).ensureAlpha().raw().toBuffer();
+      for (let y = 0; y < 1200; y += 1) {
+        expect(finalPixels.subarray(y * 900 * 4, (y * 900 + 450) * 4).equals(originalPixels.subarray(y * 900 * 4, (y * 900 + 450) * 4))).toBe(true);
+      }
+      expect([...finalPixels.subarray(450 * 4, 451 * 4)]).toEqual([200, 150, 100, 255]);
+    }
+    await expect(workflowService.review({ id: succeeded.id, ownerUserId, actorUserId: ownerUserId,
+      expectedRevision: succeeded.revision, outputAssetId: raw.id, decision: 'APPROVE', note: null })).rejects.toMatchObject({ code: 'WORKFLOW_CONFLICT' });
+    expect(await workflowService.review({ id: succeeded.id, ownerUserId, actorUserId: ownerUserId,
+      expectedRevision: succeeded.revision, outputAssetId: final.id, decision: 'APPROVE', note: null })).toMatchObject({ reviewStatus: 'APPROVED' });
+    const target = await client!.supplyGoods.findUniqueOrThrow({ where: { id: goodsId } });
+    const applied = await applyAiImageAssets(client! as any, { jobId: created.jobId, ownerUserId, actorUserId: ownerUserId,
+      mode: 'append', targetType: 'collect', targetId: goodsId, selectedAssetId: final.id, expectedTargetUpdatedAt: target.updatedAt.toISOString() });
+    expect(applied.images).toEqual(['https://cdn.example/original.png', final.url]);
+    await execute();
+    expect(fetch).toHaveBeenCalledOnce();
+    const settled = await client!.aiCostReservation.findUniqueOrThrow({ where: { jobId: created.jobId }, include: { settlements: true } });
+    expect(settled).toMatchObject({ status: 'SETTLED', currency: 'CNY', maximumCostMinor: 10 });
+    expect(settled.settlements).toEqual([expect.objectContaining({ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 })]);
+  });
 
   it('persists raw/composite lineage, executes chained candidates, and appends without replacing originals', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);

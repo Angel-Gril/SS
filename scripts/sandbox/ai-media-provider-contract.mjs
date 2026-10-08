@@ -14,11 +14,11 @@ const reviewedWanxEndpoint = createHash('sha256')
   .digest('hex');
 const reviewedPaidDerivedCapabilities = new Map([
   ['custom:gpt-image-2-count',{
-    operations:new Set(['IMAGE_TO_IMAGE']),inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:false,allowTextToImage:false,
-    // Two independently retained hero/scene POST/download/normalization samples
-    // at the operator-selected endpoint. This does not enable a default or
-    // attest generic edit, full-edit, inpaint, or multiple-reference requests.
-    sandboxEvidence:new Set([`${createHash('sha256').update('https://ai.big-model-api.top/v1').digest('hex')}:IMAGE_TO_IMAGE:multipart:sync`]),
+    operations:new Set(['IMAGE_TO_IMAGE','FULL_EDIT','INPAINT']),inputTransport:'multipart',resultMode:'sync',maxReferences:1,supportsMask:true,allowTextToImage:true,
+    // Independent user-authorized full-edit, masked edit and text transports,
+    // plus the earlier hero/scene references. Multiple references remain denied.
+    sandboxEvidence:new Set(['TEXT_TO_IMAGE','IMAGE_TO_IMAGE','FULL_EDIT','INPAINT'].map(operation=>
+      `${createHash('sha256').update('https://ai.big-model-api.top/v1').digest('hex')}:${operation}:${operation==='TEXT_TO_IMAGE'?'none':'multipart'}:sync`)),
   }],
   ['custom:gpt-image-2',{
     operations:new Set(['IMAGE_TO_IMAGE']),inputTransport:'multipart',resultMode:'sync',maxReferences:16,supportsMask:false,allowTextToImage:false,

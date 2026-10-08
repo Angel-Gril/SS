@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { normalizeGptImage2CountEditOutput } from './ai-image-gpt2-count-profile.js';
 import { calculateAiImageTaskCost, getFrozenAiImageTaskPrice } from './ai-image-task-cost.js';
 import {
   AI_IMAGE_EDIT_MAX_INPUT_BYTES,
@@ -566,10 +567,12 @@ export async function runAiImageEditJob(
     }
     const taskCost = calculateAiImageTaskCost(job, generated.images.length);
     const raw = generated.images[0]!;
+    const countOutput = job.provider === 'custom' && job.model === 'gpt-image-2-count'
+      ? await normalizeGptImage2CountEditOutput(raw, job.width, job.height) : null;
     const rawDiagnostics = await validateAiImageEditCandidate({
       buffer: raw.buffer,
-      expectedWidth: job.width,
-      expectedHeight: job.height,
+      expectedWidth: countOutput?.providerOutput.width ?? job.width,
+      expectedHeight: countOutput?.providerOutput.height ?? job.height,
     });
     const latestBeforeStorage = await deps.repository.getById(job.id);
     deps.assertExecutionLease?.();

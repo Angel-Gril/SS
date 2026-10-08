@@ -51,6 +51,7 @@ import { canRunAiImageProviderOperation } from '../services/ai-image-provider-ad
 import { isOpenAiCompatibleImageEditSizeSupported } from '../services/ai-image-providers.js';
 import {
   isAiImageEditProviderCanvasSupported,
+  isGptImage2CountHostedProvider,
   isWanxHostedEdit,
   resolveAiImageEditProviderContract,
 } from '../services/ai-image-edit-provider-contract.js';
@@ -318,6 +319,7 @@ interface AiImageRouteSettings {
   dailyLimit: number;
   estimatedCostCents: number;
   currency?: AiImageProviderCurrency;
+  credentialRevision?: AiImageProviderCredentialRevision;
   globalDailyBudgetCents?: number;
 }
 
@@ -1191,6 +1193,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
       estimatedCostCents: runtime.costPerImageCents,
       currency: runtime.currency,
+      credentialRevision: runtime.credentialRevision,
       globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
     };
   });
@@ -1517,6 +1520,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!['fake', 'dashscope-wanx', 'openai-images', 'custom'].includes(settings.provider)) {
       throw new AiImageJobError('PROVIDER_NOT_READY', 'AI image provider adapter is not enabled yet');
     }
+    if (isGptImage2CountHostedProvider(settings.provider, settings.model)
+      && (input.count !== 1 || !isAiImageEditProviderCanvasSupported(settings.provider, settings.model, input.width, input.height))) {
+      throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Count image generation requires one output on a supported canvas');
+    }
     const generationCapability = resolveProviderCapability(settings.provider, settings.model,'TEXT_TO_IMAGE');
     if (settings.provider !== 'fake' && (
       !canRunAiImageProviderOperation({
@@ -1542,6 +1549,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       baseUrl: settings.baseUrl || '',
       costPerImageCents: settings.estimatedCostCents,
       currency: settings.currency,
+      credentialRevision: settings.credentialRevision,
     }, input);
     return { settings, quote };
   };

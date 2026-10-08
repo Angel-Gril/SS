@@ -117,6 +117,7 @@ export const SystemConfigSchema = {
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),
   ai_image_generation_cost_cents: z.number().int().min(0).max(100000).default(0),
+  ai_image_currency: z.enum(['inherit', 'USD', 'CNY']).default('inherit'),
   ai_image_suite_provider: z.enum(['inherit', 'disabled', 'dashscope-wanx', 'openai-images', 'custom']).default('inherit'),
   ai_image_suite_base_url: z.string().default(''),
   ai_image_suite_api_key: z.string().default(''),
@@ -624,6 +625,10 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_suite_provider: {
     label: '托管套图服务', group: 'ai',
     description: 'inherit 沿用普通生图配置；选择独立服务后，套图预览与执行只使用该服务的模型、密钥和价格，不影响普通改图',
+  },
+  ai_image_currency: {
+    label: '生图与改图报价币种', group: 'ai',
+    description: '明确普通生图和改图的用户预扣币种；inherit保持历史通道默认，指定count服务可按人民币分报价，不改变已确认任务的冻结价格',
   },
   ai_image_suite_base_url: {
     label: '托管套图 Base URL', group: 'ai', description: '独立套图服务的明确 HTTPS API 基址',

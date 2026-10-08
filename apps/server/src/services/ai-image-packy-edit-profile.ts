@@ -1,4 +1,5 @@
 import { AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE } from './ai-image-xiaoyi-provider.js';
+import { AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE, AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT } from './ai-image-gpt2-count-profile.js';
 
 export const AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE =
   'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1';
@@ -14,6 +15,7 @@ export type AiImageEditMultipartDialect =
   | typeof AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT
   | typeof AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
   | typeof AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT
+  | typeof AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT
   | typeof AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
 
 export const AI_IMAGE_PACKY_EDIT_PROFILE = Object.freeze({
@@ -60,6 +62,7 @@ export function aiImageEditMultipartShape(dialect: AiImageEditMultipartDialect) 
     case AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT:
       return Object.freeze({ includeN: true, includeSize: true, fields: null });
     case AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT:
+    case AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT:
       return Object.freeze({ includeN: true, includeSize: true,
         fields: Object.freeze({ quality: 'high', response_format: 'url' }) });
     case AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT:
@@ -82,6 +85,7 @@ export function aiImageEditMultipartDialectForRequestProfile(
     return AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT;
   }
   if (requestProfile === 'DONOR_GPT_IMAGE_2_PORTRAIT_EDIT_V1') return AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT;
+  if (requestProfile === AI_IMAGE_GPT2_COUNT_ORDINARY_EDIT_REQUEST_PROFILE) return AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT;
   if (requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE) {
     return AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
   }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { normalizeGptImage2CountEditOutput } from './ai-image-gpt2-count-profile.js';
 import { AiImageJobError } from './ai-image-job-error.js';
 import { assertWanxHostedEditPrompt } from './ai-image-edit-provider-contract.js';
 import {
@@ -182,6 +183,7 @@ function storedAsset(input: {
   buffer: Buffer;
   mimeType: string;
   metadata: Record<string, unknown>;
+  dimensions?: { width: number; height: number };
 }): AiImageAssetInput {
   const storageKey = input.stored.key || input.stored.filename || null;
   if (!['local', 'oss'].includes(input.stored.backend) || !storageKey || !input.stored.url) {
@@ -199,8 +201,8 @@ function storedAsset(input: {
     storageKey,
     mimeType: input.mimeType,
     sizeBytes: input.buffer.length,
-    width: input.job.width,
-    height: input.job.height,
+    width: input.dimensions?.width ?? input.job.width,
+    height: input.dimensions?.height ?? input.job.height,
     sha256: sha256(input.buffer),
     metadata: input.metadata,
   };
@@ -265,6 +267,7 @@ export async function storeAiImageEditRaw(
     stored: rawStored,
     job,
     kind: 'AI_PROVIDER_OUTPUT',
+    dimensions: { width: rawDiagnostics.width, height: rawDiagnostics.height },
     buffer: rawBuffer,
     mimeType: rawDiagnostics.mimeType,
     metadata: {
@@ -284,21 +287,29 @@ export async function storeAiImageEditFinal(
   uploadBuffer: AiImageEditUploadBuffer,
 ): Promise<AiImageAssetInput> {
   let finalBuffer = rawBuffer;
+  const rawFormat = job.provider === 'custom' && job.model === 'gpt-image-2-count'
+    ? (await sharp(rawBuffer).metadata()).format : null;
+  const countOutput = job.provider === 'custom' && job.model === 'gpt-image-2-count'
+    ? await normalizeGptImage2CountEditOutput({ buffer: rawBuffer,
+      mimeType: rawFormat === 'jpeg' ? 'image/jpeg' : `image/${rawFormat}` }, job.width, job.height) : null;
+  if (countOutput) finalBuffer = countOutput.buffer;
   let finalMetadata: Record<string, unknown> = {
     outputRole: 'FINAL_CANDIDATE',
     policyVersion: AI_IMAGE_EDIT_POLICY_VERSION,
     operation: job.operation,
     providerOutputAssetId,
+    ...(countOutput ? { normalizerVersion: countOutput.normalizerVersion, providerOutput: countOutput.providerOutput } : {}),
   };
   if (job.operation === 'INPAINT') {
     const composite = await composeAiImageInpaint({
       sourceBuffer: inputs.sourceBuffer,
-      rawCandidateBuffer: rawBuffer,
+      rawCandidateBuffer: finalBuffer,
       maskBuffer: inputs.maskBuffer!,
       maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
     });
     finalBuffer = composite.buffer;
     finalMetadata = {
+      ...finalMetadata,
       outputRole: 'FINAL_COMPOSITE',
       policyVersion: AI_IMAGE_EDIT_POLICY_VERSION,
       operation: job.operation,

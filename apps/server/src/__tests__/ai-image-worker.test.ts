@@ -18,7 +18,7 @@ const allowPaidDispatch = async () => ({
 });
 
 describe('AI image BullMQ worker boundary', () => {
-  it.each(['gpt-image-2','gpt-image-2-count'])('preserves %s legacy text mode but rejects generic edit before Provider POST',async model=>{
+  it.each(['gpt-image-2'])('preserves %s legacy text mode but rejects generic edit before Provider POST',async model=>{
     const calls=vi.fn(async()=>({images:[],actualCostCents:0}));
     const provider=resolveAiImageProvider('custom',{provider:'custom',model,baseUrl:'https://ai.big-model-api.top/v1',apiKey:'fixture-key',costPerImageCents:8},undefined,{
       createOpenAiGenerationProvider:()=>({name:'fixture-text',generate:calls}),createOpenAiEditProvider:()=>({name:'fixture-edit',edit:calls})} as any);

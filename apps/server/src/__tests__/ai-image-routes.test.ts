@@ -4,6 +4,7 @@ import { aiImageRoutes, isPaidAiImageEditCanvasSupported } from '../routes/ai-im
 import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import type { AiImageJobRecord, AiImageJobRepository } from '../services/ai-image-jobs.js';
 import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
+import type { AiImageProviderCredentialRevision } from '../services/ai-image-provider-runtime-contract.js';
 
 const baseJob: AiImageJobRecord = {
   id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', status: 'SUCCEEDED',
@@ -26,6 +27,7 @@ async function buildApp(
     baseUrl?: string;
     estimatedCostCents?: number;
     currency?: 'USD' | 'CNY';
+    credentialRevision?: AiImageProviderCredentialRevision;
     resolveProviderCapability?: (
       provider: string,
       model: string,
@@ -85,6 +87,7 @@ async function buildApp(
       dailyLimit: 5,
       estimatedCostCents: overrides.estimatedCostCents ?? 4,
       currency: overrides.currency,
+      credentialRevision: overrides.credentialRevision,
     }),
     getMediaWorkflowDecision: async () => workflowDecision,
     resolvePrompt,
@@ -98,6 +101,25 @@ describe('AI image job routes', () => {
     baseUrl: 'https://dashscope.aliyuncs.com/api/v1', costPerImageCents: 14, currency: 'CNY' as const };
   const pricedRequest = { prompt: 'photo', count: 2, width: 1024, height: 1024, idempotencyKey: 'quoted-request-1' };
   const pricedOptions = { ...pricedProvider, estimatedCostCents: pricedProvider.costPerImageCents };
+
+  it('returns one count-model CNY0.10 quote while freezing its credential revision privately', async () => {
+    const { app, repository, enqueue } = await buildApp('owner-1', 'custom', undefined, {
+      model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1', estimatedCostCents: 10, currency: 'CNY',
+      credentialRevision: { recordId: 'fixture-private-key-record', revision: 3, updatedAt: '2026-10-08T00:00:00.000Z' },
+    });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/quote?count=1&width=900&height=1200' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toMatchObject({ provider: 'custom', model: 'gpt-image-2-count',
+        currency: 'CNY', unitCostCents: 10, maximumCostCents: 10, requestedImageCount: 1 });
+      expect(response.body).not.toContain('fixture-private-key-record');
+      expect(repository.createWithQuota).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      for (const query of ['count=2&width=900&height=1200', 'count=1&width=999&height=1200']) {
+        expect((await app.inject({ method: 'GET', url: `/quote?${query}` })).statusCode).toBe(400);
+      }
+    } finally { await app.close(); }
+  });
 
   it('returns the authenticated server quote without creating, reserving or dispatching a task', async () => {
     const { app, repository, enqueue, resolvePrompt } = await buildApp('owner-1', pricedProvider.provider, undefined, pricedOptions);

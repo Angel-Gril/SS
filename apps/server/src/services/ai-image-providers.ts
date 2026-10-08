@@ -27,6 +27,13 @@ import {
   isAiImageXiaoyiEditOperation,
 } from './ai-image-xiaoyi-provider.js';
 import {assertDonorGpt2ImageToImageRequest,donorGpt2EditEndpoint,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
+import {
+  AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT,
+  assertGptImage2CountGenerationRequest,
+  assertGptImage2CountOrdinaryEditRequest,
+  assertGptImage2CountProviderIdentity,
+  isGptImage2CountOrdinarySizeSupported,
+} from './ai-image-gpt2-count-profile.js';
 
 export {
   isOfficialOpenAiImagesApiBase,
@@ -500,7 +507,11 @@ async function openAiInpaintDimensions(
   }
 }
 
-export async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest, donorProfile = false) {
+export async function validateOpenAiImageEditRequest(
+  request: OpenAiImageEditRequest,
+  donorProfile = false,
+  sizeSupported = isOpenAiCompatibleImageEditSizeSupported,
+) {
   if (
     request.operation !== 'IMAGE_TO_IMAGE'
     && request.operation !== 'FULL_EDIT'
@@ -516,7 +527,7 @@ export async function validateOpenAiImageEditRequest(request: OpenAiImageEditReq
   }
   const size = `${request.width}x${request.height}`;
   if (!(donorProfile ? request.width === 1008 && request.height === 1344
-    : isOpenAiCompatibleImageEditSizeSupported(request.width, request.height))) {
+    : sizeSupported(request.width, request.height))) {
     throw invalidOpenAiEditInput('OpenAI image edit output size is not supported');
   }
   if (request.operation === 'INPAINT' && !request.mask) {
@@ -672,13 +683,20 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
   };
 }
 
-export function createOpenAiImagesProvider(options: ProviderOptions): AiImageProvider {
+function createOpenAiImagesProviderWithProfile(
+  options: ProviderOptions & { beforeProviderDispatch?: BeforeAiImageProviderDispatch },
+  countProfile = false,
+): AiImageProvider {
   const fetcher = options.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
   const apiBase = normalizeOpenAiImagesApiBase(options.baseUrl);
   return {
     name: 'openai-images',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
+      if (countProfile) {
+        try { assertGptImage2CountGenerationRequest(request); }
+        catch (error) { throw withProviderSubmissionRejected(error); }
+      }
       if (request.operation && request.operation !== 'TEXT_TO_IMAGE') {
         throw new AiImageJobError('UNSUPPORTED_OPERATION', `OpenAI ${request.operation} is not enabled for this model`);
       }
@@ -692,9 +710,11 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
             prompt: request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
             n: request.count,
             size: `${request.width}x${request.height}`,
+            ...(countProfile ? { quality: 'high', response_format: 'url' } : {}),
           }),
-        }, timeoutMs);
+        }, timeoutMs, options.beforeProviderDispatch);
       } catch (error) {
+        if (error instanceof BeforeProviderDispatchError) throw withProviderSubmissionRejected(error.original);
         if (error && typeof error === 'object' && 'providerJobId' in error) throw error;
         if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
         throw withProviderSubmissionUncertain(error);
@@ -738,6 +758,16 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
   };
 }
 
+export function createOpenAiImagesProvider(options: ProviderOptions): AiImageProvider {
+  return createOpenAiImagesProviderWithProfile(options);
+}
+
+/** A separate profile; portrait suite acceptance does not promote ordinary image operations. */
+export function createGptImage2CountGenerationProvider(options: OpenAiImageEditProviderOptions): AiImageProvider {
+  assertGptImage2CountProviderIdentity(options.baseUrl, options.model);
+  return createOpenAiImagesProviderWithProfile(options, true);
+}
+
 function createOpenAiImageEditProviderWithDialect(
   options: OpenAiImageEditProviderOptions,
   multipartDialect: AiImageEditMultipartDialect,
@@ -762,12 +792,20 @@ function createOpenAiImageEditProviderWithDialect(
       }
       let validated: Awaited<ReturnType<typeof validateOpenAiImageEditRequest>>;
       try {
+        if (multipartDialect === AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT) {
+          await assertGptImage2CountOrdinaryEditRequest(request);
+        }
         if (multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT) {
           if ('wanxEditStrength' in request) throw invalidOpenAiEditInput('Donor GPT Image 2 does not accept Wanx options');
           assertDonorGpt2ImageToImageRequest({ model: request.model || options.model, operation: request.operation,
             width: request.width, height: request.height, count: 1, referenceCount: request.images.length, quality: 'high' });
         }
-        validated = await validateOpenAiImageEditRequest(request, multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT);
+        validated = await validateOpenAiImageEditRequest(
+          request,
+          multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT,
+          multipartDialect === AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT
+            ? isGptImage2CountOrdinarySizeSupported : isOpenAiCompatibleImageEditSizeSupported,
+        );
       } catch (error) {
         throw withProviderSubmissionRejected(error);
       }
@@ -896,6 +934,12 @@ export function createDonorGptImage2EditProvider(options: OpenAiImageEditProvide
   assertDonorGpt2ProviderModel(options.baseUrl,options.model);
   return createOpenAiImageEditProviderWithDialect(options, AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT,
     options.model, operation => operation === 'IMAGE_TO_IMAGE');
+}
+
+export function createGptImage2CountEditProvider(options: OpenAiImageEditProviderOptions): OpenAiImageEditProvider {
+  assertGptImage2CountProviderIdentity(options.baseUrl, options.model);
+  return createOpenAiImageEditProviderWithDialect(options, AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT,
+    options.model, operation => ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation), 1);
 }
 
 export function createPackyGptImage2EditProvider(

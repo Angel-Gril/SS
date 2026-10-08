@@ -58,11 +58,12 @@ export class AiMediaCapabilityError extends Error {
 
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
   {
-    provider:'custom',model:'gpt-image-2-count',operations:['IMAGE_TO_IMAGE'],maxReferences:1,supportsMask:false,
+    provider:'custom',model:'gpt-image-2-count',operations:['TEXT_TO_IMAGE','IMAGE_TO_IMAGE','FULL_EDIT','INPAINT'],maxReferences:1,supportsMask:true,
     inputTransport:'multipart',resultMode:'sync',evidenceLevel:'sandbox-verified',
-    evidence:'2026-10-08 user-authorized ai.big-model-api.top single-reference hero/scene edits each completed once with original 1008x1344 frames, full-frame 900x1200 normalization and visual review; exact endpoint only, no multi-reference/full-edit/inpaint or production default change',
-    sandboxEvidence:[{endpointSha256:aiImageProviderEndpointSha256('custom',AI_IMAGE_DONOR_GPT2_COUNT_API_BASE),
-      operation:'IMAGE_TO_IMAGE',inputTransport:'multipart',resultMode:'sync'}],
+    evidence:'2026-10-08 user-authorized exact endpoint: hero/scene reference edits at 1008x1344, independent full-edit and alpha-mask inpaint requests at 900x1200 (actual raw 896x1200) and text generation at 1024x1024 completed once; raw and normalized artifacts remain separate, masked final output preserves source pixels outside the mask; no multiple-reference claim or automatic candidate approval',
+    sandboxEvidence:(['TEXT_TO_IMAGE','IMAGE_TO_IMAGE','FULL_EDIT','INPAINT'] as const).map(operation=>({
+      endpointSha256:aiImageProviderEndpointSha256('custom',AI_IMAGE_DONOR_GPT2_COUNT_API_BASE),
+      operation,inputTransport:operation==='TEXT_TO_IMAGE'?'none' as const:'multipart' as const,resultMode:'sync' as const})),
   },
   {
     provider:'custom',model:'gpt-image-2',operations:['IMAGE_TO_IMAGE'],maxReferences:16,supportsMask:false,
