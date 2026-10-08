@@ -1,5 +1,11 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 `d64649fd / 1.0.446` 预览修复双区部署与新 suite 证据
+
+- `d64649fd33487bdaee6703bcf0fb05a89e41ef53 / 1.0.446` 已推送、COM/CN 签名验签、标准双区部署；两区 FULL canonical VPS PASS、0 failure，备份恢复和 Cloud/Local MV3 安装验收通过。官网 pointer 仍为旧 `14985551 / 1.0.434`，未执行 CAS。
+- 445 真实 suite 保留为失败预览边界；446 新建真实隔离草稿 `draft-53329c39-640f-43ba-9b94-cde084a6f14d`，计划 `cmuzz56gx00025oizzuxlcnkw`，新 suite `cmuzzhg6v000c5oizz361hq2a`。START/CONTINUE 各一次，Provider POST 2 次，最高 CNY0.20，ERP 两笔 CNY0.10 settled；attempt1、SUCCEEDED、PENDING审核前、数据库 generated、原始 provider bytes/SHA 全部保存，Ozon0。
+- 446 原生签名包真实候选预览通过：两图 `crossOrigin=anonymous`、PNG、900×1200，主图无白边，场景图有窗边绿植/台面光影且主体完整。预览前已完成目视检查。当前审核状态在真实 UI 已显示两候选“已通过”，但原始审核 POST/response 证据捕获不完整，assignment 尚未执行；因此不能将该 suite 直接提升为正式 QA04，也不能执行官网 approval/CAS。保留所有失败 readback 和未确认审核原件，禁止重发审核或套图请求。
+
 ## 2026-10-09 445 已双区部署，精铺候选跨域图片修复准备446
 
 - `17fc5ee6` 入口统一及 `b95eda6fd621fca3211cee64be26791cd93475a6` 真实 MV3 接线修复均已推送，1.0.445 COM/CN 区域候选外部签名/验签、实际签名包 MV3、标准部署、部署/日常备份恢复及 FULL canonical VPS 均通过。两区 API/Worker/Web active、ready 的数据库/Redis 正常；COM 分析开启和原 DOTH 范围、CN direct/RDS dark 保持。唯一 VPS warning 仍为既有远端备份未配置。最终 clean native offline 完整通过，后端7194/378既有条件skipped，实库AI Media215项及升级回放通过；官方 pointer 两区仍434，未执行新 CAS。

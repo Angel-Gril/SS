@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-10-09 `d64649fd / 1.0.446` 双区部署完成，官网仍待正式 QA04
+
+1.0.446 已提交、推送、COM/CN 签名验签并按标准入口部署；两区 `/ready`、DB/Redis、部署 commit、签名包 MV3 安装和备份恢复通过。COM hosted pilot 仍限原 owner/shop/device/operation，CN direct/RDS dark。修复版新增候选图片 `crossOrigin="anonymous"`，真实 Chrome 预览两图均解码 900×1200，原始 CDN/CORP 保持不变。
+
+修复版新的两图 suite 已真实 START/CONTINUE 一次，Provider POST 2 次，ERP 结算最高 CNY 0.20；两槽 attempt 1、SUCCEEDED、原始图片和审核前 PENDING 证据均保留。新版原生预览已通过并完成两图目视确认；当前同一 suite 的审核 readback/正式 QA04 输入、双区 canary、website approval、CAS、distribution probe 尚未闭合，官网两区仍安全服务 `14985551 / 1.0.434`。没有 Ozon 写入，也未读取 Provider 控制台或账单。
+
+准确实现和失败原件仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 count候选预览/应用修复准备444
 
 443正式freshsuite已真实两图成功/CNY0.20，但preview被旧normalizer检查409，不能公开。Preview/assignment消费者已接冻结runtime和真实raw验证，108定向及215实库/升级回放通过；尚未部署修复或执行官网CAS。旧失败输出/原件保留，新444继续同一发布授权，准确事实见[直接适配 owner](donor-workbench/direct-adaptation.md)。
