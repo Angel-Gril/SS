@@ -301,7 +301,7 @@ import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-t
 import { resolveTrustedAiImageTranslationCategory } from './services/ai-image-translation-glossary.js';
 import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
 import { getAiImageEditProviderRuntimeConfig } from './services/ai-image-edit-runtime-config.js';
-import { getAiImageOperationProviderRuntimeConfig } from './services/ai-image-operation-runtime-config.js';
+import { getAiImageSuiteProviderRuntimeConfig } from './services/ai-image-suite-runtime-config.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
 import { createAiImageEditMask } from './services/ai-image-edit.js';
 import type { AiImageProviderRuntimeContract } from './services/ai-image-provider-runtime-contract.js';
@@ -1078,7 +1078,7 @@ const getAiImageSuiteCostControls = async () => {
 };
 const getAiImageSuiteProviderRuntime = async () => {
   return createAiImageSuiteProviderRuntimeSnapshot(
-    await getAiImageOperationProviderRuntimeConfig('IMAGE_TO_IMAGE'),
+    await getAiImageSuiteProviderRuntimeConfig(),
   );
 };
 const requireAiImageSuiteProviderRuntime = async () => {

@@ -9,6 +9,7 @@ import {
   AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
   aiImageSuiteProviderConfigMatches,
   aiImageSuiteProviderRuntimeMatches,
+  aiImageSuiteQuoteCurrency,
   createAiImageSuiteProviderRuntimeSnapshot,
   createProviderFreeAiImageSuiteConfig,
 } from '../services/ai-image-suite-provider-runtime.js';
@@ -47,6 +48,66 @@ const exactCapability = (evidenceLevel: AiImageProviderCapability['evidenceLevel
 }) satisfies AiImageProviderCapability;
 
 describe('AI image suite Provider runtime snapshot', () => {
+  const countSettings = (overrides: Record<string, unknown> = {}) => settings({
+    provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+    costPerImageCents: 10,
+    credentialRevision: { recordId: 'fixture-count-key', revision: 1, updatedAt: '2026-10-08T00:00:00.000Z' },
+    ...overrides,
+  });
+
+  it('freezes the verified count profile with an explicit CNY 0.10 quote and currency-specific identity', () => {
+    const cny = createAiImageSuiteProviderRuntimeSnapshot(countSettings({ currency: 'CNY' }), { nodeEnv: 'production' });
+    const usd = createAiImageSuiteProviderRuntimeSnapshot(countSettings({ currency: 'USD' }), { nodeEnv: 'production' });
+    expect(cny).toMatchObject({
+      executionReady: true, testOnly: false, reasonCode: 'READY',
+      providerRuntime: {
+        contractVersion: 'ai-image-provider-runtime/v3', provider: 'custom', model: 'gpt-image-2-count',
+        currency: 'CNY', width: 1008, height: 1344, imageCount: 1, unitCostCents: 10, maximumCostCents: 10,
+        credentialRevision: { recordId: 'fixture-count-key', revision: 1, updatedAt: '2026-10-08T00:00:00.000Z' },
+      },
+      providerConfig: { estimatedCostPerImageCents: 10, maximumCostPerImageCents: 10,
+        pricingVersion: expect.stringMatching(/^ai-image-suite-price-cny\/v1:[a-f0-9]{32}$/u) },
+    });
+    expect(aiImageSuiteQuoteCurrency(cny.providerConfig!.pricingVersion)).toBe('CNY');
+    expect(aiImageSuiteQuoteCurrency(usd.providerConfig!.pricingVersion)).toBe('USD');
+    expect(cny.providerConfig!.providerConfigHash).not.toBe(usd.providerConfig!.providerConfigHash);
+    expect(cny.providerConfig!.pricingVersion).not.toBe(usd.providerConfig!.pricingVersion);
+    expect(JSON.stringify(cny)).not.toContain('secret-key-must-not-leak');
+  });
+
+  it('keeps explicit USD count settings identical to historical currency-free v2 quotes', () => {
+    const historical = createAiImageSuiteProviderRuntimeSnapshot(countSettings());
+    const explicit = createAiImageSuiteProviderRuntimeSnapshot(countSettings({ currency: 'USD' }));
+    expect(historical.providerRuntime).toMatchObject({ contractVersion: 'ai-image-provider-runtime/v2' });
+    expect(historical.providerRuntime).not.toHaveProperty('currency');
+    expect(explicit.providerRuntime).toEqual(historical.providerRuntime);
+    expect(explicit.providerConfig).toEqual(historical.providerConfig);
+  });
+
+  it.each([
+    ['another count endpoint', countSettings({ currency: 'CNY', baseUrl: 'https://another-provider.example/v1' })],
+    ['generic GPT2', countSettings({ currency: 'CNY', model: 'gpt-image-2' })],
+    ['unsupported currency', countSettings({ currency: 'RUB' })],
+    ['missing credential revision', countSettings({ currency: 'CNY', credentialRevision: undefined })],
+  ])('rejects CNY expansion or invalid count configuration: %s', (_label, input) => {
+    expect(createAiImageSuiteProviderRuntimeSnapshot(input)).toMatchObject({
+      providerConfig: null, executionReady: false, reasonCode: 'PROVIDER_CONFIG_INVALID',
+    });
+  });
+
+  it('does not permit CNY for another custom model even with exact sandbox evidence', () => {
+    const input = settings({ provider: 'custom', currency: 'CNY', baseUrl: 'https://relay.example/v1' });
+    const capability: AiImageProviderCapability = {
+      ...exactCapability('sandbox-verified'), provider: 'custom', sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256('custom', input.baseUrl),
+        operation: 'IMAGE_TO_IMAGE', inputTransport: 'multipart', resultMode: 'sync',
+      }],
+    };
+    expect(createAiImageSuiteProviderRuntimeSnapshot(input, { resolveCapability: () => capability })).toMatchObject({
+      providerConfig: null, executionReady: false, reasonCode: 'PROVIDER_CONFIG_INVALID',
+    });
+  });
+
   it('admits only the live verified single-reference count alias and rejects another origin',()=>{
     const correct=settings({provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',
       credentialRevision:{recordId:'fixture-donor-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}});

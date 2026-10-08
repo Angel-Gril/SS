@@ -117,6 +117,12 @@ export const SystemConfigSchema = {
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),
   ai_image_generation_cost_cents: z.number().int().min(0).max(100000).default(0),
+  ai_image_suite_provider: z.enum(['inherit', 'disabled', 'dashscope-wanx', 'openai-images', 'custom']).default('inherit'),
+  ai_image_suite_base_url: z.string().default(''),
+  ai_image_suite_api_key: z.string().default(''),
+  ai_image_suite_model: z.string().default(''),
+  ai_image_suite_cost_cents: z.number().int().min(0).max(100000).default(0),
+  ai_image_suite_currency: z.enum(['USD', 'CNY']).default('USD'),
   ai_image_text_to_image_model: z.string().max(500).default(''),
   ai_image_text_to_image_cost_cents: z.number().int().min(0).max(100000).default(0),
   ai_image_prompt: z
@@ -614,6 +620,26 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '独立文生图模型',
     group: 'ai',
     description: '留空继承生图模型；填写后仅文生图使用此模型，仍使用同一服务和密钥，参考图、全图编辑及局部重绘保持原模型',
+  },
+  ai_image_suite_provider: {
+    label: '托管套图服务', group: 'ai',
+    description: 'inherit 沿用普通生图配置；选择独立服务后，套图预览与执行只使用该服务的模型、密钥和价格，不影响普通改图',
+  },
+  ai_image_suite_base_url: {
+    label: '托管套图 Base URL', group: 'ai', description: '独立套图服务的明确 HTTPS API 基址',
+  },
+  ai_image_suite_api_key: {
+    label: '托管套图 API Key', group: 'ai', description: '独立套图服务访问密钥；不继承普通生图密钥',
+    sensitive: true, encrypted: true,
+  },
+  ai_image_suite_model: {
+    label: '托管套图模型', group: 'ai', description: '已验证的完整模型 ID；普通文字生图、改图、分析与翻译不受此项影响',
+  },
+  ai_image_suite_cost_cents: {
+    label: '托管套图单张预扣价（分）', group: 'ai', description: 'ERP 用户单张报价，按套图币种的分填写；人民币0.10元填10，0禁止新付费套图，不代表供应商实际账单',
+  },
+  ai_image_suite_currency: {
+    label: '托管套图报价币种', group: 'ai', description: '套图价格的明确币种；与模型和单价一起冻结，不能把人民币分当作美分',
   },
   ai_image_text_to_image_cost_cents: {
     label: '独立文生图单张费用（分）',
@@ -1208,6 +1234,7 @@ export function isSensitiveConfigKey(key: string): key is SystemConfigKey {
 export function isEncryptedConfigKey(key: string): key is SystemConfigKey {
   if (!validateKey(key)) return false;
   const meta = SystemConfigMeta[key];
+
   const defaultValue = getDefaultValue(key);
   return !!(meta.encrypted || meta.sensitive) && typeof defaultValue === 'string';
 }
@@ -1370,6 +1397,7 @@ export async function setConfig<K extends SystemConfigKey>(
   const validated = schema.parse(value);
   const serialized = serializeValue(key, validated as SystemConfigValue<K>);
   const meta = SystemConfigMeta[key];
+  const revisionBound = key === 'ai_image_api_key' || key === 'ai_image_suite_api_key' || key === 'ai_image_suite_provider';
 
   await prisma.systemConfig.upsert({
     where: { key },
@@ -1379,10 +1407,10 @@ export async function setConfig<K extends SystemConfigKey>(
       label: meta.label,
       group: meta.group,
       description: meta.description,
-      ...(key === 'ai_image_api_key' ? { revision: 1 } : {}),
+      ...(revisionBound ? { revision: 1 } : {}),
     },
     // Image jobs bind this revision; same-millisecond writes must also invalidate the old identity.
-    update: { value: serialized, ...(key === 'ai_image_api_key' ? { revision: { increment: 1 } } : {}) },
+    update: { value: serialized, ...(revisionBound ? { revision: { increment: 1 } } : {}) },
   });
 }
 

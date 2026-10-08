@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-08 COM 默认套图模型切换准备（尚未生产写入）
+
+- 用户明确授权使用提供的 `https://ai.big-model-api.top / gpt-image-2-count` 与测试 Key 作为 COM 后端托管套图配置，并指定 ERP 单张预扣价为 CNY0.10；这是 ERP 用户收费，不代表供应商实际账单。商品分析继续 qwen-vl-max，CN 保持 direct/RDS dark。
+- 当前全局模型同时供普通改图和套图消费，437 的 donor profile 仅在套图 owner 接齐；直接替换全局配置会使普通改图被拒绝。因此新增 `ai_image_suite_*` 专用配置 family，默认 inherit 保留现有行为。套图预览、API runtime、独立 Worker 与发包前 paid owner 共用 `ai-image-suite-runtime-config.ts`；普通改图、文字生图和翻译不借用套图 Key。没有扩大操作、owner/shop/device 或新 flag。
+- 专用 Key 通过原加密和 revision-aware 配置 mutation 保存；模式选择并发修改时拒绝，不混合两组配置，也不从另一组密钥降级。count 的 CNY10 单张报价冻结 v3，历史 USDv2 的 hash/恢复保持兼容；服务端保存时拒绝其他 endpoint 使用 count 别名。
+- T2 原配置 mutation 基线59项通过，新行为3项 RED→62项GREEN；专用读取原行为22项失败→26项通过；币种/付费 owner 目标3项失败→52项通过。主 Agent 合并后配置/运行/报价/旧任务关联202项通过，定向 ESLint通过；完整新提交构建、签名、部署与生产读回尚未执行。此处不把本地通过记录为已启用新默认模型。
+
 ## 2026-10-08 `136aa330 / 1.0.437` 已提交、推送、签名与双区应用部署
 
 - 用户明确请求提交/部署，实施提交`5483f06e`、发布review目录补齐`48fe945e`、Wanx isolation最终修复`136aa3304620a87436e55e987909868afa848fda`均已推送到`feat/ai-media-prompt-registry`。435/436中间候选保留但未部署；最终版本437，CHANGELOG仍Unreleased，日期不冒充官网公开发布日期。

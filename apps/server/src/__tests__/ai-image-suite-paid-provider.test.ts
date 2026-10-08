@@ -24,6 +24,7 @@ import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-s
 import {
   AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
   AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+  aiImageSuiteQuoteCurrency,
   createAiImageSuiteProviderRuntimeSnapshot,
   type AiImageSuiteProviderRuntimeSettings,
 } from '../services/ai-image-suite-provider-runtime.js';
@@ -189,6 +190,70 @@ function paidDependencies(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AI image suite paid Provider preparation', () => {
+  const countSettings = (overrides: Partial<AiImageSuiteProviderRuntimeSettings> = {}) => settings({
+    provider: 'custom', model: 'gpt-image-2-count', baseUrl: 'https://ai.big-model-api.top/v1',
+    costPerImageCents: 10, currency: 'CNY',
+    credentialRevision: { recordId: 'fixture-count-key', revision: 1, updatedAt: '2026-10-08T00:00:00.000Z' },
+    ...overrides,
+  });
+
+  it('executes the verified count job at its frozen CNY 0.10 quote after the active price changes', async () => {
+    const initial = countSettings();
+    const input = validInput(initial, resolveAiImageProviderCapability(initial.provider, initial.model)!);
+    expect(input.suite).toMatchObject({ estimatedCostCents: 10, maximumCostCents: 10 });
+    expect(aiImageSuiteQuoteCurrency(input.suite.pricingVersion)).toBe('CNY');
+    expect(input.job).toMatchObject({ estimatedCostCents: 10, operationConfig: { providerRuntime: {
+      contractVersion: 'ai-image-provider-runtime/v3', currency: 'CNY', unitCostCents: 10, maximumCostCents: 10,
+    } } });
+    const edit = vi.fn(async () => ({ images: [{ buffer: referencePng, mimeType: 'image/png' }], actualCostCents: 10 }));
+    const createOpenAiProvider = vi.fn(() => ({ name: 'donor-image-edits', edit }));
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => ({ ...initial, costPerImageCents: 99 }),
+      loadInputBuffer: async () => referencePng, createOpenAiProvider,
+    });
+    await expect(prepared.execute(async () => undefined)).resolves.toMatchObject({ actualCostCents: 10 });
+    expect(createOpenAiProvider).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: initial.baseUrl, model: initial.model, costPerImageCents: 10,
+    }));
+    expect(edit).toHaveBeenCalledOnce();
+  });
+
+  it('restores an existing count USD v2 job without adopting the new CNY price', async () => {
+    const historical = countSettings({ currency: undefined, costPerImageCents: 8 });
+    const input = validInput(historical, resolveAiImageProviderCapability(historical.provider, historical.model)!);
+    expect((input.job.operationConfig as any).providerRuntime).toMatchObject({ contractVersion: 'ai-image-provider-runtime/v2' });
+    expect((input.job.operationConfig as any).providerRuntime).not.toHaveProperty('currency');
+    expect(aiImageSuiteQuoteCurrency(input.suite.pricingVersion)).toBe('USD');
+    const edit = vi.fn(async () => ({ images: [{ buffer: referencePng, mimeType: 'image/png' }], actualCostCents: 8 }));
+    const createOpenAiProvider = vi.fn(() => ({ name: 'donor-image-edits', edit }));
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => countSettings(), loadInputBuffer: async () => referencePng, createOpenAiProvider,
+    });
+    await expect(prepared.execute(async () => undefined)).resolves.toMatchObject({ actualCostCents: 8 });
+    expect(createOpenAiProvider).toHaveBeenCalledWith(expect.objectContaining({ costPerImageCents: 8 }));
+    expect(edit).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a CNY count credential rotation at the final dispatch fence before POST', async () => {
+    const active = countSettings();
+    const input = validInput(active, resolveAiImageProviderCapability(active.provider, active.model)!);
+    const providerPost = vi.fn(async () => ({ images: [{ buffer: referencePng, mimeType: 'image/png' }], actualCostCents: 10 }));
+    const createOpenAiProvider = vi.fn((options: OpenAiImageEditProviderOptions) => ({
+      name: 'donor-image-edits', edit: async () => {
+        active.credentialRevision = { ...active.credentialRevision!, revision: 2 };
+        await options.beforeProviderDispatch?.();
+        return providerPost();
+      },
+    }));
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, {
+      loadSettings: async () => active, loadInputBuffer: async () => referencePng, createOpenAiProvider,
+    });
+    const grantDispatch = vi.fn();
+    await expect(prepared.execute(async () => undefined, grantDispatch)).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RUNTIME_CHANGED' });
+    expect(providerPost).not.toHaveBeenCalled();
+    expect(grantDispatch).not.toHaveBeenCalled();
+  });
+
   it('refuses a rotated count-relay credential before creating a Provider or sending its saved command',async()=>{
     const active=settings({provider:'custom',model:'gpt-image-2-count',baseUrl:'https://ai.big-model-api.top/v1',
       credentialRevision:{recordId:'fixture-count-key',revision:1,updatedAt:'2026-10-08T00:00:00.000Z'}});

@@ -648,6 +648,63 @@ describe('SystemConfig route mutation security', () => {
     await app.close();
   });
 
+  it('saves a dedicated CNY suite configuration atomically without changing ordinary image settings', async () => {
+    state.rows.set('ai_image_provider', { key: 'ai_image_provider', value: 'dashscope-wanx', revision: 2 });
+    state.rows.set('ai_image_model', { key: 'ai_image_model', value: 'wanx2.1-imageedit', revision: 3 });
+    const app = await appFor('account_session');
+    const secret = 'synthetic-suite-credential-sentinel';
+    const response = await app.inject({ method: 'PUT', url: '/batch', payload: { items: [
+      { key: 'ai_image_suite_provider', value: 'custom', expectedRevision: 0 },
+      { key: 'ai_image_suite_base_url', value: 'https://ai.big-model-api.top/v1', expectedRevision: 0 },
+      { key: 'ai_image_suite_model', value: 'gpt-image-2-count', expectedRevision: 0 },
+      { key: 'ai_image_suite_api_key', value: secret, expectedRevision: 0 },
+      { key: 'ai_image_suite_cost_cents', value: '10', expectedRevision: 0 },
+      { key: 'ai_image_suite_currency', value: 'CNY', expectedRevision: 0 },
+    ] } });
+    expect(response.statusCode).toBe(200);
+    expect(state.rows.get('ai_image_suite_cost_cents')).toMatchObject({ value: '10', revision: 1 });
+    expect(state.rows.get('ai_image_suite_currency')).toMatchObject({ value: 'CNY', revision: 1 });
+    expect(state.rows.get('ai_image_suite_api_key')?.value).toMatch(/^enc:v1:/);
+    expect(JSON.stringify(response.json())).not.toContain(secret);
+    expect(JSON.stringify(audit.mock.calls)).not.toContain(secret);
+    expect(state.rows.get('ai_image_provider')).toMatchObject({ value: 'dashscope-wanx', revision: 2 });
+    expect(state.rows.get('ai_image_model')).toMatchObject({ value: 'wanx2.1-imageedit', revision: 3 });
+    await app.close();
+  });
+
+  it('rejects moving the dedicated suite Key to another endpoint via a masked placeholder', async () => {
+    for (const [key, value] of Object.entries({ ai_image_suite_provider: 'custom',
+      ai_image_suite_base_url: 'https://old-suite.fixture.example/v1', ai_image_suite_model: 'fixture-model',
+      ai_image_suite_api_key: 'synthetic-suite-credential-sentinel' })) {
+      state.rows.set(key, { key, value, revision: 2 });
+    }
+    const app = await appFor('account_session');
+    const response = await app.inject({ method: 'PUT', url: '/batch', payload: { items: [
+      { key: 'ai_image_suite_base_url', value: 'https://new-suite.fixture.example/v1', expectedRevision: 2 },
+      { key: 'ai_image_suite_api_key', value: 'synt***inel', expectedRevision: 2 },
+    ] } });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ errorCode: 'system_config_ai_image_api_key_reentry_required' });
+    expect(state.rows.get('ai_image_suite_base_url')?.value).toBe('https://old-suite.fixture.example/v1');
+    expect(audit).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rejects the count alias on another suite endpoint without persisting any settings', async () => {
+    const app = await appFor('account_session');
+    const response = await app.inject({ method: 'PUT', url: '/batch', payload: { items: [
+      { key: 'ai_image_suite_provider', value: 'custom', expectedRevision: 0 },
+      { key: 'ai_image_suite_base_url', value: 'https://wrong-suite.fixture.example/v1', expectedRevision: 0 },
+      { key: 'ai_image_suite_model', value: 'gpt-image-2-count', expectedRevision: 0 },
+      { key: 'ai_image_suite_api_key', value: 'synthetic-suite-credential-sentinel', expectedRevision: 0 },
+    ] } });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ errorCode: 'system_config_ai_image_provider_endpoint_mismatch' });
+    expect(state.rows.has('ai_image_suite_provider')).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('rejects rebinding a masked AI image secret to a different endpoint', async () => {
     state.rows.set('ai_image_provider', {
       key: 'ai_image_provider', value: 'custom', revision: 2,

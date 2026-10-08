@@ -14,7 +14,6 @@ import { startRechargeTimeoutWorker } from './workers/recharge-timeout.js';
 import { startListingTaskRefreshWorker } from './workers/listing-task-refresh.js';
 import { startBrowserOneClickListingWorker } from './workers/browser-one-click-listing.js';
 import {
-  getAiImageProviderRuntimeConfig,
   startAiImageGenerationWorker,
 } from './workers/ai-image-generation.js';
 import { startAiImageTranslationWorker } from './workers/ai-image-translation.js';
@@ -32,6 +31,7 @@ import {
 } from './services/ai-image-suite-provider-runtime.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import { getAiImageSuiteDispatchAuthorization } from './services/ai-image-suite-dispatch-authorization.js';
+import { getAiImageSuiteProviderRuntimeConfig } from './services/ai-image-suite-runtime-config.js';
 
 console.log('[worker] starting all workers as standalone process...');
 
@@ -56,7 +56,7 @@ const standaloneSuiteRuntimeEvidence = async (suite: {
   maximumCostCents: number;
 }) => {
   const snapshot = createAiImageSuiteProviderRuntimeSnapshot(
-    await getAiImageProviderRuntimeConfig('IMAGE_TO_IMAGE'),
+    await getAiImageSuiteProviderRuntimeConfig(),
   );
   if (!snapshot.executionReady || !aiImageSuiteProviderRuntimeMatches(suite, snapshot)) return null;
   return snapshot.capability?.evidenceLevel === 'sandbox-verified'

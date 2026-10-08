@@ -30,7 +30,7 @@ import {
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import { canRunAiImageProviderOperation } from './ai-image-provider-admission.js';
 import { AI_IMAGE_WANX21_EDIT_MODEL, AI_IMAGE_WANX21_EDIT_PROFILE } from './ai-image-wanx-edit-profile.js';
-import {AI_IMAGE_DONOR_GPT2_PROFILE,isDonorGpt2SuiteProvider,createDonorGpt2FullFrameConfig,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
+import {AI_IMAGE_DONOR_GPT2_COUNT_MODEL,AI_IMAGE_DONOR_GPT2_PROFILE,isDonorGpt2SuiteProvider,createDonorGpt2FullFrameConfig,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
 import type { AiImageProviderCredentialRevision, AiImageProviderCurrency } from './ai-image-provider-runtime-contract.js';
 import {requiresAiImageProviderCredentialRevision} from './ai-image-provider-runtime-contract.js';
 
@@ -68,7 +68,7 @@ export function aiImageSuiteProviderRequestDimensions(provider: string, model: s
     : { width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH, height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT };
 }
 
-/** Legacy suite price versions remain USD; CNY is explicitly bound in the new price version. */
+/** Legacy suite price versions remain USD; Wanx/count CNY is bound in the distinct price version. */
 export function aiImageSuiteQuoteCurrency(pricingVersion: string): AiImageProviderCurrency {
   return new RegExp(`^${AI_IMAGE_SUITE_CNY_PRICING_VERSION}:[a-f0-9]{32}$`, 'u').test(pricingVersion)
     ? 'CNY' : 'USD';
@@ -306,10 +306,14 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
   }
   const concurrencyLimit = safeConcurrency(rawSettings?.concurrencyLimit);
   const wanx = isWanxAiImageSuiteProvider(provider, model);
+  const count = provider === 'custom' && model === AI_IMAGE_DONOR_GPT2_COUNT_MODEL;
+  const currencyValid = wanx ? rawSettings.currency === 'CNY'
+    : rawSettings.currency === undefined || rawSettings.currency === 'USD'
+      || (count && rawSettings.currency === 'CNY');
   if (!concurrencyLimit
     || !Number.isSafeInteger(rawSettings?.costPerImageCents)
     || rawSettings.costPerImageCents < 1
-    || (wanx ? rawSettings.currency !== 'CNY' : rawSettings.currency !== undefined && rawSettings.currency !== 'USD')) {
+    || !currencyValid) {
     return invalidSnapshot(
       'PROVIDER_CONFIG_INVALID',
       'AI image suite Provider price or concurrency is invalid',
@@ -324,7 +328,10 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
       model,
       baseUrl: rawSettings.baseUrl,
       costPerImageCents: rawSettings.costPerImageCents,
-      ...(wanx ? { currency: 'CNY', credentialRevision: rawSettings.credentialRevision } : {}),
+      // Keep historical count USD v2 identities stable, including when frozen
+      // execution binding makes the formerly implicit USD currency explicit.
+      ...(rawSettings.currency === 'CNY' ? { currency: 'CNY' as const } : {}),
+      ...(wanx ? { credentialRevision: rawSettings.credentialRevision } : {}),
       ...(!wanx && requiresAiImageProviderCredentialRevision(provider,model) ? {credentialRevision:rawSettings.credentialRevision} : {}),
     }, {
       count: 1,

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import sharp, { type Metadata } from 'sharp';
-import { getAiImageOperationProviderRuntimeConfig } from './ai-image-operation-runtime-config.js';
+import { getAiImageSuiteProviderRuntimeConfig } from './ai-image-suite-runtime-config.js';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import {
   createOpenAiImageEditProvider,
@@ -113,7 +113,7 @@ interface Dependencies {
 }
 
 async function defaultSettings(): Promise<AiImageSuiteProviderRuntimeSettings> {
-  return getAiImageOperationProviderRuntimeConfig('IMAGE_TO_IMAGE');
+  return getAiImageSuiteProviderRuntimeConfig();
 }
 
 function record(value: unknown): Record<string, any> | null {

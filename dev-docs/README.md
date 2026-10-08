@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-08 COM 套图新模型与 CNY0.10 配置接线准备
+
+用户授权切换提供的模型、域名和 Key，并指定单张预扣 CNY0.10。为保留普通图片操作，套图新增独立加密/修订配置 family；原默认 inherit，CN dark 与商品分析保持。配置/运行/报价关联202项与定向 lint已通过，尚未执行生产配置写入；后续提交、构建和部署证据仅维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-08 `136aa330 / 1.0.437` 已推送、签名并双区部署
 
 GPT2套图质量修复及发布前兼容收口已完成提交/推送、区域签名、完整preflight/build、双区标准部署、备份恢复、实际签名包MV3及canonical VPS验收；两区应用均运行`136aa330 / 1.0.437`，db/Redis正常。COM AI分析开启、CN direct/RDS dark保持；生产Provider/Key修订/价格读回完全不变，COM默认仍Wanx。官网公开下载仍1.0.434，本轮未执行正式QA04/网站canary/approval/CAS/distribution，也没有新增Provider/Ozon请求。当前准确证据只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

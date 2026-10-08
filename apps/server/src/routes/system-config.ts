@@ -23,6 +23,7 @@ import {
   aiImageCredentialEndpointIdentity,
   isOfficialOpenAiImagesApiBase,
 } from '../services/ai-image-providers.js';
+import { AI_IMAGE_DONOR_GPT2_COUNT_MODEL, assertDonorGpt2ProviderModel } from '../services/ai-image-donor-gpt2-profile.js';
 import { getRuntimeMode } from '../adapters/runtime-config.js';
 import {
   AUTH_PROVIDER_PREFLIGHT_KEYS,
@@ -62,12 +63,10 @@ const PROTECTED_OZON_PUBLISHER_STAGE_KEYS = new Set<string>([
   'source_ozon_publisher_extension_adapter_stage',
 ] as const satisfies readonly SystemConfigKey[]);
 
-const AI_IMAGE_PROVIDER_CONFIG_KEYS = new Set<SystemConfigKey>([
-  'ai_image_provider',
-  'ai_image_base_url',
-  'ai_image_api_key',
-  'ai_image_model',
-]);
+const AI_IMAGE_PROVIDER_CONFIG_FAMILIES = [
+  { provider: 'ai_image_provider', baseUrl: 'ai_image_base_url', apiKey: 'ai_image_api_key', model: 'ai_image_model' },
+  { provider: 'ai_image_suite_provider', baseUrl: 'ai_image_suite_base_url', apiKey: 'ai_image_suite_api_key', model: 'ai_image_suite_model' },
+] as const satisfies readonly Record<'provider' | 'baseUrl' | 'apiKey' | 'model', SystemConfigKey>[];
 
 const SECRET_FIELDS: string[] = [];
 
@@ -306,8 +305,10 @@ async function applyConfigMutations(
   inputs: readonly ConfigMutationInput[],
 ) {
   const lookupKeys = new Set<SystemConfigKey>(inputs.map((item) => item.key));
-  if (inputs.some((item) => AI_IMAGE_PROVIDER_CONFIG_KEYS.has(item.key))) {
-    AI_IMAGE_PROVIDER_CONFIG_KEYS.forEach((key) => lookupKeys.add(key));
+  for (const family of AI_IMAGE_PROVIDER_CONFIG_FAMILIES) {
+    if (inputs.some((item) => Object.values(family).some((key) => key === item.key))) {
+      Object.values(family).forEach((key) => lookupKeys.add(key));
+    }
   }
   const existingRows = await client.systemConfig.findMany({
     where: { key: { in: [...lookupKeys] } },
@@ -366,7 +367,8 @@ async function applyConfigMutations(
     .map((item) => item.key);
   if (staleKeys.length > 0) throw new SystemConfigRevisionConflictError(staleKeys);
 
-  if (changed.some((item) => AI_IMAGE_PROVIDER_CONFIG_KEYS.has(item.key))) {
+  for (const family of AI_IMAGE_PROVIDER_CONFIG_FAMILIES) {
+    if (!changed.some((item) => Object.values(family).some((key) => key === item.key))) continue;
     const existingValue = (key: SystemConfigKey) => {
       const row = existingByKey.get(key);
       if (!row) return String(getDefaultValue(key));
@@ -382,12 +384,13 @@ async function applyConfigMutations(
     };
     const nextValue = (key: SystemConfigKey) => prepared.find((item) => item.key === key)?.displayValue
       ?? existingValue(key);
-    const previousProvider = existingValue('ai_image_provider');
-    const previousBaseUrl = existingValue('ai_image_base_url');
-    const previousApiKey = existingValue('ai_image_api_key');
-    const nextProvider = nextValue('ai_image_provider');
-    const nextBaseUrl = nextValue('ai_image_base_url');
-    const nextModel = nextValue('ai_image_model');
+    const previousProvider = existingValue(family.provider);
+    const previousBaseUrl = existingValue(family.baseUrl);
+    const previousApiKey = existingValue(family.apiKey);
+    const nextProvider = nextValue(family.provider);
+    const nextBaseUrl = nextValue(family.baseUrl);
+    const nextModel = nextValue(family.model);
+    if (nextProvider === 'inherit') continue;
     if (nextProvider === 'custom' && !nextBaseUrl.trim()) {
       throw new SystemConfigMutationError(
         422,
@@ -410,9 +413,16 @@ async function applyConfigMutations(
         'AI 生图模型必须是 1-500 字符且不能包含首尾空格',
       );
     }
+    if (nextProvider === 'custom' && nextModel === AI_IMAGE_DONOR_GPT2_COUNT_MODEL) {
+      try { assertDonorGpt2ProviderModel(nextBaseUrl, nextModel); }
+      catch {
+        throw new SystemConfigMutationError(422, 'system_config_ai_image_provider_endpoint_mismatch',
+          'gpt-image-2-count 只能绑定已验证的 https://ai.big-model-api.top/v1');
+      }
+    }
     const nextEndpoint = aiImageCredentialEndpointIdentity(nextProvider, nextBaseUrl);
     const previousEndpoint = aiImageCredentialEndpointIdentity(previousProvider, previousBaseUrl);
-    const apiKeyInput = inputs.find((item) => item.key === 'ai_image_api_key');
+    const apiKeyInput = inputs.find((item) => item.key === family.apiKey);
     const apiKeyExplicitlyReentered = Boolean(
       apiKeyInput && !isMaskedSecretPlaceholder(apiKeyInput.value),
     );
