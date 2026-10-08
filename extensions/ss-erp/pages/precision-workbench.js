@@ -173,7 +173,7 @@ const preview = createPreviewController({
   getItems: () => [
     ...visibleWorkspaceMedia(eligibleReferenceMedia()).map((item) => ({ ...item, id: item.key, originalUrl: item.url, group: 'gallery' })),
     ...(currentMediaContext().history?.items || []).filter(item => imageWorkspace.state().all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey).flatMap((item) => item.outputs.map((output) => ({
-      id: `candidate:${output.id}`, originalUrl: output.url, reviewStatus: item.reviewStatus, group: 'gallery',
+      id: `candidate:${output.id}`, originalUrl: output.url, crossOrigin: 'anonymous', reviewStatus: item.reviewStatus, group: 'gallery',
     }))),
   ],
 });
@@ -1253,7 +1253,7 @@ function renderMedia() {
       card.dataset.candidateOutput = output.id;
       let image = card.querySelector('img');
       if (!image) {
-        image = make('img'); image.src = output.url; image.alt = '候选图'; image.referrerPolicy = 'no-referrer'; image.decoding = 'async';
+        image = make('img'); image.crossOrigin = 'anonymous'; image.src = output.url; image.alt = '候选图'; image.referrerPolicy = 'no-referrer'; image.decoding = 'async';
         image.addEventListener('click', () => preview.open({ id: `candidate:${output.id}` }));
       } else if (image.getAttribute('src') !== output.url) image.src = output.url;
       const reviewLabel = item.reviewStatus === 'APPROVED' && item.selectedOutputAssetId !== output.id

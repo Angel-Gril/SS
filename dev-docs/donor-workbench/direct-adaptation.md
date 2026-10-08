@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 445 已双区部署，精铺候选跨域图片修复准备446
+
+- `17fc5ee6` 入口统一及 `b95eda6fd621fca3211cee64be26791cd93475a6` 真实 MV3 接线修复均已推送，1.0.445 COM/CN 区域候选外部签名/验签、实际签名包 MV3、标准部署、部署/日常备份恢复及 FULL canonical VPS 均通过。两区 API/Worker/Web active、ready 的数据库/Redis 正常；COM 分析开启和原 DOTH 范围、CN direct/RDS dark 保持。唯一 VPS warning 仍为既有远端备份未配置。最终 clean native offline 完整通过，后端7194/378既有条件skipped，实库AI Media215项及升级回放通过；官方 pointer 两区仍434，未执行新 CAS。
+- 实际签名445在新9455浏览器正常配对DOTH，真实1688 `1048072018093` 正常采集，新隔离 `draft-edbf3028-d23e-4757-ab24-d3ea7035351d` / r1v1、精确ERP按钮进入来源精铺iframe、物理计划创建/审核及START/CONTINUE各1通过。同suite `cmuzwppet000i5o3mp91f1nnz` 两图SUCCEEDED/attempt1/PENDING，真实Provider POST2、ERP两笔CNY0.10共0.20；完整审核前UI/实库、raw1008×1344/成品900×1200原字节及SHA保留。没有Ozon写入或读取供应商账单，未重发旧任务。
+- 正式预览发现跨域消费者缺口：CDN实际200 PNG，但image默认no-cors被同源CORP策略拦截。真实Chrome只读对照将候选/预览设置匿名CORS后两图均decoded900×1200，原CORP/CORS/身份/权限均未放宽。该DOM诊断不冒充445原生预览通过，当前两图未审核、未assignment；只读pending实库全部0。
+- 446最小修复只在候选缩略图及复用的preview view设置匿名模式，来源图切回原模式；删去preview原常量永不执行的未绑定变量分支。T2两例真实RED→GREEN，26关联回归、ESLint及隔离实际MV3入口通过；未新增接口、权限或Blob通道。445失败及诊断原件完整保留，446需新clean候选及真实samecommit完整suite，不改445 execution或审核原件。
+
 ## 2026-10-09 ERP 图片入口统一到来源页精铺工作台（本地实现，尚未发布）
 
 - 用户确认继续收口重复旧入口。ERP 的 WORKBENCH 启动继续消费现有服务端短时 grant，但在真实来源商品页打开已有 `precision-workbench.html`，优先复用原商品 tab；不再新开独立 `ai-image-workbench.html`。特殊图片编辑器、历史会话/未决任务与后台合同不在本次删除范围，不能把入口迁移描述为删除全部历史文件。

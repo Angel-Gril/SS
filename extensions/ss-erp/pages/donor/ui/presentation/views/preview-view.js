@@ -95,22 +95,13 @@ export function createPreviewController({
       resolvedValue1.previewModal.hidden = false;
     },
     prev: function () {
-      if (objectValue.qUyDP(objectValue.AIaWK, objectValue.YIaRE)) {
-        const derivedValue8 = unboundValue8(unboundValue9);
-        if (unboundValue10.isFinite(derivedValue8)) {
-          return derivedValue8;
-        } else {
-          return unboundValue11.MAX_SAFE_INTEGER;
-        }
-      } else {
-        if (!objectValue.rCxRt(helperFn2)) {
-          return;
-        }
-        const dsytUResult6 = objectValue.dsytU(helperFn4);
-        if (!objectValue.oOwAo(dsytUResult6, 0)) {
-          textValue = arrayValue[dsytUResult6 - 1]?.id || textValue;
-          helperFn3();
-        }
+      if (!objectValue.rCxRt(helperFn2)) {
+        return;
+      }
+      const dsytUResult6 = objectValue.dsytU(helperFn4);
+      if (!objectValue.oOwAo(dsytUResult6, 0)) {
+        textValue = arrayValue[dsytUResult6 - 1]?.id || textValue;
+        helperFn3();
       }
     },
     refresh: function () {
@@ -134,6 +125,8 @@ export function createPreviewController({
     const DAiQOResult8 = objectValue.DAiQO(resolvedValue3, findResult7);
     const qkODbResult9 = objectValue.qkODb(resolvedValue4, findResult7);
     var localValue10;
+    if (findResult7.crossOrigin === 'anonymous') resolvedValue1.previewImage.crossOrigin = 'anonymous';
+    else resolvedValue1.previewImage.removeAttribute('crossorigin');
     resolvedValue1.previewImage.src = findResult7.currentUrl || findResult7.originalUrl;
     const textValue16 = text("previewTooltip_decisionLabel", "决策");
     const textValue17 = text("previewTooltip_reasonLabel", "原因");
