@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
+import { createOrderStockReadyService } from '../services/order-stock-ready.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
   isOrderAwaitingSellerShipment,
@@ -298,6 +299,7 @@ function restrictOrderIds(where: Record<string, unknown>, ids: string[]): void {
 
 export async function orderRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+  const stockReady = createOrderStockReadyService(prisma as never);
 
   // Explicit operator confirmation. The log is the durable owner of this marker;
   // no client supplied actor or shop id is trusted.
@@ -308,23 +310,10 @@ export async function orderRoutes(app: FastifyInstance) {
     const body = request.body as { prepared?: unknown };
     if (body?.prepared !== true || Object.keys(body || {}).some((key) => key !== 'prepared')) return reply.status(400).send({ code: 0, msg: '仅允许 prepared=true' });
 
-    const result = await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ id: string; status: string | null; sub_status: string | null; domestic_status: string | null; international_status: string | null }>>`
-        SELECT o.id, o.status, o.sub_status, o.domestic_status, o.international_status
-        FROM "orders" o JOIN "shops" s ON s.id = o.shop_id
-        WHERE o.id = ${id} AND s.user_id = ${userId} AND s.status <> 'DISABLED' FOR UPDATE`;
-      const order = rows[0];
-      if (!order) return { error: 'not_found' as const };
-      const existing = await tx.warehouseLog.findMany({ where: { orderId: id, operationType: 'stock_ready' }, orderBy: { createdAt: 'asc' }, select: { createdAt: true } });
-      if (existing[0]) return { order, timestamp: existing[0].createdAt, replayed: true };
-      const current = resolveOrderFulfillmentStage({ status: order.status, subStatus: order.sub_status, domesticStatus: order.domestic_status, internationalStatus: order.international_status });
-      if (current.key === 'abnormal' || current.key === 'warehouse_processing' || current.key === 'delivering') return { error: 'immutable' as const };
-      const log = await tx.warehouseLog.create({ data: { orderId: id, operationType: 'stock_ready', operatorId: actorUserId, note: '用户确认已备货' }, select: { createdAt: true } });
-      return { order, timestamp: log.createdAt, replayed: false };
-    });
-    if ('error' in result) return reply.status(result.error === 'not_found' ? 404 : 409).send({ code: 0, msg: result.error === 'not_found' ? '订单不存在' : '订单当前状态不可确认已备货' });
-    const projection = { status: result.order.status, subStatus: result.order.sub_status, domesticStatus: result.order.domestic_status, internationalStatus: result.order.international_status, stockPreparedAt: result.timestamp };
-    return reply.send({ code: 1, msg: result.replayed ? '已备货状态已存在' : '已确认备货', data: { id, stockPreparedAt: result.timestamp, fulfillmentStage: resolveOrderFulfillmentStage(projection).key, fulfillmentStatus: resolveOrderFulfillmentStatus(projection) } });
+    const result = await stockReady.mark({ orderId: id, ownerUserId: userId, actorUserId });
+    if (result.kind === 'not_found') return reply.status(404).send({ code: 0, msg: '订单不存在' });
+    if (result.kind === 'immutable') return reply.status(409).send({ code: 0, msg: '订单当前状态不可确认已备货' });
+    return reply.send({ code: 1, msg: result.replayed ? '已备货状态已存在' : '已确认备货', data: { id: result.id, stockPreparedAt: result.stockPreparedAt, fulfillmentStage: result.stage, fulfillmentStatus: result.status } });
   });
 
   // GET /api/orders/service-tags — 获取可用标签列表

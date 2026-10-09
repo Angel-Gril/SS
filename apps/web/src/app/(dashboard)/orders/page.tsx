@@ -368,9 +368,20 @@ export default function OrdersPage() {
   const limit = 20;
 
   const loadPipeline = useCallback(async () => {
-    const res = await api.get<{ stages: PipelineStage[] }>('/api/orders/pipeline');
+    const params = new URLSearchParams();
+    if (shopId) params.set('shopId', shopId);
+    if (search) params.set('search', search);
+    if (search && searchField !== 'all') params.set('searchField', searchField);
+    if (serviceTagId) params.set('serviceTagId', serviceTagId);
+    if (userColorTagId) params.set('userColorTagId', userColorTagId);
+    if (purchaseState) params.set('purchaseState', purchaseState);
+    if (shippingMethod) params.set('shippingMethod', shippingMethod);
+    if (hasTracking) params.set('hasTracking', hasTracking);
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
+    const res = await api.get<{ stages: PipelineStage[] }>(`/api/orders/pipeline?${params}`);
     if (res.code === 1 && res.data) setPipeline(res.data.stages);
-  }, []);
+  }, [shopId, search, searchField, serviceTagId, userColorTagId, purchaseState, shippingMethod, hasTracking, startDate, endDate]);
 
   useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
@@ -612,15 +623,14 @@ export default function OrdersPage() {
                 const isActive = pipelineActive === stage.key;
                 return (
                   <div key={stage.key} className="flex items-center flex-1 min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => handlePipelineClick(stage.key)}
-                      className={`flex flex-col items-center gap-1 px-2 py-1 rounded-lg transition-colors cursor-pointer min-w-[72px] ${
+                    <div
+                      className={`flex flex-col items-center gap-1 px-2 py-1 rounded-lg transition-colors min-w-[72px] ${
                         isActive
                           ? 'bg-blue-50 dark:bg-blue-950'
                           : 'hover:bg-muted'
                       }`}
                     >
+                      <button type="button" onClick={() => handlePipelineClick(stage.key)} className="flex flex-col items-center gap-1">
                       <div className={`relative flex items-center justify-center w-9 h-9 rounded-full border-2 transition-colors ${
                         isActive
                           ? 'border-blue-500 bg-blue-500 text-white'
@@ -644,6 +654,7 @@ export default function OrdersPage() {
                       }`}>
                         {PIPELINE_LABELS[stage.key] || stage.label}
                       </span>
+                      </button>
                       {isActive && stage.children?.length ? (
                         <div className="mt-1 flex flex-wrap justify-center gap-1">
                           {stage.children.map((child) => (
@@ -661,7 +672,7 @@ export default function OrdersPage() {
                           ))}
                         </div>
                       ) : null}
-                    </button>
+                    </div>
                     {idx < pipeline.length - 1 && (
                       <div className="flex-1 h-px bg-border mx-1 min-w-[12px]" />
                     )}
