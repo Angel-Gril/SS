@@ -171,7 +171,7 @@ function skuLabel(value: SourceCaptureView['skus']['items'][number]): string {
 }
 
 function mediaUrl(value: SourceCaptureView['media']['items'][number]): string {
-  return typeof value.url === 'string' ? value.url : '';
+  return typeof value.displayUrl === 'string' ? value.displayUrl : typeof value.url === 'string' ? value.url : '';
 }
 
 function pageCount(total: number, limit: number): number {
@@ -1993,7 +1993,8 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                         <span className="break-all">{media.key}</span>
                       </label>
                       <a href={mediaUrl(media)} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden border bg-muted">
-                        <img src={mediaUrl(media)} alt="" className="h-full w-full object-contain" />
+                        <img src={mediaUrl(media)} crossOrigin={media.displayUrl ? 'anonymous' : undefined}
+                          referrerPolicy="no-referrer" alt="" className="h-full w-full object-contain" />
                       </a>
                       {selection ? (
                         <div className="grid gap-2">

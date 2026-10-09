@@ -1,5 +1,18 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 来源图片后台转存（本地验收完成，准备推送）
+
+用户授权完成 V2 来源图转存并提交、推送。采集仍立即返回，事务同时保存后台待处理标记；独立 Worker 使用现有 ERP-owned OSS/R2 与 `SOURCE_ORIGINAL` MediaAsset，禁止自动使用 Ozon CDN。快照 payload/hash、媒体 key、SKU 归属、草稿版本及发布/费用合同不变。已有商品不做未经请求的批量迁移；重新采集形成的新快照进入转存。
+
+Owner：`source-capture-prisma.ts` 为 native/legacy 新快照事务持久化待处理标记，`source-listing-media-import.ts` 负责准确快照图片内部化，`source-capture-image-transfer.ts`/Prisma store/Worker 负责租约、分页游标、失败恢复和当前投影 CAS；`source-capture-media-display.ts` 向 Web/扩展提供独立 displayUrl。每批100张、4并发、128MiB下载预算，每图8MiB/12MP，下载15秒/上传30秒，每批最多3次后台尝试；大采集分页续接而不拒绝全部图片。失败继续保留原图，不隐藏商品。生成图片内容 hash 纳入对象 key，失效租约重试不会覆盖已有不同字节。
+
+验收 T2 RED→GREEN 已证明 pending 原子保存、105图分批、只用OSS/R2、错误不泄漏、准确 owner/snapshot/mediaKey；真实本机 PostgreSQL 8项验证租约互斥/重启恢复/分页游标/3次上限/旧快照拒绝，实际解码字节与 MediaAsset 唯一复用、Web displayUrl 和不可变原件校验均通过，155 migrations/隔离schema已清理。最终受影响后端150项及扩展/Web55项通过，服务端/Web类型与定向lint通过；完整preflight曾通过7305后端/385既有条件skipped和618静态门禁，后续分页/自动刷新/超时的受影响回归另行验证，不复用该全量输出冒充最终重跑。
+
+已打开的精铺在PENDING/RUNNING/RETRY期间每3秒单飞只读，最多120次；完成/失败、关闭、来源/快照变更即停，旧响应不能取消重开窗口的轮询。只替换来源显示映射，草稿 revision/version、审核、计费、未保存表格值不变。隔离Chrome真实bridge/精铺fixture证明自动切图、匿名CORS/128×128解码、两SKU及未保存37.25价格保持；私有证据 `ss-erp-precision-ui-evidence-kyooG0`。该证据不冒充真实1688/R2或签名包验收；Provider/Ozon/生产写入0。
+
+Keep a Changelog 的本轮变更只进入 Unreleased。用户授权范围为开发、提交及推送；当前生产R2真实转存、签名、双区部署和官网公开指针均未执行，线上仍452/官网448。无schema迁移、权限或部署模型变更。
+
+
 ## 2026-10-10 `6e028c70 / 1.0.452` 订单与采集图片修复已双区部署
 
 - [x] 订单履约 owner 已统一为五个上层阶段：采购备货、国内在途、仓库处理、出库发运、异常；仓库处理展开待打包/待发货，出库发运展开配送中/已送达，异常展开取消/其他异常。pipeline 和订单列表共享店铺、日期、搜索、物流、采购和标签作用域，避免顶部计数与列表结果不一致。

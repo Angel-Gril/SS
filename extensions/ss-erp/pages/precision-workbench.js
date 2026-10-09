@@ -173,7 +173,8 @@ const preview = createPreviewController({
   getRoleLabel: (item) => item.reviewStatus ? '生成候选' : roleLabel(item.role),
   getStatusLabel: (item) => reviewStatusLabel(item.reviewStatus) || '来源素材',
   getItems: () => [
-    ...visibleWorkspaceMedia(eligibleReferenceMedia()).map((item) => ({ ...item, id: item.key, originalUrl: item.url, group: 'gallery' })),
+    ...visibleWorkspaceMedia(eligibleReferenceMedia()).map((item) => ({ ...item, id: item.key,
+      originalUrl: item.displayUrl || item.url, ...(item.displayUrl ? { crossOrigin: 'anonymous' } : {}), group: 'gallery' })),
     ...(currentMediaContext().history?.items || []).filter(item => imageWorkspace.state().all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey).flatMap((item) => item.outputs.map((output) => ({
       id: `candidate:${output.id}`, originalUrl: output.url, crossOrigin: 'anonymous', reviewStatus: item.reviewStatus, group: 'gallery',
     }))),
@@ -1102,7 +1103,7 @@ function renderEditor() {
       canonicalSkuKey: sku.key,
       sourceSkuKey: copy?.sourceSkuKey, isCopiedSku: Boolean(copy),
       title: projection.source.title, sourceSpec: sku.label,
-      sourceImageUrl: sku.imageUrl, media: { mainImage: sku.imageUrl },
+      sourceImageUrl: sku.imageUrl, imageCrossOrigin: sku.imageCrossOrigin, media: { mainImage: sku.imageUrl },
       fields,
     }; });
     renderProductEditor({ container: element('product-editor'), drafts, templateMeta: attributes.templateMeta(), onOpenLongText: (value) => { try { attributes.openText(value); } catch (error) { report(error); } }, onFieldChange: (change) => {
@@ -1224,7 +1225,8 @@ function renderMedia() {
       const tile = make('div', `precision-source-tile${referenceKeys.has(item.key) ? ' is-selected' : ''}`);
       tile.dataset.referenceKey = item.key;
       const image = make('img'); image.decoding = 'async';
-      image.src = item.url;
+      if (item.displayUrl) image.crossOrigin = 'anonymous';
+      image.src = item.displayUrl || item.url;
       image.alt = roleLabel(item.role);
       image.referrerPolicy = 'no-referrer';
       const label = make('small', '', roleLabel(item.role));

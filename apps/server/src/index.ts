@@ -3663,6 +3663,7 @@ if (RUN_WORKERS) {
     { startOzonPublishReconciliationWorker },
     { startAiProviderReconciliationWorker },
     { startExtensionByokUploadCleanupWorker },
+    { startSourceCaptureImageTransferWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
@@ -3673,6 +3674,7 @@ if (RUN_WORKERS) {
     import('./workers/ozon-publish-reconciliation.js'),
     import('./workers/ai-provider-reconciliation.js'),
     import('./workers/extension-byok-upload-cleanup.js'),
+    import('./workers/source-capture-image-transfer.js'),
   ]);
 
   startWarehouseCommandPollWorker();
@@ -3713,6 +3715,7 @@ if (RUN_WORKERS) {
     },
   });
   startExtensionByokUploadCleanupWorker();
+  startSourceCaptureImageTransferWorker();
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

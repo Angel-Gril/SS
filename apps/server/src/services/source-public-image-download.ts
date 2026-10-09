@@ -59,6 +59,7 @@ export interface DownloadPublicImageOptions {
   timeoutMs?: number;
   lookup?: SourceAddressResolver;
   fetch?: PublicImageFetch;
+  omitReferer?: boolean;
 }
 
 export function isPublicSourceAddress(address: string): boolean {
@@ -246,7 +247,7 @@ export async function downloadPublicImage(
           headers: {
             accept: 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
             'user-agent': 'Mozilla/5.0 (compatible; SS-ERP-Source-Media/1.0)',
-            referer: sourceReferer(current),
+            ...(options.omitReferer ? {} : { referer: sourceReferer(current) }),
           },
         })
         : await undiciFetch(current.href, {
@@ -256,7 +257,7 @@ export async function downloadPublicImage(
           headers: {
             accept: 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
             'user-agent': 'Mozilla/5.0 (compatible; SS-ERP-Source-Media/1.0)',
-            referer: sourceReferer(current),
+            ...(options.omitReferer ? {} : { referer: sourceReferer(current) }),
           },
         }) as unknown as Response;
 

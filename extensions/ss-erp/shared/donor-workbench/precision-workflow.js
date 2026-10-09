@@ -24,6 +24,7 @@
           specifications: { '规格': sku.label },
           specs: { color_name_cn: sku.label, size_name_cn: '' },
           sku_image_url: sku.imageUrl,
+          ...(sku.imageCrossOrigin ? { sku_image_cross_origin: sku.imageCrossOrigin } : {}),
           price: { amount: sku.priceCny, currency: 'CNY' },
           stock: sku.stock,
         };

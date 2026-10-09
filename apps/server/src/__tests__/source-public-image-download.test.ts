@@ -12,6 +12,20 @@ function response(body: string | Buffer | null, init: ResponseInit & { url?: str
 }
 
 describe('source public image download', () => {
+  it('omits Referer for capture transfer without sending cookies or authorization', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init: unknown) => response(Buffer.from('png'), {
+      status: 200, headers: { 'content-type': 'image/png' },
+    }));
+    await downloadPublicImage('https://cbu01.alicdn.com/source.png', {
+      lookup: async () => [{ address: '1.1.1.1', family: 4 }], fetch: fetchImpl,
+      omitReferer: true, maxRedirects: 0,
+    });
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual', signal: expect.any(AbortSignal) });
+    const headers = (fetchImpl.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
+    expect(headers).not.toHaveProperty('referer');
+    expect(headers).not.toHaveProperty('cookie');
+    expect(headers).not.toHaveProperty('authorization');
+  });
   it.each([
     '0.0.0.0',
     '10.0.0.1',

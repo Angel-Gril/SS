@@ -201,7 +201,8 @@ export function createSkuPickerController({
         sub: "SKU #" + localValue21,
         price: "¥" + localValue24,
         stock: helperFn0("sku_stockLabel", [localValue25], `库存 ${localValue25}`),
-        imageUrl: arg18?.sku_image_url || ""
+        imageUrl: arg18?.sku_image_url || "",
+        imageCrossOrigin: arg18?.sku_image_cross_origin
       };
     }(arg16, arg17);
     const createElementResult26 = document.createElement("label");
@@ -213,6 +214,8 @@ export function createSkuPickerController({
     const createElementResult28 = document.createElement("img");
     createElementResult28.className = "sku-thumb";
     createElementResult28.alt = helperFn0("common_image", undefined, resolvedValue3.imageAlt || "图片");
+    if (helperValue3.imageCrossOrigin === 'anonymous') createElementResult28.crossOrigin = 'anonymous';
+    createElementResult28.referrerPolicy = 'no-referrer';
     createElementResult28.src = helperValue3.imageUrl || "";
     createElementResult28.loading = "lazy";
     createElementResult28.decoding = "async";

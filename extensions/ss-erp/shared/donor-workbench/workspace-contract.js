@@ -89,7 +89,36 @@
     }).filter(Boolean).join(' / ').slice(0, 300);
   }
 
-  function skuRows(product, capture) {
+  function sourceMediaDisplayStatus(value, handoff) {
+    var status = record(record(value)?.status) || {};
+    var snapshot = record(status.snapshot) || {};
+    var sourceMedia = record(status.sourceMedia);
+    if (value?.state !== 'ready' || snapshot.current !== true || !sourceMedia
+      || !handoff || snapshot.id !== handoff.snapshotId || sourceMedia.snapshotId !== snapshot.id
+      || !/^[a-f0-9]{64}$/u.test(String(snapshot.captureHash || ''))
+      || sourceMedia.captureHash !== snapshot.captureHash || !Array.isArray(sourceMedia.items)
+      || sourceMedia.items.length > MAX_MEDIA || JSON.stringify(sourceMedia.items).length > 96 * 1024
+      || !exactKeys(sourceMedia, ['snapshotId', 'captureHash', 'transferStatus', 'items'])
+      || !['PENDING', 'RUNNING', 'RETRY', 'COMPLETE', 'FAILED', 'UNKNOWN'].includes(sourceMedia.transferStatus)) return null;
+    return sourceMedia;
+  }
+
+  function storedMediaDisplay(value, handoff) {
+    var sourceMedia = sourceMediaDisplayStatus(value, handoff);
+    if (!sourceMedia) return [];
+    var keys = new Set();
+    var rows = [];
+    for (var item of sourceMedia.items) {
+      if (!record(item) || !exactKeys(item, ['key', 'sourceUrl', 'displayUrl'])
+        || typeof item.key !== 'string' || !item.key || item.key.length > 500
+        || keys.has(item.key) || !httpsUrl(item.sourceUrl) || !httpsUrl(item.displayUrl)) return [];
+      keys.add(item.key);
+      rows.push(Object.freeze({ key: item.key, sourceUrl: item.sourceUrl, displayUrl: httpsUrl(item.displayUrl) }));
+    }
+    return rows;
+  }
+
+  function skuRows(product, capture, displayRows) {
     var source = Array.isArray(capture && capture.skus) && capture.skus.length
       ? capture.skus
       : Array.isArray(product && product.variants) && product.variants.length
@@ -108,19 +137,28 @@
           return text(name, 80) + ': ' + text(attributes[name], 160);
         }).join(' / ')
         : '';
+      var sourceImageUrl = item.imageUrl || item.image || item.skuImageUrl
+        || (Array.isArray(item.images) && item.images[0])
+        || (Array.isArray(capture.media) && capture.media.find(function (media) {
+          return media.disposition === 'accepted' && media.role !== 'video'
+            && ((Array.isArray(item.mediaKeys) && item.mediaKeys.includes(media.key))
+              || (Array.isArray(media.skuKeys) && media.skuKeys.includes(key)));
+        }) || {}).url;
+      var stored = (displayRows || []).find(function (row) {
+        return row.sourceUrl === sourceImageUrl && Array.isArray(capture.media) && capture.media.some(function (media) {
+          return media.key === row.key && media.disposition === 'accepted'
+            && ((Array.isArray(item.mediaKeys) && item.mediaKeys.includes(media.key))
+              || (Array.isArray(media.skuKeys) && media.skuKeys.includes(key)));
+        });
+      });
       rows.push(Object.freeze({
         key: key,
         label: text(
           item.name || item.specText || selectorLabel(item.selectors || item.attributes) || attributesLabel || key,
           300,
         ),
-        imageUrl: httpsUrl(item.imageUrl || item.image || item.skuImageUrl
-          || (Array.isArray(item.images) && item.images[0])
-          || (Array.isArray(capture.media) && capture.media.find(function (media) {
-            return media.disposition === 'accepted' && media.role !== 'video'
-              && ((Array.isArray(item.mediaKeys) && item.mediaKeys.includes(media.key))
-                || (Array.isArray(media.skuKeys) && media.skuKeys.includes(key)));
-          }) || {}).url),
+        imageUrl: httpsUrl(stored ? stored.displayUrl : sourceImageUrl),
+        ...(stored || item.imageCrossOrigin === 'anonymous' ? { imageCrossOrigin: 'anonymous' } : {}),
         sourceSkuId: text(item.sourceSkuId || item.skuId || item.sku || item.id, 200),
         priceCny: typeof item.priceCny === 'number' && Number.isFinite(item.priceCny) && item.priceCny > 0
           ? item.priceCny : typeof item.price === 'number' && Number.isFinite(item.price) && item.price > 0 ? item.price : null,
@@ -138,7 +176,7 @@
     return Object.freeze(rows);
   }
 
-  function mediaRows(product, capture) {
+  function mediaRows(product, capture, displayRows) {
     var accepted = Array.isArray(capture && capture.media)
       ? capture.media.filter(function (item) {
         return record(item) && item.disposition === 'accepted';
@@ -161,10 +199,12 @@
       var url = httpsUrl(item.url || item.imageUrl);
       if (!url || seen.has(url)) return false;
       seen.add(url);
+      var display = (displayRows || []).find(function (row) { return row.key === item.key && row.sourceUrl === item.url; });
       rows.push(Object.freeze({
         key: text(item.key || 'media-' + index, 500),
         role: text(item.role || 'unknown', 80),
         url: url,
+        ...(display ? { displayUrl: display.displayUrl } : {}),
         skuKeys: Object.freeze(unique(item.skuKeys, MAX_SKUS)),
       }));
       return rows.length >= MAX_MEDIA;
@@ -250,11 +290,18 @@
     var snapshot = record(status.snapshot) || {};
     var listing = record(status.listing) || {};
     var media = record(status.media) || {};
+    var displayStatus = sourceMediaDisplayStatus(input, { snapshotId: snapshot.id });
+    var displayRows = storedMediaDisplay(input, { snapshotId: snapshot.id });
     return Object.freeze({
       state: text(input.state || 'unavailable', 80),
       reason: text(input.reason, 160),
       status: Object.freeze({
-        snapshot: Object.freeze({ current: snapshot.current === true }),
+        snapshot: Object.freeze({ current: snapshot.current === true,
+          ...(typeof snapshot.id === 'string' ? { id: text(snapshot.id, 200) } : {}),
+          ...(typeof snapshot.captureHash === 'string' ? { captureHash: text(snapshot.captureHash, 64) } : {}) }),
+        ...(displayStatus && displayRows.length === displayStatus.items.length ? { sourceMedia: Object.freeze({ snapshotId: snapshot.id,
+          captureHash: snapshot.captureHash, transferStatus: displayStatus.transferStatus,
+          items: Object.freeze(displayRows) }) } : {}),
         listing: Object.freeze({
           items: listingRows(listing),
           truncated: listing.truncated === true,
@@ -551,7 +598,8 @@
       identity.productId || product.sourceProductId || product.productId || product.id,
       200,
     );
-    var projectedSkus = skuRows(product, capture);
+    var displayRows = storedMediaDisplay(options.workbench, options.handoff);
+    var projectedSkus = skuRows(product, capture, displayRows);
     var facts = record(capture.facts) || {};
     var selectedSku = record(product.selectedSku) || {};
     var preferredSkuCandidate = text(
@@ -577,7 +625,7 @@
         preferredSkuKey: preferredSkuKey,
       }),
       skus: projectedSkus,
-      media: mediaRows(product, capture),
+      media: mediaRows(product, capture, displayRows),
       videos: videoRows(product, capture),
       shops: shopRows(options.shops),
       handoff: handoffProjection(options.handoff),
@@ -615,7 +663,7 @@
           facts: { selectedSkuKey: source.preferredSkuKey },
           skus: (Array.isArray(item.skus) ? item.skus : []).map(function (sku) {
             var row = record(sku) || {};
-            return { key: row.key, name: row.label, imageUrl: row.imageUrl,
+            return { key: row.key, name: row.label, imageUrl: row.imageUrl, imageCrossOrigin: row.imageCrossOrigin,
               sourceSkuId: row.sourceSkuId, priceCny: row.priceCny, stock: row.stock };
           }),
           media: [...(Array.isArray(item.media) ? item.media : []), ...(Array.isArray(item.videos) ? item.videos : [])].map(function (media) {

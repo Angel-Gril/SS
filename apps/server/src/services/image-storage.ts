@@ -48,6 +48,7 @@ export interface ImageUploadOptions {
   category?: ImageUploadCategory;
   ownerId?: string;
   idempotencyKey?: string;
+  signal?: AbortSignal;
 }
 
 export interface ImageStorageBackend {
@@ -407,7 +408,7 @@ class OssBackend implements OwnedImageStorageBackend {
       Key: objectKey,
       Body: buffer,
       ContentType: mime,
-    }));
+    }), { abortSignal: options?.signal });
 
     const url = this.getPublicObjectUrl(objectKey);
 

@@ -120,7 +120,7 @@ export interface SourceCaptureView {
   truncations: SourceProductCaptureV2['truncations'];
   counts: SourceCaptureViewStageCounts;
   skus: SourceCaptureViewPage<SourceProductCaptureV2['skus'][number]>;
-  media: SourceCaptureViewPage<SourceProductCaptureV2['media'][number]>;
+  media: SourceCaptureViewPage<SourceProductCaptureV2['media'][number] & { displayUrl?: string }>;
 }
 
 export interface SourceCaptureViewRequest {

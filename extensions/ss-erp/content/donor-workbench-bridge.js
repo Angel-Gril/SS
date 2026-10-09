@@ -31,6 +31,11 @@
   var entryContext = null;
   var entryRequest = null;
   var entrySequence = 0;
+  var sourceTransferTimer = 0;
+  var sourceTransferKey = '';
+  var sourceTransferAttempts = 0;
+  var sourceTransferEpoch = 0;
+  var sourceTransferReading = false;
   var currentHistory = {
     state: 'idle', listingWorkflowId: '', error: '', context: null,
     items: [], nextCursor: null, receipt: null,
@@ -104,6 +109,70 @@
       projection: currentProjection,
       ...(entryContext ? { entryContext: entryContext } : {}),
     });
+    syncSourceTransferPoll();
+  }
+
+  function currentSourceTransferKey() {
+    var media = currentProjection.workbench.status.sourceMedia;
+    if (!open || currentProjection.workbench.state !== 'ready' || currentProjection.workbench.status.snapshot.current !== true
+      || !currentProjection.handoff || !media || !['PENDING', 'RUNNING', 'RETRY'].includes(media.transferStatus)) return '';
+    return JSON.stringify([location.href, currentProjection.source.platform, currentProjection.source.sourceProductId,
+      currentProjection.handoff.supplyGoodsId, currentProjection.handoff.snapshotId, media.captureHash]);
+  }
+
+  function stopSourceTransferPoll() {
+    globalThis.clearTimeout(sourceTransferTimer);
+    sourceTransferTimer = 0;
+    sourceTransferKey = '';
+    sourceTransferAttempts = 0;
+    sourceTransferEpoch += 1;
+    sourceTransferReading = false;
+  }
+
+  function syncSourceTransferPoll() {
+    var key = currentSourceTransferKey();
+    if (key !== sourceTransferKey) {
+      stopSourceTransferPoll();
+      sourceTransferKey = key;
+    }
+    if (!key || sourceTransferTimer || sourceTransferReading || sourceTransferAttempts >= 120) return;
+    var epoch = sourceTransferEpoch;
+    sourceTransferTimer = globalThis.setTimeout(async function () {
+      sourceTransferTimer = 0;
+      if (epoch !== sourceTransferEpoch) return;
+      if (key !== currentSourceTransferKey()) { stopSourceTransferPoll(); return; }
+      if (busy || projectionRead || hostedAuthorityRefresh) { syncSourceTransferPoll(); return; }
+      sourceTransferReading = true;
+      sourceTransferAttempts += 1;
+      var observedRefresh = refreshEpoch;
+      try {
+        var response = await sendRuntimeMessage({ type: 'ss-erp:source-listing-workbench-status',
+          sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform });
+        if (epoch !== sourceTransferEpoch) return;
+        if (key !== currentSourceTransferKey()) { stopSourceTransferPoll(); return; }
+        if (observedRefresh !== refreshEpoch || busy || projectionRead || hostedAuthorityRefresh) return;
+        var status = response?.result?.status;
+        var media = status?.sourceMedia;
+        var current = currentProjection.workbench.status.sourceMedia;
+        if (!response?.ok || response.result?.state !== 'ready' || status?.snapshot?.current !== true
+          || response.handoff?.snapshotId !== currentProjection.handoff.snapshotId
+          || response.handoff?.supplyGoodsId !== currentProjection.handoff.supplyGoodsId
+          || media?.snapshotId !== current.snapshotId || media?.captureHash !== current.captureHash) {
+          stopSourceTransferPoll(); return;
+        }
+        // Update display state only. Draft revisions, edits, history and billing keep their current owners.
+        currentProjection = Contract.createProjection({ platform: currentProjection.source.platform, product: currentProduct,
+          shops: currentProjection.shops, handoff: currentProjection.handoff,
+          workbench: { ...currentProjection.workbench, status: { ...currentProjection.workbench.status, sourceMedia: media } },
+          history: currentHistory, billing: currentBilling, busy: currentProjection.busy,
+          busyMessage: currentProjection.busyMessage, error: currentProjection.error });
+        publishProjection();
+      } catch {
+        // A bounded read-only retry never re-collects, writes or changes the user's editing state.
+      } finally {
+        if (epoch === sourceTransferEpoch) { sourceTransferReading = false; syncSourceTransferPoll(); }
+      }
+    }, 3000);
   }
 
   function commandResult(requestId, ok, error, receipt, data, outcome, code, failure) {
@@ -950,6 +1019,7 @@
     globalThis.clearTimeout(frameLoadTimer);
     frameLoadTimer = 0;
     open = false;
+    stopSourceTransferPoll();
     if (frame) frame.hidden = true;
     if (trigger) trigger.hidden = false;
     setLegacySurfaceHidden(false);

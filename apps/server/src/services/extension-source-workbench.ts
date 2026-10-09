@@ -5,6 +5,8 @@ import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
 import { canUseAiImageJobOperation } from './ai-image-provider-admission.js';
 import type { SourceListingWorkflowContextResolver } from './source-listing-workflow-context.js';
 import type { SourceListingWorkflowService } from './source-listing-workflow.js';
+import { verifySourceProductCaptureV2Submission, type SourceProductCaptureV2 } from 'shared';
+import { createSourceCaptureMediaDisplayService, type SourceCaptureMediaDisplayClient, type SourceCaptureMediaDisplayUrl } from './source-capture-media-display.js';
 
 export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
@@ -16,7 +18,13 @@ export const EXTENSION_SOURCE_MEDIA_HISTORY_LIMIT = 20;
 export const EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT = 4;
 export const EXTENSION_SOURCE_MEDIA_HISTORY_URL_LIMIT = 4_096;
 
+type SourceImageTransferStatus = 'PENDING' | 'RUNNING' | 'RETRY' | 'COMPLETE' | 'FAILED' | 'UNKNOWN';
+
 interface ExtensionSourceWorkbenchClient {
+  mediaAsset?: SourceCaptureMediaDisplayClient['mediaAsset'];
+  supplyGoods?: {
+    findFirst(args: any): Promise<{ metadata?: unknown } | null>;
+  };
   sourceCaptureSnapshot: {
     findFirst(args: any): Promise<any>;
   };
@@ -459,6 +467,27 @@ function mediaActionable(row: any) {
     && row.selectedOutputAsset?.aiImageJob?.appliedAt == null;
 }
 
+const SOURCE_IMAGE_TRANSFER_STATES = new Set(['PENDING', 'RUNNING', 'RETRY', 'COMPLETE', 'FAILED']);
+
+function sourceImageTransferStatus(value: unknown, input: {
+  snapshotId: string;
+  captureHash: string;
+}): 'PENDING' | 'RUNNING' | 'RETRY' | 'COMPLETE' | 'FAILED' | 'UNKNOWN' {
+  const metadata = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+  const capture = metadata?.sourceCaptureV2;
+  const transfer = metadata?.sourceImageTransferV2;
+  if (!capture || typeof capture !== 'object' || Array.isArray(capture)
+    || !transfer || typeof transfer !== 'object' || Array.isArray(transfer)) return 'UNKNOWN';
+  const captureRow = capture as Record<string, unknown>;
+  const transferRow = transfer as Record<string, unknown>;
+  if (captureRow.snapshotId !== input.snapshotId || captureRow.captureHash !== input.captureHash
+    || transferRow.version !== 'source-capture-image-transfer/v1'
+    || transferRow.snapshotId !== input.snapshotId || transferRow.captureHash !== input.captureHash
+    || !SOURCE_IMAGE_TRANSFER_STATES.has(String(transferRow.status))) return 'UNKNOWN';
+  return transferRow.status as 'PENDING' | 'RUNNING' | 'RETRY' | 'COMPLETE' | 'FAILED';
+}
+
 export function createExtensionSourceWorkbenchService(options: {
   client?: ExtensionSourceWorkbenchClient;
   ownership?: Pick<SourceListingWorkflowContextResolver, 'assertOwnedTarget'>;
@@ -535,6 +564,9 @@ export function createExtensionSourceWorkbenchService(options: {
           id: true,
           version: true,
           capturedAt: true,
+          captureHash: true,
+          payloadBytes: true,
+          payload: true,
           subject: {
             select: {
               snapshots: {
@@ -552,6 +584,27 @@ export function createExtensionSourceWorkbenchService(options: {
           404,
           'Owned source workbench was not found',
         );
+      }
+      const transferRow = client.supplyGoods?.findFirst
+        ? await client.supplyGoods.findFirst({
+          where: { id: supplyGoodsId, userId: ownerUserId },
+          select: { metadata: true },
+        })
+        : null;
+      const transferStatus = sourceImageTransferStatus(transferRow?.metadata, {
+        snapshotId, captureHash: String(snapshot.captureHash),
+      });
+      let sourceMedia: {
+        snapshotId: string;
+        captureHash: string;
+        transferStatus: SourceImageTransferStatus;
+        items: SourceCaptureMediaDisplayUrl[];
+      } | undefined;
+      if (client.mediaAsset && (await verifySourceProductCaptureV2Submission({ capture: snapshot.payload,
+        captureHash: snapshot.captureHash, payloadBytes: snapshot.payloadBytes })).valid) {
+        sourceMedia = { snapshotId, captureHash: String(snapshot.captureHash), transferStatus,
+          items: await createSourceCaptureMediaDisplayService({ client: { mediaAsset: client.mediaAsset } })
+            .loadDisplayUrls({ ownerUserId, snapshotId, media: (snapshot.payload as SourceProductCaptureV2).media }) };
       }
 
       const listingRows = allowedShopIds.length
@@ -663,7 +716,9 @@ export function createExtensionSourceWorkbenchService(options: {
           version: Number(snapshot.version),
           capturedAt: isoDate(snapshot.capturedAt),
           current: snapshot.subject?.snapshots?.[0]?.id === snapshot.id,
+          ...(sourceMedia ? { captureHash: sourceMedia.captureHash } : {}),
         },
+        ...(sourceMedia ? { sourceMedia } : {}),
         listing: {
           items: listingItems,
           truncated: listingRows.length > EXTENSION_SOURCE_WORKBENCH_LISTING_LIMIT,

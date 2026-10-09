@@ -205,6 +205,11 @@ describe('Prisma source capture repository', () => {
     expect(statements.findIndex((sql) => sql.includes('INSERT INTO "source_capture_snapshots"')))
       .toBeLessThan(statements.findIndex((sql) => sql.includes('UPDATE "extension_command_receipts"')));
     expect(statements.at(-1)).toContain('UPDATE "extension_command_receipts"');
+    const projection = client.calls.find(({ sql }) => sql.includes('UPDATE "supply_goods"'));
+    expect(JSON.parse(String(projection?.params[10])).sourceImageTransferV2).toMatchObject({
+      version: 'source-capture-image-transfer/v1', snapshotId: 'snapshot-1',
+      captureHash: fixture.captureHash, status: 'PENDING', attempts: 0,
+    });
   });
 
   it('returns a completed receipt replay without touching snapshots or projections', async () => {

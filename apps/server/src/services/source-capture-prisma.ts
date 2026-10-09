@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { pendingSourceCaptureImageTransfer } from './source-capture-image-transfer.js';
 import type { PrismaClient } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import {
@@ -351,7 +352,8 @@ async function updateProjectionPointer(
       input.projection.sku,
       json(input.projection.images),
       json(input.projection.variants),
-      json({ ...input.projection.metadata, ...pointer }),
+      json({ ...input.projection.metadata, ...pointer,
+        sourceImageTransferV2: pendingSourceCaptureImageTransfer(result.snapshotId, input.captureHash) }),
       now,
       supplyGoodsId,
       input.ownerUserId,
@@ -363,7 +365,7 @@ async function updateProjectionPointer(
      SET "metadata" = COALESCE("metadata", '{}'::jsonb) || $1::jsonb,
          "updated_at" = $2
      WHERE "id" = $3 AND "user_id" = $4`,
-    json(pointer),
+    json({ ...pointer, sourceImageTransferV2: pendingSourceCaptureImageTransfer(result.snapshotId, input.captureHash) }),
     now,
     supplyGoodsId,
     input.ownerUserId,

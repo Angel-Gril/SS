@@ -780,6 +780,8 @@ function helperFn8({
     localValue69.alt = objectValue21.cfZBy;
     localValue69.loading = "lazy";
     localValue69.decoding = "async";
+    if (arg121.imageCrossOrigin === 'anonymous') localValue69.crossOrigin = 'anonymous';
+    localValue69.referrerPolicy = 'no-referrer';
     localValue69.src = arg121.media && (arg121.media.mainImage || arg121.media.colorSample) || arg121.sourceImageUrl || "";
     localValue68.appendChild(localValue69);
     objectValue21.eWrCa(resolvedValue25, localValue68, 5, false);

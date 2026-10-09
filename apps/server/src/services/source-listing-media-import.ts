@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import type { OzonListingDraft, OzonListingDraftMediaAssignment, SourceCaptureMedia } from 'shared';
-import type { ImageStorageBackend } from './image-storage.js';
+import type { ImageStorageBackend, OwnedImageStorageBackend } from './image-storage.js';
 import {
   downloadPublicImage,
   type DownloadedPublicImage,
@@ -67,6 +67,7 @@ export interface SourceListingMediaImportDependencies {
   }): Promise<SourceListingImportedMediaAsset[]>;
   createAsset(input: SourceListingMediaAssetCreateInput): Promise<SourceListingImportedMediaAsset>;
   getStorageBackend(shopId: string): Promise<Pick<ImageStorageBackend, 'uploadBuffer'>>;
+  getCaptureStorageBackend?: () => Promise<Pick<OwnedImageStorageBackend, 'backendType' | 'uploadBuffer'>>;
   download?: (url: string) => Promise<DownloadedPublicImage>;
 }
 
@@ -204,7 +205,7 @@ function detectedMime(format: string): string {
 
 function reusableAsset(
   asset: SourceListingImportedMediaAsset | null,
-  input: { ownerUserId: string; draft: OzonListingDraft; media: SourceCaptureMedia },
+  input: { ownerUserId: string; draft: Pick<OzonListingDraft, 'sourceCaptureSnapshotId'>; media: SourceCaptureMedia },
 ): SourceListingImportedMediaAsset | null {
   if (!asset) return null;
   if (asset.ownerUserId !== input.ownerUserId
@@ -251,7 +252,122 @@ export function createSourceListingMediaImportService(
   dependencies: SourceListingMediaImportDependencies,
 ) {
   const download = dependencies.download || downloadPublicImage;
+  const downloadCapture = dependencies.download || ((url: string) => downloadPublicImage(url, {
+    maxBytes: 8 * 1024 * 1024, maxRedirects: 0, timeoutMs: 15_000, omitReferer: true,
+  }));
+  async function importImage(input: {
+    ownerUserId: string; snapshotId: string; captureHash: string; media: SourceCaptureMedia;
+    backend: Pick<ImageStorageBackend, 'uploadBuffer'>; captureTransfer?: boolean;
+    consumeBytes?: (bytes: number) => void;
+  }): Promise<SourceListingImportedMediaAsset> {
+    const draftAuthority = { sourceCaptureSnapshotId: input.snapshotId };
+    const existing = reusableAsset(await dependencies.findReusableAsset({
+      ownerUserId: input.ownerUserId, sourceCaptureSnapshotId: input.snapshotId, sourceMediaKey: input.media.key,
+    }), { ownerUserId: input.ownerUserId, draft: draftAuthority, media: input.media });
+    // Capture-time transfer must never reuse a legacy Ozon CDN asset. It must
+    // converge on the ERP-owned OSS/R2 namespace so the display projection is
+    // durable and independent of a shop's Ozon session.
+    if (existing && (!input.captureTransfer || existing.storageBackend === 'oss')) {
+      if (input.captureTransfer && existing.kind !== 'SOURCE_ORIGINAL') {
+        fail('SOURCE_LISTING_MEDIA_ASSET_CONFLICT', 409, 'Existing asset is not an original source image');
+      }
+      return existing;
+    }
+    const sourceUrl = exactSourceUrl(input.media.url);
+    const downloaded = await (input.captureTransfer ? downloadCapture : download)(sourceUrl);
+    if (input.captureTransfer && downloaded.buffer.length > 8 * 1024 * 1024) {
+      fail('SOURCE_IMAGE_SIZE_EXCEEDED', 422, 'Source image exceeds the transfer limit');
+    }
+    input.consumeBytes?.(downloaded.buffer.length);
+    const decoded = await sharp(downloaded.buffer, { animated: false,
+      ...(input.captureTransfer ? { limitInputPixels: 12_000_000 } : {}),
+    }).metadata().catch(() => null);
+    const decodedMime = decoded?.format ? detectedMime(decoded.format) : '';
+    if (!decodedMime || decodedMime !== downloaded.contentType) {
+      fail('SOURCE_LISTING_MEDIA_MIME_MISMATCH', 422, 'Source image MIME does not match decoded image content');
+    }
+    if (input.captureTransfer && (!decoded?.width || !decoded.height || decoded.width > 16384
+      || decoded.height > 16384 || decoded.width * decoded.height > 12_000_000 || (decoded.pages || 1) !== 1)) {
+      fail('SOURCE_IMAGE_PIXELS_EXCEEDED', 422, 'Source image exceeds the pixel or frame limit');
+    }
+    const sanitized = await sanitizeOzonPublishImageBuffer(downloaded.buffer, filenameFor(input.media), downloaded.contentType);
+    // Capture previews are untrusted remote bytes: strip metadata and decode/re-encode before storage.
+    const buffer = input.captureTransfer
+      ? await (sanitized.mimeType === 'image/png'
+        ? sharp(sanitized.buffer, { limitInputPixels: 12_000_000 }).rotate().png()
+        : sharp(sanitized.buffer, { limitInputPixels: 12_000_000 }).rotate().jpeg({ quality: 92 })).toBuffer()
+      : sanitized.buffer;
+    const metadata = await sharp(buffer, { animated: false }).metadata();
+    if (input.captureTransfer && buffer.length > 8 * 1024 * 1024) {
+      fail('SOURCE_IMAGE_SIZE_EXCEEDED', 422, 'Normalized source image exceeds the transfer limit');
+    }
+    const sha256 = createHash('sha256').update(buffer).digest('hex');
+    const uploaded = await input.backend.uploadBuffer(buffer, sanitized.filename, sanitized.mimeType, {
+      category: 'raw', ownerId: input.ownerUserId,
+      ...(input.captureTransfer ? { idempotencyKey: `source-capture:${input.snapshotId}:${input.media.key}:${sha256}`,
+        signal: AbortSignal.timeout(30_000) } : {}),
+    });
+    if (!DURABLE_BACKENDS.has(uploaded.backend) || (input.captureTransfer && uploaded.backend !== 'oss')) {
+      fail('SOURCE_LISTING_MEDIA_STORAGE_UNAVAILABLE', 503, 'Source media requires durable owned storage');
+    }
+    const created = await dependencies.createAsset({
+      ownerUserId: input.ownerUserId, kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: input.snapshotId,
+      sourceMediaKey: input.media.key, sourceUrl, url: durableHttpsUrl(uploaded.url), storageBackend: uploaded.backend,
+      storageKey: exactIdentifier(uploaded.key || uploaded.filename, 'storageKey'), mimeType: sanitized.mimeType,
+      sizeBytes: buffer.length, width: metadata.width || null, height: metadata.height || null,
+      sha256, metadata: {
+        lineageVersion: 'source-media-lineage/v1', sourceCaptureHash: input.captureHash, sourceUrl,
+        finalSourceUrl: downloaded.finalUrl, sourceSha256: createHash('sha256').update(downloaded.buffer).digest('hex'),
+        sourceSizeBytes: downloaded.buffer.length, sourceMimeType: downloaded.contentType,
+        sourceFormat: sanitized.sourceFormat, redirectCount: downloaded.redirectCount,
+      },
+    });
+    return reusableAsset(created, { ownerUserId: input.ownerUserId, draft: draftAuthority, media: input.media })!;
+  }
   return {
+    async internalizeCapture(input: { ownerUserId: string; snapshotId: string; captureHash: string; offset?: number }) {
+      exactIdentifier(input.ownerUserId, 'ownerUserId');
+      exactIdentifier(input.snapshotId, 'snapshotId');
+      const authority = await dependencies.loadCaptureAuthority(input);
+      if (!authority || authority.snapshotId !== input.snapshotId || authority.captureHash !== input.captureHash) {
+        fail('SOURCE_LISTING_MEDIA_AUTHORITY_STALE', 409, 'Owned capture authority no longer matches');
+      }
+      const allMedia = authority.media.filter(item => item.kind === 'image' && item.disposition === 'accepted' && item.url);
+      if (new Set(allMedia.map(item => item.key)).size !== allMedia.length) {
+        fail('SOURCE_IMAGE_COUNT_EXCEEDED', 422, 'Capture source image keys are not unique');
+      }
+      const offset = Number.isSafeInteger(input.offset) && input.offset! >= 0 ? input.offset! : 0;
+      if (offset > allMedia.length) fail('SOURCE_IMAGE_OFFSET_INVALID', 400, 'Capture source image offset is invalid');
+      const total = allMedia.length;
+      const media = allMedia.slice(offset, offset + 100);
+      if (!media.length) return { assets: [], errors: [] };
+      const backend = await dependencies.getCaptureStorageBackend?.();
+      if (!backend || backend.backendType !== 'oss') {
+        fail('SOURCE_LISTING_MEDIA_STORAGE_UNAVAILABLE', 503, 'Capture images require ERP-owned OSS/R2');
+      }
+      const assets: SourceListingImportedMediaAsset[] = [];
+      const errors: Array<{ sourceMediaKey: string; code: string }> = [];
+      let bytes = 0;
+      for (let offset = 0; offset < media.length; offset += 4) {
+        const results = await Promise.all(media.slice(offset, offset + 4).map(async (item) => {
+          try {
+            if (bytes >= 128 * 1024 * 1024) throw new SourceListingMediaImportError('SOURCE_IMAGE_SIZE_EXCEEDED', 422, 'Transfer byte budget exhausted');
+            return { asset: await importImage({ ...input, media: item, backend, captureTransfer: true, consumeBytes: count => {
+              bytes += count;
+              if (bytes > 128 * 1024 * 1024) fail('SOURCE_IMAGE_SIZE_EXCEEDED', 422, 'Transfer byte budget exhausted');
+            } }) };
+          } catch (error) {
+            return { error: { sourceMediaKey: item.key,
+              code: error instanceof SourceListingMediaImportError ? error.code : 'SOURCE_IMAGE_TRANSFER_FAILED' } };
+          }
+        }));
+        for (const result of results) {
+          if (result.asset) assets.push(result.asset);
+          if (result.error) errors.push(result.error);
+        }
+      }
+      return { assets, errors, nextOffset: offset + media.length, total };
+    },
     async validateSourceAssignments(input: {
       ownerUserId: string;
       draft: OzonListingDraft;
@@ -374,74 +490,8 @@ export function createSourceListingMediaImportService(
       const assignments: OzonListingDraftMediaAssignment[] = [];
       for (const selection of selections) {
         const media = exactCaptureMedia(authority, selection);
-        const sourceUrl = exactSourceUrl(media.url);
-        const existing = reusableAsset(await dependencies.findReusableAsset({
-          ownerUserId: input.ownerUserId,
-          sourceCaptureSnapshotId: input.draft.sourceCaptureSnapshotId,
-          sourceMediaKey: media.key,
-        }), { ownerUserId: input.ownerUserId, draft: input.draft, media });
-        if (existing) {
-          assets.push(existing);
-          assignments.push(assignment(selection, existing.id));
-          continue;
-        }
-
-        const downloaded = await download(sourceUrl);
-        const decoded = await sharp(downloaded.buffer, { animated: false }).metadata().catch(() => null);
-        const decodedMime = decoded?.format ? detectedMime(decoded.format) : '';
-        if (!decodedMime || decodedMime !== downloaded.contentType) {
-          fail('SOURCE_LISTING_MEDIA_MIME_MISMATCH', 422, 'Source image MIME does not match decoded image content');
-        }
-        const sanitized = await sanitizeOzonPublishImageBuffer(
-          downloaded.buffer,
-          filenameFor(media),
-          downloaded.contentType,
-        );
-        const sanitizedMetadata = await sharp(sanitized.buffer, { animated: false }).metadata();
-        const uploaded = await backend.uploadBuffer(
-          sanitized.buffer,
-          sanitized.filename,
-          sanitized.mimeType,
-          { category: 'raw', ownerId: input.ownerUserId },
-        );
-        if (!DURABLE_BACKENDS.has(uploaded.backend)) {
-          fail('SOURCE_LISTING_MEDIA_STORAGE_UNAVAILABLE', 503, 'Source media requires a durable OSS or Ozon CDN backend');
-        }
-        const url = durableHttpsUrl(uploaded.url);
-        const storageKey = exactIdentifier((uploaded as { key?: string }).key || uploaded.filename, 'storageKey');
-        const sha256 = createHash('sha256').update(sanitized.buffer).digest('hex');
-        const sourceSha256 = createHash('sha256').update(downloaded.buffer).digest('hex');
-        const created = await dependencies.createAsset({
-          ownerUserId: input.ownerUserId,
-          kind: 'SOURCE_ORIGINAL',
-          sourceCaptureSnapshotId: input.draft.sourceCaptureSnapshotId,
-          sourceMediaKey: media.key,
-          sourceUrl,
-          url,
-          storageBackend: uploaded.backend,
-          storageKey,
-          mimeType: sanitized.mimeType,
-          sizeBytes: sanitized.buffer.length,
-          width: sanitizedMetadata.width || null,
-          height: sanitizedMetadata.height || null,
-          sha256,
-          metadata: {
-            lineageVersion: 'source-media-lineage/v1',
-            sourceCaptureHash: input.draft.sourceCaptureHash,
-            sourceUrl,
-            finalSourceUrl: downloaded.finalUrl,
-            sourceSha256,
-            sourceSizeBytes: downloaded.buffer.length,
-            sourceMimeType: downloaded.contentType,
-            sourceFormat: sanitized.sourceFormat,
-            redirectCount: downloaded.redirectCount,
-          },
-        });
-        const canonical = reusableAsset(created, {
-          ownerUserId: input.ownerUserId,
-          draft: input.draft,
-          media,
-        })!;
+        const canonical = await importImage({ ownerUserId: input.ownerUserId,
+          snapshotId: input.draft.sourceCaptureSnapshotId, captureHash: input.draft.sourceCaptureHash, media, backend });
         assets.push(canonical);
         assignments.push(assignment(selection, canonical.id));
       }

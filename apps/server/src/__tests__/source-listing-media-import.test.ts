@@ -80,6 +80,97 @@ function setup(overrides: Record<string, unknown> = {}) {
 }
 
 describe('source listing media import', () => {
+  it('transfers large captures in bounded pages instead of rejecting every image', async () => {
+    const fixture = setup();
+    const download = vi.fn(async (url: string) => ({ sourceUrl: url, finalUrl: url,
+      contentType: 'image/png', buffer: PNG, redirectCount: 0 }));
+    const rows = Array.from({ length: 105 }, (_, index) => media(`source-${index}`));
+    const { service } = setup({ download,
+      loadCaptureAuthority: vi.fn(async () => ({ snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64), media: rows })),
+      getCaptureStorageBackend: vi.fn(async () => ({ backendType: 'oss', uploadBuffer: fixture.uploadBuffer })),
+    });
+    const first = await service.internalizeCapture({ ownerUserId: 'owner-1', snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64) });
+    expect(first.assets).toHaveLength(100);
+    expect(first).toMatchObject({ nextOffset: 100, total: 105, errors: [] });
+    const second = await service.internalizeCapture({ ownerUserId: 'owner-1', snapshotId: 'snapshot-1',
+      captureHash: 'a'.repeat(64), offset: 100 } as any);
+    expect(second.assets).toHaveLength(5);
+    expect(second).toMatchObject({ nextOffset: 105, total: 105, errors: [] });
+    expect(download).toHaveBeenCalledTimes(105);
+  });
+  it('internalizes capture main and SKU images before a draft exists without creating assignments', async () => {
+    const fixture = setup();
+    const getCaptureStorageBackend = vi.fn(async () => ({ backendType: 'oss', uploadBuffer: fixture.uploadBuffer }));
+    const { service, createAsset } = setup({ getCaptureStorageBackend });
+    const result = await (service as any).internalizeCapture({
+      ownerUserId: 'owner-1', snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64),
+    });
+    expect(result.assets.map((asset: any) => asset.sourceMediaKey)).toEqual(['main-1', 'sku-image']);
+    expect(result.errors).toEqual([]);
+    expect(result).not.toHaveProperty('assignments');
+    expect(createAsset.mock.calls.map(([asset]) => asset)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: 'snapshot-1',
+        sourceMediaKey: 'sku-image', sourceUrl: 'https://img.example.com/sku-image.png',
+        storageBackend: 'oss', width: 1, height: 1, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    ]));
+  });
+
+  it('refuses another owner or stale capture before downloading or uploading', async () => {
+    const { service, download, uploadBuffer } = setup({ loadCaptureAuthority: vi.fn(async () => null) });
+    await expect((service as any).internalizeCapture({
+      ownerUserId: 'other-owner', snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64),
+    })).rejects.toMatchObject({ code: 'SOURCE_LISTING_MEDIA_AUTHORITY_STALE' });
+    expect(download).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('refuses non-owned storage without attempting an Ozon upload', async () => {
+    const { service, download, uploadBuffer } = setup({
+      getCaptureStorageBackend: vi.fn(async () => ({ backendType: 'ozon-cdn', uploadBuffer: vi.fn() })),
+    });
+    await expect((service as any).internalizeCapture({
+      ownerUserId: 'owner-1', snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64),
+    })).rejects.toMatchObject({ code: 'SOURCE_LISTING_MEDIA_STORAGE_UNAVAILABLE' });
+    expect(download).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse an old Ozon CDN source asset during capture transfer', async () => {
+    const oldAsset = {
+      id: 'old-ozon', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL' as const,
+      sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'main-1', sourceUrl: 'https://img.example.com/main-1.png',
+      url: 'https://cdn.ozon.ru/old.png', storageBackend: 'ozon-cdn', storageKey: 'old.png',
+      mimeType: 'image/png', sizeBytes: PNG.length, width: 1, height: 1, sha256: 'a'.repeat(64),
+    };
+    const { service, download, uploadBuffer } = setup({
+      findReusableAsset: vi.fn(async () => oldAsset),
+      getCaptureStorageBackend: vi.fn(async () => ({ backendType: 'oss', uploadBuffer: vi.fn(async () => ({
+        url: 'https://cdn.example.com/new.png', filename: 'new.png', backend: 'oss' as const, key: 'new.png',
+      })) })),
+    });
+    const result = await (service as any).internalizeCapture({ ownerUserId: 'owner-1', snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64) });
+    expect(result.assets[0]?.storageBackend).toBe('oss');
+    expect(result.assets[0]?.url).toBe('https://cdn.example.com/new.png');
+    expect(download).toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('keeps successful source assets and reports failed media keys without echoing raw errors', async () => {
+    const fixture = setup();
+    const { service } = setup({
+      getCaptureStorageBackend: vi.fn(async () => ({ backendType: 'oss', uploadBuffer: fixture.uploadBuffer })),
+      download: vi.fn(async (url: string) => {
+        if (url.includes('sku-image')) throw new Error('private-token must never appear');
+        return { sourceUrl: url, finalUrl: url, contentType: 'image/png', buffer: PNG, redirectCount: 0 };
+      }),
+    });
+    const result = await (service as any).internalizeCapture({ ownerUserId: 'owner-1',
+      snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64) });
+    expect(result.assets).toHaveLength(1);
+    expect(result.errors).toEqual([{ sourceMediaKey: 'sku-image', code: 'SOURCE_IMAGE_TRANSFER_FAILED' }]);
+    expect(JSON.stringify(result)).not.toContain('private-token');
+  });
+
   it('imports exact capture media into durable owned assets and builds reviewed assignments', async () => {
     const { service, createAsset, download, uploadBuffer } = setup();
     const result = await service.internalize({

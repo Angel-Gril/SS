@@ -3,6 +3,7 @@ import {
   type SourceProductCaptureV2,
 } from 'shared';
 import { prisma } from '../lib/prisma.js';
+import { createSourceCaptureMediaDisplayService, type SourceCaptureMediaDisplayClient } from './source-capture-media-display.js';
 
 export const SOURCE_CAPTURE_VIEW_SKU_OFFSET_MAX = 10_000;
 export const SOURCE_CAPTURE_VIEW_MEDIA_OFFSET_MAX = 20_000;
@@ -26,6 +27,7 @@ interface SourceCaptureViewPersistenceClient {
   sourceCaptureSnapshot: {
     findFirst(args: any): Promise<SourceCaptureViewPersistenceRow | null>;
   };
+  mediaAsset?: SourceCaptureMediaDisplayClient['mediaAsset'];
 }
 
 export class SourceCaptureViewError extends Error {
@@ -159,6 +161,11 @@ export function createSourceCaptureViewService(options: {
       if (!verification.valid) invalidSnapshot();
       const capture = row.payload as SourceProductCaptureV2;
       validAuthority(row, capture);
+      const media = capture.media.slice(mediaOffset, mediaOffset + mediaLimit);
+      const displayUrls = client.mediaAsset ? await createSourceCaptureMediaDisplayService({
+        client: { mediaAsset: client.mediaAsset },
+      }).loadDisplayUrls({ ownerUserId, snapshotId: row.id, media }) : [];
+      const displayByKey = new Map(displayUrls.map(item => [item.key, item.displayUrl]));
 
       return {
         snapshotId: row.id,
@@ -179,7 +186,8 @@ export function createSourceCaptureViewService(options: {
           limit: skuLimit,
         },
         media: {
-          items: structuredClone(capture.media.slice(mediaOffset, mediaOffset + mediaLimit)),
+          items: media.map(item => ({ ...structuredClone(item),
+            ...(displayByKey.has(item.key) ? { displayUrl: displayByKey.get(item.key)! } : {}) })),
           total: capture.media.length,
           offset: mediaOffset,
           limit: mediaLimit,

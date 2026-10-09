@@ -111,7 +111,7 @@ function fixtureProduct() {
     },
   };
 }
-function parentHtml(watermarkJpeg) {
+function parentHtml(watermarkJpeg, sourceMediaBridge = '') {
   return `<!doctype html><html><head><script src="/shared/donor-workbench/product-preparation-client.js"></script><script src="/shared/donor-workbench/workspace-contract.js"></script></head>
   <body style="margin:0"><iframe id="workspace" src="/pages/precision-workbench.html" referrerpolicy="no-referrer"
   style="position:fixed;inset:0;width:100vw;height:100vh;border:0"></iframe>
@@ -162,6 +162,33 @@ function parentHtml(watermarkJpeg) {
   };
   window.__precisionSetCopySourceCurrent=(current)=>{copy.pendingCandidates.forEach(candidate=>candidate.sourceCurrent=current);};
   window.__precisionExistingReviewedMedia=()=>{assignedMedia=true;window.__precisionAdvanceDraft();};
+  window.__precisionInstallSourceDisplayBridge=()=>{
+    const nodes=[];let transferStatus='PENDING';window.__precisionSourceDisplayReads=[];
+    const currentFrame=document.getElementById('workspace');
+    function node(){const handlers=new Map();const item={hidden:false,style:{removeProperty(){}},
+      contentWindow:{postMessage(message,origin){
+        // Join the already-open fixture only after the real bridge has read its existing draft.
+        if(message.type==='PROJECTION'&&!message.projection?.handoff)return;
+        currentFrame.contentWindow.postMessage(message,origin);}},setAttribute(){},appendChild(){},remove(){},
+      addEventListener(type,handler){handlers.set(type,handler);},click(){handlers.get('click')?.({target:item});}};nodes.push(item);return item;}
+    const fakeDocument={documentElement:node(),createElement:node,addEventListener(){},getElementById(id){return nodes.find(node=>node.id===id);}};
+    const runtime={id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',getManifest(){return{version:'1.0.452'};},
+      getURL(path){return location.origin+'/'+path.replace(/^\\//,'');},onMessage:{addListener(){}},sendMessage(request,callback){
+        window.__precisionSourceDisplayReads.push(JSON.parse(JSON.stringify(request)));
+        if(request.type==='spb-self-hosted:get-ozon-shops'){callback({ok:true,data:shops});return;}
+        if(request.type!=='ss-erp:source-listing-workbench-status')throw Error('unexpected source display write');
+        callback({ok:true,handoff,result:{state:'ready',status:{...workbench.status,
+          snapshot:{...workbench.status.snapshot,id:handoff.snapshotId,captureHash:'a'.repeat(64)},
+          sourceMedia:{snapshotId:handoff.snapshotId,captureHash:'a'.repeat(64),transferStatus,
+            items:transferStatus==='COMPLETE'?product.captureV2.media.filter(item=>item.role!=='video').map(item=>({
+              key:item.key,sourceUrl:item.url,displayUrl:${JSON.stringify(IMAGE_ORIGIN)}+'/stored-'+item.key+'.png'})):[]}}}});
+      }};
+    const scope={SS_ERP_DONOR_WORKBENCH_CONTRACT:contract,SS_ERP_DONOR_1688_CAPTURE:{async collect(){return product;}},
+      addEventListener(){},setTimeout:window.setTimeout.bind(window),clearTimeout:window.clearTimeout.bind(window)};
+    new Function('globalThis','document','chrome','location',${JSON.stringify(sourceMediaBridge)})(scope,fakeDocument,{runtime},location);
+    nodes.find(node=>node.id==='ss-erp-donor-workbench-trigger').click();
+    window.__precisionCompleteSourceTransfer=()=>{transferStatus='COMPLETE';};
+  };
   window.addEventListener('message',async event=>{
     const frame=document.getElementById('workspace');
     if(event.source!==frame.contentWindow||event.origin!==location.origin)return;
@@ -682,7 +709,8 @@ async function run() {
       void (async () => {
         const url = new URL(event.request.url);
         let body, type;
-        if (url.href === PAGE_URL) { body = Buffer.from(parentHtml(watermarkJpeg)); type = 'text/html'; }
+        if (url.href === PAGE_URL) { body = Buffer.from(parentHtml(watermarkJpeg,
+          process.argv.includes('--source-media-display') ? await readFile(path.join(EXTENSION_ROOT, 'content/donor-workbench-bridge.js'), 'utf8') : '')); type = 'text/html'; }
         else if (url.origin === PAGE_ORIGIN && url.pathname === '/favicon.ico') {
           await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 204 }); return;
         } else if (url.origin === PAGE_ORIGIN) {
@@ -816,6 +844,33 @@ async function run() {
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
     await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("选择官方类目")'), 'continuous preparation pauses at explicit official category review');
+    if (process.argv.includes('--source-media-display')) {
+      await click('#editor-category-modal .settings-head button');
+      const priceSelector = 'input[data-row-index="1"][data-field-key="价格，CNY"]';
+      await click(priceSelector);
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+      await send('Input.insertText', { text: '37.25' });
+      const before = await evaluate('JSON.stringify(window.__precisionCommands)');
+      await evaluate('window.__precisionInstallSourceDisplayBridge()');
+      await until(() => evaluate('window.__precisionSourceDisplayReads?.some(request=>request.type==="ss-erp:source-listing-workbench-status")'), 'real bridge reads pending source transfer');
+      assert.equal(await workspace('document.querySelector(' + JSON.stringify(priceSelector) + ').value'), '37.25');
+      await evaluate('window.__precisionCompleteSourceTransfer()');
+      await until(() => workspace('[...document.querySelectorAll(".precision-source-tile img")].every(image=>image.src.includes("/stored-")&&image.complete&&image.naturalWidth===128)'), 'real bridge automatically replaces and decodes stored source images');
+      assert.equal(await workspace('document.querySelector(' + JSON.stringify(priceSelector) + ').value'), '37.25', 'automatic source display refresh preserves unsaved pricing');
+      assert.equal(await workspace('document.querySelectorAll("tr[data-editor-row-index]").length'), 2);
+      assert.ok(await workspace('[...document.querySelectorAll("[data-image-sku-key] img")].every(image=>image.src.includes("/stored-")&&image.crossOrigin==="anonymous")'));
+      assert.ok(await workspace('[...document.querySelectorAll(".editor-table-image img")].every(image=>image.src.includes("/stored-")&&image.crossOrigin==="anonymous")'));
+      assert.equal(await evaluate('JSON.stringify(window.__precisionCommands)'), before, 'source polling never emits an editor save or new frame command');
+      assert.ok(await evaluate('window.__precisionSourceDisplayReads.every(request=>["spb-self-hosted:get-ozon-shops","ss-erp:source-listing-workbench-status"].includes(request.type))'));
+      await screenshot('source-images-auto-internalized');
+      summary.sourceMediaDisplay = { actualBridgePolling: true, imageDecoded: true, unsavedPrice: '37.25',
+        selectedSkuRows: 2, sourceGalleryAndSkuAndEditor: true, providerWrites: 0, ozonWrites: 0, databaseWrites: 0 };
+      summary.ok = true;
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify(summary, null, 2)); return;
+    }
     if(process.argv.includes('--process-category-recovery')){
       await click('#editor-category-modal .settings-head button');await click('#process-view-btn');
       await until(()=>workspace('!document.getElementById("process-modal").hidden'),'same-window process view');

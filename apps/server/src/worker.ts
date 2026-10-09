@@ -22,6 +22,7 @@ import { startAiImageSuiteGenerationWorker } from './workers/ai-image-suite-gene
 import { startAiProviderReconciliationWorker } from './workers/ai-provider-reconciliation.js';
 import { startOzonPublishReconciliationWorker } from './workers/ozon-publish-reconciliation.js';
 import { startExtensionByokUploadCleanupWorker } from './workers/extension-byok-upload-cleanup.js';
+import { startSourceCaptureImageTransferWorker } from './workers/source-capture-image-transfer.js';
 import { prisma } from './lib/prisma.js';
 import { PrismaAiImageSuiteGenerationCoordinator } from './repositories/ai-image-suite-execution-repository.js';
 import { shutdownAllWorkers } from './lib/worker-registry.js';
@@ -77,6 +78,7 @@ startAiImageSuiteGenerationWorker(new PrismaAiImageSuiteGenerationCoordinator(pr
 startAiProviderReconciliationWorker();
 startOzonPublishReconciliationWorker();
 startExtensionByokUploadCleanupWorker();
+startSourceCaptureImageTransferWorker();
 startProductSyncWorker();
 startOrderSyncWorker();
 startSoloBillingWorker();

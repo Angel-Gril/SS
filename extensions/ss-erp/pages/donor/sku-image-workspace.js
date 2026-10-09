@@ -60,7 +60,7 @@ export function describeSuite(billing) {
 export function buildSkuImageRows({ skus, media, history, billing, title = '' }) {
   return skus.map((sku, index) => {
     const sources = media.filter(item => !item.skuKeys.length || item.skuKeys.includes(sku.key));
-    sources.sort((a, b) => Number(b.url === sku.imageUrl) - Number(a.url === sku.imageUrl)
+    sources.sort((a, b) => Number((b.displayUrl || b.url) === sku.imageUrl) - Number((a.displayUrl || a.url) === sku.imageUrl)
       || Number(b.skuKeys.includes(sku.key)) - Number(a.skuKeys.includes(sku.key)));
     const tasks = (history?.items || []).filter(item => !item.contextSkuKey || item.contextSkuKey === sku.key);
     const images = [...sources.map(item => ({ ...item, kind: 'SOURCE' })),
@@ -180,7 +180,9 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
         const name = make('div', 'image-manager-summary-name', row.name); name.title = row.name;
         const thumbnails = make('div', 'image-manager-summary-images');
         for (const item of row.images.slice(0, 4)) {
-          const image = make('img'); image.src = item.url; image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
+          const image = make('img');
+          if (item.displayUrl || item.kind === 'CANDIDATE') image.crossOrigin = 'anonymous';
+          image.src = item.displayUrl || item.url; image.alt = ''; image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
           thumbnails.append(image);
         }
         if (row.images.length > 4) thumbnails.append(make('span', 'image-manager-summary-more', `+${row.images.length - 4}`));

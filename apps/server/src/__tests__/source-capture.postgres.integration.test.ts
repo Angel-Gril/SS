@@ -2,13 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import {
-  createSourceProductCaptureV2Submission,
+    createSourceProductCaptureV2Submission,
+    verifySourceProductCaptureV2Submission,
   type SourceProductCaptureV2Submission,
 } from 'shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createExtensionCommandGrantService } from '../services/extension-command-grants.js';
 import { createPrismaExtensionCommandGrantStore } from '../services/extension-command-grants-prisma.js';
 import { createPrismaSourceCaptureRepository } from '../services/source-capture-prisma.js';
+import { createPrismaSourceCaptureImageTransferStore } from '../services/source-capture-image-transfer-prisma.js';
+import { createSourceListingMediaImportService } from '../services/source-listing-media-import.js';
+import { createPrismaSourceListingMediaImportStore } from '../services/source-listing-media-import-prisma.js';
+import { createSourceCaptureViewService } from '../services/source-capture-view.js';
 import {
   buildSourceCaptureCommandEnvelope,
   createSourceCaptureService,
@@ -210,6 +215,132 @@ function ingestInput(
 describePostgres('source capture PostgreSQL integration', () => {
   let first: PrismaClient;
   let second: PrismaClient;
+
+  it('persists a bounded page cursor and starts the next page without charging it a retry', async () => {
+    const seed = await seedCaptureDevice(first);
+    const submission = fixtureSubmission();
+    const grant = await issueCaptureGrant(first, seed, submission, `${seed.prefix}_transfer_pages`);
+    await captureService(first).ingest(ingestInput(seed, submission, grant));
+    const store = createPrismaSourceCaptureImageTransferStore(first);
+    const clock = new Date();
+    const firstPage = await store.claim({ now: clock, leaseId: `page1-${seed.prefix}`,
+      leaseExpiresAt: new Date(clock.getTime() + 60_000) });
+    expect(firstPage).toMatchObject({ attempts: 1, offset: 0 });
+    expect(await store.finish({ claim: firstPage!, now: clock, nextAttemptAt: clock,
+      result: { assets: [], errors: [], nextOffset: 100, total: 105 } })).toBe(true);
+    const secondPage = await store.claim({ now: clock, leaseId: `page2-${seed.prefix}`,
+      leaseExpiresAt: new Date(clock.getTime() + 60_000) });
+    expect(secondPage).toMatchObject({ attempts: 1, offset: 100 });
+    expect(await store.finish({ claim: secondPage!, now: clock, nextAttemptAt: clock,
+      result: { assets: [], errors: [], nextOffset: 105, total: 105 } })).toBe(true);
+    expect(await store.claim({ now: clock, leaseId: 'complete', leaseExpiresAt: new Date(clock.getTime() + 60_000) })).toBeNull();
+  }, 30_000);
+
+  it('claims source image transfer once and atomically updates only current images without changing the snapshot', async () => {
+    const seed = await seedCaptureDevice(first);
+    const submission = fixtureSubmission();
+    const grant = await issueCaptureGrant(first, seed, submission, `${seed.prefix}_transfer`);
+    const accepted = await captureService(first).ingest(ingestInput(seed, submission, grant));
+    const [before] = await first.supplyGoods.findMany({ where: { id: accepted.supplyGoodsId } });
+    const snapshotBefore = await first.sourceCaptureSnapshot.findUniqueOrThrow({ where: { id: accepted.snapshotId } });
+    expect((before?.metadata as any).sourceImageTransferV2).toMatchObject({ status: 'PENDING', attempts: 0 });
+    const clock = new Date();
+    const stores = [createPrismaSourceCaptureImageTransferStore(first), createPrismaSourceCaptureImageTransferStore(second)];
+    const claims = await Promise.all(stores.map((store, index) => store.claim({ now: clock,
+      leaseId: `lease-${seed.prefix}-${index}`, leaseExpiresAt: new Date(clock.getTime() + 60_000) })));
+    const claimed = claims.filter(Boolean);
+    expect(claimed).toHaveLength(1);
+    const claim = claimed[0]!;
+    expect(claim.snapshotId).toBe(accepted.snapshotId);
+    const source = submission.capture.media.find(media => media.kind === 'image' && media.role === 'product_main' && media.disposition === 'accepted')!;
+    const asset = { id: `${seed.prefix}_asset`, ownerUserId: seed.ownerUserId, sourceCaptureSnapshotId: accepted.snapshotId,
+      sourceMediaKey: source.key, sourceUrl: source.url!, url: 'https://cdn.example/source.jpg',
+      storageBackend: 'oss', storageKey: 'raw/source.jpg', mimeType: 'image/jpeg', sizeBytes: 100 };
+    const result = { assets: [asset], errors: [] };
+    expect(await stores[0]!.finish({ claim: { ...claim, leaseId: 'wrong-lease' }, result, now: clock, nextAttemptAt: clock })).toBe(false);
+    expect(await stores[0]!.finish({ claim, result, now: clock, nextAttemptAt: clock })).toBe(true);
+    expect(await stores[0]!.finish({ claim, result, now: clock, nextAttemptAt: clock })).toBe(false);
+    const goods = await first.supplyGoods.findUniqueOrThrow({ where: { id: accepted.supplyGoodsId } });
+    expect(goods.images).toContain(asset.url);
+    expect(goods.images).not.toContain(source.url);
+    expect((goods.metadata as any).sourceImageTransferV2.status).toBe('COMPLETE');
+    expect(goods.updatedAt.getTime()).toBeGreaterThanOrEqual(before?.updatedAt.getTime() || 0);
+    const snapshot = await first.sourceCaptureSnapshot.findUniqueOrThrow({ where: { id: accepted.snapshotId } });
+    expect(snapshot.payload).toEqual(snapshotBefore.payload);
+    expect(snapshot.captureHash).toBe(submission.captureHash);
+  }, 30_000);
+
+  it('stores real normalized bytes as one owned asset and both Web media reads and retries reuse it', async () => {
+    const seed = await seedCaptureDevice(first);
+    const submission = fixtureSubmission();
+    const grant = await issueCaptureGrant(first, seed, submission, `${seed.prefix}_transfer_asset`);
+    const accepted = await captureService(first).ingest(ingestInput(seed, submission, grant));
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+    let downloads = 0; let uploads = 0;
+    const importer = createSourceListingMediaImportService({
+      ...createPrismaSourceListingMediaImportStore(first),
+      download: async url => { downloads += 1; return { sourceUrl: url, finalUrl: url,
+        buffer: bytes, contentType: 'image/png', redirectCount: 0 }; },
+      getStorageBackend: async () => { throw new Error('capture transfer has no shop or Ozon upload'); },
+      getCaptureStorageBackend: async () => ({ backendType: 'oss', uploadBuffer: async () => {
+        uploads += 1; return { backend: 'oss', url: 'https://cdn.example/api/cdn/source.png',
+          filename: 'source.png', key: 'source.png' }; } }),
+    });
+    const imageScope = { ownerUserId: seed.ownerUserId, snapshotId: accepted.snapshotId, captureHash: accepted.captureHash };
+    const result = await importer.internalizeCapture(imageScope);
+    expect(result.errors).toEqual([]);
+    expect(result.assets).toHaveLength(1);
+    const store = createPrismaSourceCaptureImageTransferStore(first);
+    const clock = new Date();
+    const claim = await store.claim({ now: clock, leaseId: `asset-${seed.prefix}`, leaseExpiresAt: new Date(clock.getTime() + 60_000) });
+    expect(claim?.snapshotId).toBe(accepted.snapshotId);
+    expect(await store.finish({ claim: claim!, result, now: clock, nextAttemptAt: clock })).toBe(true);
+    const replay = await importer.internalizeCapture(imageScope);
+    expect(replay.assets[0]?.id).toBe(result.assets[0]?.id);
+    expect(downloads).toBe(1); expect(uploads).toBe(1);
+    expect(await first.mediaAsset.count({ where: { sourceCaptureSnapshotId: accepted.snapshotId } })).toBe(1);
+    const view = await createSourceCaptureViewService({ client: first as never }).getView({ ...imageScope,
+      supplyGoodsId: accepted.supplyGoodsId, skuOffset: 0, skuLimit: 50, mediaOffset: 0, mediaLimit: 50 });
+    expect(view.media.items[0]?.displayUrl).toBe('https://cdn.example/api/cdn/source.png');
+    const snapshot = await first.sourceCaptureSnapshot.findUniqueOrThrow({ where: { id: accepted.snapshotId } });
+    expect((await verifySourceProductCaptureV2Submission({ capture: snapshot.payload,
+      captureHash: snapshot.captureHash, payloadBytes: snapshot.payloadBytes })).valid).toBe(true);
+    await expect(importer.internalizeCapture({ ...imageScope, ownerUserId: 'foreign-owner' }))
+      .rejects.toMatchObject({ code: 'SOURCE_LISTING_MEDIA_AUTHORITY_STALE' });
+    expect(downloads).toBe(1); expect(uploads).toBe(1);
+  }, 30_000);
+
+  it('recovers expired transfer leases with bounded retries and refuses stale snapshot projection writes', async () => {
+    const seed = await seedCaptureDevice(first);
+    const submission = fixtureSubmission();
+    const grant = await issueCaptureGrant(first, seed, submission, `${seed.prefix}_transfer_retry`);
+    const accepted = await captureService(first).ingest(ingestInput(seed, submission, grant));
+    const store = createPrismaSourceCaptureImageTransferStore(first);
+    const clock = new Date();
+    const original = await store.claim({ now: clock, leaseId: `lease-${seed.prefix}`, leaseExpiresAt: new Date(clock.getTime() + 1000) });
+    expect(original).not.toBeNull();
+    const later = new Date(clock.getTime() + 2000);
+    const recovered = await store.claim({ now: later, leaseId: `recovered-${seed.prefix}`, leaseExpiresAt: new Date(later.getTime() + 60_000) });
+    expect(recovered).toMatchObject({ snapshotId: accepted.snapshotId, attempts: 2 });
+    const failure = { assets: [], errors: [{ sourceMediaKey: '', code: 'SOURCE_IMAGE_TRANSFER_FAILED' }] };
+    expect(await store.finish({ claim: original!, result: failure, now: later, nextAttemptAt: later })).toBe(false);
+    expect(await store.finish({ claim: recovered!, result: failure, now: later, nextAttemptAt: later })).toBe(true);
+    const final = await store.claim({ now: later, leaseId: `final-${seed.prefix}`, leaseExpiresAt: new Date(later.getTime() + 60_000) });
+    expect(final).toMatchObject({ attempts: 3 });
+    expect(await store.finish({ claim: final!, result: failure, now: later, nextAttemptAt: later })).toBe(true);
+    expect(await store.claim({ now: later, leaseId: 'exhausted', leaseExpiresAt: new Date(later.getTime() + 60_000) })).toBeNull();
+
+    const captureV2 = structuredClone(submission.capture);
+    captureV2.facts.title = 'New capture title';
+    captureV2.fieldEvidence.title = { ...captureV2.fieldEvidence.title, value: captureV2.facts.title };
+    const newSubmission = await createSourceProductCaptureV2Submission(captureV2);
+    const newGrant = await issueCaptureGrant(first, seed, newSubmission, `${seed.prefix}_new_snapshot`);
+    const newAccepted = await captureService(first).ingest(ingestInput(seed, newSubmission, newGrant));
+    expect(await store.finish({ claim: final!, result: { assets: [], errors: [] }, now: later, nextAttemptAt: later })).toBe(false);
+    const current = await first.supplyGoods.findUniqueOrThrow({ where: { id: accepted.supplyGoodsId } });
+    expect((current.metadata as any).sourceCaptureV2.snapshotId).toBe(newAccepted.snapshotId);
+    expect((current.metadata as any).sourceImageTransferV2.status).toBe('PENDING');
+  }, 30_000);
 
   beforeAll(async () => {
     const expectedSchema = assertIsolatedSchema(testDatabaseUrl);

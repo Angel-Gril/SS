@@ -357,6 +357,11 @@ const steps = [
     args: ['--test', 'scripts/extension-precision-image-process.test.mjs'],
   },
   {
+    name: 'extension source media display contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-source-media-display.test.mjs'],
+  },
+  {
     name: 'extension precision BYOK registration recovery',
     command: 'node',
     args: ['--test', 'scripts/extension-precision-byok-registration-ui.test.mjs'],

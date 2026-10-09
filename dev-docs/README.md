@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-10 来源图片异步转存本地完成
+
+V2/legacy新快照采集不等待网络，后台按准确owner/snapshot/mediaKey分页转存到ERP-owned OSS/R2，列表/工作台使用独立显示地址，精铺自动更新时保留未保存编辑；快照原件和草稿版本不变。真实本机PostgreSQL8项、定向后端/扩展/Web和隔离Chrome自动切图通过。当前仅准备提交推送，未签名/部署/公开更新，生产452/官网448保持。证据及资源边界仅维护在[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-10 `6e028c70 / 1.0.452` 双区应用部署完成
 
 订单履约五阶段、二级筛选、确认备货审计及采集图片防盗链修复已部署到 COM/CN，服务、DB/Redis、`/ready` 和运行 commit 均通过；官网扩展继续公开 `1.0.448`。采集图根因是 1688 Referer 防盗链，生成图已核实由 ERP-owned OSS/R2 兼容对象存储和数据库 MediaAsset 记录共同承载。订单独立 PostgreSQL runner 2 项通过、服务端定向55项、Web typecheck/lint和图片/订单回归通过。准确范围见[直接适配 owner](donor-workbench/direct-adaptation.md)。

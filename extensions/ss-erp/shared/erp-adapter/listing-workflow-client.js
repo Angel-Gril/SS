@@ -402,6 +402,7 @@
       && value.snapshot.version > 0
       && dateTime(value.snapshot.capturedAt)
       && typeof value.snapshot.current === 'boolean'
+      && (value.sourceMedia === undefined || validSourceMediaDisplay(value.sourceMedia, value.snapshot))
       && record(value.listing)
       && Array.isArray(value.listing.items)
       && value.listing.items.length <= 10
@@ -417,6 +418,17 @@
       && value.media.actionableCount === value.media.items.filter(function (item) {
         return item.actionable === true;
       }).length;
+  }
+
+  function validSourceMediaDisplay(value, snapshot) {
+    return record(value) && exactKeys(value, ['snapshotId', 'captureHash', 'transferStatus', 'items'])
+      && value.snapshotId === snapshot.id && value.captureHash === snapshot.captureHash
+      && ['PENDING', 'RUNNING', 'RETRY', 'COMPLETE', 'FAILED', 'UNKNOWN'].includes(value.transferStatus)
+      && /^[a-f0-9]{64}$/u.test(String(value.captureHash || '')) && Array.isArray(value.items)
+      && value.items.length <= 120 && new Set(value.items.map(function (item) { return item.key; })).size === value.items.length
+      && value.items.every(function (item) { return record(item) && exactKeys(item, ['key', 'sourceUrl', 'displayUrl'])
+        && text(item.key, 500) && validPreviewUrl(item.sourceUrl) && validPreviewUrl(item.displayUrl)
+        && item.sourceUrl.startsWith('https://') && item.displayUrl.startsWith('https://'); });
   }
 
   function validPreviewUrl(value) {
