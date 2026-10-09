@@ -45,6 +45,9 @@ interface Order {
   warehouseScanInAt: string | null;
   warehouseScanOutAt: string | null;
   labelPrintedAt: string | null;
+  stockPreparedAt: string | null;
+  fulfillmentStage: string | null;
+  fulfillmentStatus: string | null;
   shop: { name: string; platform: string };
 }
 interface Shop {
@@ -707,7 +710,7 @@ function DomesticStatusBadge({ status }: { status: string | null }) {
 
 function InternationalStatusBadge({ order }: { order: any }) {
   const stage = resolveOrderFulfillmentStage(order);
-  if (stage.key === 'delivered') return <Badge variant="success">已送达</Badge>;
+  if (order.fulfillmentStatus === 'delivered') return <Badge variant="success">已送达</Badge>;
   if (stage.key === 'delivering') return <Badge variant="success">出库发运</Badge>;
   if (stage.key === 'warehouse_processing') return <Badge variant={stage.variant}>{stage.label}</Badge>;
   if (order.internationalTrackingNumber || order.trackingNumber || order.international?.trackingNumber) {

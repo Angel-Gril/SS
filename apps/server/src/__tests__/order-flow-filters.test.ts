@@ -33,11 +33,30 @@ describe('order flow filters', () => {
     ];
 
     expect(filterOrderIdsByFulfillmentStage(orders, logs, 'warehouse_processing', now)).toEqual([
+      'received',
       'warehouse-aged',
-      'warehouse-label',
     ]);
-    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'purchased', now)).toEqual(['needs-purchase']);
-    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'received', now)).toEqual(['received']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'purchased', now)).toEqual(['needs-purchase', 'warehouse-label']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'received', now)).toEqual(['received', 'warehouse-aged']);
+  });
+
+  it('filters normalized children and the old delivered alias without broadening the group', () => {
+    const now = new Date('2026-10-09T00:00:00.000Z');
+    const orders = [
+      { id: 'pack', status: 'awaiting_packaging', domesticStatus: 'received' },
+      { id: 'ship', status: 'awaiting_deliver', domesticStatus: 'received' },
+      { id: 'label-only', status: 'awaiting_deliver', trackingNumber: 'label' },
+      { id: 'delivered', status: 'delivered' },
+      { id: 'cancel', status: 'cancelled' },
+      { id: 'exception', status: 'delivering', inspectionStatus: 'failed' },
+      { id: 'prepared', status: 'awaiting_packaging' },
+    ];
+    const logs = [{ orderId: 'prepared', operationType: 'stock_ready', createdAt: now }];
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'warehouse_processing', now, 'awaiting_deliver')).toEqual(['ship']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'abnormal', now, 'cancelled')).toEqual(['cancel']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'abnormal', now, 'exception')).toEqual(['exception']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'delivered', now)).toEqual(['delivered']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'domestic_transit', now)).toEqual(['prepared']);
   });
 
   it('does not treat Ozon-dispatched postings as still awaiting seller shipment', () => {

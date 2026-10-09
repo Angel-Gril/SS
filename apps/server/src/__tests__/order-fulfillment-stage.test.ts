@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
+import { resolveOrderFulfillmentStage, resolveOrderFulfillmentStatus, ORDER_FULFILLMENT_PIPELINE } from 'shared/order-fulfillment-stage';
 
 describe('resolveOrderFulfillmentStage', () => {
   it('does not treat a generated international tracking number as shipped', () => {
@@ -8,14 +8,14 @@ describe('resolveOrderFulfillmentStage', () => {
       internationalTrackingNumber: 'OZON123',
       internationalStatus: 'pending',
     });
-    expect(stage.key).toBe('warehouse_processing');
-    expect(stage.label).toBe('仓库处理');
+    expect(stage.key).toBe('purchased');
+    expect(stage.label).toBe('采购备货');
 
     expect(resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       labelPrintedAt: new Date().toISOString(),
-    }).label).toBe('仓库处理');
+    }).label).toBe('采购备货');
   });
 
   it('shows outbound dispatch only after a real shipping signal', () => {
@@ -29,7 +29,7 @@ describe('resolveOrderFulfillmentStage', () => {
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       internationalStatus: 'shipped',
-    }).key).toBe('warehouse_processing');
+    }).key).toBe('delivering');
 
     expect(resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
@@ -57,7 +57,7 @@ describe('resolveOrderFulfillmentStage', () => {
       domesticTrackingNumber: 'SF123',
       domesticStatus: 'received',
       warehouseScanInAt: new Date().toISOString(),
-    }).key).toBe('received');
+    }).key).toBe('warehouse_processing');
 
     expect(resolveOrderFulfillmentStage({
       domesticTrackingNumber: 'SF123',
@@ -80,8 +80,8 @@ describe('resolveOrderFulfillmentStage', () => {
       status: 'awaiting_deliver',
       shipmentDate: new Date().toISOString(),
     })).toMatchObject({
-      key: 'warehouse_processing',
-      label: '仓库处理',
+      key: 'purchased',
+      label: '采购备货',
     });
   });
 
@@ -94,5 +94,35 @@ describe('resolveOrderFulfillmentStage', () => {
     expect(resolveOrderFulfillmentStage({
       inspectionStatus: 'failed',
     }).key).toBe('abnormal');
+  });
+
+  it('merges warehouse and outbound stages while keeping normalized secondary statuses', () => {
+    expect(ORDER_FULFILLMENT_PIPELINE.map(stage => stage.key)).toEqual([
+      'purchased', 'domestic_transit', 'warehouse_processing', 'delivering', 'abnormal',
+    ]);
+    for (const status of ['awaiting_packaging', 'awaiting_deliver']) {
+      const order = { status, warehouseScanInAt: new Date() };
+      expect(resolveOrderFulfillmentStage(order).key).toBe('warehouse_processing');
+      expect(resolveOrderFulfillmentStatus(order)).toBe(status);
+    }
+    expect(resolveOrderFulfillmentStage({ status: 'delivered' }).key).toBe('delivering');
+    expect(resolveOrderFulfillmentStatus({ status: 'delivered' })).toBe('delivered');
+    expect(resolveOrderFulfillmentStatus({ status: 'awaiting_deliver', internationalStatus: 'in_transit' })).toBe('delivering');
+    expect(resolveOrderFulfillmentStatus({ status: 'cancelled', deliveredAt: new Date() })).toBe('cancelled');
+    expect(resolveOrderFulfillmentStatus({ status: 'delivered', inspectionStatus: 'failed' })).toBe('exception');
+  });
+
+  it('uses confirmed stock readiness only before a real warehouse or outbound signal', () => {
+    const stockPreparedAt = new Date();
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_deliver', stockPreparedAt }).key).toBe('domestic_transit');
+    expect(resolveOrderFulfillmentStatus({ status: 'awaiting_deliver', stockPreparedAt })).toBeNull();
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_packaging', warehouseScanInAt: new Date(), stockPreparedAt }).key).toBe('warehouse_processing');
+    expect(resolveOrderFulfillmentStage({ status: 'cancelled', stockPreparedAt }).key).toBe('abnormal');
+    expect(resolveOrderFulfillmentStage({ internationalStatus: 'shipped', stockPreparedAt }).key).toBe('delivering');
+  });
+
+  it('does not mistake a domestic warehouse received substatus or deadline for international delivery', () => {
+    expect(resolveOrderFulfillmentStage({ subStatus: 'warehouse_received', shipmentDate: new Date() }).key).toBe('purchased');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_packaging', shipmentDate: new Date(), internationalTrackingNumber: 'generated-label' }).key).toBe('purchased');
   });
 });

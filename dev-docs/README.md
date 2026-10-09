@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-10-09 采集图片加载与订单履约阶段收口（本地验收完成）
+
+已确认采集图空白是 1688 CDN 的 Referer 防盗链：带 `https://app.ss-erp.com/` 返回 403，去掉 Referer 返回 200；不是数据库或对象存储缺图。来源图片现在统一由 `SourceProductImage` 使用 `no-referrer`，ERP `/api/cdn` 图片匿名 CORS，失败显示占位。生图资产已核实通过 ERP-owned OSS/R2 兼容后端写入对象存储并在数据库保存元数据。
+
+订单履约 owner 已统一为五个上层阶段：采购备货、国内在途、仓库处理、出库发运、异常；仓库处理包含待打包/待发货，出库发运包含配送中/已送达，异常包含取消/其他异常。新增服务端 `stock_ready` 审计动作和同店权限检查，列表/管线/详情共享阶段与二级状态解析。定向服务端33项、Web订单/图片5项和 Web typecheck 通过，尚未提交或部署。
+
 ## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
 
 448 已完成推送、原生 offline、区域签名、双区标准部署、备份恢复、FULL VPS、真实 9458 精铺采集/草稿/START/CONTINUE、两图 Provider 套图、审核、独立 store-draft assignment、幂等 replay、正式 QA04、COM/CN canary、website approval、CAS、匿名 distribution probe 和最终 publication verifier。COM/CN 官网 latest 与 Cloud/Local 下载均实读 448；COM 商品分析继续 qwen-vl-max，CN direct/RDS dark。真实 suite 两笔 ERP CNY0.10 settled、Ozon0；447 的失败 count 任务已按新合同释放 ERP CNY0.10 预扣并保留原失败/供应商未知费用事实。临时发布账号/9458已清理，用户9222保留。准确原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。

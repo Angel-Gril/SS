@@ -3,7 +3,8 @@ import { authenticate } from '../../lib/auth.js';
 import { prisma } from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';
 import { OzonClient } from '../../services/ozon-client.js';
-import { resolveOrderFulfillmentStage, type FulfillmentStageKey } from 'shared/order-fulfillment-stage';
+import { ORDER_FULFILLMENT_PIPELINE, resolveOrderFulfillmentStage, resolveOrderFulfillmentStatus } from 'shared/order-fulfillment-stage';
+import { findOrderIdsByItemSearch } from '../order.js';
 
 export async function orderAnalyticsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -113,16 +114,33 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     return { code: 1, msg: 'ok', data: { rows, summary: { ...summary, totalRevenue: summary.totalRevenue.toFixed(2), todayRevenue: summary.todayRevenue.toFixed(2), shopCount: rows.length } } };
   });
 
-  // PLACEHOLDER_PIPELINE
-
   app.get('/pipeline', async (request) => {
     const { userId } = (request as any).user;
+    const query = request.query as { shopId?: string; startDate?: string; endDate?: string; search?: string; searchField?: 'all' | 'sku' | 'product'; purchaseState?: string; shippingMethod?: string; hasTracking?: string; serviceTagId?: string; userColorTagId?: string };
     const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
-    if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { stages: [] } };
+    const scopedShopIds = query.shopId ? (shopIds.includes(query.shopId) ? [query.shopId] : []) : shopIds;
+    if (scopedShopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, stages: ORDER_FULFILLMENT_PIPELINE.map(stage => ({ ...stage, count: 0, children: stage.children.map(child => ({ ...child, count: 0 })) })) } };
+    const where: Record<string, unknown> = { shopId: { in: scopedShopIds } };
+    const dateFilter: Record<string, Date> = {};
+    if (query.startDate) dateFilter.gte = new Date(`${query.startDate}T00:00:00.000Z`);
+    if (query.endDate) { const end = new Date(`${query.endDate}T00:00:00.000Z`); end.setUTCDate(end.getUTCDate() + 1); dateFilter.lt = end; }
+    if (Object.keys(dateFilter).length) where.createdAt = dateFilter;
+    if (query.purchaseState === 'linked') where.purchaseOrderId = { not: null };
+    if (query.purchaseState === 'unlinked') where.purchaseOrderId = null;
+    if (query.shippingMethod) where.shippingMethod = { contains: query.shippingMethod, mode: 'insensitive' };
+    if (query.hasTracking === 'yes') where.trackingNumber = { not: null };
+    if (query.hasTracking === 'no') where.trackingNumber = null;
+    if (query.serviceTagId) where.serviceTags = { array_contains: [query.serviceTagId] };
+    if (query.userColorTagId) where.userColorTags = { array_contains: [query.userColorTagId] };
+    if (query.search?.trim()) {
+      const term = query.search.trim();
+      const itemIds = await findOrderIdsByItemSearch(scopedShopIds, term, query.searchField || 'all');
+      where.OR = [{ postingNumber: { contains: term, mode: 'insensitive' } }, { platformOrderId: { contains: term, mode: 'insensitive' } }, { trackingNumber: { contains: term, mode: 'insensitive' } }, { id: { in: itemIds } }];
+    }
 
     const orders = await prisma.order.findMany({
-      where: { shopId: { in: shopIds } },
+      where: where as any,
       select: {
         id: true,
         status: true,
@@ -142,28 +160,21 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const orderIds = orders.map((order) => order.id);
     const warehouseLogs = orderIds.length > 0
       ? await prisma.warehouseLog.findMany({
-          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print', 'stock_ready'] } },
           orderBy: { createdAt: 'desc' },
           select: { orderId: true, operationType: true, createdAt: true },
         })
       : [];
-    const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
+    const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date; stockPreparedAt?: Date }>();
     for (const log of warehouseLogs) {
       const current = latestWarehouseLogByOrder.get(log.orderId) || {};
       if (log.operationType === 'scan_in' && !current.scanInAt) current.scanInAt = log.createdAt;
       if (log.operationType === 'scan_out' && !current.scanOutAt) current.scanOutAt = log.createdAt;
       if (log.operationType === 'label_print' && !current.labelPrintedAt) current.labelPrintedAt = log.createdAt;
+      if (log.operationType === 'stock_ready' && !current.stockPreparedAt) current.stockPreparedAt = log.createdAt;
       latestWarehouseLogByOrder.set(log.orderId, current);
     }
-    const counts: Record<FulfillmentStageKey, number> = {
-      purchased: 0,
-      domestic_transit: 0,
-      received: 0,
-      warehouse_processing: 0,
-      delivering: 0,
-      delivered: 0,
-      abnormal: 0,
-    };
+    const counts = new Map(ORDER_FULFILLMENT_PIPELINE.map(stage => [stage.key, { count: 0, children: new Map(stage.children.map(child => [child.key, 0])) }]));
     const now = new Date();
     for (const order of orders) {
       const logs = latestWarehouseLogByOrder.get(order.id);
@@ -172,18 +183,14 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
         warehouseScanInAt: logs?.scanInAt ?? null,
         warehouseScanOutAt: logs?.scanOutAt ?? null,
         labelPrintedAt: logs?.labelPrintedAt ?? null,
+        stockPreparedAt: logs?.stockPreparedAt ?? null,
       }, now);
-      counts[stage.key] += 1;
+      const bucket = counts.get(stage.key)!; bucket.count += 1;
+      const child = resolveOrderFulfillmentStatus({ ...order, warehouseScanInAt: logs?.scanInAt ?? null, warehouseScanOutAt: logs?.scanOutAt ?? null, stockPreparedAt: logs?.stockPreparedAt ?? null });
+      if (child && bucket.children.has(child)) bucket.children.set(child, bucket.children.get(child)! + 1);
     }
 
-    return { code: 1, msg: 'ok', data: { stages: [
-      { key: 'purchased', label: '采购备货', count: counts.purchased },
-      { key: 'domestic_transit', label: '国内在途', count: counts.domestic_transit },
-      { key: 'received', label: '到仓入库', count: counts.received },
-      { key: 'warehouse_processing', label: '仓库处理', count: counts.warehouse_processing },
-      { key: 'delivering', label: '出库发运', count: counts.delivering },
-      { key: 'abnormal', label: '异常', count: counts.abnormal },
-    ] } };
+    return { code: 1, msg: 'ok', data: { total: orders.length, stages: ORDER_FULFILLMENT_PIPELINE.map(stage => ({ ...stage, count: counts.get(stage.key)!.count, children: stage.children.map(child => ({ ...child, count: counts.get(stage.key)!.children.get(child.key) ?? 0 })) })) } };
   });
 
   app.get('/analytics/trend', async (request) => {

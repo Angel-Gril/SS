@@ -9,20 +9,18 @@ import { fetchLabelAsync } from '../services/ozon-label.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
   isOrderAwaitingSellerShipment,
+  matchesOrderFulfillmentFilter,
+  isOrderFulfillmentFilterCompatible,
+  ORDER_FULFILLMENT_STAGE_FILTER_KEYS,
+  ORDER_FULFILLMENT_STATUS_KEYS,
   resolveOrderFulfillmentStage,
+  resolveOrderFulfillmentStatus,
   type FulfillmentStageKey,
+  type OrderFulfillmentStatus,
   type OrderFulfillmentStageInput,
 } from 'shared/order-fulfillment-stage';
 
-const fulfillmentStageKeys = [
-  'purchased',
-  'domestic_transit',
-  'received',
-  'warehouse_processing',
-  'delivering',
-  'delivered',
-  'abnormal',
-] as const;
+const fulfillmentStageKeys = ORDER_FULFILLMENT_STAGE_FILTER_KEYS;
 
 type OrderStageFilterInput = OrderFulfillmentStageInput & {
   id: string;
@@ -45,6 +43,7 @@ const orderQuerySchema = z.object({
   status: z.string().optional(),
   subStatus: z.string().trim().min(1).max(120).optional(),
   fulfillmentStage: z.enum(fulfillmentStageKeys).optional(),
+  fulfillmentStatus: z.enum(ORDER_FULFILLMENT_STATUS_KEYS).optional(),
   search: z.string().optional(),
   searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(),
   serviceTagId: z.string().optional(),
@@ -92,21 +91,23 @@ export function buildOrderCreatedAtRange(startDate?: string, endDate?: string): 
 export function filterOrderIdsByFulfillmentStage(
   orders: OrderStageFilterInput[],
   warehouseLogs: WarehouseStageLogInput[],
-  fulfillmentStage: FulfillmentStageKey,
+  fulfillmentStage: FulfillmentStageKey | undefined,
   now: Date = new Date(),
+  fulfillmentStatus?: OrderFulfillmentStatus,
 ): string[] {
   const latestWarehouseLogByOrder = buildLatestWarehouseLogMap(warehouseLogs);
 
   return orders
     .filter((order) => {
       const logs = latestWarehouseLogByOrder.get(order.id);
-      const stage = resolveOrderFulfillmentStage({
+      const stageInput = {
         ...order,
         warehouseScanInAt: logs?.scanInAt ?? null,
         warehouseScanOutAt: logs?.scanOutAt ?? null,
         labelPrintedAt: logs?.labelPrintedAt ?? null,
-      }, now);
-      return stage.key === fulfillmentStage;
+        stockPreparedAt: logs?.stockPreparedAt ?? null,
+      };
+      return matchesOrderFulfillmentFilter(stageInput, fulfillmentStage, fulfillmentStatus);
     })
     .map((order) => order.id);
 }
@@ -184,8 +185,8 @@ function parseDateAtUtcStartOfDay(value: string): Date {
 
 function buildLatestWarehouseLogMap(
   warehouseLogs: WarehouseStageLogInput[],
-): Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }> {
-  const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
+): Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date; stockPreparedAt?: Date }> {
+  const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date; stockPreparedAt?: Date }>();
   for (const log of warehouseLogs) {
     const current = latestWarehouseLogByOrder.get(log.orderId) || {};
     if (log.operationType === 'scan_in' && !current.scanInAt) {
@@ -196,6 +197,9 @@ function buildLatestWarehouseLogMap(
     }
     if (log.operationType === 'label_print' && !current.labelPrintedAt) {
       current.labelPrintedAt = log.createdAt;
+    }
+    if (log.operationType === 'stock_ready' && !current.stockPreparedAt) {
+      current.stockPreparedAt = log.createdAt;
     }
     latestWarehouseLogByOrder.set(log.orderId, current);
   }
@@ -228,7 +232,7 @@ function orderSort(sort: z.infer<typeof orderQuerySchema>['sort']) {
   }
 }
 
-type OrderItemSearchField = 'all' | 'sku' | 'product';
+export type OrderItemSearchField = 'all' | 'sku' | 'product';
 
 /**
  * Resolve order ids whose JSON item array contains a matching SKU/offer/name.
@@ -239,7 +243,7 @@ type OrderItemSearchField = 'all' | 'sku' | 'product';
  * jsonb_array_elements instead, while keeping all user input parameterized by
  * Prisma's tagged SQL builder.
  */
-async function findOrderIdsByItemSearch(
+export async function findOrderIdsByItemSearch(
   shopIds: string[],
   term: string,
   searchField: OrderItemSearchField,
@@ -294,6 +298,34 @@ function restrictOrderIds(where: Record<string, unknown>, ids: string[]): void {
 
 export async function orderRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+
+  // Explicit operator confirmation. The log is the durable owner of this marker;
+  // no client supplied actor or shop id is trusted.
+  app.put('/:id/stock-ready', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const actorUserId = (request as any).user.actorUserId ?? userId;
+    const { id } = request.params as { id: string };
+    const body = request.body as { prepared?: unknown };
+    if (body?.prepared !== true || Object.keys(body || {}).some((key) => key !== 'prepared')) return reply.status(400).send({ code: 0, msg: '仅允许 prepared=true' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; status: string | null; sub_status: string | null; domestic_status: string | null; international_status: string | null }>>`
+        SELECT o.id, o.status, o.sub_status, o.domestic_status, o.international_status
+        FROM "orders" o JOIN "shops" s ON s.id = o.shop_id
+        WHERE o.id = ${id} AND s.user_id = ${userId} AND s.status <> 'DISABLED' FOR UPDATE`;
+      const order = rows[0];
+      if (!order) return { error: 'not_found' as const };
+      const existing = await tx.warehouseLog.findMany({ where: { orderId: id, operationType: 'stock_ready' }, orderBy: { createdAt: 'asc' }, select: { createdAt: true } });
+      if (existing[0]) return { order, timestamp: existing[0].createdAt, replayed: true };
+      const current = resolveOrderFulfillmentStage({ status: order.status, subStatus: order.sub_status, domesticStatus: order.domestic_status, internationalStatus: order.international_status });
+      if (current.key === 'abnormal' || current.key === 'warehouse_processing' || current.key === 'delivering') return { error: 'immutable' as const };
+      const log = await tx.warehouseLog.create({ data: { orderId: id, operationType: 'stock_ready', operatorId: actorUserId, note: '用户确认已备货' }, select: { createdAt: true } });
+      return { order, timestamp: log.createdAt, replayed: false };
+    });
+    if ('error' in result) return reply.status(result.error === 'not_found' ? 404 : 409).send({ code: 0, msg: result.error === 'not_found' ? '订单不存在' : '订单当前状态不可确认已备货' });
+    const projection = { status: result.order.status, subStatus: result.order.sub_status, domesticStatus: result.order.domestic_status, internationalStatus: result.order.international_status, stockPreparedAt: result.timestamp };
+    return reply.send({ code: 1, msg: result.replayed ? '已备货状态已存在' : '已确认备货', data: { id, stockPreparedAt: result.timestamp, fulfillmentStage: resolveOrderFulfillmentStage(projection).key, fulfillmentStatus: resolveOrderFulfillmentStatus(projection) } });
+  });
 
   // GET /api/orders/service-tags — 获取可用标签列表
   app.get('/service-tags', async (_request, reply) => {
@@ -483,9 +515,11 @@ export async function orderRoutes(app: FastifyInstance) {
     });
   });
 
-  app.get('/', async (request) => {
+  app.get('/', async (request, reply) => {
     const { userId } = (request as any).user;
-    const query = orderQuerySchema.parse(request.query);
+    const parsedQuery = orderQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) return reply.status(400).send({ code: 0, msg: parsedQuery.error.errors[0]?.message ?? '参数错误' });
+    const query = parsedQuery.data;
 
     const userShops = await prisma.shop.findMany({
       where: { userId, status: { not: 'DISABLED' } },
@@ -601,7 +635,10 @@ export async function orderRoutes(app: FastifyInstance) {
       where.createdAt = buildOrderCreatedAtRange(query.startDate, query.endDate);
     }
 
-    if (query.fulfillmentStage) {
+    if (query.fulfillmentStage || query.fulfillmentStatus) {
+      if (!isOrderFulfillmentFilterCompatible(query.fulfillmentStage, query.fulfillmentStatus)) {
+        return reply.status(400).send({ code: 0, msg: '履约阶段与二级状态不匹配' });
+      }
       const candidateOrders = await prisma.order.findMany({
         where: where as any,
         select: {
@@ -623,7 +660,7 @@ export async function orderRoutes(app: FastifyInstance) {
       const candidateOrderIds = candidateOrders.map((order) => order.id);
       const warehouseLogs = candidateOrderIds.length > 0
         ? await prisma.warehouseLog.findMany({
-            where: { orderId: { in: candidateOrderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+            where: { orderId: { in: candidateOrderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print', 'stock_ready'] } },
             orderBy: { createdAt: 'desc' },
             select: { orderId: true, operationType: true, createdAt: true },
           })
@@ -632,6 +669,8 @@ export async function orderRoutes(app: FastifyInstance) {
         candidateOrders,
         warehouseLogs,
         query.fulfillmentStage,
+        new Date(),
+        query.fulfillmentStatus,
       );
       restrictOrderIds(where, matchingOrderIds);
     }
@@ -680,7 +719,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const orderIds = rows.map((row) => row.id);
     const warehouseLogs = orderIds.length > 0
       ? await prisma.warehouseLog.findMany({
-          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print', 'stock_ready'] } },
           orderBy: { createdAt: 'desc' },
           select: { orderId: true, operationType: true, createdAt: true },
         })
@@ -698,6 +737,9 @@ export async function orderRoutes(app: FastifyInstance) {
           warehouseScanInAt: latestWarehouseLogByOrder.get(r.id)?.scanInAt ?? null,
           warehouseScanOutAt: latestWarehouseLogByOrder.get(r.id)?.scanOutAt ?? null,
           labelPrintedAt: latestWarehouseLogByOrder.get(r.id)?.labelPrintedAt ?? null,
+          stockPreparedAt: latestWarehouseLogByOrder.get(r.id)?.stockPreparedAt ?? null,
+          fulfillmentStage: resolveOrderFulfillmentStage({ ...r, warehouseScanInAt: latestWarehouseLogByOrder.get(r.id)?.scanInAt ?? null, warehouseScanOutAt: latestWarehouseLogByOrder.get(r.id)?.scanOutAt ?? null, stockPreparedAt: latestWarehouseLogByOrder.get(r.id)?.stockPreparedAt ?? null }).key,
+          fulfillmentStatus: resolveOrderFulfillmentStatus({ ...r, warehouseScanInAt: latestWarehouseLogByOrder.get(r.id)?.scanInAt ?? null, warehouseScanOutAt: latestWarehouseLogByOrder.get(r.id)?.scanOutAt ?? null, stockPreparedAt: latestWarehouseLogByOrder.get(r.id)?.stockPreparedAt ?? null }),
         })),
       },
     };
@@ -770,13 +812,14 @@ export async function orderRoutes(app: FastifyInstance) {
     }
 
     const warehouseLogs = await prisma.warehouseLog.findMany({
-      where: { orderId: id, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+      where: { orderId: id, operationType: { in: ['scan_in', 'scan_out', 'label_print', 'stock_ready'] } },
       orderBy: { createdAt: 'desc' },
       select: { operationType: true, createdAt: true },
     });
     const warehouseScanInAt = warehouseLogs.find((log) => log.operationType === 'scan_in')?.createdAt ?? null;
     const warehouseScanOutAt = warehouseLogs.find((log) => log.operationType === 'scan_out')?.createdAt ?? null;
     const labelPrintedAt = warehouseLogs.find((log) => log.operationType === 'label_print')?.createdAt ?? null;
+    const stockPreparedAt = warehouseLogs.find((log) => log.operationType === 'stock_ready')?.createdAt ?? null;
 
     return {
       code: 1,
@@ -787,6 +830,9 @@ export async function orderRoutes(app: FastifyInstance) {
         warehouseScanInAt,
         warehouseScanOutAt,
         labelPrintedAt,
+        stockPreparedAt,
+        fulfillmentStage: resolveOrderFulfillmentStage({ ...order, warehouseScanInAt, warehouseScanOutAt, labelPrintedAt, stockPreparedAt }).key,
+        fulfillmentStatus: resolveOrderFulfillmentStatus({ ...order, warehouseScanInAt, warehouseScanOutAt, labelPrintedAt, stockPreparedAt }),
       },
     };
   });

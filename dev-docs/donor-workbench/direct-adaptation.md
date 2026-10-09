@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 采集图片防盗链与订单阶段收口（本地，尚未部署）
+
+- 采集图空白根因已由真实请求证实：1688 `cbu01.alicdn.com` 在 `Referer: https://app.ss-erp.com/` 下返回403 HTML；`no-referrer` 返回200 JPEG。数据库仍有来源元数据；生成图走 ERP-owned OSS/R2 兼容 `PutObject`，数据库保存 `MediaAsset` 的 URL、storage key、尺寸和 SHA。
+- Web source 列表、详情和图片网格改用 `SourceProductImage`：第三方来源使用 `referrerPolicy=no-referrer`，`/api/cdn` 使用 anonymous CORS，错误不再隐藏整行而显示“图片暂不可用”。6项 source media/readiness/image 回归、Web typecheck/ESLint通过。
+- 订单阶段改为共享 owner 五阶段及二级状态；新增 `PUT /api/orders/:id/stock-ready` 严格 `prepared:true`、owner/shop检查、事务和幂等 `stock_ready` warehouse log。pipeline 使用同店/日期/搜索/物流等作用域，列表/详情投影 `stockPreparedAt`、`fulfillmentStage`、`fulfillmentStatus`。服务端订单33项、Web orders flow通过。
+- 这批改动仅本地验证，未触发 Provider/Ozon、数据库生产写入或部署；下一步复核 UI 截图后，再按单一提交推送部署。
+
 ## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
 
 - [x] 最终提交 `66c9396c48e3b934a18257fca945363be0c742e6` 已推送；COM/CN 签名、安装验收、原生 offline（7232 passed / 381 条既有条件 skipped）、双区标准部署、备份恢复和 FULL canonical VPS 均通过。两区 `/ready`、DB/Redis、服务进程和运行 commit 实际读回一致。

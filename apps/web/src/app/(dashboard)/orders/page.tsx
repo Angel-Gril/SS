@@ -59,6 +59,9 @@ interface Order {
   warehouseScanInAt: string | null;
   warehouseScanOutAt: string | null;
   labelPrintedAt: string | null;
+  stockPreparedAt: string | null;
+  fulfillmentStage: string | null;
+  fulfillmentStatus: string | null;
   shop: { name: string; platform: string };
 }
 
@@ -83,6 +86,7 @@ interface PipelineStage {
   key: string;
   label: string;
   count: number;
+  children?: Array<{ key: string; label: string; count: number }>;
 }
 
 interface OrderStats {
@@ -270,7 +274,7 @@ function getProgressStep(order: any): number {
 
 function formatInternationalDisplayStatus(order: any): string {
   const stage = resolveOrderFulfillmentStage(order);
-  if (stage.key === 'delivered') return '已送达';
+  if (order.fulfillmentStatus === 'delivered') return '已送达';
   if (stage.key === 'delivering') return '出库发运';
   if (stage.key === 'warehouse_processing') return '仓库处理';
   if (order.internationalTrackingNumber || order.trackingNumber) return '国际单已生成';
@@ -329,6 +333,7 @@ export default function OrdersPage() {
   const [syncSinceDays, setSyncSinceDays] = useState(90);
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
   const [serviceTags, setServiceTags] = useState<ServiceTag[]>([]);
   const [userColorTags, setUserColorTags] = useState<UserColorTag[]>([]);
   const [tagDialogOrder, setTagDialogOrder] = useState<Order | null>(null);
@@ -408,6 +413,7 @@ export default function OrdersPage() {
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
     if (pipelineActive) params.set('fulfillmentStage', pipelineActive);
+    if (pipelineStatus) params.set('fulfillmentStatus', pipelineStatus);
 
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
     if (res.code === 1 && res.data) {
@@ -419,7 +425,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, subStatus, purchaseState, shippingMethod, sort, page, startDate, endDate, pipelineActive]);
+  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, subStatus, purchaseState, shippingMethod, sort, page, startDate, endDate, pipelineActive, pipelineStatus]);
 
   function handleSync(fullSync = false) {
     if (!shopId && shops.length === 0) {
@@ -430,6 +436,17 @@ export default function OrdersPage() {
     setSyncDialogOpen(true);
   }
 
+  async function markStockReady(order: Order) {
+    try {
+      const response = await api.put(`/api/orders/${order.id}/stock-ready`, { prepared: true });
+      if (response.code !== 1) throw new Error(response.msg || '确认备货失败');
+      toast({ title: '已确认备货', description: '订单已进入国内在途' });
+      await Promise.all([loadOrders(), loadPipeline()]);
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '确认备货失败', variant: 'destructive' });
+    }
+  }
+
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
     setPage(0);
@@ -437,12 +454,23 @@ export default function OrdersPage() {
   }
 
   function handlePipelineClick(stageKey: string) {
+    const stage = pipeline.find(item => item.key === stageKey);
     if (pipelineActive === stageKey) {
       setPipelineActive(null);
+      setPipelineStatus(null);
     } else {
       setPipelineActive(stageKey);
+      setPipelineStatus(null);
+      if (!stage?.children?.length) setPipelineStatus(null);
       setStatus('');
     }
+    setPage(0);
+  }
+
+  function handlePipelineStatusClick(stageKey: string, childKey: string) {
+    setPipelineActive(stageKey);
+    setPipelineStatus(pipelineStatus === childKey ? null : childKey);
+    setStatus('');
     setPage(0);
   }
 
@@ -616,6 +644,23 @@ export default function OrdersPage() {
                       }`}>
                         {PIPELINE_LABELS[stage.key] || stage.label}
                       </span>
+                      {isActive && stage.children?.length ? (
+                        <div className="mt-1 flex flex-wrap justify-center gap-1">
+                          {stage.children.map((child) => (
+                            <button
+                              key={child.key}
+                              type="button"
+                              onClick={(event) => { event.stopPropagation(); handlePipelineStatusClick(stage.key, child.key); }}
+                              className={cn(
+                                'rounded-full border px-1.5 py-0.5 text-[10px] transition-colors',
+                                pipelineStatus === child.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted',
+                              )}
+                            >
+                              {child.label} {child.count > 0 ? `(${child.count})` : ''}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </button>
                     {idx < pipeline.length - 1 && (
                       <div className="flex-1 h-px bg-border mx-1 min-w-[12px]" />
@@ -636,7 +681,7 @@ export default function OrdersPage() {
                 key={tab.key}
                 size="sm"
                 variant={status === tab.key && !pipelineActive ? 'default' : 'outline'}
-                onClick={() => { setStatus(tab.key); setPipelineActive(null); setPage(0); }}
+                onClick={() => { setStatus(tab.key); setPipelineActive(null); setPipelineStatus(null); setPage(0); }}
               >
                 <tab.icon className="h-3.5 w-3.5" />
                 {tab.label}
@@ -1163,6 +1208,16 @@ export default function OrdersPage() {
                             onClick={() => setShipOrder(order)}
                           >
                             <Send className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[10px]"
+                            disabled={Boolean(order.stockPreparedAt) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
+                            title={order.stockPreparedAt ? '已确认备货' : '确认已备货，进入国内在途'}
+                            onClick={() => void markStockReady(order)}
+                          >
+                            {order.stockPreparedAt ? '已备货' : '确认备货'}
                           </Button>
                           <Button
                             size="icon"

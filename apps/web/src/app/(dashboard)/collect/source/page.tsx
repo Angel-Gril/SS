@@ -35,6 +35,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
 import { SourceListingWorkbench } from '@/components/source-listing/source-listing-workbench';
+import { SourceProductImage } from '@/components/source-listing/source-product-image';
 import { useScopedSystemConfirmation, useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
@@ -1106,13 +1107,10 @@ function SourceProductRow({
           title="查看采集详情"
         >
           {preview ? (
-            <img
+            <SourceProductImage
               src={preview}
               alt=""
               className="h-full w-full object-cover"
-              onError={(event) => {
-                event.currentTarget.style.display = 'none';
-              }}
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-muted-foreground">
@@ -1282,7 +1280,7 @@ function SourceDetailContent({
       <div className="flex gap-4">
         <div className="h-24 w-24 shrink-0 overflow-hidden rounded-md border bg-muted">
           {sourceMainPreviewImage(item) ? (
-            <img src={sourceMainPreviewImage(item)} alt="" className="h-full w-full object-cover" />
+            <SourceProductImage src={sourceMainPreviewImage(item)} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-muted-foreground">
               <ImageIcon className="h-7 w-7" />
@@ -3078,13 +3076,10 @@ function SourceImageGrid({ images, empty, limit, onRemove }: { images: string[];
       {images.slice(0, limit).map((image, index) => (
         <div key={index} className="group relative aspect-square overflow-hidden rounded border bg-muted">
           <a href={/^https?:\/\//i.test(image) ? image : apiUrl(image)} target="_blank" rel="noreferrer" className="block h-full w-full">
-            <img
+            <SourceProductImage
               src={/^https?:\/\//i.test(image) ? image : apiUrl(image)}
               alt=""
               className="h-full w-full object-cover"
-              onError={(event) => {
-                event.currentTarget.parentElement?.parentElement?.classList.add('hidden');
-              }}
             />
           </a>
           {onRemove ? (
