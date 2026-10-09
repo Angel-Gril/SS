@@ -1,8 +1,10 @@
 # 旧扩展直接适配 SS ERP
 
-## 2026-10-10 来源图片后台转存（本地验收完成，准备推送）
+## 2026-10-10 来源图片后台转存（本地验收完成，已提交推送）
 
 用户授权完成 V2 来源图转存并提交、推送。采集仍立即返回，事务同时保存后台待处理标记；独立 Worker 使用现有 ERP-owned OSS/R2 与 `SOURCE_ORIGINAL` MediaAsset，禁止自动使用 Ozon CDN。快照 payload/hash、媒体 key、SKU 归属、草稿版本及发布/费用合同不变。已有商品不做未经请求的批量迁移；重新采集形成的新快照进入转存。
+
+实现提交 `be6d8ffdda5b67359efbbd110ade90a2f1756c64` 已推送到 `origin/feat/ai-media-prompt-registry`，服务端构建通过。当前签名、双区部署与公开扩展分发尚未执行；生产应用452、官网448保持。
 
 Owner：`source-capture-prisma.ts` 为 native/legacy 新快照事务持久化待处理标记，`source-listing-media-import.ts` 负责准确快照图片内部化，`source-capture-image-transfer.ts`/Prisma store/Worker 负责租约、分页游标、失败恢复和当前投影 CAS；`source-capture-media-display.ts` 向 Web/扩展提供独立 displayUrl。每批100张、4并发、128MiB下载预算，每图8MiB/12MP，下载15秒/上传30秒，每批最多3次后台尝试；大采集分页续接而不拒绝全部图片。失败继续保留原图，不隐藏商品。生成图片内容 hash 纳入对象 key，失效租约重试不会覆盖已有不同字节。
 
