@@ -6,6 +6,8 @@
 
 实现提交 `be6d8ffdda5b67359efbbd110ade90a2f1756c64` 已推送到 `origin/feat/ai-media-prompt-registry`，服务端构建通过。当前签名、双区部署与公开扩展分发尚未执行；生产应用452、官网448保持。
 
+部署接续提交 `ae4d69861be0e6a56c15db0fd301c3866547f74e` 已完成 `1.0.453` COM/CN 签名和双区应用切换。COM/CN canonical VPS 均 `0 failure`，服务 active、`/ready` 与 DB/Redis 通过，部署备份恢复分别为 COM144/CN143 张表并清理临时库。当前官网公开指针仍 `66c9396c / 1.0.448`；新扩展公开发布门禁尚未执行，保留旧 pointer 可回滚。无 Provider/Ozon 请求或新增费用。
+
 Owner：`source-capture-prisma.ts` 为 native/legacy 新快照事务持久化待处理标记，`source-listing-media-import.ts` 负责准确快照图片内部化，`source-capture-image-transfer.ts`/Prisma store/Worker 负责租约、分页游标、失败恢复和当前投影 CAS；`source-capture-media-display.ts` 向 Web/扩展提供独立 displayUrl。每批100张、4并发、128MiB下载预算，每图8MiB/12MP，下载15秒/上传30秒，每批最多3次后台尝试；大采集分页续接而不拒绝全部图片。失败继续保留原图，不隐藏商品。生成图片内容 hash 纳入对象 key，失效租约重试不会覆盖已有不同字节。
 
 验收 T2 RED→GREEN 已证明 pending 原子保存、105图分批、只用OSS/R2、错误不泄漏、准确 owner/snapshot/mediaKey；真实本机 PostgreSQL 8项验证租约互斥/重启恢复/分页游标/3次上限/旧快照拒绝，实际解码字节与 MediaAsset 唯一复用、Web displayUrl 和不可变原件校验均通过，155 migrations/隔离schema已清理。最终受影响后端150项及扩展/Web55项通过，服务端/Web类型与定向lint通过；完整preflight曾通过7305后端/385既有条件skipped和618静态门禁，后续分页/自动刷新/超时的受影响回归另行验证，不复用该全量输出冒充最终重跑。

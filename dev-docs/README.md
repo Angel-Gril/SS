@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-10 `ae4d6986 / 1.0.453` 双区应用部署完成
+
+来源图异步转存、OSS/R2 displayUrl、精铺自动只读刷新已随 `ae4d69861be0e6a56c15db0fd301c3866547f74e / 1.0.453` 部署到 COM/CN。两区签名包 MV3 安装、部署备份恢复、canonical VPS、`/ready`、DB/Redis 和运行配置均通过；COM 保持原 DOTH hosted pilot，CN 保持 direct/RDS dark。官网 Cloud/Local 下载仍安全服务 `66c9396c / 1.0.448`，尚未执行新 website approval/CAS/distribution probe。Provider/Ozon/新增费用为 0。准确证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-10 来源图片异步转存本地完成
 
 V2/legacy新快照采集不等待网络，后台按准确owner/snapshot/mediaKey分页转存到ERP-owned OSS/R2，列表/工作台使用独立显示地址，精铺自动更新时保留未保存编辑；快照原件和草稿版本不变。实现`be6d8ffd`已提交推送，真实本机PostgreSQL8项、后端150项、扩展/Web55项及隔离Chrome自动切图通过，服务端构建和类型/lint通过。未签名/部署/公开更新，生产452/官网448保持。证据及资源边界仅维护在[直接适配owner](donor-workbench/direct-adaptation.md)。
