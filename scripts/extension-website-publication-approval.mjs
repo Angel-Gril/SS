@@ -278,7 +278,7 @@ function validateDarkPolicyEvidence(value) {
     }
   }
   if (typeof policy.legacyGeneration !== 'string'
-    || !policy.legacyGeneration.endsWith('/disabled')
+    || !(policy.legacyGeneration.endsWith('/disabled') || policy.legacyGeneration === 'disabled/custom')
     || typeof policy.imageTranslation !== 'string'
     || !policy.imageTranslation.endsWith('/disabled')
     || typeof policy.policy !== 'string'

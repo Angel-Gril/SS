@@ -42,6 +42,7 @@ import {
   probeWebsiteDistribution,
 } from './probe-extension-website-distribution.mjs';
 import { verifyExtensionPublication } from './verify-extension-publication.mjs';
+import { validateRel04DarkCanarySummary } from './extension-website-publication-approval.mjs';
 
 const roots = [];
 const keyId = 'ss-erp-extension-release-test-01';
@@ -438,6 +439,22 @@ test('new website approval refuses a legacy canary before accessing the signing 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /v2 candidate-bound/u);
   assert.equal(existsSync(value.approvalPath), false);
+});
+
+test('dark website approval accepts a disabled configured custom image provider', () => {
+  const commit = 'a'.repeat(40), summary = darkCanaryFixture({ expectedGitCommit: commit });
+  summary.checks.find(check => check.id === 'default-off-policy').evidence.legacyGeneration = 'disabled/custom';
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, { expectedGitCommit: commit, expectedApiOrigin: origin, now: approvedAt }));
+});
+
+test('configured custom image provider cannot authorize an enabled channel or a non-dark rollout', () => {
+  for (const mutate of [policy => { policy.legacyGeneration = 'enabled/custom'; },
+    policy => { policy.legacyGeneration = 'disabled/custom'; policy.master = 'true'; },
+    policy => { policy.legacyGeneration = 'disabled/custom'; policy.suite = 'true'; }]) {
+    const commit = 'a'.repeat(40), summary = darkCanaryFixture({ expectedGitCommit: commit });
+    mutate(summary.checks.find(check => check.id === 'default-off-policy').evidence);
+    assert.throws(() => validateRel04DarkCanarySummary(summary, { expectedGitCommit: commit, expectedApiOrigin: origin, now: approvedAt }));
+  }
 });
 
 test('new website approval rejects VPS evidence completed before the candidate signature', () => {

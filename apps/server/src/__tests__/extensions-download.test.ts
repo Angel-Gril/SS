@@ -684,6 +684,30 @@ describe('extensionDownloadRoutes', () => {
     })).rejects.toThrow(/no-shop|canary/u);
   });
 
+  it('serves a signed CN dark bundle with a configured custom provider whose channel is disabled', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const cn = await publishedFixture({ ...value, canaryVersion: 2, region: 'CN', mutateDarkCanary(canary) {
+      const checks = canary.checks as Array<{ id: string; evidence: Record<string, unknown> }>;
+      checks.find(check => check.id === 'default-off-policy')!.evidence.legacyGeneration = 'disabled/custom';
+    } });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: cn.publicationRoot, keyringPath: cn.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.cn', expectedRegion: 'CN', trustedOwnerUid: null,
+    })).resolves.toMatchObject({ approvalSha256: cn.approvalSha256 });
+  });
+
+  it.each(['enabled/custom', 'disabled/unknown'])('rejects a signed CN custom channel with invalid state %s', async legacyGeneration => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const cn = await publishedFixture({ ...value, canaryVersion: 2, region: 'CN', mutateDarkCanary(canary) {
+      const checks = canary.checks as Array<{ id: string; evidence: Record<string, unknown> }>;
+      checks.find(check => check.id === 'default-off-policy')!.evidence.legacyGeneration = legacyGeneration;
+    } });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: cn.publicationRoot, keyringPath: cn.keyringPath,
+      expectedDistributionOrigin: 'https://api.example.cn', expectedRegion: 'CN', trustedOwnerUid: null,
+    })).rejects.toThrow(/default-off|Provider|policy/u);
+  });
+
   it.each([
     ['missing CN binding', (canary: any) => { delete canary.bindings.noShopDarkCanary; }],
     ['wrong shop hash', (canary: any) => { canary.bindings.shopIdHash = 'f'.repeat(64); }],

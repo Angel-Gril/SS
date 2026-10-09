@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-09 446 完整套图及正式 QA04 已通过，CN 官网消费者修复准备447
+
+同一446套图已完成持久化审核回执恢复、真实UI应用、两条store-draft assignment和原请求幂等重放；正式QA04 PASS，无新Provider请求/Ozon写入。双区canary均通过，但CN官网批准消费者错误拒绝`disabled/custom`（所有AI/BYOK/上架仍dark）；服务端下载消费者同样存在该缺口。两处T2正例RED→GREEN，启用/未知provider和非dark拒绝、37后端及33发布回归通过。当前官网仍434，准备447新干净候选，详情仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-09 `d64649fd / 1.0.446` 双区部署完成，官网仍待正式 QA04
 
 1.0.446 已提交、推送、COM/CN 签名验签并按标准入口部署；两区 `/ready`、DB/Redis、部署 commit、签名包 MV3 安装和备份恢复通过。COM hosted pilot 仍限原 owner/shop/device/operation，CN direct/RDS dark。修复版新增候选图片 `crossOrigin="anonymous"`，真实 Chrome 预览两图均解码 900×1200，原始 CDN/CORP 保持不变。

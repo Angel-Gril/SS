@@ -1,5 +1,12 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 446 正式证据闭合与 CN 官网 dark 消费者修复
+
+- 两槽审核已通过持久化ExtensionCommandReceipt、当前HTTP及签名UI读回确认，未重发审核；记录明确`originalPostResponseCaptured=false`，使用真实只读成功HTTP回执及精确持久化grant/receipt，不伪称保存了原POST。当前同suite通过物理“应用已审核图片”完成r1v1→r2v2两条store-draft assignment，原body/idempotency replay返回同批次且`replayed=true`。实库两笔CNY0.10 settled、所有pending0，queue完成清理，专用来源/Web目标关闭、9222保留，正式schema4 QA04 PASS（SHA d7bce73e31a4cbc7a53c684fb157a145c25e0086e72f894066aebf9f5de9de8e）。本次新增Provider0、Ozon0，旧原件保持。
+- 刷新已过期的双区目标备份认证后，双区canonicalVPS与REL04 canary均PASS。COM官网approval已生成，CN批准被真实canary的`legacyGeneration=disabled/custom`拒绝；生成者与部署检查正确证明未启用，批准/服务端下载消费者仍按provider字段必须disabled错误判断。官网未CAS，双区仍434。
+- 新修复只在两处消费者认可精确`disabled/custom`，保持全部master/suite/operation/BYOK/发布dark检查、tenantIds0、签名/region/commit/字节/时序不变；`enabled/custom`、`disabled/unknown`、master/suite开启仍拒绝。没有改CN配置、权限、价格、Provider运行或旧canary原件。T2两处正例先RED，再37后端/33发布回归GREEN（3/1既有平台skipped），lint通过。
+- 最终447需新commit候选/签名/双区标准部署与正式证据，沿用已授权真实测试和公开发布范围，不将446运行重标为447。本轮只修官网分发消费者，不扩展AI功能开放范围。
+
 ## 2026-10-09 `d64649fd / 1.0.446` 预览修复双区部署与新 suite 证据
 
 - `d64649fd33487bdaee6703bcf0fb05a89e41ef53 / 1.0.446` 已推送、COM/CN 签名验签、标准双区部署；两区 FULL canonical VPS PASS、0 failure，备份恢复和 Cloud/Local MV3 安装验收通过。官网 pointer 仍为旧 `14985551 / 1.0.434`，未执行 CAS。
