@@ -45,8 +45,8 @@ for (const pattern of ['-tps-', 'gg_dtc', 'rate', '160-160']) {
 }
 assert.match(
   page,
-  /onError=\{\(event\)/,
-  'source collection thumbnails should hide broken image previews',
+  /SourceProductImage/,
+  'source collection thumbnails should use the shared referrer-safe image consumer',
 );
 assert.match(
   page,
