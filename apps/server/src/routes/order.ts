@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
@@ -10,7 +9,6 @@ import { createOrderStockReadyService } from '../services/order-stock-ready.js';
 import { buildOrderListScope } from '../services/order-list-scope.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
-  isOrderAwaitingSellerShipment,
   matchesOrderFulfillmentFilter,
   isOrderFulfillmentFilterCompatible,
   ORDER_FULFILLMENT_STAGE_FILTER_KEYS,
@@ -32,12 +30,6 @@ type WarehouseStageLogInput = {
   orderId: string;
   operationType: string;
   createdAt: Date;
-};
-
-type ShipmentUrgency = 'overdue' | 'today' | 'tomorrow' | 'within3d';
-
-type OrderShipmentUrgencyInput = OrderFulfillmentStageInput & {
-  id: string;
 };
 
 const orderQuerySchema = z.object({
@@ -93,7 +85,7 @@ export function filterOrderIdsByFulfillmentStage(
   orders: OrderStageFilterInput[],
   warehouseLogs: WarehouseStageLogInput[],
   fulfillmentStage: FulfillmentStageKey | undefined,
-  now: Date = new Date(),
+  _now: Date = new Date(),
   fulfillmentStatus?: OrderFulfillmentStatus,
 ): string[] {
   const latestWarehouseLogByOrder = buildLatestWarehouseLogMap(warehouseLogs);
@@ -134,21 +126,6 @@ function buildLatestWarehouseLogMap(
     latestWarehouseLogByOrder.set(log.orderId, current);
   }
   return latestWarehouseLogByOrder;
-}
-
-function toValidDate(value: string | Date | null | undefined): Date | null {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isFinite(date.getTime()) ? date : null;
-}
-
-/**
- * Escape a user supplied value used in a PostgreSQL ILIKE pattern.
- * `%`, `_` and `\` are pattern characters and must be treated literally for
- * order searches (the UI presents this as a normal substring search).
- */
-function escapePostgresLike(value: string): string {
-  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 function orderSort(sort: z.infer<typeof orderQuerySchema>['sort']) {
