@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
+
+448 已完成推送、原生 offline、区域签名、双区标准部署、备份恢复、FULL VPS、真实 9458 精铺采集/草稿/START/CONTINUE、两图 Provider 套图、审核、独立 store-draft assignment、幂等 replay、正式 QA04、COM/CN canary、website approval、CAS、匿名 distribution probe 和最终 publication verifier。COM/CN 官网 latest 与 Cloud/Local 下载均实读 448；COM 商品分析继续 qwen-vl-max，CN direct/RDS dark。真实 suite 两笔 ERP CNY0.10 settled、Ozon0；447 的失败 count 任务已按新合同释放 ERP CNY0.10 预扣并保留原失败/供应商未知费用事实。临时发布账号/9458已清理，用户9222保留。准确原件只维护在[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-09 count响应与当前图片过程本地修复完成，准备448
 
 用户批准的首图选择、count未交付受审计释放和当前图片过程/历史折叠已本地完成；Provider137项/追加匿名下载、owner66项、PG10+8及Chrome过程与iframe恢复通过。447生产套图的失败/未决预扣保持原件，未重发Provider；线上447、官网434，准备最终448候选，准确边界仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。

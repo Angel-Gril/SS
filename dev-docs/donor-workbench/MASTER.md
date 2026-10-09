@@ -1,5 +1,9 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
+
+count首图兼容、未交付释放和当前图片过程/历史折叠已随448完成推送、签名、双区部署和公开发布。真实9458采集/草稿/两图suite/审核/assignment/replay、正式QA04、双区canary/approval/CAS/distribution均通过；官网与Cloud/Local下载均448，COM分析开启/CN dark，Ozon0。准确原件和限制仅维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-09 当前图片过程与count响应修复本地完成（3/3），准备448
 
 首图兼容/未交付释放/自动图片过程及历史折叠三项本地验收通过，线上仍447、官网434，待新候选部署后关闭447未决并完成正式发布。准确测试、原件和范围仅维护在[直接适配 owner](./direct-adaptation.md)。
@@ -94,9 +98,9 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications run `9f074c87 / 1.0.447`; public Cloud/Local downloads remain `14985551 / 1.0.434`.
+COM/CN applications and public Cloud/Local downloads run `66c9396c / 1.0.448`.
 Both regions keep the configured custom/count image model at CNY0.10 per image; COM product analysis is enabled and CN stays dark.
-The current native offline, canonical VPS and signed-package installation checks passed. Dedicated Chrome9457 completed capture and the actual ERP-to-precision launch; its fresh suite is PARTIAL_FAILURE because one 1-image Provider request returned3 images. Cost/recovery reconciliation and website publication remain incomplete.
+The current native offline, canonical VPS, signed-package installation, fresh normal suite and website publication checks passed; 447's original rejected count task remains preserved with one audited ERP release.
 The following public-distribution facts describe the completed `1.0.434` baseline.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads

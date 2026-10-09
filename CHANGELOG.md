@@ -36,6 +36,22 @@
 - 新模型套图按已验证的单参考能力采用批准顺序中的首图，避免多参考计划使预览失败；保留原计划与全部引用校验。
 - 保留自定义模型的原文字生图能力，并阻止普通改图入口把旧请求参数当作已验证的精铺套图合同。
 
+## [1.0.448] - 2026-10-09
+
+### Added
+
+- 精铺图片处理在确认开始后自动展示当前套图过程、槽位进度和候选，历史任务默认折叠并可展开查看。
+
+### Fixed
+
+- 指定 `gpt-image-2-count` 单张请求按原精铺只采用第一张有效图片，仍只下载和计费一张；无效首图和超出已验证数量的响应继续拒绝。
+- 已接受但未交付的 count 套图支持受审计放弃恢复，释放 ERP 预扣并保留供应商任务身份、失败和未知供应商费用事实。
+
+### Changed
+
+- COM/CN 应用、签名包和官网 Cloud/Local 下载公开切换到 `66c9396c48e3b934a18257fca945363be0c742e6 / 1.0.448`。
+- COM 保持 DOTH hosted pilot 与 `qwen-vl-max` 商品分析，CN 继续 direct/RDS dark。
+
 ## [1.0.434] - 2026-10-07
 
 ### Added
@@ -233,6 +249,7 @@
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
 [Unreleased]: https://github.com/Angel-Gril/SS/compare/566f146b9dc494bb581f6cf1d97b2b1757ac7b05...HEAD
+[1.0.448]: https://github.com/Angel-Gril/SS/compare/149855518f39e0475571e8ab6fc382530a177b7f...66c9396c48e3b934a18257fca945363be0c742e6
 [1.0.429]: https://github.com/Angel-Gril/SS/compare/3fdc5c430bd1d04990ba3894c2225449a855a867...566f146b9dc494bb581f6cf1d97b2b1757ac7b05
 [1.0.427]: https://github.com/Angel-Gril/SS/compare/46e17e00622753a8f37ff501697a3cc8d2324baa...3fdc5c430bd1d04990ba3894c2225449a855a867
 [1.0.424]: https://github.com/Angel-Gril/SS/compare/4df9ec387b75c0f26c8a483c42d33940c03a892c...46e17e00622753a8f37ff501697a3cc8d2324baa

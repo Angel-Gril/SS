@@ -1,5 +1,15 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
+
+- [x] 最终提交 `66c9396c48e3b934a18257fca945363be0c742e6` 已推送；COM/CN 签名、安装验收、原生 offline（7232 passed / 381 条既有条件 skipped）、双区标准部署、备份恢复和 FULL canonical VPS 均通过。两区 `/ready`、DB/Redis、服务进程和运行 commit 实际读回一致。
+- [x] 专用9458加载签名Cloud 1.0.448并正常DOTH配对；1688滑块通过后真实采集1SKU/9图、新隔离草稿 `draft-85546643-6c1a-4488-9845-12b363a5683f`、ERP同窗精铺入口、plan审核、START/CONTINUE各一次通过。两图suite `cmv0tegeu000i5o06j808cavo` attempt1全部成功；原始1008×1344/成品900×1200，无白边，主图/场景差异明确。
+- [x] 两槽实际精铺 UI 审核通过并应用到草稿，r1/v1→r2/v2，新增两条独立 store-draft assignment；原 assignment request 使用同一 idempotency key replay 返回 `replayed=true`，没有重复写入。两笔 ERP CHARGE 各 CNY0.10，pending jobs/costs/recovery/workflows/suites 全部0，queue清理，Ozon publish attempts=0。
+- [x] 正式 QA04 PASS（SHA `a04488c3822af2eaab5509777f23e360f2d94dc4e8a773200fafb70238f42742`）；COM/CN REL-04 canary、website approval、CAS 和匿名 Cloud/Local distribution probe/final publication verifier 全部 PASS。COM/CN latest 实读 `66c9396c / 1.0.448`；COM AI分析继续 qwen-vl-max/CN AI、BYOK、Ozon publisher dark。
+- [x] 447 主图实际供应商返回3图而被原合同拒绝的任务，已在448部署后按精确count ABANDON 合同通过正式管理员 owner 释放 ERP CNY0.10 预扣；原 `INVALID_PROVIDER_RESULT`、accepted task identity、供应商 billing UNKNOWN 和审计回执保留，幂等重放只生成一次 `RECONCILED_RELEASE`，没有重发Provider/Ozon。
+- [x] 双区临时发布 account sessions、9457/9458 专用设备测试浏览器和本轮 owner token 均已清理；用户9222保留，业务草稿/图片/回执不删除。私有回执根为 `release-66c9396c-deploy448` / `release-66c9396c-fresh448`，不进入Git；供应商控制台/账单未读取。
+- 本次真实图片保留收纳盒主体、把手和底部纹理；场景图含相邻来源收纳盒，作为画面道具审查，不声明包装数量。该样本技术/目视通过不证明全部商品质量。源商品打开初期滑块、只读刷新时序、审核控件处于sources tab及旧final时间顺序失败原件保留；仅只读或首次未发出的UI动作恢复，原suite/Provider提交不重发。正式QA04使用pilot-after后的新restored和闭合浏览器读回，未改门禁或旧原件。
+
 ## 2026-10-09 count 多图响应与当前过程展示修复本地验收完成，准备448
 
 - 用户明确批准单张请求只采用首张合格图、CNY0.10只计一次；为本次count未交付任务新增受审计放弃恢复和ERP预扣释放，保留供应商身份/真实失败；自动展示当前生图过程并折叠历史，继续新候选公开发布。此前部署/费用/官网授权持续有效。
