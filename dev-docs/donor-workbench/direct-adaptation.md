@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 `6e028c70 / 1.0.452` 订单与采集图片修复已双区部署
+
+- [x] 订单履约 owner 已统一为五个上层阶段：采购备货、国内在途、仓库处理、出库发运、异常；仓库处理展开待打包/待发货，出库发运展开配送中/已送达，异常展开取消/其他异常。pipeline 和订单列表共享店铺、日期、搜索、物流、采购和标签作用域，避免顶部计数与列表结果不一致。
+- [x] `PUT /api/orders/:id/stock-ready` 由独立 service owner 负责，使用 active shop ownership、行锁、stock_ready 审计、物理入库/出库保护和幂等 replay；本机隔离 PostgreSQL 2 tests、migration 155、schema cleanup 完成，Provider/Ozon 0。
+- [x] 采集图空白根因是 1688 Referer 防盗链：带 app.ss-erp.com Referer 返回 403 HTML，无 Referer 返回 200 JPEG。source 列表/详情/网格统一使用 no-referrer 组件；ERP `/api/cdn` 使用 anonymous CORS，失败显示占位。
+- [x] 448 生图资产已实读：两张 raw/provider 与两张成品均有数据库 MediaAsset、尺寸、SHA、storage key，公网路径为 ERP `/api/cdn`，由 ERP-owned OSS/R2 兼容后端写入；采集旧记录仍可能保留外部 1688 URL，不能把外链失效描述为数据库缺图。长期将来源图转存 ERP 对象存储属于后续独立 owner。
+- [x] 6e028c70 已部署双区并健康通过；官网扩展公开指针继续 1.0.448，未把 Web/API 订单修复伪装成扩展版本发布。生产无 Provider/Ozon 新请求。
+
 ## 2026-10-09 采集图片防盗链与订单阶段收口（本地，尚未部署）
 
 - 采集图空白根因已由真实请求证实：1688 `cbu01.alicdn.com` 在 `Referer: https://app.ss-erp.com/` 下返回403 HTML；`no-referrer` 返回200 JPEG。数据库仍有来源元数据；生成图走 ERP-owned OSS/R2 兼容 `PutObject`，数据库保存 `MediaAsset` 的 URL、storage key、尺寸和 SHA。

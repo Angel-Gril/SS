@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-10 `6e028c70 / 1.0.452` 双区应用部署完成
+
+订单履约五阶段、二级筛选、确认备货审计及采集图片防盗链修复已部署到 COM/CN，服务、DB/Redis、`/ready` 和运行 commit 均通过；官网扩展继续公开 `1.0.448`。采集图根因是 1688 Referer 防盗链，生成图已核实由 ERP-owned OSS/R2 兼容对象存储和数据库 MediaAsset 记录共同承载。订单独立 PostgreSQL runner 2 项通过、服务端定向55项、Web typecheck/lint和图片/订单回归通过。准确范围见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-09 采集图片加载与订单履约阶段收口（本地验收完成）
 
 已确认采集图空白是 1688 CDN 的 Referer 防盗链：带 `https://app.ss-erp.com/` 返回 403，去掉 Referer 返回 200；不是数据库或对象存储缺图。来源图片现在统一由 `SourceProductImage` 使用 `no-referrer`，ERP `/api/cdn` 图片匿名 CORS，失败显示占位。生图资产已核实通过 ERP-owned OSS/R2 兼容后端写入对象存储并在数据库保存元数据。
