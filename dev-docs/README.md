@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-10-09 count响应与当前图片过程本地修复完成，准备448
+
+用户批准的首图选择、count未交付受审计释放和当前图片过程/历史折叠已本地完成；Provider137项/追加匿名下载、owner66项、PG10+8及Chrome过程与iframe恢复通过。447生产套图的失败/未决预扣保持原件，未重发Provider；线上447、官网434，准备最终448候选，准确边界仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
+## 2026-10-09 `9f074c87 / 1.0.447` 双区部署与 VPS 验收完成
+
+447 已推送、区域签名、标准双区部署及 FULL canonical VPS 验收通过，DB/Redis 与三个服务正常；同提交原生 offline、7197 项后端回归、构建和签名安装通过。COM 分析开启/原 DOTH pilot、CN direct/RDS dark 保持。用户通过9457滑块后完成真实采集/草稿/ERP精铺入口，两图suite一张成功/CNY0.10 settled，另一张因供应商请求1却返回3而拒绝；cost/recovery各1待闭合，正式QA04/官网门禁未完成、官网仍434。未重发Provider/Ozon或读取账单；新增count终止恢复合同已提交范围确认，详情仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-09 446 完整套图及正式 QA04 已通过，CN 官网消费者修复准备447
 
 同一446套图已完成持久化审核回执恢复、真实UI应用、两条store-draft assignment和原请求幂等重放；正式QA04 PASS，无新Provider请求/Ozon写入。双区canary均通过，但CN官网批准消费者错误拒绝`disabled/custom`（所有AI/BYOK/上架仍dark）；服务端下载消费者同样存在该缺口。两处T2正例RED→GREEN，启用/未知provider和非dark拒绝、37后端及33发布回归通过。当前官网仍434，准备447新干净候选，详情仅见[直接适配 owner](donor-workbench/direct-adaptation.md)。

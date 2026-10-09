@@ -10,6 +10,8 @@ import {
 } from './ai-provider-reconciliation-events.js';
 import { aiImageSuiteRecoveryAuthorization } from './ai-image-suite-recovery.js';
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
+import { aiImageProviderEndpointSha256, parseAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
+import { AI_IMAGE_DONOR_GPT2_COUNT_API_BASE, validDonorGpt2SuiteConfig } from './ai-image-donor-gpt2-profile.js';
 
 const UNRESOLVED_STATUSES = ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] as const;
 const LIST_STATUSES = ['ALL', ...UNRESOLVED_STATUSES] as const;
@@ -133,6 +135,12 @@ function evidenceHash(job: any) {
       updatedAt: iso(job.costReservation.updatedAt),
     } : null,
     updatedAt: iso(job.updatedAt),
+    ...(isRejectedCountSuite(job) ? { abandonmentEvidence: {
+      workflow: job.workflow, assets: job.assets, operationConfig: job.operationConfig,
+      attemptCount: job.attemptCount, maxAttempts: job.maxAttempts, requestedImageCount: job.requestedImageCount,
+      actualCostCents: job.actualCostCents, billedUnits: job.billedUnits,
+      requestFingerprint: job.requestFingerprint, reservation: job.costReservation,
+    } } : {}),
   })).digest('hex');
 }
 
@@ -236,8 +244,60 @@ function historicalAbandonmentEligible(job: any, now: Date): boolean {
     && now.getTime() - dispatchedAt.getTime() >= HISTORICAL_ABANDONMENT_AGE_MS;
 }
 
+function isRejectedCountSuite(job: any): boolean {
+  return job.operation === 'IMAGE_TO_IMAGE' && job.provider === 'custom' && job.model === 'gpt-image-2-count'
+    && job.errorCode === 'INVALID_PROVIDER_RESULT' && Boolean(job.workflow?.suiteSlot);
+}
+
+/** A known synchronous result was rejected before ingest; no Provider lookup can recover it.
+ * This only ends ERP recovery and releases the undelivered ERP reservation. It makes no
+ * claim about Supplier output absence or Supplier billing, and preserves the original failure. */
+function countAbandonmentEvidence(job: any, now: Date) {
+  if (!isRejectedCountSuite(job)) return null;
+  const workflow = job.workflow, slot = workflow.suiteSlot, suite = slot.suite, cost = job.costReservation;
+  const acceptedAt = cost?.providerAcceptedAt, dispatchedAt = job.providerDispatchedAt;
+  if (!(acceptedAt instanceof Date) || !(dispatchedAt instanceof Date)
+    || !Number.isFinite(acceptedAt.getTime()) || !Number.isFinite(dispatchedAt.getTime())
+    || acceptedAt.getTime() > now.getTime() || dispatchedAt.getTime() > now.getTime()
+    || job.status !== 'FAILED' || !isCurrentAttempt(job) || workflow.id !== job.workflowId
+    || workflow.operation !== job.operation || workflow.status !== 'FAILED' || workflow.reviewStatus !== 'NOT_READY'
+    || workflow.selectedOutputAssetId !== null || slot.childWorkflowId !== job.workflowId
+    || slot.ownerUserId !== job.ownerUserId || slot.attempt !== job.workflowAttempt || slot.status !== 'FAILED'
+    || !suite || suite.ownerUserId !== job.ownerUserId || !['FAILED', 'PARTIAL_FAILURE'].includes(suite.status)
+    || suite.cancelRequestedAt || suite.provider !== job.provider || suite.model !== job.model
+    || job.attemptCount !== 1 || job.maxAttempts !== 1 || job.requestedImageCount !== 1
+    || job.width !== 900 || job.height !== 1200 || job.actualCostCents !== null || job.billedUnits !== 0
+    || job.estimatedCostCents !== 10 || slot.estimatedCostCents !== 10 || slot.maximumCostCents !== 10
+    || !Number.isSafeInteger(suite.itemCount) || suite.itemCount < 1 || suite.itemCount > 2
+    || suite.maximumCostCents !== suite.itemCount * 10
+    || !Array.isArray(job.assets) || job.assets.length !== 0
+    || !cost || cost.status !== 'RECONCILIATION_REQUIRED' || cost.ownerUserId !== job.ownerUserId
+    || cost.jobId !== job.id || cost.workflowId !== job.workflowId || cost.actorUserId !== job.actorUserId
+    || cost.operation !== job.operation || cost.provider !== job.provider || cost.model !== job.model
+    || cost.currency !== 'CNY' || cost.estimatedCostMinor !== 10 || cost.maximumCostMinor !== 10
+    || !/^[a-f0-9]{64}$/u.test(job.requestFingerprint || '') || cost.requestFingerprint !== job.requestFingerprint
+    || !String(job.providerJobId || '').trim() || cost.providerRequestId !== job.providerJobId
+    || !Array.isArray(cost.settlements) || cost.settlements.some((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind))) return null;
+  try {
+    const config = job.operationConfig;
+    const runtime = parseAiImageProviderRuntimeContract(config?.providerRuntime);
+    if (config?.version !== 'ai-image-suite-child-operation/v2' || !validDonorGpt2SuiteConfig(config)
+      || runtime.contractVersion !== 'ai-image-provider-runtime/v3' || runtime.provider !== job.provider || runtime.model !== job.model
+      || runtime.baseUrlSha256 !== aiImageProviderEndpointSha256('custom', AI_IMAGE_DONOR_GPT2_COUNT_API_BASE)
+      || runtime.currency !== 'CNY' || runtime.imageCount !== 1
+      || runtime.unitCostCents !== 10 || runtime.maximumCostCents !== 10 || runtime.width !== 1008 || runtime.height !== 1344) return null;
+  } catch { return null; }
+  return { version: 'ai-image-count-undelivered-abandonment/v1', suiteId: suite.id, slotId: slot.id,
+    jobId: job.id, reservationId: cost.id, attempt: job.workflowAttempt, requestFingerprint: job.requestFingerprint,
+    providerJobId: job.providerJobId, providerAcceptedAt: acceptedAt.toISOString(), providerDispatchedAt: dispatchedAt.toISOString(),
+    originalErrorCode: job.errorCode, originalErrorMessage: job.errorMessage || '',
+    providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0 };
+}
+
 function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> {
   if (job.providerReconciliationStatus !== 'MANUAL_REVIEW') return [];
+  // A known rejected synchronous response cannot honestly become NO_OUTPUT or RESUME.
+  if (isRejectedCountSuite(job)) return countAbandonmentEvidence(job, now) ? ['ABANDON'] : [];
   const jobProviderId = String(job.providerJobId || '').trim();
   const costProviderId = String(job.costReservation?.providerRequestId || '').trim();
   const identitiesConflict = Boolean(
@@ -362,6 +422,8 @@ export function createAiProviderReconciliationAdminService(input: {
                   ? { suiteRecovery: existing.payload.suiteRecovery } : {})
                 : { suiteRecovery: aiImageSuiteRecoveryAuthorization(job, now()) }
               : {}),
+            ...(raw.action === 'ABANDON' && isRejectedCountSuite(job)
+              ? { abandonment: existing?.payload?.abandonment || countAbandonmentEvidence(job, now()) } : {}),
           };
           const nextRevision = Number(job.providerReconciliationRevision) + 1;
           const nextStatus = raw.action === 'RESUME'
@@ -409,10 +471,10 @@ export function createAiProviderReconciliationAdminService(input: {
             );
           }
           if (raw.action === 'RESUME') assertCurrentAttempt(job);
-          if (raw.action === 'ABANDON' && !historicalAbandonmentEligible(job, now())) {
+          if (raw.action === 'ABANDON' && !historicalAbandonmentEligible(job, now()) && !countAbandonmentEvidence(job, now())) {
             throw new AiProviderReconciliationAdminError(
               'INVALID_REQUEST',
-              'Only an expired failed suite child with no ERP output may be abandoned',
+              'Only an eligible failed suite child with no ERP output may be abandoned',
               400,
             );
           }

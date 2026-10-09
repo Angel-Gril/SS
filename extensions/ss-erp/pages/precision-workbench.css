@@ -82,6 +82,20 @@
 .precision-image-summary .image-manager-summary-item.is-active { background: #f5fbff; box-shadow: inset 3px 0 0 var(--brand); }
 .precision-image-summary .image-manager-summary-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .precision-image-summary .image-manager-summary-task { flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; }
+.precision-image-task-history { width: 100%; font-size: 12px; color: var(--muted); }
+.precision-image-task-history summary { cursor: pointer; padding: 4px 0; }
+.precision-image-task-history .image-manager-summary-task-line { display: block; margin-top: 4px; }
+.precision-image-process { margin: 12px 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #f5fbff; }
+.precision-image-process h3 { margin: 0 0 8px; font-size: 14px; }
+.precision-image-process > strong { display: block; font-size: 13px; }
+.precision-image-process progress { width: 100%; margin: 12px 0; height: 8px; accent-color: var(--brand); }
+.precision-image-process-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.precision-image-process-slot { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 8px; background: #fff; border: 1px solid var(--line); font-size: 12px; }
+.precision-image-process-slot.is-failed,.precision-image-process-slot.is-unknown_outcome { color: #b42318; border-color: #f3b5ad; }
+.precision-image-process-slot.is-succeeded { border-color: #b2dccb; }
+.precision-image-result-history { grid-column: 1 / -1; width: 100%; border-top: 1px solid var(--line); padding-top: 12px; }
+.precision-image-result-history summary { cursor: pointer; color: var(--muted); font-size: 13px; padding-bottom: 8px; }
+.precision-image-history-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .precision-image-summary .image-manager-video-icon { width: 14px; height: 14px; font-size: 0; border: 2px solid currentColor; border-radius: 3px; }
 .precision-image-summary .image-manager-video-icon::after { content: ''; width: 4px; height: 7px; border: 2px solid currentColor; border-left: 0; position: absolute; right: -7px; top: 1px; border-radius: 0 2px 2px 0; }
 .precision-image-dialog { width: 1180px; height: 860px; grid-template-rows: auto minmax(0, 1fr) auto; }

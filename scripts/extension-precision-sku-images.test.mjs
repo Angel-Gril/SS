@@ -25,7 +25,8 @@ test('a single selected draft SKU stays one row; the view never restores unselec
 });
 test('task candidates and review status belong only to their exact SKU or an explicit product scope', () => {
   const rows = buildSkuImageRows({ skus, media, history: { items: [pending, { ...pending, id: 'product-task', contextSkuKey: '' }] } });
-  assert.deepEqual(rows[0].taskStatusLines.map(line => line.key), ['image-task', 'product-task']);
+  assert.deepEqual(rows[0].taskStatusLines.map(line => line.key), ['image-task']);
+  assert.deepEqual(rows[0].historyTaskStatusLines.map(line => line.key), ['product-task']);
   assert.deepEqual(rows[1].taskStatusLines.map(line => line.key), ['product-task']);
   assert.deepEqual(buildSkuImageRows({ skus, media, history: { items: [pending] } })[1].images.map(image => image.kind), ['SOURCE', 'SOURCE']);
 });
@@ -37,7 +38,7 @@ test('generation success does not present a pending or rejected output as review
 });
 test('shared suite progress is labelled as a whole-suite task instead of fake per-SKU completion', () => {
   const rows = buildSkuImageRows({ skus, media, billing: { suite: { status: 'RUNNING' } } });
-  assert.equal(rows[0].taskStatusLines[0].text, '整套图片处理中');
+  assert.equal(rows[0].taskStatusLines[0].text, '本次套图 · 处理中');
   assert.equal(describeImageTask({ status: 'UNRECOGNIZED' }).text, '状态待核对');
 });
 test('the suite summary keeps the ERP quote and communicates a Chinese review step', () => {

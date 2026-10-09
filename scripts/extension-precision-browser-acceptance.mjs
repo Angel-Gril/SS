@@ -121,6 +121,7 @@ function parentHtml(watermarkJpeg) {
   const product=${JSON.stringify(fixtureProduct())};
   const shops=[{id:'doth',name:'DOTH'},{id:'other-fixture',name:'另一个测试店铺'}];
   let handoff=null,workbench=null,pricing=null,category=null,packaging=[],billing=null,history=null,selectedSkuKeys=[],offerRows=[];
+  let imageProcessFinal=null,imageProcessHistory=null;
   const editorKeys=()=>selectedSkuKeys.concat(offerRows.map(row=>row.rowKey));
   let readyForPublish=false,assignedMedia=false,publishPreviews=0,publishStatusPolls=0,publishCommitted=false;
   let copy={titleRu:null,descriptionRu:null,pendingCandidates:[]},validationPasses=0,validationStatus='NOT_RUN',validationBlockers=[];
@@ -166,6 +167,12 @@ function parentHtml(watermarkJpeg) {
     if(event.source!==frame.contentWindow||event.origin!==location.origin)return;
     const command=contract.parseFrameCommand(event.data);
     commands.push(command);
+    if(${process.argv.includes('--image-process-flow')}&&imageProcessFinal&&command.type==='LOAD_BILLING'){
+      const loading=contract.createProjection({platform:'1688',product,shops,handoff,workbench,
+        billing:{state:'loading',listingWorkflowId:billing.listingWorkflowId},history});
+      frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:loading},location.origin);
+      await new Promise(resolve=>setTimeout(resolve,80));
+    }
     if(command.type==='REFRESH'&&window.__precisionCategoryRefresh)await window.__precisionCategoryRefresh;
     if(command.type==='EDITOR_READ'&&${process.argv.includes('--editor-read-recovery')}&&!window.__precisionFailedEditorRead){
       window.__precisionFailedEditorRead=true;
@@ -398,6 +405,11 @@ function parentHtml(watermarkJpeg) {
         billing.projection.suite.slots[0].goal='sku_hero';
         history.items=history.items.slice(0,1);
       }
+      if(${process.argv.includes('--image-process-flow')}){
+        imageProcessFinal=structuredClone(billing.projection.suite);imageProcessHistory=structuredClone(history.items);
+        imageProcessFinal.slots[0].goal='sku_hero';
+        window.__precisionImagePhase='QUEUED';
+      }
     }
     if(command.type==='EXECUTE_HOSTED_SUITE'&&command.action==='REVIEW_SLOT'){
       await new Promise(resolve=>setTimeout(resolve,200));
@@ -441,6 +453,19 @@ function parentHtml(watermarkJpeg) {
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'COMMAND_RESULT',requestId:command.requestId,ok:true,error:'',data:result},location.origin);
       await window.__precisionCategoryRefresh;window.__precisionCategoryRefresh=null;
       frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);return;
+    }
+    if(${process.argv.includes('--image-process-flow')}&&imageProcessFinal){
+      const phase=window.__precisionImagePhase||'QUEUED',final=structuredClone(imageProcessFinal);
+      final.status=phase;
+      final.slots=final.slots.map((slot,index)=>{
+        if(phase==='SUCCEEDED'||(index===0&&phase!=='QUEUED'))return slot;
+        return {...slot,status:phase==='PARTIAL_FAILURE'?'FAILED':phase,workflowId:null,output:null,
+          reviewStatus:'NOT_READY',commands:{},allowedActions:[],billing:{...slot.billing,reservationStatus:'RESERVED',settlement:null}};
+      });
+      billing.projection.suite=final;
+      const old=Array.from({length:12},(_,i)=>({...imageProcessHistory[0],id:'history-'+i,
+        outputs:[{...imageProcessHistory[0].outputs[0],id:'history-output-'+i,url:'${IMAGE_ORIGIN}/history-'+i+'.png'}]}));
+      history.items=[...(phase==='QUEUED'?[]:phase==='SUCCEEDED'?imageProcessHistory.slice(0,2):imageProcessHistory.slice(0,1)),...old];
     }
     frame.contentWindow.postMessage({contractVersion:contract.CONTRACT_VERSION,type:'PROJECTION',projection:projection()},location.origin);
     if(command.type==='EDITOR_SAVE'&&command.action==='SKU_DUPLICATE'&&${process.argv.includes('--sku-copy-flow')}&&!window.__precisionLostCopyReply){
@@ -672,7 +697,8 @@ async function run() {
           summary.blockedRequests.push(event.request.url);
           await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }); return;
         }
-        await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: type + '; charset=utf-8' }], body: body.toString('base64') });
+        await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: type + '; charset=utf-8' },
+          ...(url.origin === IMAGE_ORIGIN ? [{ name: 'Access-Control-Allow-Origin', value: PAGE_ORIGIN }] : [])], body: body.toString('base64') });
       })().catch(async (error) => {
         summary.pageErrors.push(error.message);
         try { await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }); } catch {}
@@ -1160,6 +1186,49 @@ async function run() {
       await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
       console.log(JSON.stringify(summary, null, 2));
       return;
+    }
+    if (process.argv.includes('--image-process-flow')) {
+      await click('#image-workflow-start-btn'); await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-image-primary").textContent.includes("确认费用")'), 'image process quote');
+      await click('#precision-image-primary');
+      await until(() => workspace('!document.getElementById("precision-image-manager").hidden&&document.getElementById("precision-image-result-panel").hidden===false'), 'confirmed start automatically opens current image process');
+      assert.equal(await workspace('document.getElementById("process-modal").hidden'), true, 'generic preparation modal stays closed');
+      assert.equal(await workspace('document.getElementById("precision-image-process").dataset.suiteStatus'), 'QUEUED');
+      assert.equal(await workspace('document.querySelector(".precision-image-task-history").open'), false);
+      assert.equal(await workspace('document.querySelector(".precision-image-result-history").open'), false);
+      assert.equal(await workspace('document.querySelectorAll("#precision-image-result-panel > .precision-candidates > .precision-candidate").length'), 0);
+      await screenshot('image-process-queued');
+      await evaluate('window.__precisionImagePhase="RUNNING"');
+      await until(() => workspace('document.getElementById("precision-image-process").dataset.suiteStatus==="RUNNING"&&document.querySelectorAll("#precision-image-result-panel > .precision-candidates > .precision-candidate").length===1'), 'read-only polling shows completed slot candidates while another runs');
+      await until(() => workspace('[...document.querySelectorAll("#precision-image-result-panel > .precision-candidates > .precision-candidate img")].every(image=>image.complete&&image.naturalWidth>0)'), 'current generated candidates decode under anonymous CORS');
+      await screenshot('image-process-running');
+      await click('#precision-image-close');
+      await evaluate('window.__precisionImagePhase="PARTIAL_FAILURE"');
+      await until(() => workspace('document.getElementById("precision-image-process").dataset.suiteStatus==="PARTIAL_FAILURE"'), 'closed process still reads the original current task');
+      assert.equal(await workspace('document.getElementById("precision-image-manager").hidden'), true, 'close neither cancels nor reopens automatically');
+      await click('#ai-image-process-btn');
+      assert.match(await workspace('document.getElementById("precision-image-process-status").textContent'), /部分.*失败/u);
+      await screenshot('image-process-partial-failure');
+      await click('.precision-image-result-history summary');
+      assert.equal(await workspace('document.querySelector(".precision-image-result-history").open'), true, 'history remains viewable');
+      await screenshot('image-process-history');
+      await evaluate('window.__precisionImagePhase="SUCCEEDED"'); await click('#precision-image-refresh');
+      await until(() => workspace('document.getElementById("precision-image-process").dataset.suiteStatus==="SUCCEEDED"'), 'explicit refresh restores current success');
+      await screenshot('image-process-complete');
+      const readsAtTerminal=await evaluate('window.__precisionCommands.filter(command=>command.type==="LOAD_BILLING").length');
+      await pause(3300);
+      assert.equal(await evaluate('window.__precisionCommands.filter(command=>command.type==="LOAD_BILLING").length'), readsAtTerminal, 'terminal task stops timers');
+      await evaluate('new Promise(resolve=>{const frame=document.getElementById("workspace");frame.addEventListener("load",()=>resolve(),{once:true});frame.contentWindow.location.reload();})');
+      await until(() => workspace('document.getElementById("precision-image-process")?.dataset.suiteStatus==="SUCCEEDED"&&document.querySelectorAll("[data-image-sku-key]").length===2'), 'iframe reload restores existing task without another start');
+      await click('#ai-image-process-btn');
+      assert.equal(await workspace('document.querySelector(".precision-image-result-history").open'), false, 'reload keeps old results collapsed');
+      await screenshot('image-process-reloaded');
+      const writes=await evaluate('window.__precisionCommands.filter(command=>command.type==="EXECUTE_HOSTED_SUITE").map(command=>command.action)');
+      assert.deepEqual(writes,['CREATE_AND_REVIEW_PLAN','START'], 'progress never continues, retries, reviews or applies');
+      assert.equal(await evaluate('window.__precisionCommands.filter(command=>["ASSIGN_HOSTED_SUITE","PUBLISH"].includes(command.type)).length'),0);
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.imageProcess={autoOpen:true,historyCollapsed:true,queuedRunningPartialSuccess:true,currentCandidates:true,closeKeepsTask:true,terminalStopsPolling:true,iframeReloadRestores:true,readOnlyProgress:true};
+      summary.ok=true; await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2)); return;
     }
     if (process.argv.includes('--video-flow')) {
       await click('[data-video-sku="sku-1"][data-video-role=MAIN]');

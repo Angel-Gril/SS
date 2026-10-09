@@ -3,9 +3,39 @@
 // review and assignment. No donor runner, upload or video authority is copied.
 const taskLabels = {
   PLANNED: '等待处理', QUEUED: '排队中', RUNNING: '处理中',
+  SUCCEEDED: '生成完成',
   FAILED: '处理失败', CANCELLED: '已取消', PARTIAL_FAILURE: '部分完成',
   CANCEL_REQUESTED: '正在取消', UNKNOWN_OUTCOME: '结果待核对',
 };
+
+export function partitionImageTasks(history, billing) {
+  const items = history?.items || [];
+  if (!billing?.suite) return { current: items.slice(0, 1), history: items.slice(1) };
+  const currentIds = new Set(billing.suite.slots?.map(slot => slot.media?.workflowId).filter(Boolean));
+  return { current: items.filter(item => currentIds.has(item.id)), history: items.filter(item => !currentIds.has(item.id)) };
+}
+
+export function buildImageProcess({ billing, history }) {
+  const suite = billing?.suite;
+  if (!suite) return { status: 'NOT_STARTED', total: 0, completed: 0, slots: [], candidates: [], message: '尚未开始生图；准备计划并确认费用后，在这里查看当前过程。' };
+  const tasks = partitionImageTasks(history, billing).current;
+  const slots = (suite.slots || []).map((slot, index) => ({ ...slot, label: ({ sku_hero: 'SKU 主图', hero: '商品主图', scene: '场景图', detail: '详情图' })[slot.goal] || `图片 ${index + 1}`,
+    text: slot.status === 'SUCCEEDED' ? reviewStatus(slot.media?.reviewStatus) : taskLabels[slot.status] || '状态待核对' }));
+  const total = slots.length || billing.quote?.itemCount || 0;
+  const completed = slots.filter(slot => slot.status === 'SUCCEEDED').length;
+  const failed = slots.filter(slot => ['FAILED', 'CANCELLED', 'UNKNOWN_OUTCOME'].includes(slot.status)).length;
+  const message = suite.status === 'SUCCEEDED' ? `已生成 ${completed}/${total} 张，请预览并审核；尚未应用到草稿。`
+    : suite.status === 'PARTIAL_FAILURE' ? `部分图片完成：已生成 ${completed}/${total} 张，${failed} 张失败或待核对；请核对原任务。`
+      : `${taskLabels[suite.status] || '状态待核对'}${total ? ` · 已生成 ${completed}/${total} 张` : ''}`;
+  const candidates = slots.flatMap(slot => {
+    const task = tasks.find(item => item.id === slot.media?.workflowId);
+    return (task?.outputs || []).filter(output => output.id === slot.media?.outputAssetId);
+  });
+  return { status: suite.status, total, completed, slots, candidates, message };
+}
+function reviewStatus(value) {
+  return ({ PENDING: '图片已生成 · 待审核', APPROVED: '审核通过 · 待应用', REJECTED: '已驳回' })[value] || '生成完成，正在读取候选';
+}
 
 export function describeImageTask(item) {
   if (item.status !== 'SUCCEEDED') return {
@@ -37,12 +67,13 @@ export function buildSkuImageRows({ skus, media, history, billing, title = '' })
       ...tasks.flatMap(item => item.outputs.map(output => ({ ...output, key: `candidate:${output.id}`, kind: 'CANDIDATE' })))];
     const seen = new Set();
     const uniqueImages = images.filter(image => !seen.has(image.url) && seen.add(image.url));
-    const lines = tasks.map(item => ({ key: item.id, ...describeImageTask(item) }));
-    if (!lines.length && billing?.suite && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(billing.suite.status)) {
-      lines.push({ key: 'suite', text: `整套图片${taskLabels[billing.suite.status]}`, status: 'running' });
-    }
+    const partition = partitionImageTasks({ items: tasks }, billing);
+    const lines = partition.current.map(item => ({ key: item.id, ...describeImageTask(item) }));
+    if (billing?.suite) lines.unshift({ key: 'suite', text: `本次套图 · ${buildImageProcess({ billing, history }).message}`,
+      status: ['FAILED', 'PARTIAL_FAILURE', 'UNKNOWN_OUTCOME'].includes(billing.suite.status) ? 'error' : billing.suite.status === 'SUCCEEDED' ? 'warning' : 'running' });
     return { skuRowKey: sku.key, index: index + 1, name: [title, sku.label].filter(Boolean).join(' · '),
-      images: uniqueImages, taskStatusLines: lines };
+      images: uniqueImages, taskStatusLines: lines,
+      historyTaskStatusLines: partition.history.map(item => ({ key: item.id, ...describeImageTask(item) })) };
   });
 }
 
@@ -83,11 +114,12 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
   const foot = make('footer', 'image-manager-foot');
   const hint = make('span', 'image-manager-global-status'); hint.id = 'precision-image-notice'; hint.setAttribute('role', 'status');
   foot.append(hint); dialog.append(head, body, foot); modal.append(dialog); root.append(modal);
-  let rows = [], selected = '', tab = 'sources', all = false, signature = '', focusBefore = null, focusSkuKey = '';
+  let rows = [], selected = '', tab = 'sources', all = false, process = false, signature = '', focusBefore = null, focusSkuKey = '';
+  const expandedHistory = new Set();
 
   function sync(resetNotice = false) {
     const index = rows.findIndex(row => row.skuRowKey === selected);
-    heading.textContent = rows[index]?.name || '图片管理';
+    heading.textContent = `${process && tab === 'results' ? 'AI 生图过程 · ' : ''}${rows[index]?.name || '图片管理'}`;
     previous.disabled = index <= 0; next.disabled = index < 0 || index >= rows.length - 1;
     sourcePanel.hidden = tab !== 'sources'; resultPanel.hidden = tab !== 'results';
     sources.classList.toggle('is-active', tab === 'sources'); results.classList.toggle('is-active', tab === 'results');
@@ -105,7 +137,7 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
   function open(key, options = {}) {
     if (!rows.some(row => row.skuRowKey === key)) return;
     if (modal.hidden) { focusBefore = document.activeElement; focusSkuKey = focusBefore?.dataset.imageSkuKey || ''; }
-    selected = key; tab = options.tab || 'sources'; all = options.all === true;
+    selected = key; tab = options.tab || 'sources'; all = options.all === true; process = options.process === true;
     modal.hidden = false; sync(true); onSelect(key); onChange(); close.focus();
   }
   function hide() {
@@ -127,7 +159,7 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
   });
   previous.addEventListener('click', () => open(rows[rows.findIndex(row => row.skuRowKey === selected) - 1]?.skuRowKey, { tab }));
   next.addEventListener('click', () => open(rows[rows.findIndex(row => row.skuRowKey === selected) + 1]?.skuRowKey, { tab }));
-  sources.addEventListener('click', () => { tab = 'sources'; sync(true); onChange(); });
+  sources.addEventListener('click', () => { tab = 'sources'; process = false; sync(true); onChange(); });
   results.addEventListener('click', () => { tab = 'results'; sync(true); onChange(); });
   scope.addEventListener('click', () => { all = !all; sync(); onChange(); });
   function render(nextRows, selectedKey) {
@@ -156,6 +188,16 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
         const tasks = make('div', 'image-manager-summary-task');
         for (const line of row.taskStatusLines) tasks.append(make('span', `image-manager-summary-task-line is-${line.status}`, line.text));
         if (!row.taskStatusLines.length) tasks.append(make('span', 'image-manager-summary-task-empty', '暂无任务'));
+        if (row.historyTaskStatusLines?.length) {
+          const history = make('details', 'precision-image-task-history'); history.dataset.historySku = row.skuRowKey;
+          history.open = expandedHistory.has(row.skuRowKey);
+          history.append(make('summary', '', `${row.historyTaskStatusLines.length} 条历史任务`));
+          for (const line of row.historyTaskStatusLines) history.append(make('span', `image-manager-summary-task-line is-${line.status}`, line.text));
+          history.addEventListener('click', event => event.stopPropagation());
+          history.addEventListener('keydown', event => event.stopPropagation());
+          history.addEventListener('toggle', () => { if (history.open) expandedHistory.add(row.skuRowKey); else expandedHistory.delete(row.skuRowKey); });
+          tasks.append(history);
+        }
         node.append(make('div', 'image-manager-summary-index', row.index), name, thumbnails, tasks);
         for (const label of ['主图视频', '富内容视频']) {
           const video = make('div', 'image-manager-summary-video'); video.title = `${label}：查看来源或设置草稿视频`;

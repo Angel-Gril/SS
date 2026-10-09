@@ -14,7 +14,8 @@ import { createCategoryDialog } from './donor/category-dialog.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
-import { buildSkuImageRows, createSkuImageWorkspace, describeSuite } from './donor/sku-image-workspace.js';
+import { buildSkuImageRows, buildImageProcess, partitionImageTasks, createSkuImageWorkspace, describeSuite } from './donor/sku-image-workspace.js';
+import { createImageProcessPoller, createImageProcessContext } from './donor/image-process-poller.js';
 import { createSourceVideoView } from './donor/source-video-view.js';
 import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
 import { createWatermarkEditor } from './donor/watermark-editor.js';
@@ -53,8 +54,9 @@ let selectedDraftSkuKeys = null;
 let selectedDraftShopId = '';
 let referenceSelectionInitialized = false;
 let mediaStateBinding = '';
-let pollingTimer = 0;
-let pollingAttempts = 0;
+let imageProcessAutoShown = '';
+let imageProcessStartPending = false;
+let imageProcessReadWarning = '';
 let editor = null;
 let editorLoadKey = '';
 let editorRefreshBusy = false;
@@ -300,6 +302,13 @@ creativeOptions.append(make('summary', '', '创作方向与视觉 JSON（可选�
 imageWorkspace.sourcePanel.append(mediaToolbar, library, creativeOptions);
 trusted('precision-watermark-settings', () => watermark.open());
 imageWorkspace.resultPanel.append(candidates);
+const imageProcess = make('section', 'precision-image-process'); imageProcess.id = 'precision-image-process';
+const imageProcessStatus = make('strong'); imageProcessStatus.id = 'precision-image-process-status'; imageProcessStatus.setAttribute('role', 'status');
+const imageProcessProgress = make('progress'); imageProcessProgress.id = 'precision-image-process-progress'; imageProcessProgress.setAttribute('aria-label', '当前套图生成进度');
+const imageProcessSlots = make('div', 'precision-image-process-slots'); imageProcessSlots.id = 'precision-image-process-slots';
+const imageProcessHint = make('p', 'settings-tip'); imageProcessHint.id = 'precision-image-process-hint';
+imageProcess.append(make('h3', '', '本次生图过程'), imageProcessStatus, imageProcessProgress, imageProcessSlots, imageProcessHint);
+candidates.before(imageProcess);
 imageWorkspace.foot.append(suiteActions);
 const imagePrimary = make('button', 'primary'); imagePrimary.id = 'precision-image-primary'; imageWorkspace.foot.append(imagePrimary);
 const mediaRefresh = make('button', 'ghost', '读取最新状态'); mediaRefresh.id = 'precision-image-refresh'; imageWorkspace.foot.append(mediaRefresh);
@@ -1002,6 +1011,25 @@ function currentMediaContext() {
     && projection.history.context.draftVersion === draft.draftVersion ? projection.history : null;
   return { draft, billing, history };
 }
+const imageProcessContext = createImageProcessContext();
+function currentImageProcessContext(context = currentMediaContext()) {
+  const draft = context.draft;
+  const base = draft ? JSON.stringify([projection.source.platform, projection.source.sourceProductId,
+    projection.handoff?.snapshotId, draft.shopId, draft.id, draft.revision, draft.draftVersion]) : '';
+  return imageProcessContext.read(base, context, projection.billing.state, projection.history.state);
+}
+function currentImageProcessKey() { return currentImageProcessContext().key; }
+function openImageProcess() {
+  const key = currentImageProcessKey();
+  if (key) imageProcessAutoShown = key;
+  imageWorkspace.open(selectedSkuKey, { tab: 'results', all: true, process: true });
+}
+const imageProcessPoller = createImageProcessPoller({
+  getContext: () => currentImageProcessContext(),
+  read: () => refreshMediaState(),
+  onError(error) { imageProcessReadWarning = `只读刷新暂未完成：${error.message || String(error)}；可点击读取最新状态。`; renderMedia(); },
+  onExhausted() { imageProcessReadWarning = '本次自动读取已到上限；任务仍在 ERP 继续，可点击读取最新状态。'; renderMedia(); },
+});
 function suiteSlotForItem(billing, item) {
   return billing?.suite?.slots.find((slot) => slot.media?.workflowId === item.id
     || slot.slotKey === item.contextSlotKey);
@@ -1234,17 +1262,31 @@ function renderMedia() {
   });
   renderSelectionCount();
   const context = currentMediaContext();
-  const billing = context.billing;
+  const displayContext = currentImageProcessContext(context).presentation;
+  const billing = displayContext.billing;
   const mediaBusy = projection.busy || mediaMutationBusy;
   suiteState.textContent = describeSuite(billing);
   element('precision-assign').disabled = mediaBusy || !assignableSuiteSlots(context).length;
-  const visibleHistory = (context.history?.items || []).filter(item => workspaceState.all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey);
-  imageWorkspace.render(buildSkuImageRows({ skus, media, history: context.history, billing, title: projection.source.title }), selectedSkuKey);
+  const visibleHistory = (displayContext.history?.items || []).filter(item => workspaceState.all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey);
+  const processView = buildImageProcess(displayContext);
+  imageProcess.dataset.suiteStatus = processView.status;
+  imageProcessStatus.textContent = processView.message;
+  imageProcessProgress.max = processView.total || 1; imageProcessProgress.value = processView.completed;
+  imageProcessProgress.hidden = !processView.total;
+  imageProcessSlots.replaceChildren(...processView.slots.map(slot => {
+    const row = make('div', `precision-image-process-slot is-${slot.status.toLowerCase()}`); row.dataset.processSlot = slot.slotKey;
+    row.append(make('strong', '', slot.label), make('span', '', slot.text)); return row;
+  }));
+  imageProcessHint.textContent = imageProcessReadWarning || '根据 ERP 当前任务更新。关闭此窗口不会取消任务；图片仍需预览、审核并应用。';
+  imageWorkspace.render(buildSkuImageRows({ skus, media, history: displayContext.history, billing, title: projection.source.title }), selectedSkuKey);
   const nextCandidateSignature = JSON.stringify([context.draft?.id, selectedSkuKey, workspaceState.all, visibleHistory, billing?.suite?.slots]);
   if (candidateSignature !== nextCandidateSignature) {
   candidateSignature = nextCandidateSignature;
   const existingCandidates = new Map([...candidates.querySelectorAll('.precision-candidate')].map(card => [`${card.dataset.candidateWorkflow}:${card.dataset.candidateOutput}`, card]));
-  const nextCandidates = [];
+  const nextCandidates = [], oldCandidates = [];
+  const currentOutputIds = new Set(processView.candidates.map(output => output.id));
+  const currentTaskIds = new Set(partitionImageTasks({ items: visibleHistory }, billing).current.map(item => item.id));
+  const historyOpen = candidates.querySelector('.precision-image-result-history')?.open === true;
   for (const item of visibleHistory) {
     const slot = suiteSlotForItem(billing, item);
     for (const output of item.outputs) {
@@ -1278,13 +1320,19 @@ function renderMedia() {
       if (item.selectedOutputAssetId === output.id && item.application) {
         card.append(make('p', '', item.application.state === 'APPLIED' ? '已应用到草稿' : '已撤回应用'));
       }
-      nextCandidates.push(card);
+      const current = billing?.suite ? currentOutputIds.has(output.id) : currentTaskIds.has(item.id);
+      (current ? nextCandidates : oldCandidates).push(card);
     }
   }
   candidates.replaceChildren(...nextCandidates);
   if (!nextCandidates.length) candidates.append(make('p', 'precision-candidates-empty', '当前 SKU 还没有图片结果。处理完成后可在这里预览、审核。'));
+  if (oldCandidates.length) {
+    const history = make('details', 'precision-image-result-history'); history.open = historyOpen;
+    const gallery = make('div', 'precision-image-history-gallery'); gallery.append(...oldCandidates);
+    history.append(make('summary', '', `${oldCandidates.length} 张历史候选 · 展开查看`), gallery); candidates.append(history);
   }
-  candidates.querySelectorAll('button').forEach(button => { button.disabled = mediaBusy; });
+  }
+  candidates.querySelectorAll('button').forEach(button => { button.disabled = mediaBusy || !context.history; });
   compilePrompt();
   renderPromptState();
   renderImageMode();
@@ -1356,7 +1404,13 @@ function render() {
     byokRegistrationContext = registrationContext;
     void byok.initialize();
   }
-  schedulePolling();
+  imageProcessPoller.sync();
+  const processKey = currentImageProcessKey();
+  if (!imageProcessStartPending && processKey && processKey !== imageProcessAutoShown
+    && ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(currentMediaContext().billing?.suite?.status)) {
+    imageProcessAutoShown = processKey;
+    queueMicrotask(() => { if (currentImageProcessKey() === processKey && !imageProcessStartPending) openImageProcess(); });
+  }
 }
 
 let mediaReadback = null;
@@ -1383,17 +1437,6 @@ async function refreshConfirmedMedia(message) {
       log(`操作回执已确认；只读刷新：${error.message || String(error)}`);
     }
   }
-}
-function schedulePolling() {
-  const suite = projection.billing.suite;
-  if (pollingTimer || !suite || !['PLANNED', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(suite.status)
-    || pollingAttempts >= 20) return;
-  pollingTimer = setTimeout(async () => {
-    pollingTimer = 0;
-    pollingAttempts += 1;
-    try { await refreshMediaState(); } catch (error) { report(error); }
-    schedulePolling();
-  }, 3000);
 }
 
 async function ensureCurrentDraft(){
@@ -1526,7 +1569,8 @@ trusted('category-select-btn', async () => {
   if (!editor) await loadEditor();
   await categoryPicker.open();
 });
-for (const id of ['process-view-btn', 'ai-image-process-btn']) trusted(id, () => openModal('process-modal'));
+trusted('process-view-btn', () => openModal('process-modal'));
+trusted('ai-image-process-btn', openImageProcess);
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());
 trusted('process-close-btn', () => { element('process-modal').hidden = true; });
@@ -1549,11 +1593,12 @@ trusted('erp-refresh-btn', async () => {
   status('商品、草稿与图片任务已刷新', 'ok');
   } finally { editorRefreshBusy=false;render(); }
 });
-trusted('precision-image-refresh', async () => { await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
+trusted('precision-image-refresh', async () => { imageProcessReadWarning = ''; imageProcessPoller.restart(); await refreshMediaState(); status('图片任务与审核状态已刷新', 'ok'); });
 trusted('close-btn', async () => { picker.cancelSelection(); await command('CLOSE'); });
 async function suiteCommand(action, costConfirmed = false) {
   if (!listing()) throw new Error('请先开始执行并创建 ERP 草稿');
   const draftId = listing().id;
+  const sourceAtStart = JSON.stringify(currentEditorBinding());
   let creativeBrief;
   let candidateMediaKeys;
   let referenceSelection;
@@ -1581,6 +1626,7 @@ async function suiteCommand(action, costConfirmed = false) {
         throw Object.assign(new Error('草稿已变化，请重新读取后准备套图'), { outcome: 'NOT_SUBMITTED' });
       }
     }
+    if (action === 'START') imageProcessStartPending = true;
     await command('EXECUTE_HOSTED_SUITE', { listingWorkflowId: draftId, action, slotKey: null, decision: null, costConfirmed,
       ...(action === 'CREATE_AND_REVIEW_PLAN' && imageMode === 'ai-main-translate' ? { galleryGoals: [] } : {}),
       ...(creativeBrief ? { creativeBrief } : {}),
@@ -1594,10 +1640,13 @@ async function suiteCommand(action, costConfirmed = false) {
     }
     throw error;
   } finally {
+    if (action === 'START') imageProcessStartPending = false;
     if (action === 'CREATE_AND_REVIEW_PLAN') { planSubmissionBusy = false; renderPromptState(); }
   }
-  pollingAttempts = 0;
+  imageProcessReadWarning = ''; imageProcessPoller.restart();
   await refreshConfirmedMedia('图片操作已确认');
+  if (action === 'START' && listing()?.id === draftId && projection.handoff
+    && sourceAtStart === JSON.stringify(currentEditorBinding())) openImageProcess();
 }
 trusted('precision-assign', () => runMediaMutation(async () => {
   const context = currentMediaContext();
@@ -1685,7 +1734,7 @@ window.addEventListener('message', (event) => {
 window.addEventListener('pagehide', () => {
   byok.invalidate(); privateRuntime?.invalidate();
   preparationAnalysis?.dispose();
-  clearTimeout(pollingTimer);
+  imageProcessPoller.dispose();
   picker.cancelSelection();
   for (const task of pending.values()) { clearTimeout(task.timer); task.reject(new Error('工作台已关闭')); }
   pending.clear();

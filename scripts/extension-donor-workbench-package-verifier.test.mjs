@@ -61,6 +61,11 @@ try {
 
   const extensionDir = path.join(outRoot, 'ss-erp-cloud');
 
+  unlinkSync(path.join(extensionDir, 'pages/donor/image-process-poller.js'));
+  const missingProcess = verify(extensionDir, 'cloud');
+  assert.notEqual(missingProcess.status, 0, 'a package without the imported image process module must fail');
+  assert.match(`${missingProcess.stdout}\n${missingProcess.stderr}`, /donor workbench file pages\/donor\/image-process-poller\.js missing/u);
+  cpSync(path.join(sourceDir, 'pages/donor/image-process-poller.js'), path.join(extensionDir, 'pages/donor/image-process-poller.js'));
   unlinkSync(path.join(extensionDir, 'shared/donor-workbench/prompt-adapter.js'));
 
   const manifestPath = path.join(extensionDir, 'manifest.json');

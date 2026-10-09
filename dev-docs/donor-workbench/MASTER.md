@@ -1,5 +1,13 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-09 当前图片过程与count响应修复本地完成（3/3），准备448
+
+首图兼容/未交付释放/自动图片过程及历史折叠三项本地验收通过，线上仍447、官网434，待新候选部署后关闭447未决并完成正式发布。准确测试、原件和范围仅维护在[直接适配 owner](./direct-adaptation.md)。
+
+## 2026-10-09 `1.0.447` 已双区部署，公开验收待多图响应边界修复
+
+源码推送、区域签名、原生offline、签名MV3、双区标准部署/备份恢复/FULL VPS均完成。用户通过9457滑块后，真实精铺两图suite一张成功，一张因请求1却返回3图被拒绝；费用/恢复各1待闭合，正式QA04与官网发布未完成，官网仍434。COM分析开启/CN dark保持；Ozon0、没有未知Provider重试。新增count终止恢复及交互修复已提交范围确认；准确事实仅维护在[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-08 `1.0.437` 应用双区部署完成，官网仍1.0.434
 
 质量修复代码最终`136aa330 / 1.0.437`已提交、推送、签名及COM/CN标准部署，完整preflight/build、签名包MV3、备份恢复和canonical VPS通过。默认Provider/Key/价格保持，COM分析开启/CN dark；本轮新增费用/Ozon零。公开指针未切换，正式官网门禁仍待单独完成。唯一详细事实见[直接适配 owner](./direct-adaptation.md)。
@@ -86,9 +94,9 @@ linked owner below.
 
 ## Current Status
 
-COM/CN applications run `136aa330 / 1.0.437`; public Cloud/Local downloads remain `14985551 / 1.0.434`.
-The newest application deployment preserves the previous Provider credentials, prices and rollout policy.
-Its canonical VPS and signed-package installation checks passed; its website publication gates have not run.
+COM/CN applications run `9f074c87 / 1.0.447`; public Cloud/Local downloads remain `14985551 / 1.0.434`.
+Both regions keep the configured custom/count image model at CNY0.10 per image; COM product analysis is enabled and CN stays dark.
+The current native offline, canonical VPS and signed-package installation checks passed. Dedicated Chrome9457 completed capture and the actual ERP-to-precision launch; its fresh suite is PARTIAL_FAILURE because one 1-image Provider request returned3 images. Cost/recovery reconciliation and website publication remain incomplete.
 The following public-distribution facts describe the completed `1.0.434` baseline.
 Regional signing, isolated signed-package MV3, backup/restore, full canonical VPS,
 formal QA04, regional canaries, website approval, CAS and complete anonymous downloads

@@ -1,5 +1,28 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-09 count 多图响应与当前过程展示修复本地验收完成，准备448
+
+- 用户明确批准单张请求只采用首张合格图、CNY0.10只计一次；为本次count未交付任务新增受审计放弃恢复和ERP预扣释放，保留供应商身份/真实失败；自动展示当前生图过程并折叠历史，继续新候选公开发布。此前部署/费用/官网授权持续有效。
+- 范围为三个独立owner：Provider edit响应选择（只对精确count profile兼容有界多图，首图无效不能挑后图、不能扩大请求数/费用/下载数量）；provider reconciliation eligibility/SQL（当前失败attempt、同Provider身份、无ERP输出、无终态费用，明确ABANDON而不是NO_OUTPUT）；精铺图片汇总/过程视图（当前suite优先，历史可展开，真实轮询与审核仍走既有owner）。不增加自动重试/自动审核/自动上架，不改变店铺/设备/CN范围，不查询供应商账单。
+- 验收分类T2：三处最小owner测试先RED后GREEN；Provider多图/空/超限/首图坏/非count拒绝，取消任务的状态及幂等费用实库检查，当前过程/历史折叠真实Chrome T3。退回代码不逆转已经执行的ERP释放记录；旧任务/回执保留，新运行绑定新commit，不改447原证据。正式门禁及全量测试只在最终合并候选运行一次。
+- UI目标沿用`jp20260803`的图片过程行为和现有精铺表格/CSS：点击开始后自动进入本次过程、随真实队列状态更新，已生成图出现在本次结果；历史任务默认折叠、可回看。关闭过程不取消服务端任务，刷新恢复当前状态，失败明确显示并核对，审核/应用保留用户动作。
+- [x] 精确count API/model的普通文字/改图和套图支持1–3个返回项，严格只选data[0]，请求n=1/只下载一个/只计CNY0.10。坏首图不选后图、空/>3/其他模型多图仍拒绝，供应商已接受身份保留；3处正例先RED，4套137项及追加匿名下载验证通过，ESLint/8GB TypeScript通过。真实447返回3的原失败不重标成功，未重发Provider。
+- [x] count未交付放弃恢复仅精确冻结CNY10/count/I2I/suite、current attempt、同accepted identity、零ERP资产和无终态结算；原Wanx过期分支保持。前向迁移复用已有`CANCELLED_OUTPUT_RETAINED`终态，audit记录`REJECTED_UNRECOVERABLE`和供应商费用UNKNOWN，ERP仅追加一次RECONCILED_RELEASE。66项owner/route回归、真实隔离PG10项suite+8项reconciliation/cost、旧guard RED→新guard GREEN、幂等/成功兄弟不变/audit失败整事务回滚通过，临时schema清理。回滚不逆改已审计释放记录；生产尚未执行本次释放。
+- [x] 图片过程按钮已指向实际results视图，START确认后自动展示，当前workflow/output精确定位、旧状态/候选折叠，poll每3秒最多80次且终态停止。same-binding loading仅缓存展示，不成为审核/应用权限；切换binding/quote和迟到旧读取拒绝。55定向、isolatedChrome真实物理开始/QUEUED→RUNNING→PARTIAL/SUCCEEDED/首候选decoded/close继续/历史展开/iframe重载恢复通过，Provider/Ozon0。私有截图根`ss-erp-precision-ui-evidence-VQu46v`，不是生产Provider质量验收。
+- 最终新候选448待提交/签名/双区标准部署；公开门禁、447原count预扣释放和新版freshsuite未完成，官网仍434。新poll module已加入安装包必需文件与删除负例门禁，发布只在最终合并源码执行一次完整offline。
+
+## 2026-10-09 `9f074c87 / 1.0.447` 双区部署完成，fresh suite 被真实多图响应拒绝
+
+- [x] 源码提交 `9f074c8739228b05201d05703db6101a13131d22` 已推送；COM/CN 区域签名及实际签名包 MV3 安装通过。两区标准部署 exit 0，`current`、API/Web/Worker、`/ready` 的 commit、DB/Redis 已实际读回；FULL canonical VPS 均 PASS、0 failure。部署备份和独立日常备份恢复通过，临时恢复库已清理。
+- [x] 同提交原生 `pnpm qa:04:offline` 已完整通过，完成时间 `2026-10-09T05:55:04.061Z`；后端 7197 passed / 378 既有条件 skipped，完整构建、PostgreSQL 专项与 Cloud/Local verifier 624/620 通过。条件 skipped 不计为实库验收。
+- [x] COM 保持原 DOTH/owner/operation 受限 pilot，商品分析 `qwen-vl-max` 开启；CN direct/.cn origins/RDS、AI/BYOK/Ozon publisher 全 dark。两区图片模型/价格继续为已授权 custom/count、CNY0.10/张，本轮没有再次修改配置或扩大权限。
+- [x] 用户手动完成9457真实滑块后，从现有来源页物理打开精铺，读回1SKU/9图；正常采集得到snapshot `676d1926-de6d-40af-99d5-49d6e3c2b272`，新隔离DOTH草稿 `draft-6c86d237-067b-4196-a1e5-ae0a8b60b026` / r1v1。ERP按钮真实进入同一来源精铺iframe，plan创建/审核、START/CONTINUE原请求和响应已保存。早期滑块遮挡失败原件保留，未自动解验证码或强制显示DOM。
+- [ ] 当前提交 fresh suite `cmv0m2wmg000c5og0csfhn4y2`：两个child各attempt1、Provider POST各1。场景成功，raw1008×1344/成品900×1200，ERP CNY0.10 settled；主图 `cmv0m4azk000u5og03wbdsiwy` 请求n=1但实际HTTP结果data.length=3，owner以`INVALID_PROVIDER_RESULT`拒绝（已接受Provider身份、无ERP资产），suite为PARTIAL_FAILURE。当前pending为jobs0/costs1/recovery1/workflows0/suites0；主图CNY0.10预扣待对账，不宣称总最终费用。没有审核、assignment或Provider重试。
+- [ ] 正式 QA04、双区 REL-04 canary、website approval、CAS、distribution probe 和公开 pointer 切换尚未执行。446 正式证据保持原绑定，未重标为447；两区官网仍实际服务 `14985551 / 1.0.434`。
+- Provider POST共2、Ozon0，未读取Provider控制台或账单；实际供应商最终扣费未读取。临时设备/测试账号会话仍保留用于接续，不能宣称已清理。用户9222浏览器保留，凭据不进入Git；私有回执根为 `release-9f074c87-deploy447`、`release-9f074c87-fresh447`。
+- 用户截图的SKU状态汇总确实把同SKU历史任务逐条列出（`buildSkuImageRows`）；当前图片过程面板由按钮打开，没有自动成为当前suite主视图。托管请求实际由ERP Worker执行，不是浏览器直连Provider。原donor `runner.js/pickFirstImage` 直接选返回数组第一项，而ERP OpenAI edit owner严格要求data.length=1，差异已由源码和本次真实结果证实。
+- 现有count为sync transport，suite recovery只提供Wanx原任务查询；原三图响应未作为可恢复ERP原件存储，不能假记NO_OUTPUT或重发旧POST。现有ABANDON eligibility仅过期Wanx失败任务，不能直接关闭本次count。已提交明确产品范围确认：单张请求有界只采用首图、CNY0.10仍只计一次；新增受审计的未交付count放弃恢复/ERP预扣释放合同；自动显示当前过程并折叠历史。确认前只分析，不改此新状态/schema合同，既有测试费和公开发布授权持续有效。
+
 ## 2026-10-09 446 正式证据闭合与 CN 官网 dark 消费者修复
 
 - 两槽审核已通过持久化ExtensionCommandReceipt、当前HTTP及签名UI读回确认，未重发审核；记录明确`originalPostResponseCaptured=false`，使用真实只读成功HTTP回执及精确持久化grant/receipt，不伪称保存了原POST。当前同suite通过物理“应用已审核图片”完成r1v1→r2v2两条store-draft assignment，原body/idempotency replay返回同批次且`replayed=true`。实库两笔CNY0.10 settled、所有pending0，queue完成清理，专用来源/Web目标关闭、9222保留，正式schema4 QA04 PASS（SHA d7bce73e31a4cbc7a53c684fb157a145c25e0086e72f894066aebf9f5de9de8e）。本次新增Provider0、Ozon0，旧原件保持。

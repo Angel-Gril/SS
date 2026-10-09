@@ -26,7 +26,9 @@ import {
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
   isAiImageXiaoyiEditOperation,
 } from './ai-image-xiaoyi-provider.js';
-import {assertDonorGpt2ImageToImageRequest,donorGpt2EditEndpoint,assertDonorGpt2ProviderModel} from './ai-image-donor-gpt2-profile.js';
+import {assertDonorGpt2ImageToImageRequest,donorGpt2EditEndpoint,assertDonorGpt2ProviderModel,
+  AI_IMAGE_DONOR_GPT2_COUNT_API_BASE, AI_IMAGE_DONOR_GPT2_COUNT_MODEL,
+} from './ai-image-donor-gpt2-profile.js';
 import {
   AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT,
   assertGptImage2CountGenerationRequest,
@@ -683,6 +685,19 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
   };
 }
 
+// The selected count gateway has returned three variants for n=1. Match the
+// donor's first-result behavior without downloading or charging extra variants.
+// Empty, larger, and other profiles remain invalid; a bad first image is never
+// replaced with another image from the response.
+function selectedOpenAiImageResults(body: any, requested: number, countFirstResult: boolean): any[] {
+  const data = Array.isArray(body?.data) ? body.data : [];
+  if (countFirstResult && requested === 1 && data.length >= 1 && data.length <= 3) return data.slice(0, 1);
+  if (data.length !== requested) {
+    throw new AiImageJobError('INVALID_PROVIDER_RESULT', `OpenAI Images returned ${data.length} images for a ${requested}-image request`);
+  }
+  return data;
+}
+
 function createOpenAiImagesProviderWithProfile(
   options: ProviderOptions & { beforeProviderDispatch?: BeforeAiImageProviderDispatch },
   countProfile = false,
@@ -723,14 +738,8 @@ function createOpenAiImagesProviderWithProfile(
       if (providerJobId) {
         await recordProviderAcceptance(options.onProviderJobCreated, providerJobId, providerAcceptedAt);
       }
-      const data = Array.isArray(body?.data) ? body.data : [];
       try {
-        if (data.length !== request.count) {
-          throw new AiImageJobError(
-            'INVALID_PROVIDER_RESULT',
-            `OpenAI Images returned ${data.length} images for a ${request.count}-image request`,
-          );
-        }
+        const data = selectedOpenAiImageResults(body, request.count, countProfile);
         const images = await Promise.all(data.map(async (item: any, index: number) => {
           if (item?.b64_json) {
             const buffer = Buffer.from(String(item.b64_json), 'base64');
@@ -880,13 +889,10 @@ function createOpenAiImageEditProviderWithDialect(
         await recordProviderAcceptance(options.onProviderJobCreated, providerJobId, providerAcceptedAt);
       }
       try {
-        const data = Array.isArray(body?.data) ? body.data : [];
-        if (data.length !== 1) {
-          throw new AiImageJobError(
-            'INVALID_PROVIDER_RESULT',
-            `OpenAI Images returned ${data.length} images for a 1-image edit request`,
-          );
-        }
+        const countFirstResult = apiBase === AI_IMAGE_DONOR_GPT2_COUNT_API_BASE
+          && requestModel === AI_IMAGE_DONOR_GPT2_COUNT_MODEL
+          && (multipartDialect === AI_IMAGE_DONOR_GPT2_MULTIPART_DIALECT || multipartDialect === AI_IMAGE_GPT2_COUNT_ORDINARY_MULTIPART_DIALECT);
+        const data = selectedOpenAiImageResults(body, 1, countFirstResult);
         const item = data[0];
         let image: { buffer: Buffer; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' };
         if (item?.b64_json) {

@@ -118,4 +118,19 @@ describe('AI provider reconciliation persistence migrations', () => {
     expect(migration).toMatch(/24 hours|INTERVAL '24 hours'/u);
     expect(migration).not.toMatch(/DROP (?:TABLE|COLUMN|TYPE|INDEX)/u);
   });
+
+  it('adds a precise known count-response abandonment branch without rewriting old Provider facts or disabling guards', async () => {
+    const migration = await readMigration('20261009160000_allow_count_undelivered_suite_abandonment');
+    expect(migration).toMatch(/CREATE FUNCTION ai_media_count_undelivered_abandonment_allowed/u);
+    expect(migration).toMatch(/job\.provider = 'custom' AND job\.model = 'gpt-image-2-count'/u);
+    expect(migration).toMatch(/job\.error_code = 'INVALID_PROVIDER_RESULT'/u);
+    expect(migration).toMatch(/job\.workflow_attempt = workflow\.current_attempt AND slot\.attempt = job\.workflow_attempt/u);
+    expect(migration).toMatch(/cost\.status = 'RECONCILIATION_REQUIRED'/u);
+    expect(migration).toMatch(/cost\.provider_request_id = job\.provider_job_id/u);
+    expect(migration).toMatch(/NOT EXISTS \(SELECT 1 FROM media_assets/u);
+    expect(migration).toMatch(/ai_media_gpt2_count_suite_runtime_valid/u);
+    expect(migration).toContain('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH');
+    expect(migration).toContain("INTERVAL '24 hours'");
+    expect(migration).not.toMatch(/UPDATE\s+"?(?:ai_image_jobs|ai_cost_reservations)|DISABLE TRIGGER|DROP (?:TABLE|COLUMN|TYPE|INDEX)/u);
+  });
 });

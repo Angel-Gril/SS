@@ -790,7 +790,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     expect(lookups).toBe(2);
   }, 75_000);
 
-  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean } = {}) {
+  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean; count?: boolean; successfulSibling?: boolean } = {}) {
     const id = `${label}_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     const owner = `abandon_owner_${id}`, goods = `abandon_goods_${id}`, subject = `abandon_subject_${id}`, snapshot = `abandon_snapshot_${id}`;
     const sourceCapture = structuredClone(sourceFixture.capture);
@@ -822,8 +822,8 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       selectedSkuKeys: [sourceCapture.skus[0]!.key], candidateMediaKeys: [sourceCapture.media[0]!.key], galleryGoals: ['scene'] });
     const approved = await planning.review({ planId: created.plan.id, ownerUserId: owner, actorUserId: owner,
       expectedRevision: created.plan.revision, operationKey: `abandon-review-${id}`, decision: 'APPROVE', note: null });
-    const runtime = createAiImageSuiteProviderRuntimeSnapshot({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit',
-      baseUrl: 'https://dashscope.aliyuncs.com/api/v1', apiKey: 'synthetic-abandonment-only', costPerImageCents: 14, currency: 'CNY', concurrencyLimit: 2,
+    const runtime = createAiImageSuiteProviderRuntimeSnapshot({ provider: options.count ? 'custom' : 'dashscope-wanx', model: options.count ? 'gpt-image-2-count' : 'wanx2.1-imageedit',
+      baseUrl: options.count ? 'https://ai.big-model-api.top/v1' : 'https://dashscope.aliyuncs.com/api/v1', apiKey: 'synthetic-abandonment-only', costPerImageCents: options.count ? 10 : 14, currency: 'CNY', concurrencyLimit: 2,
       credentialRevision: { recordId: `abandon_key_${id}`, revision: 1, updatedAt: '2026-09-16T00:00:00.000Z' } });
     const suites = new PrismaAiImageSuiteRepository(client);
     const authority = await suites.loadApprovedAuthority({ ownerUserId: owner, actorUserId: owner, planId: created.plan.id });
@@ -843,11 +843,25 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     })).materialize({ suiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 3, operationKey: `abandon-materialize-${id}` });
     const repository = new PrismaAiImageSuiteExecutionRepository(client, { runtimeReady: async () => true, getCostControls: controls });
     await createAiImageSuiteExecutionService(repository).dispatch({ suiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 4, operationKey: `abandon-dispatch-${id}` });
-    const acceptedAt = new Date(Date.now() - (options.fresh ? 1000 : 25 * 60 * 60 * 1000));
+    const acceptedAt = new Date(Date.now() - (options.fresh || options.count ? 1000 : 25 * 60 * 60 * 1000));
+    const resultBytes = options.successfulSibling
+      ? await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#257852' } }).png().toBuffer() : null;
+    let executionCount = 0;
     const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, {
       runtimeReady: async () => true, getRuntimeEvidence: async () => runtime.capability!.evidenceLevel, outputStorageReady: async () => true,
       getDispatchAuthorization: async () => ({ enabled: true, reasonCode: 'READY', reason: 'isolated fixture' }), uploadBuffer,
       executePaidProvider: async (input, dependencies) => {
+        if (options.successfulSibling && executionCount++ === 1) {
+          return executeAiImageSuitePaidProvider(input, { ...dependencies, prepareProvider: async () => ({
+            evidenceLevel: 'local-test', normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1',
+            execute: async (recordAccepted, beforeDispatch) => {
+              await beforeDispatch!();
+              const providerJobId = `accepted-output-${input.jobId}`;
+              await recordAccepted(providerJobId, new Date());
+              return { providerJobId, images: [{ buffer: resultBytes!, mimeType: 'image/png' }], actualCostCents: 10 };
+            },
+          }) });
+        }
         await dependencies.assertClaim();
         expect(await dependencies.markProviderDispatchStarted(acceptedAt)).toBe(true);
         const providerJobId = `accepted-output-${input.jobId}`;
@@ -863,7 +877,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         }
         // A deterministic Provider boundary; the real coordinator/repositories
         // persist the accepted task and failed graph, with all triggers enabled.
-        throw Object.assign(new Error('Known output failed the frozen dimensions'), { code: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
+        throw Object.assign(new Error(options.count ? 'Known single-image response returned three candidates' : 'Known output failed the frozen dimensions'), { code: options.count ? 'INVALID_PROVIDER_RESULT' : 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
           providerJobId, providerAcceptedAt: acceptedAt, providerResultReceived: true });
       },
     });
@@ -875,10 +889,80 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       await coordinator.execute(task, claim);
     }
     const suite = await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } });
-    expect(suite.status).toBe('FAILED');
+    expect(suite.status).toBe(options.successfulSibling ? 'PARTIAL_FAILURE' : 'FAILED');
     await client.$queryRawUnsafe('SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS result', suiteId, owner);
     return { owner, suiteId, tasks };
   }
+
+  it.each([false, true])('audits fresh rejected count recovery abandonment with successful sibling=%s and one ERP release', async successfulSibling => {
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('No real Provider/Ozon request is authorized'); });
+    try {
+      const fixture = await failedWanxSuiteForAbandonment('count_abandon', { count: true, successfulSibling });
+      const service = createAiProviderReconciliationAdminService({ database: client });
+      const listed = await service.listReconciliations({ limit: 100 });
+      const item = listed.items.find((row: any) => row.id === fixture.tasks[0]!.jobId)!;
+      expect(item.allowedActions).toEqual(['ABANDON']);
+      const include = { assets: true, workflow: { include: { suiteSlot: true } }, costReservation: { include: { settlements: { orderBy: { id: 'asc' as const } } } } };
+      const before = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      const siblingBefore = await client.aiImageJob.findUniqueOrThrow({ where: { id: fixture.tasks[1]!.jobId }, include });
+      const decision = { jobId: item.id, actorUserId: fixture.owner, requestId: randomUUID(), expectedStatus: 'MANUAL_REVIEW' as const,
+        expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash, action: 'ABANDON' as const,
+        reason: 'Known synchronous count output was rejected before ingest; release only the undelivered ERP reservation, Provider cost remains unknown' };
+      const [definition] = await client.$queryRawUnsafe<Array<{ definition: string }>>(
+        "SELECT pg_get_functiondef('validate_ai_provider_reconciliation_transition()'::regprocedure) AS definition");
+      const branch = ' OR (NEW."provider_reconciled_at" IS NOT NULL AND ai_media_count_undelivered_abandonment_allowed(OLD."id"))';
+      expect(definition!.definition).toContain(branch);
+      try {
+        await client.$executeRawUnsafe(definition!.definition.replace(branch, ''));
+        await expect(service.resolveReconciliation(decision)).rejects.toThrow(/invalid AI provider reconciliation transition/u);
+        expect(await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include })).toEqual(before);
+        expect(await client.aiProviderReconciliationEvent.count({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } })).toBe(0);
+      } finally { await client.$executeRawUnsafe(definition!.definition); }
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED', revision: item.revision + 1 });
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', revision: item.revision + 1 });
+      await expect(service.resolveReconciliation({ ...decision, reason: 'Changed decision must not overwrite the original audit' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      const after = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      expect(after).toMatchObject({ status: 'FAILED', providerJobId: before.providerJobId, providerDispatchedAt: before.providerDispatchedAt,
+        errorCode: 'INVALID_PROVIDER_RESULT', errorMessage: before.errorMessage, actualCostCents: null, billedUnits: 0,
+        workflow: before.workflow, assets: [], costReservation: { status: 'RELEASED', providerRequestId: before.providerJobId,
+          providerAcceptedAt: before.costReservation!.providerAcceptedAt } });
+      expect(after.costReservation!.settlements.filter(row => row.kind === 'RECONCILED_RELEASE')).toEqual([
+        expect.objectContaining({ actualCostMinor: 0, billedUnits: 0 }),
+      ]);
+      const events = await client.aiProviderReconciliationEvent.findMany({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({ abandonment: { version: 'ai-image-count-undelivered-abandonment/v1',
+        providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0 } });
+      expect(await client.aiMediaWorkflowEvent.count({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } })).toBe(1);
+      expect(await client.aiImageJob.findUniqueOrThrow({ where: { id: siblingBefore.id }, include })).toEqual(siblingBefore);
+      await expect(client.aiImageJob.update({ where: { id: item.id }, data: { providerReconciliationLastErrorMessage: 'tamper' } }))
+        .rejects.toThrow(/terminal AI provider reconciliation is immutable/u);
+      await client.$queryRawUnsafe('SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS result', fixture.suiteId, fixture.owner);
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  }, 30_000);
+
+  it('rolls back count abandonment and ERP release atomically if its audit cannot persist', async () => {
+    const fixture = await failedWanxSuiteForAbandonment('count_audit_failure', { count: true });
+    const service = createAiProviderReconciliationAdminService({ database: client });
+    const item = (await service.listReconciliations({ limit: 100 })).items.find((row: any) => row.id === fixture.tasks[0]!.jobId)!;
+    const include = { costReservation: { include: { settlements: { orderBy: { id: 'asc' as const } } } } };
+    const before = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+    await client.$executeRawUnsafe(`CREATE FUNCTION reject_count_abandon_audit() RETURNS trigger AS $$ BEGIN
+      IF NEW."job_id" = '${item.id}' AND NEW."event_type" = 'PROVIDER_RECONCILIATION_ABANDON' THEN
+        RAISE EXCEPTION 'deliberate count audit persistence failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
+    await client.$executeRawUnsafe('CREATE TRIGGER reject_count_abandon_audit BEFORE INSERT ON ai_media_workflow_events FOR EACH ROW EXECUTE FUNCTION reject_count_abandon_audit()');
+    try {
+      await expect(service.resolveReconciliation({ jobId: item.id, actorUserId: fixture.owner, requestId: randomUUID(),
+        expectedStatus: 'MANUAL_REVIEW', expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash, action: 'ABANDON',
+        reason: 'The count decision and ERP release must roll back if immutable audit persistence fails' })).rejects.toThrow(/deliberate count audit persistence failure/u);
+      expect(await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include })).toEqual(before);
+      expect(await client.aiProviderReconciliationEvent.count({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } })).toBe(0);
+    } finally {
+      await client.$executeRawUnsafe('DROP TRIGGER reject_count_abandon_audit ON ai_media_workflow_events');
+      await client.$executeRawUnsafe('DROP FUNCTION reject_count_abandon_audit()');
+    }
+  }, 30_000);
 
   it.each(['RECONCILIATION_REQUIRED', 'SETTLED'] as const)('abandons a historical failed Wanx suite with %s cost without Provider calls or audit loss', async costStatus => {
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('No external request is authorized in this fixture'); });

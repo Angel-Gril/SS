@@ -777,6 +777,7 @@ const requiredDonorWorkbenchFiles = [
   'pages/donor/category-dialog.css',
   'pages/donor/suite-primary-action.js',
   'pages/donor/sku-image-workspace.js',
+  'pages/donor/image-process-poller.js',
   'pages/donor/source-video-view.js',
   'pages/donor/combined-image-flow.js',
   'pages/donor/watermark-editor.js',

@@ -26,7 +26,8 @@ function producer(options = {}) {
     promptText: { value: '浅灰背景，柔和自然光' }, negativeText: { value: '' },
     Prompt: { compileCreativeBrief: ({ prompt }) => ({ prompt }) },
     eligibleReferenceMedia: () => [{ key: rawKey }], referenceKeys: new Set([rawKey]),
-    visualJsonError: '', imageMode: options.imageMode || 'ai-suite', planSubmissionBusy: false, promptPlanLocks: new Map(), pollingAttempts: 0,
+    visualJsonError: '', imageMode: options.imageMode || 'ai-suite', planSubmissionBusy: false, promptPlanLocks: new Map(),
+    imageProcessReadWarning: '', imageProcessPoller: { restart() {} },
     render() {}, log() {}, renderPromptState() {}, refreshConfirmedMedia: async () => {},
     command: async (type, fields) => {
       const parsed = contract.parseFrameCommand({ contractVersion: contract.CONTRACT_VERSION, requestId: 'test-plan', type, ...fields });
