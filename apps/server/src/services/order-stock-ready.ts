@@ -49,13 +49,25 @@ export function createOrderStockReadyService(database: Database) {
         const order = rows[0];
         if (!order) return { kind: 'not_found' } as const;
 
+        // Read physical warehouse facts under the same row lock. This is also
+        // required for an idempotent replay: a previously marked order may
+        // have entered the warehouse since its first request.
+        const logs = await tx.warehouseLog.findMany({
+          where: { orderId: input.orderId, operationType: { in: ['scan_in', 'scan_out'] } },
+          orderBy: { createdAt: 'asc' },
+          select: { operationType: true, createdAt: true },
+        }) as Array<{ operationType: string; createdAt: Date }>;
+        const physical = {
+          warehouseScanInAt: logs.find(log => log.operationType === 'scan_in')?.createdAt ?? null,
+          warehouseScanOutAt: logs.find(log => log.operationType === 'scan_out')?.createdAt ?? null,
+        };
         const existing = await tx.warehouseLog.findMany({
           where: { orderId: input.orderId, operationType: 'stock_ready' },
           orderBy: { createdAt: 'asc' },
           select: { createdAt: true },
         });
         if (existing[0]) {
-          const projection = { ...order, stockPreparedAt: existing[0].createdAt };
+          const projection = { ...order, ...physical, stockPreparedAt: existing[0].createdAt };
           return {
             kind: 'marked', id: order.id, stockPreparedAt: existing[0].createdAt, replayed: true,
             stage: resolveOrderFulfillmentStage(projection).key,
@@ -64,15 +76,9 @@ export function createOrderStockReadyService(database: Database) {
         }
 
         // Physical warehouse / outbound facts are read inside the same lock.
-        const logs = await tx.warehouseLog.findMany({
-          where: { orderId: input.orderId, operationType: { in: ['scan_in', 'scan_out'] } },
-          orderBy: { createdAt: 'asc' },
-          select: { operationType: true, createdAt: true },
-        }) as Array<{ operationType: string; createdAt: Date }>;
         const current = resolveOrderFulfillmentStage({
           ...order,
-          warehouseScanInAt: logs.find(log => log.operationType === 'scan_in')?.createdAt ?? null,
-          warehouseScanOutAt: logs.find(log => log.operationType === 'scan_out')?.createdAt ?? null,
+          ...physical,
         });
         if (current.key === 'abnormal' || current.key === 'warehouse_processing' || current.key === 'delivering') {
           return { kind: 'immutable', stage: current.key } as const;

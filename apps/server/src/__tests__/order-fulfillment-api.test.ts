@@ -84,7 +84,7 @@ describe('order fulfillment owner consumers', () => {
     expect(mocks.queryRaw).toHaveBeenCalledTimes(1);
     const scope = mocks.orderFindMany.mock.calls[0]?.[0]?.where;
     expect(scope).toEqual(expect.objectContaining({ serviceTags: { array_contains: ['inspect'] }, purchaseOrderId: null }));
-    expect(scope.OR).toEqual(expect.arrayContaining([{ id: { in: ['pending'] } }]));
+    expect(scope.id).toEqual({ in: ['pending'] });
     await app.close();
   });
 
@@ -120,6 +120,34 @@ describe('order fulfillment owner consumers', () => {
     expect(mocks.orderFindMany).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it.each(['startDate=not-a-date', 'startDate=2026-02-30', 'startDate=2026-10-11&endDate=2026-10-09', 'limit=0', 'limit=201', 'offset=-1'])('rejects invalid list and pipeline query before database reads: %s', async query => {
+    const app = await appFor();
+    for (const path of ['/api/orders', '/api/orders/pipeline']) {
+      const response = await app.inject(`${path}?${query}`);
+      expect(response.statusCode).toBe(400);
+    }
+    expect(mocks.orderFindMany).not.toHaveBeenCalled();
+    expect(mocks.shopFindMany).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each(['posting', 'tracking', 'purchase', 'sku', 'product', 'all'])('uses one scope for list and pipeline searchField=%s', async field => {
+    const app = await appFor();
+    const query = `search=box&searchField=${field}&startDate=2026-10-01&endDate=2026-10-09&hasTracking=yes&serviceTagId=inspect&purchaseState=unlinked`;
+    await app.inject(`/api/orders?${query}`);
+    const listWhere = mocks.orderCount.mock.calls[0]?.[0]?.where;
+    mocks.orderFindMany.mockClear();
+    await app.inject(`/api/orders/pipeline?${query}`);
+    expect(mocks.orderFindMany.mock.calls[0]?.[0]?.where).toEqual(listWhere);
+    if (field === 'sku' || field === 'product') expect(listWhere).not.toHaveProperty('OR');
+    if (field === 'tracking') expect(listWhere.OR).toEqual([
+      { trackingNumber: { contains: 'box', mode: 'insensitive' } },
+      { domesticTrackingNumber: { contains: 'box', mode: 'insensitive' } },
+      { internationalTrackingNumber: { contains: 'box', mode: 'insensitive' } },
+    ]);
+    await app.close();
+  });
 });
 
 describe('mark order stock ready', () => {
@@ -137,13 +165,43 @@ describe('mark order stock ready', () => {
   });
 
   it('replays the persisted marker even if the order has since moved to warehouse', async () => {
-    mocks.orderFindUnique.mockResolvedValue({ id: 'pending', status: 'awaiting_packaging', domesticStatus: 'received' });
+    mocks.queryRaw.mockResolvedValue([{ id: 'pending', status: 'awaiting_packaging', domesticStatus: 'received' }]);
     mocks.warehouseLogFindMany.mockResolvedValue([{ orderId: 'pending', operationType: 'stock_ready', createdAt: preparedAt }]);
     const app = await appFor();
     const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });
     expect(response.statusCode).toBe(200);
     expect(response.json().data.stockPreparedAt).toBe(preparedAt.toISOString());
+    expect(response.json().data.fulfillmentStage).toBe('warehouse_processing');
     expect(mocks.warehouseLogCreate).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each(['scan_in', 'scan_out'])('refuses fresh stock readiness after a durable %s log', async operationType => {
+    mocks.warehouseLogFindMany.mockImplementation(async args => typeof args.where.operationType === 'object' ? [{ operationType, createdAt: preparedAt }] : []);
+    const app = await appFor();
+    const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });
+    expect(response.statusCode).toBe(409);
+    expect(mocks.warehouseLogCreate).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('replays the existing stock marker with current physical warehouse stage', async () => {
+    mocks.warehouseLogFindMany.mockImplementation(async args => args.where.operationType === 'stock_ready'
+      ? [{ operationType: 'stock_ready', createdAt: preparedAt }]
+      : [{ operationType: 'scan_in', createdAt: preparedAt }]);
+    const app = await appFor();
+    const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.fulfillmentStage).toBe('warehouse_processing');
+    expect(mocks.warehouseLogCreate).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([{ deliveredAt: preparedAt }, { deliveringDate: preparedAt }, { inspectionStatus: 'failed' }])('refuses fresh readiness after factual dispatch, delivery, or failed inspection', async facts => {
+    mocks.queryRaw.mockResolvedValue([{ id: 'pending', status: 'awaiting_packaging', ...facts }]);
+    const app = await appFor();
+    const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });
+    expect(response.statusCode).toBe(409); expect(mocks.warehouseLogCreate).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -170,7 +228,7 @@ describe('mark order stock ready', () => {
   });
 
   it.each([{ status: 'cancelled' }, { status: 'delivered' }, { status: 'awaiting_packaging', domesticStatus: 'received' }, { internationalStatus: 'shipped' }])('does not newly mark warehouse, dispatched, cancelled or delivered orders', async order => {
-    mocks.queryRaw.mockResolvedValue([{ id: 'pending', status: order.status ?? null, sub_status: null, domestic_status: order.domesticStatus ?? null, international_status: order.internationalStatus ?? null }]);
+    mocks.queryRaw.mockResolvedValue([{ id: 'pending', status: order.status ?? null, subStatus: null, domesticStatus: order.domesticStatus ?? null, internationalStatus: order.internationalStatus ?? null }]);
     mocks.orderFindUnique.mockResolvedValue({ id: 'pending', ...order });
     const app = await appFor();
     const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });

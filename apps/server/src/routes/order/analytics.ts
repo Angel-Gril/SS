@@ -1,13 +1,18 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { authenticate } from '../../lib/auth.js';
 import { prisma } from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';
 import { OzonClient } from '../../services/ozon-client.js';
 import { ORDER_FULFILLMENT_PIPELINE, resolveOrderFulfillmentStage, resolveOrderFulfillmentStatus } from 'shared/order-fulfillment-stage';
-import { findOrderIdsByItemSearch } from '../order.js';
+import { buildOrderListScope } from '../../services/order-list-scope.js';
 
 export async function orderAnalyticsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+  const queryDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }, '日期参数无效');
 
   app.get('/stats', async (request) => {
     const { userId } = (request as any).user;
@@ -114,30 +119,27 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     return { code: 1, msg: 'ok', data: { rows, summary: { ...summary, totalRevenue: summary.totalRevenue.toFixed(2), todayRevenue: summary.todayRevenue.toFixed(2), shopCount: rows.length } } };
   });
 
-  app.get('/pipeline', async (request) => {
+  app.get('/pipeline', async (request, reply) => {
     const { userId } = (request as any).user;
-    const query = request.query as { shopId?: string; startDate?: string; endDate?: string; search?: string; searchField?: 'all' | 'sku' | 'product'; purchaseState?: string; shippingMethod?: string; hasTracking?: string; serviceTagId?: string; userColorTagId?: string };
+    const querySchema = z.object({ shopId: z.string().optional(), status: z.string().optional(), subStatus: z.string().min(1).max(120).optional(), search: z.string().optional(), searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(), purchaseState: z.enum(['linked', 'unlinked']).optional(), shippingMethod: z.string().min(1).max(120).optional(), hasTracking: z.enum(['yes', 'no']).optional(), serviceTagId: z.string().optional(), userColorTagId: z.string().optional(), startDate: queryDateSchema.optional(), endDate: queryDateSchema.optional(), shipmentUrgency: z.enum(['overdue', 'today', 'tomorrow', 'within3d']).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional() }).superRefine((value, context) => {
+      if (value.startDate && value.endDate && new Date(value.startDate) > new Date(value.endDate)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: '结束日期不能早于开始日期' });
+    });
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    const query = parsed.data;
+    if (query.startDate && (!/^\d{4}-\d{2}-\d{2}$/u.test(query.startDate) || Number.isNaN(new Date(`${query.startDate}T00:00:00.000Z`).getTime()))) return reply.status(400).send({ code: 0, msg: '日期参数无效' });
+    if (query.endDate && (!/^\d{4}-\d{2}-\d{2}$/u.test(query.endDate) || Number.isNaN(new Date(`${query.endDate}T00:00:00.000Z`).getTime()))) return reply.status(400).send({ code: 0, msg: '日期参数无效' });
+    if (query.startDate && query.endDate && query.startDate > query.endDate) return reply.status(400).send({ code: 0, msg: '结束日期不能早于开始日期' });
+    const rawLimit = (query as any).limit, rawOffset = (query as any).offset;
+    if (rawLimit !== undefined && (!/^\d+$/u.test(String(rawLimit)) || Number(rawLimit) < 1 || Number(rawLimit) > 200)) return reply.status(400).send({ code: 0, msg: 'limit 参数无效' });
+    if (rawOffset !== undefined && (!/^\d+$/u.test(String(rawOffset)))) return reply.status(400).send({ code: 0, msg: 'offset 参数无效' });
     const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
     const scopedShopIds = query.shopId ? (shopIds.includes(query.shopId) ? [query.shopId] : []) : shopIds;
     if (scopedShopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, stages: ORDER_FULFILLMENT_PIPELINE.map(stage => ({ ...stage, count: 0, children: stage.children.map(child => ({ ...child, count: 0 })) })) } };
-    const where: Record<string, unknown> = { shopId: { in: scopedShopIds } };
-    const dateFilter: Record<string, Date> = {};
-    if (query.startDate) dateFilter.gte = new Date(`${query.startDate}T00:00:00.000Z`);
-    if (query.endDate) { const end = new Date(`${query.endDate}T00:00:00.000Z`); end.setUTCDate(end.getUTCDate() + 1); dateFilter.lt = end; }
-    if (Object.keys(dateFilter).length) where.createdAt = dateFilter;
-    if (query.purchaseState === 'linked') where.purchaseOrderId = { not: null };
-    if (query.purchaseState === 'unlinked') where.purchaseOrderId = null;
-    if (query.shippingMethod) where.shippingMethod = { contains: query.shippingMethod, mode: 'insensitive' };
-    if (query.hasTracking === 'yes') where.trackingNumber = { not: null };
-    if (query.hasTracking === 'no') where.trackingNumber = null;
-    if (query.serviceTagId) where.serviceTags = { array_contains: [query.serviceTagId] };
-    if (query.userColorTagId) where.userColorTags = { array_contains: [query.userColorTagId] };
-    if (query.search?.trim()) {
-      const term = query.search.trim();
-      const itemIds = await findOrderIdsByItemSearch(scopedShopIds, term, query.searchField || 'all');
-      where.OR = [{ postingNumber: { contains: term, mode: 'insensitive' } }, { platformOrderId: { contains: term, mode: 'insensitive' } }, { trackingNumber: { contains: term, mode: 'insensitive' } }, { id: { in: itemIds } }];
-    }
+    let where: Record<string, unknown>;
+    try { where = await buildOrderListScope(prisma as never, scopedShopIds, query); }
+    catch (error) { return reply.status(400).send({ code: 0, msg: error instanceof Error ? error.message : '参数错误' }); }
 
     const orders = await prisma.order.findMany({
       where: where as any,

@@ -7,6 +7,7 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
 import { createOrderStockReadyService } from '../services/order-stock-ready.js';
+import { buildOrderListScope } from '../services/order-list-scope.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
   isOrderAwaitingSellerShipment,
@@ -59,8 +60,18 @@ const orderQuerySchema = z.object({
   ]).default('created_desc'),
   offset: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(20),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+}).superRefine((value, context) => {
+  const parse = (date: string) => {
+    const result = new Date(`${date}T00:00:00.000Z`);
+    return Number.isFinite(result.getTime()) && result.toISOString().slice(0, 10) === date ? result : null;
+  };
+  const start = value.startDate ? parse(value.startDate) : null;
+  const end = value.endDate ? parse(value.endDate) : null;
+  if (value.startDate && !start) context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: '日期参数无效' });
+  if (value.endDate && !end) context.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: '日期参数无效' });
+  if (start && end && start > end) context.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: '结束日期不能早于开始日期' });
 });
 
 const labelPrintLogsQuerySchema = z.object({
@@ -76,18 +87,7 @@ const batchUserColorTagsBodySchema = z.object({
   tagIds: z.array(z.string()),
 });
 
-export function buildOrderCreatedAtRange(startDate?: string, endDate?: string): Record<string, Date> | undefined {
-  const range: Record<string, Date> = {};
-  if (startDate) {
-    range.gte = parseDateAtUtcStartOfDay(startDate);
-  }
-  if (endDate) {
-    const exclusiveEnd = parseDateAtUtcStartOfDay(endDate);
-    exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
-    range.lt = exclusiveEnd;
-  }
-  return Object.keys(range).length > 0 ? range : undefined;
-}
+export { buildOrderCreatedAtRange, filterOrderIdsByShipmentUrgency } from '../services/order-list-scope.js';
 
 export function filterOrderIdsByFulfillmentStage(
   orders: OrderStageFilterInput[],
@@ -111,77 +111,6 @@ export function filterOrderIdsByFulfillmentStage(
       return matchesOrderFulfillmentFilter(stageInput, fulfillmentStage, fulfillmentStatus);
     })
     .map((order) => order.id);
-}
-
-export function filterOrderIdsByShipmentUrgency(
-  orders: OrderShipmentUrgencyInput[],
-  shipmentUrgency: ShipmentUrgency,
-  now: Date = new Date(),
-): string[] {
-  return orders
-    .filter((order) => matchesShipmentUrgency(order, shipmentUrgency, now))
-    .map((order) => order.id);
-}
-
-function matchesShipmentUrgency(
-  order: OrderShipmentUrgencyInput,
-  shipmentUrgency: ShipmentUrgency,
-  now: Date,
-): boolean {
-  if (!isOrderAwaitingSellerShipment(order)) return false;
-  const deadline = toValidDate(order.shipmentDate);
-  if (!deadline) return false;
-
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
-  const endOfTomorrow = new Date(now);
-  endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
-  endOfTomorrow.setHours(23, 59, 59, 999);
-  const endOfThirdDay = new Date(now);
-  endOfThirdDay.setDate(endOfThirdDay.getDate() + 3);
-  endOfThirdDay.setHours(23, 59, 59, 999);
-
-  switch (shipmentUrgency) {
-    case 'overdue':
-      return deadline < now;
-    case 'today':
-      return deadline >= now && deadline <= endOfToday;
-    case 'tomorrow':
-      return deadline > endOfToday && deadline <= endOfTomorrow;
-    case 'within3d':
-      return deadline >= now && deadline <= endOfThirdDay;
-  }
-}
-
-function buildShipmentDeadlineRange(shipmentUrgency: ShipmentUrgency, now: Date): Record<string, Date> {
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
-  const endOfTomorrow = new Date(now);
-  endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
-  endOfTomorrow.setHours(23, 59, 59, 999);
-  const endOfThirdDay = new Date(now);
-  endOfThirdDay.setDate(endOfThirdDay.getDate() + 3);
-  endOfThirdDay.setHours(23, 59, 59, 999);
-
-  switch (shipmentUrgency) {
-    case 'overdue':
-      return { lt: now };
-    case 'today':
-      return { gte: now, lte: endOfToday };
-    case 'tomorrow':
-      return { gt: endOfToday, lte: endOfTomorrow };
-    case 'within3d':
-      return { gte: now, lte: endOfThirdDay };
-  }
-}
-
-function parseDateAtUtcStartOfDay(value: string): Date {
-  const trimmed = value.trim();
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-    ? new Date(`${trimmed}T00:00:00.000Z`)
-    : new Date(trimmed);
-  dateOnly.setUTCHours(0, 0, 0, 0);
-  return dateOnly;
 }
 
 function buildLatestWarehouseLogMap(
@@ -231,56 +160,6 @@ function orderSort(sort: z.infer<typeof orderQuerySchema>['sort']) {
     case 'amount_asc': return [{ totalAmount: 'asc' as const }, { createdAt: 'desc' as const }];
     default: return [{ createdAt: 'desc' as const }];
   }
-}
-
-export type OrderItemSearchField = 'all' | 'sku' | 'product';
-
-/**
- * Resolve order ids whose JSON item array contains a matching SKU/offer/name.
- *
- * Prisma's PostgreSQL JSON path filter does not support the `$[*]` wildcard
- * used by the previous implementation.  It consequently generated a query
- * that could never match an item in an array.  Use PostgreSQL's native
- * jsonb_array_elements instead, while keeping all user input parameterized by
- * Prisma's tagged SQL builder.
- */
-export async function findOrderIdsByItemSearch(
-  shopIds: string[],
-  term: string,
-  searchField: OrderItemSearchField,
-): Promise<string[]> {
-  if (shopIds.length === 0 || !term) return [];
-
-  const pattern = `%${escapePostgresLike(term)}%`;
-  const predicates: Prisma.Sql[] = [];
-
-  if (searchField === 'all' || searchField === 'sku') {
-    // Ozon calls the seller's article `offer_id`; users commonly refer to it
-    // as the article/货号, so both fields belong to the SKU search scope.
-    predicates.push(
-      Prisma.sql`item ->> 'sku' ILIKE ${pattern} ESCAPE '\\'`,
-      Prisma.sql`item ->> 'offer_id' ILIKE ${pattern} ESCAPE '\\'`,
-    );
-  }
-  if (searchField === 'all' || searchField === 'product') {
-    predicates.push(Prisma.sql`item ->> 'name' ILIKE ${pattern} ESCAPE '\\'`);
-  }
-  if (predicates.length === 0) return [];
-
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT DISTINCT o."id"
-    FROM "orders" AS o
-    CROSS JOIN LATERAL jsonb_array_elements(
-      CASE
-        WHEN jsonb_typeof(o."items") = 'array' THEN o."items"
-        ELSE '[]'::jsonb
-      END
-    ) AS item
-    WHERE o."shop_id" IN (${Prisma.join(shopIds)})
-      AND (${Prisma.join(predicates, ' OR ')})
-  `);
-
-  return rows.map((row) => String(row.id)).filter(Boolean);
 }
 
 /** Restrict an existing id filter instead of replacing it. */
@@ -520,108 +399,11 @@ export async function orderRoutes(app: FastifyInstance) {
       return { code: 1, msg: 'ok', data: { total: 0, rows: [] } };
     }
 
-    const where: Record<string, unknown> = {
-      shopId: query.shopId && shopIds.includes(query.shopId)
-        ? query.shopId
-        : { in: shopIds },
-    };
-
-    if (query.status) {
-      where.status = query.status;
-    }
-    if (query.subStatus) where.subStatus = query.subStatus;
-    if (query.purchaseState === 'linked') where.purchaseOrderId = { not: null };
-    if (query.purchaseState === 'unlinked') where.purchaseOrderId = null;
-    if (query.shippingMethod) {
-      where.shippingMethod = { contains: query.shippingMethod, mode: 'insensitive' };
-    }
-
-    if (query.search) {
-      const term = query.search.trim();
-      const ci = { contains: term, mode: 'insensitive' as const };
-      const searchField = query.searchField || 'all';
-      switch (searchField) {
-        case 'posting':
-          where.OR = [
-            { postingNumber: ci },
-            { platformOrderId: ci },
-          ];
-          break;
-        case 'tracking':
-          where.OR = [
-            { trackingNumber: ci },
-            { domesticTrackingNumber: ci },
-            { internationalTrackingNumber: ci },
-          ];
-          break;
-        case 'purchase':
-          where.OR = [
-            { purchaseOrderId: ci },
-          ];
-          break;
-        case 'sku':
-        case 'product': {
-          const itemIds = await findOrderIdsByItemSearch(shopIds, term, searchField);
-          // Item fields live in a JSON array. Resolve matching ids with a
-          // native JSONB query, then let Prisma apply the remaining filters.
-          where.id = { in: itemIds };
-          break;
-        }
-        default: {
-          // `all` includes the scalar order fields and the item fields shown
-          // in the search placeholder. Item matches are represented as an
-          // additional OR branch so scalar matches are not accidentally lost.
-          const itemIds = await findOrderIdsByItemSearch(shopIds, term, 'all');
-          where.OR = [
-            { postingNumber: ci },
-            { platformOrderId: ci },
-            { trackingNumber: ci },
-            { domesticTrackingNumber: ci },
-            { internationalTrackingNumber: ci },
-            { purchaseOrderId: ci },
-            { id: { in: itemIds } },
-          ];
-          break;
-        }
-      }
-    }
-
-    if (query.serviceTagId) {
-      where.serviceTags = { array_contains: [query.serviceTagId] };
-    }
-
-    if (query.userColorTagId) {
-      where.userColorTags = { array_contains: [query.userColorTagId] };
-    }
-
-    if (query.hasTracking === 'yes') {
-      where.trackingNumber = { not: null };
-    } else if (query.hasTracking === 'no') {
-      where.trackingNumber = null;
-    }
-
-    if (query.shipmentUrgency) {
-      const now = new Date();
-      where.shipmentDate = buildShipmentDeadlineRange(query.shipmentUrgency, now);
-      if (!query.status) {
-        where.status = { in: ['awaiting_packaging', 'awaiting_deliver'] };
-      }
-      const candidateOrders = await prisma.order.findMany({
-        where: where as any,
-        select: {
-          id: true,
-          status: true,
-          subStatus: true,
-          shipmentDate: true,
-          deliveringDate: true,
-          deliveredAt: true,
-        },
-      });
-      restrictOrderIds(where, filterOrderIdsByShipmentUrgency(candidateOrders, query.shipmentUrgency, now));
-    }
-
-    if (query.startDate || query.endDate) {
-      where.createdAt = buildOrderCreatedAtRange(query.startDate, query.endDate);
+    let where: Record<string, unknown>;
+    try {
+      where = await buildOrderListScope(prisma as never, shopIds, query);
+    } catch (error) {
+      return reply.status(400).send({ code: 0, msg: error instanceof Error ? error.message : '参数错误' });
     }
 
     if (query.fulfillmentStage || query.fulfillmentStatus) {
