@@ -145,7 +145,79 @@ function settledRejectedCountSuite() {
   return db;
 }
 
+function uncertainCountSuite() {
+  const db = rejectedCountSuite();
+  Object.assign(db.job, { providerJobId: null, errorCode: 'PROVIDER_REQUEST_FAILED',
+    errorMessage: 'OpenAI Images request failed (HTTP 524)',
+    providerReconciliationLastErrorCode: 'PROVIDER_REQUEST_FAILED' });
+  Object.assign(db.reservation, { status: 'SUBMISSION_UNCERTAIN', providerRequestId: null, providerAcceptedAt: null });
+  const payload = { providerDispatchedAt: db.job.providerDispatchedAt.toISOString() };
+  db.job.workflow.events = [{ workflowId: db.job.workflowId, jobId: db.job.id, ownerUserId: db.job.ownerUserId,
+    actorUserId: db.job.actorUserId, eventType: 'PROVIDER_DISPATCH_STARTED',
+    eventKey: `${db.job.workflowId}:PROVIDER_DISPATCH_STARTED:${db.job.id}:${db.job.workflowAttempt}`,
+    payload, payloadHash: hashAiMediaPlanningJson(payload) }];
+  return db;
+}
+
 describe('AI Provider reconciliation admin service', () => {
+  it('ends unknown count recovery through audited abandonment without claiming that nothing was submitted or generated', async () => {
+    const db = uncertainCountSuite();
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const item = (await service.listReconciliations()).items[0];
+    expect(item.allowedActions).toEqual(['ABANDON']);
+    const decision = { jobId: db.job.id, actorUserId: 'super-admin-1', requestId: 'count-unknown-abandon',
+      expectedStatus: 'MANUAL_REVIEW' as const, expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash,
+      action: 'ABANDON' as const, reason: 'Authorized termination of unknown Provider recovery; release only the undelivered ERP prepayment' };
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+    expect(db.job).toMatchObject({ status: 'FAILED', providerJobId: null, errorCode: 'PROVIDER_REQUEST_FAILED', actualCostCents: null, billedUnits: 0 });
+    expect([...db.providerEvents.values()][0].payload.abandonment).toMatchObject({
+      version: 'ai-image-count-uncertain-abandonment/v1', providerOutputDisposition: 'UNKNOWN',
+      providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0,
+    });
+    expect(db.reservation.settlements.filter((row: any) => row.kind === 'RECONCILED_RELEASE')).toHaveLength(1);
+    expect(db.providerEvents.size).toBe(1);
+    expect(db.workflowEvents.size).toBe(1);
+  });
+
+  it.each(['no-dispatch', 'future-dispatch', 'missing-event', 'bad-hash', 'event-owner', 'event-actor', 'event-job', 'event-attempt',
+    'event-time', 'provider-id', 'accepted-id', 'accepted-time', 'asset', 'settled', 'charge', 'old-attempt', 'slot-attempt',
+    'foreign-suite', 'cancelled', 'running', 'wrong-endpoint', 'amount', 'billed', 'unfrozen-cost'])(
+    'does not abandon an uncertain count task with %s evidence or claim it was not submitted', async shape => {
+      const db = uncertainCountSuite(), event = db.job.workflow.events[0];
+      if (shape === 'no-dispatch') db.job.providerDispatchedAt = null;
+      if (shape === 'future-dispatch') db.job.providerDispatchedAt = new Date(NOW.getTime() + 60_000);
+      if (shape === 'missing-event') db.job.workflow.events = [];
+      if (shape === 'bad-hash') event.payloadHash = 'b'.repeat(64);
+      if (shape === 'event-owner') event.ownerUserId = 'other-owner';
+      if (shape === 'event-actor') event.actorUserId = 'other-actor';
+      if (shape === 'event-job') event.jobId = 'other-job';
+      if (shape === 'event-attempt') event.eventKey += ':2';
+      if (shape === 'event-time') event.payload.providerDispatchedAt = new Date(NOW.getTime() - 120_000).toISOString();
+      if (shape === 'provider-id') db.job.providerJobId = 'accepted';
+      if (shape === 'accepted-id') db.reservation.providerRequestId = 'accepted';
+      if (shape === 'accepted-time') db.reservation.providerAcceptedAt = NOW;
+      if (shape === 'asset') db.job.assets = [{ id: 'output', kind: 'AI_GENERATED' }];
+      if (shape === 'settled') db.reservation.status = 'SETTLED';
+      if (shape === 'charge') db.reservation.settlements = [{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }];
+      if (shape === 'old-attempt') db.job.workflow.currentAttempt = 2;
+      if (shape === 'slot-attempt') db.job.workflow.suiteSlot.attempt = 2;
+      if (shape === 'foreign-suite') db.job.workflow.suiteSlot.suite.ownerUserId = 'other-owner';
+      if (shape === 'cancelled') db.job.workflow.suiteSlot.suite.cancelRequestedAt = NOW;
+      if (shape === 'running') db.job.status = 'RUNNING';
+      if (shape === 'wrong-endpoint') db.job.operationConfig.providerRuntime.baseUrlSha256 = 'b'.repeat(64);
+      if (shape === 'amount') db.reservation.maximumCostMinor = 11;
+      if (shape === 'billed') db.job.billedUnits = 1;
+      if (shape === 'unfrozen-cost') db.job.actualCostCents = 10;
+      const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+      const item = (await service.listReconciliations()).items[0];
+      expect(item.allowedActions).toEqual([]);
+      await expect(service.resolveReconciliation({ jobId: db.job.id, actorUserId: 'super-admin-1', requestId: `bad-unknown-${shape}`,
+        expectedStatus: 'MANUAL_REVIEW', expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash,
+        action: 'ABANDON', reason: 'Inconsistent dispatch evidence cannot authorize a cost or recovery mutation' })).rejects.toMatchObject({ code: 'RECONCILIATION_CHANGED' });
+      expect(db.providerEvents.size).toBe(0); expect(db.workflowEvents.size).toBe(0);
+    });
+
   it('offers audited abandonment for a rejected count frame with no ERP charge or delivered asset', async () => {
     const db = rejectedCountSuite();
     db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';

@@ -808,7 +808,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     expect(lookups).toBe(2);
   }, 75_000);
 
-  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean; count?: boolean; successfulSibling?: boolean; countDimensions?: boolean; settledCount?: boolean } = {}) {
+  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean; count?: boolean; successfulSibling?: boolean; countDimensions?: boolean; settledCount?: boolean; uncertainCount?: boolean } = {}) {
     const id = `${label}_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     const owner = `abandon_owner_${id}`, goods = `abandon_goods_${id}`, subject = `abandon_subject_${id}`, snapshot = `abandon_snapshot_${id}`;
     const sourceCapture = structuredClone(sourceFixture.capture);
@@ -894,6 +894,9 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         }
         await dependencies.assertClaim();
         expect(await dependencies.markProviderDispatchStarted(acceptedAt)).toBe(true);
+        if (options.uncertainCount) {
+          throw Object.assign(new Error('OpenAI Images request failed (HTTP 524)'), { code: 'PROVIDER_REQUEST_FAILED', providerSubmissionUncertain: true });
+        }
         const providerJobId = `accepted-output-${input.jobId}`;
         await dependencies.recordProviderAccepted(providerJobId, acceptedAt);
         if (options.settledCount) {
@@ -981,6 +984,50 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     } finally { network.mockRestore(); }
   }, 30_000);
 
+  it.each([false, true])('ends unknown count recovery abandonment with successful sibling=%s and one audited ERP release', async successfulSibling => {
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('No real Provider/Ozon request'); });
+    try {
+      const fixture = await failedWanxSuiteForAbandonment('count_uncertain_abandon', { count: true, uncertainCount: true, successfulSibling });
+      const service = createAiProviderReconciliationAdminService({ database: client });
+      const item = (await service.listReconciliations({ limit: 100 })).items.find((row: any) => row.id === fixture.tasks[0]!.jobId)!;
+      expect(item.allowedActions).toEqual(['ABANDON']);
+      const include = { assets: true, costReservation: { include: { settlements: { orderBy: { id: 'asc' as const } } } } };
+      const before = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      const sibling = await client.aiImageJob.findUniqueOrThrow({ where: { id: fixture.tasks[1]!.jobId }, include });
+      expect(before).toMatchObject({ providerJobId: null, actualCostCents: null, billedUnits: 0, errorCode: 'PROVIDER_REQUEST_FAILED',
+        costReservation: { status: 'SUBMISSION_UNCERTAIN', providerRequestId: null, providerAcceptedAt: null } });
+      for (const zone of ['UTC', 'Asia/Shanghai']) {
+        await client.$transaction(async tx => {
+          await tx.$executeRawUnsafe(`SET LOCAL TIME ZONE '${zone}'`);
+          const [result] = await tx.$queryRawUnsafe<Array<{ allowed: boolean }>>(
+            'SELECT ai_media_count_uncertain_abandonment_allowed($1::text) AS allowed', item.id);
+          expect(result!.allowed).toBe(true);
+        });
+      }
+      const decision = { jobId: item.id, actorUserId: fixture.owner, requestId: randomUUID(), expectedStatus: 'MANUAL_REVIEW' as const,
+        expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash, action: 'ABANDON' as const,
+        reason: 'Explicitly stop unknown recovery and release only the undelivered ERP prepayment, Supplier remains unknown' };
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+      await expect(service.resolveReconciliation({ ...decision, reason: 'A different decision cannot replace the original audit' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+      const after = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      expect(after).toMatchObject({ status: 'FAILED', errorCode: before.errorCode, errorMessage: before.errorMessage,
+        providerJobId: null, providerDispatchedAt: before.providerDispatchedAt, actualCostCents: null, billedUnits: 0, assets: [] });
+      expect(after.costReservation!.settlements.filter(row => row.kind === 'RECONCILED_RELEASE')).toEqual([
+        expect.objectContaining({ actualCostMinor: 0, billedUnits: 0 }),
+      ]);
+      expect(await client.aiImageJob.findUniqueOrThrow({ where: { id: sibling.id }, include })).toEqual(sibling);
+      const events = await client.aiProviderReconciliationEvent.findMany({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({ abandonment: { version: 'ai-image-count-uncertain-abandonment/v1',
+        providerOutputDisposition: 'UNKNOWN', providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0 } });
+      await expect(client.aiImageJob.update({ where: { id: item.id }, data: { providerReconciliationLastErrorMessage: 'tamper' } }))
+        .rejects.toThrow(/terminal AI provider reconciliation is immutable/u);
+      await client.$queryRawUnsafe('SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS result', fixture.suiteId, fixture.owner);
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  }, 30_000);
+
   it('closes settled count recovery abandonment without rewriting its charge or successful sibling', async () => {
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('No external request is authorized'); });
     try {
@@ -1010,8 +1057,8 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     } finally { network.mockRestore(); }
   });
 
-  it('rolls back count abandonment and ERP release atomically if its audit cannot persist', async () => {
-    const fixture = await failedWanxSuiteForAbandonment('count_audit_failure', { count: true });
+  it.each([false, true])('rolls back count abandonment and ERP release atomically if its audit cannot persist, uncertain=%s', async uncertainCount => {
+    const fixture = await failedWanxSuiteForAbandonment('count_audit_failure', { count: true, uncertainCount });
     const service = createAiProviderReconciliationAdminService({ database: client });
     const item = (await service.listReconciliations({ limit: 100 })).items.find((row: any) => row.id === fixture.tasks[0]!.jobId)!;
     const include = { costReservation: { include: { settlements: { orderBy: { id: 'asc' as const } } } } };

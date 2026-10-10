@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 用户批准524未知请求受审计终止，准备456
+
+用户本轮明确批准继续发布，并同意对455 HTTP524无Provider ID的旧主图终止ERP恢复、释放未交付CNY0.10预扣；原Provider输出/费用保持UNKNOWN，禁止重试旧POST。已有双区部署、签名、真实测试费用和官网发布授权保持原目标范围；COM原DOTH pilot、CN dark、Ozon0不扩大。
+
+唯一资格owner为 `ai-image-count-uncertain-abandonment.ts`，管理员route仍消费现有权限/事务/幂等owner，精确失败code与custom/count冻结、CNY10、同owner/actor/job/workflow/slot/current attempt、无Provider/账本accepted identity、无ERP资产或结算、原不可变dispatch事件与payload hash均需符合。只提供ABANDON，不能冒充NOT_SUBMITTED/NO_OUTPUT或RESUME；ledger追加一次RECONCILED_RELEASE，旧error/status/dispatch和成功兄弟保留。新增前向SQL资格/terminal CHECK分支与原transition接线，不修改旧迁移、费用/状态enum或部署策略。终态CHECK不依赖已释放前的瞬时账本状态。
+
+T2最小owner正例先RED→GREEN，114定向、实库未知恢复/原恢复/审计失败事务回滚已通过；时区读取已按Prisma UTC无时区列修正，UTC/AsiaShanghai双会话实库复验继续。最终456仅绑定最终clean commit生成offline、签名和双区部署，再通过正式管理员关闭旧524记录，并新隔离草稿suite/审核/assignment/replay及正式QA04/双区canary/官网CAS。当前尚未部署新恢复owner或释放455旧预扣，官网仍448，本轮新增Provider/Ozon0。
+
 ## 2026-10-10 `72bd796b / 1.0.455` 双区完成，fresh suite 主图 HTTP524 未知
 
 最终修复 `72bd796b976c14b32eb0e4b85498b4a5f787b6c0` 已推送、COM/CN 区域签名验签、实际签名包 MV3、同提交原生 offline、标准双区部署、部署/日常备份恢复和 FULL canonical VPS 均通过。后端7330 passed/390既有条件skipped、独立PG221项、scope7项、Cloud/Local626/622通过；两区运行提交、三个服务、ready/DB/Redis一致。COM原DOTH pilot和qwen-vl-max分析开启、CN direct/RDS dark保持，官网仍 `66c9396c / 1.0.448`。

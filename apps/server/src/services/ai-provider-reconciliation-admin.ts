@@ -12,6 +12,7 @@ import { aiImageSuiteRecoveryAuthorization } from './ai-image-suite-recovery.js'
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
 import { aiImageProviderEndpointSha256, parseAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
 import { AI_IMAGE_DONOR_GPT2_COUNT_API_BASE, validDonorGpt2SuiteConfig } from './ai-image-donor-gpt2-profile.js';
+import { countUncertainAbandonmentEvidence, isUncertainCountSuite } from './ai-image-count-uncertain-abandonment.js';
 
 const UNRESOLVED_STATUSES = ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] as const;
 const LIST_STATUSES = ['ALL', ...UNRESOLVED_STATUSES] as const;
@@ -135,7 +136,7 @@ function evidenceHash(job: any) {
       updatedAt: iso(job.costReservation.updatedAt),
     } : null,
     updatedAt: iso(job.updatedAt),
-    ...(isRejectedCountSuite(job) ? { abandonmentEvidence: {
+    ...(isRejectedCountSuite(job) || isUncertainCountSuite(job) ? { abandonmentEvidence: {
       workflow: job.workflow, assets: job.assets, operationConfig: job.operationConfig,
       attemptCount: job.attemptCount, maxAttempts: job.maxAttempts, requestedImageCount: job.requestedImageCount,
       actualCostCents: job.actualCostCents, billedUnits: job.billedUnits,
@@ -194,7 +195,7 @@ function include() {
         status: true,
         reviewStatus: true,
         selectedOutputAssetId: true,
-        events: { where: { eventType: 'PROVIDER_SUBMITTED' }, orderBy: { createdAt: 'desc' }, take: 2 },
+        events: { where: { eventType: { in: ['PROVIDER_SUBMITTED', 'PROVIDER_DISPATCH_STARTED'] } }, orderBy: { createdAt: 'desc' }, take: 4 },
         suiteSlot: {
           include: { suite: true },
         },
@@ -323,6 +324,7 @@ function countAbandonmentEvidence(job: any, now: Date) {
 
 function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> {
   if (job.providerReconciliationStatus !== 'MANUAL_REVIEW') return [];
+  if (isUncertainCountSuite(job)) return countUncertainAbandonmentEvidence(job, now) ? ['ABANDON'] : [];
   // A known rejected synchronous response cannot honestly become NO_OUTPUT or RESUME.
   if (isRejectedCountSuite(job)) return countAbandonmentEvidence(job, now) ? ['ABANDON'] : [];
   const jobProviderId = String(job.providerJobId || '').trim();
@@ -449,8 +451,9 @@ export function createAiProviderReconciliationAdminService(input: {
                   ? { suiteRecovery: existing.payload.suiteRecovery } : {})
                 : { suiteRecovery: aiImageSuiteRecoveryAuthorization(job, now()) }
               : {}),
-            ...(raw.action === 'ABANDON' && isRejectedCountSuite(job)
-              ? { abandonment: existing?.payload?.abandonment || countAbandonmentEvidence(job, now()) } : {}),
+            ...(raw.action === 'ABANDON' && (isRejectedCountSuite(job) || isUncertainCountSuite(job))
+              ? { abandonment: existing?.payload?.abandonment || countAbandonmentEvidence(job, now())
+                || countUncertainAbandonmentEvidence(job, now()) } : {}),
           };
           const nextRevision = Number(job.providerReconciliationRevision) + 1;
           const nextStatus = raw.action === 'RESUME'
@@ -498,7 +501,8 @@ export function createAiProviderReconciliationAdminService(input: {
             );
           }
           if (raw.action === 'RESUME') assertCurrentAttempt(job);
-          if (raw.action === 'ABANDON' && !historicalAbandonmentEligible(job, now()) && !countAbandonmentEvidence(job, now())) {
+          if (raw.action === 'ABANDON' && !historicalAbandonmentEligible(job, now()) && !countAbandonmentEvidence(job, now())
+            && !countUncertainAbandonmentEvidence(job, now())) {
             throw new AiProviderReconciliationAdminError(
               'INVALID_REQUEST',
               'Only an eligible failed suite child with no ERP output may be abandoned',
