@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 `72bd796b / 1.0.455` 双区完成，fresh suite 主图 HTTP524 未知
+
+最终修复 `72bd796b976c14b32eb0e4b85498b4a5f787b6c0` 已推送、COM/CN 区域签名验签、实际签名包 MV3、同提交原生 offline、标准双区部署、部署/日常备份恢复和 FULL canonical VPS 均通过。后端7330 passed/390既有条件skipped、独立PG221项、scope7项、Cloud/Local626/622通过；两区运行提交、三个服务、ready/DB/Redis一致。COM原DOTH pilot和qwen-vl-max分析开启、CN direct/RDS dark保持，官网仍 `66c9396c / 1.0.448`。
+
+454 失败主图 `cmv1y85ln000y5o6e7vak9nl7` 已在455上经正式管理员ABANDON关闭恢复并原请求幂等通过；精确PROVIDER_SUBMITTED事件身份/hash验证，原FAIL、CNY0.10 CHARGE、空cost接受字段和成功兄弟不改。供应商费用UNKNOWN，不退款、不伪造无输出、不重发旧请求。
+
+新的签名Cloud455/9465经合法DOTH配对、用户滑块后，真实1688重新采集1SKU/9图；snapshot `433f0b32-1382-4b7d-a728-b3cfd31b0a45`、草稿 `draft-f26e6977-09f7-472b-b9b9-0d4ef476c2f2` r1/v1。9图后台转存 COMPLETE、数据库资产/公网原SHA/扩展匿名解码全部通过。真实ERP按钮回到同来源精铺、两图plan审核、START/CONTINUE各1，原请求/响应和binding保留。
+
+Fresh suite `cmv222112000e5oztcw1xg32d` 场景attempt1成功，raw1008×1344/成品900×1200、ERP CNY0.10 CHARGE；主图 `cmv2223nc000w5oztlv2drba7` 请求发出约125秒后供应商HTTP524，未取得Provider task ID，FAILED/MANUAL_REVIEW、SUBMISSION_UNCERTAIN，actualCost=null/billed0、无ERP资产。主图未重试、未结算或释放、不把524冒充明确未提交/无输出。当前pending jobs0/costs1/recovery1/suites0；正式QA04、审核/assignment/replay、REL04 canary/approval/CAS/distribution均未执行，官网未切换。
+
+本轮454+455共4次Provider POST；ERP已结算CNY0.30，455主图额外CNY0.10仍未知预扣；供应商实际扣费未查询，Ozon写入0。454/455专用设备、账号会话、9464/9465均已清理，用户9222保留；草稿、资产、费用和失败原件不删除。受保护原件 `release-72bd796b-deploy455` / `release-72bd796b-fresh455`，不进入Git。
+
+后续边界：必须取得524原请求的供应商查询/幂等结果，或明确批准新增“已发出、无供应商ID、结果未知”的受审计终止恢复合同后才能关闭该未决项。该合同必须保留未知供应商输出/扣费事实和原dispatch指纹，不能借现有known-rejected ABANDON或NOT_SUBMITTED清零；未批准前只允许只读诊断，不再新增suite。
+
 ## 2026-10-10 454 真实套图尺寸拒绝边界与计费顺序修复
 
 `1.0.454` 已完成同提交原生 offline、COM/CN 标准部署和来源图后台转存真实验收：新快照 `6baae02f-835b-491f-af98-a97c9f33bab0`、DOTH 隔离草稿 `draft-7bfcd523-30c2-4019-855b-e2514ff3ae13`，9 张来源图 COMPLETE，公网/数据库/扩展解码 SHA 一致。来源图参考复用已通过，未再出现453的 `AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT`。
