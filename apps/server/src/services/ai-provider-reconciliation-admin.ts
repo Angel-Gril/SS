@@ -246,12 +246,14 @@ function historicalAbandonmentEligible(job: any, now: Date): boolean {
 
 function isRejectedCountSuite(job: any): boolean {
   return job.operation === 'IMAGE_TO_IMAGE' && job.provider === 'custom' && job.model === 'gpt-image-2-count'
-    && job.errorCode === 'INVALID_PROVIDER_RESULT' && Boolean(job.workflow?.suiteSlot);
+    && ['INVALID_PROVIDER_RESULT', 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH'].includes(job.errorCode)
+    && Boolean(job.workflow?.suiteSlot);
 }
 
 /** A known synchronous result was rejected before ingest; no Provider lookup can recover it.
- * This only ends ERP recovery and releases the undelivered ERP reservation. It makes no
- * claim about Supplier output absence or Supplier billing, and preserves the original failure. */
+ * This only ends ERP recovery. An unsettled reservation is released; an already settled charge
+ * is preserved. It makes no claim about Supplier output absence or Supplier billing, and preserves
+ * the original failure. */
 function countAbandonmentEvidence(job: any, now: Date) {
   if (!isRejectedCountSuite(job)) return null;
   const workflow = job.workflow, slot = workflow.suiteSlot, suite = slot.suite, cost = job.costReservation;
@@ -266,18 +268,25 @@ function countAbandonmentEvidence(job: any, now: Date) {
     || !suite || suite.ownerUserId !== job.ownerUserId || !['FAILED', 'PARTIAL_FAILURE'].includes(suite.status)
     || suite.cancelRequestedAt || suite.provider !== job.provider || suite.model !== job.model
     || job.attemptCount !== 1 || job.maxAttempts !== 1 || job.requestedImageCount !== 1
-    || job.width !== 900 || job.height !== 1200 || job.actualCostCents !== null || job.billedUnits !== 0
+    || job.width !== 900 || job.height !== 1200
+    || (cost.status === 'RECONCILIATION_REQUIRED'
+      ? (job.actualCostCents !== null || job.billedUnits !== 0)
+      : (job.actualCostCents !== 10 || job.billedUnits !== 1))
     || job.estimatedCostCents !== 10 || slot.estimatedCostCents !== 10 || slot.maximumCostCents !== 10
     || !Number.isSafeInteger(suite.itemCount) || suite.itemCount < 1 || suite.itemCount > 2
     || suite.maximumCostCents !== suite.itemCount * 10
     || !Array.isArray(job.assets) || job.assets.length !== 0
-    || !cost || cost.status !== 'RECONCILIATION_REQUIRED' || cost.ownerUserId !== job.ownerUserId
+    || !cost || !['RECONCILIATION_REQUIRED', 'SETTLED'].includes(cost.status) || cost.ownerUserId !== job.ownerUserId
     || cost.jobId !== job.id || cost.workflowId !== job.workflowId || cost.actorUserId !== job.actorUserId
     || cost.operation !== job.operation || cost.provider !== job.provider || cost.model !== job.model
     || cost.currency !== 'CNY' || cost.estimatedCostMinor !== 10 || cost.maximumCostMinor !== 10
     || !/^[a-f0-9]{64}$/u.test(job.requestFingerprint || '') || cost.requestFingerprint !== job.requestFingerprint
     || !String(job.providerJobId || '').trim() || cost.providerRequestId !== job.providerJobId
-    || !Array.isArray(cost.settlements) || cost.settlements.some((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind))) return null;
+    || !Array.isArray(cost.settlements)
+    || (cost.status === 'RECONCILIATION_REQUIRED'
+      ? cost.settlements.some((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind))
+      : cost.settlements.length !== 1 || cost.settlements[0]?.kind !== 'CHARGE'
+        || Number(cost.settlements[0]?.actualCostMinor) !== 10 || Number(cost.settlements[0]?.billedUnits) !== 1)) return null;
   try {
     const config = job.operationConfig;
     const runtime = parseAiImageProviderRuntimeContract(config?.providerRuntime);
@@ -291,7 +300,7 @@ function countAbandonmentEvidence(job: any, now: Date) {
     jobId: job.id, reservationId: cost.id, attempt: job.workflowAttempt, requestFingerprint: job.requestFingerprint,
     providerJobId: job.providerJobId, providerAcceptedAt: acceptedAt.toISOString(), providerDispatchedAt: dispatchedAt.toISOString(),
     originalErrorCode: job.errorCode, originalErrorMessage: job.errorMessage || '',
-    providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0 };
+    providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: cost.status === 'SETTLED' ? 'SETTLED' : 'UNKNOWN', erpDeliveredImageCount: 0 };
 }
 
 function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> {

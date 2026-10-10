@@ -132,6 +132,42 @@ function rejectedCountSuite() {
 }
 
 describe('AI Provider reconciliation admin service', () => {
+  it('offers audited abandonment for a rejected count frame with no ERP charge or delivered asset', async () => {
+    const db = rejectedCountSuite();
+    db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';
+    db.job.errorMessage = 'Provider output must be an upright 1008x1344 frame';
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const item = (await service.listReconciliations()).items[0];
+    expect(item.allowedActions).toEqual(['ABANDON']);
+    const decision = { jobId: db.job.id, actorUserId: 'super-admin-1', requestId: 'count-dimension-abandon',
+      expectedStatus: 'MANUAL_REVIEW' as const, expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash,
+      action: 'ABANDON' as const, reason: 'Reject the known nonconforming frame; only release the undelivered ERP reservation' };
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'RELEASED' });
+    expect(db.job).toMatchObject({ errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', actualCostCents: null, billedUnits: 0 });
+    expect(db.providerEvents.size).toBe(1);
+    expect(db.reservation.settlements).toEqual([expect.objectContaining({ kind: 'RECONCILED_RELEASE', actualCostMinor: 0 })]);
+  });
+
+  it('closes a rejected count frame while preserving an already settled ERP charge', async () => {
+    const db = rejectedCountSuite();
+    db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';
+    db.job.errorMessage = 'Provider output must be an upright 1008x1344 frame';
+    db.job.actualCostCents = 10; db.job.billedUnits = 1;
+    db.reservation.status = 'SETTLED';
+    db.reservation.settlements = [{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }];
+    const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+    const item = (await service.listReconciliations()).items[0];
+    expect(item.allowedActions).toEqual(['ABANDON']);
+    const decision = { jobId: db.job.id, actorUserId: 'super-admin-1', requestId: 'count-dimension-settled-close',
+      expectedStatus: 'MANUAL_REVIEW' as const, expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash,
+      action: 'ABANDON' as const, reason: 'Close the rejected output while retaining the already settled ERP charge' };
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
+    expect(db.job).toMatchObject({ errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', actualCostCents: 10, billedUnits: 1 });
+    expect(db.reservation.settlements).toEqual([{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }]);
+    expect([...db.providerEvents.values()][0].payload.abandonment.providerBillingDisposition).toBe('SETTLED');
+  });
+
   it('abandons a known rejected synchronous count suite without pretending the Provider produced no output', async () => {
     const db = rejectedCountSuite();
     const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });

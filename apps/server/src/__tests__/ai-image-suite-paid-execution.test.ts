@@ -166,6 +166,24 @@ describe('AI image suite paid Provider dispatch boundary', () => {
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
+  it('does not settle the count ERP image price before its output passes the frozen dimensions', async () => {
+    const source = await sharp({ create: { width: 1024, height: 1024, channels: 3, background: 'red' } }).png().toBuffer();
+    const request = input();
+    Object.assign(request.suite, { provider: 'custom', model: 'gpt-image-2-count' });
+    Object.assign(request.job, { provider: 'custom', model: 'gpt-image-2-count', estimatedCostCents: 10 });
+    request.maximumCostCents = 10;
+    const deps = dependencies({ prepareProvider: async () => ({
+      ...preparedWithFetch(async () => successfulResult({ images: [{ buffer: source, mimeType: 'image/png' }], actualCostCents: 10 })),
+      normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1',
+    }) });
+    await expect(executeAiImageSuitePaidProvider(request, deps)).rejects.toMatchObject({
+      code: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', providerResultReceived: true, providerJobId: 'provider-request-1',
+    });
+    expect(deps.recordProviderResultEvidence).not.toHaveBeenCalled();
+    expect(deps.uploadBuffer).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
   it('recovers an accepted Wanx task through its original lookup and never submits or re-marks dispatch', async () => {
     const request = input();
     Object.assign(request.suite, { provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' });

@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 454 真实套图尺寸拒绝边界与计费顺序修复
+
+`1.0.454` 已完成同提交原生 offline、COM 双区部署前后门禁和来源图后台转存真实验收：新快照 `6baae02f-835b-491f-af98-a97c9f33bab0`、DOTH 隔离草稿 `draft-7bfcd523-30c2-4019-855b-e2514ff3ae13`，9 张来源图 COMPLETE，公网/数据库/扩展解码 SHA 一致。来源图参考复用已通过，未再出现453的 `AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT`。
+
+本次两图 hosted suite 仅执行一次：场景槽成功并结算 CNY0.10；主图输出被既有 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH` 拒绝，原任务、Provider identity、主图 CNY0.10 CHARGE 和失败回执保留，未重试、未发布 Ozon。真实诊断确认该费用已经结算，不能伪称为仍在预扣或释放。
+
+新增 owner 修复顺序：`gpt-image-2-count` 在尺寸/归一化通过后才记录 Provider result evidence 和成功图片计费；对未交付的尺寸失败允许受审计 ABANDON，RECONCILIATION_REQUIRED 只释放预扣，已 SETTLED 的 CNY0.10 保留原 CHARGE 并关闭恢复，不做退款。定向 server 79项、隔离 PostgreSQL 12项套图恢复+8项账本及 schema 清理通过；正式修复候选尚需新 clean commit、offline、签名和双区部署。
+
 ## 2026-10-10 453 真实来源图验收与套图复用修复
 
 隔离签名 Cloud453/9463 经既有账户与 DOTH pairing owner 正常配对，真实1688 `1048072018093` 读取1SKU/9图；新快照 `702f6546-25ee-43bf-87e3-de501c383865`、草稿 `draft-02e5a67f-1e45-4dd0-ac50-7bec9bdd8896` r1/v1。9图转存 COMPLETE、精确 SOURCE_ORIGINAL/OSS/尺寸/SHA/存储key 实读通过，9个公网原字节SHA一致，实际扩展9来源图匿名CORS解码通过。证据 `release-ae4d6986-fresh453-r2`。原9460读取失败已保留并清理本轮临时账号/设备；runner套壳的端口/目录/Worker时序与来源页临时遮挡已定位，通过固定展开脚本和等待可点击边界接续，不改变签名包。

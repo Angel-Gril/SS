@@ -332,6 +332,11 @@ export async function executeAiImageSuitePaidProvider<T>(
       await dependencies.assertClaim();
       normalized = await normalizeOutput({ buffer: raw.buffer, mimeType: raw.mimeType, providerRequest: prepared.providerRequest });
     }
+    if (input.job.provider === 'custom' && input.job.model === 'gpt-image-2-count'
+      && prepared.normalizerVersion === AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION) {
+      await dependencies.assertClaim();
+      normalized = await normalizeDonorGpt2ProviderOutput({ buffer: raw.buffer, mimeType: raw.mimeType });
+    }
     knownActualCostCents = actualCostCents;
     const providerResultReceivedAt = now();
     knownProviderResultReceivedAt = providerResultReceivedAt;
