@@ -11,6 +11,7 @@ import { sanitizeOzonPublishImageBuffer } from './ozon-image-sanitizer.js';
 const MAX_MEDIA_SELECTIONS = 50;
 const MAX_IDENTIFIER_LENGTH = 500;
 const DURABLE_BACKENDS = new Set(['oss', 'ozon-cdn']);
+export const SOURCE_MEDIA_LINEAGE_VERSION = 'source-media-lineage/v1';
 
 export interface SourceListingMediaSelection {
   sourceMediaKey: string;
@@ -316,7 +317,7 @@ export function createSourceListingMediaImportService(
       storageKey: exactIdentifier(uploaded.key || uploaded.filename, 'storageKey'), mimeType: sanitized.mimeType,
       sizeBytes: buffer.length, width: metadata.width || null, height: metadata.height || null,
       sha256, metadata: {
-        lineageVersion: 'source-media-lineage/v1', sourceCaptureHash: input.captureHash, sourceUrl,
+        lineageVersion: SOURCE_MEDIA_LINEAGE_VERSION, sourceCaptureHash: input.captureHash, sourceUrl,
         finalSourceUrl: downloaded.finalUrl, sourceSha256: createHash('sha256').update(downloaded.buffer).digest('hex'),
         sourceSizeBytes: downloaded.buffer.length, sourceMimeType: downloaded.contentType,
         sourceFormat: sanitized.sourceFormat, redirectCount: downloaded.redirectCount,

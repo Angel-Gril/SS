@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-10 来源图真实验收通过，套图参考复用修复准备454
+
+453签名扩展真实1688新快照9图已转存ERP OSS/R2，数据库/公网SHA/扩展匿名解码通过；套图START成功后CONTINUE在Provider发包前409参考资产编码冲突，无费用/Ozon写入，原件保留。参考复用owner已RED→GREEN并通过真实PostgreSQL27项；须新454候选部署后再取得正式QA04与公开发布证据，官网仍448。准确进度仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-10 `ae4d6986 / 1.0.453` 双区应用部署完成
 
 来源图异步转存、OSS/R2 displayUrl、精铺自动只读刷新已随 `ae4d69861be0e6a56c15db0fd301c3866547f74e / 1.0.453` 部署到 COM/CN。两区签名包 MV3 安装、部署备份恢复、canonical VPS、`/ready`、DB/Redis 和运行配置均通过；COM 保持原 DOTH hosted pilot，CN 保持 direct/RDS dark。官网 Cloud/Local 下载仍安全服务 `66c9396c / 1.0.448`，尚未执行新 website approval/CAS/distribution probe。Provider/Ozon/新增费用为 0。准确证据见[直接适配 owner](donor-workbench/direct-adaptation.md)。

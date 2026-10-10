@@ -57,6 +57,8 @@ import { setConfig } from '../config/system-config-schema.js';
 import { createAiProviderReconciliationAdminService } from '../services/ai-provider-reconciliation-admin.js';
 import { createAiCostReconciliationAdminService } from '../services/ai-cost-reconciliation-admin.js';
 import { reserveAiCost, markAiCostUnknown } from '../services/ai-cost-ledger.js';
+import { createSourceListingMediaImportService } from '../services/source-listing-media-import.js';
+import { createPrismaSourceListingMediaImportStore } from '../services/source-listing-media-import-prisma.js';
 
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1';
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
@@ -377,6 +379,18 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       throw new Error('Real Provider calls are forbidden in the PostgreSQL count fixture');
     });
     try {
+      const transfer = await createSourceListingMediaImportService({
+        ...createPrismaSourceListingMediaImportStore(client),
+        getStorageBackend: async () => ({ uploadBuffer: async (bytes: Buffer, name: string) => ({
+          ...(await uploadBuffer(bytes, name)), filename: name,
+        }) }),
+        getCaptureStorageBackend: async () => ({ backendType: 'oss', uploadBuffer: async (bytes: Buffer, name: string) => ({
+          ...(await uploadBuffer(bytes, name)), filename: name,
+        }) }),
+        download: async (url: string) => ({ sourceUrl: url, finalUrl: url,
+          contentType: 'image/jpeg', buffer: sourceBytes, redirectCount: 0 }),
+      }).internalizeCapture({ ownerUserId: owner, snapshotId: snapshot, captureHash: submission.captureHash });
+      expect(transfer.errors).toEqual([]); expect(transfer.assets).toHaveLength(1);
       await setConfig('ai_image_suite_model', 'gpt-image-2-count');
       await setConfig('ai_image_suite_base_url', 'https://ai.big-model-api.top/v1');
       await setConfig('ai_image_suite_api_key', 'synthetic-count-postgres-key');
@@ -418,7 +432,11 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       expect(claimed.kind).toBe('created');
       const countSuiteId = claimed.suite!.id;
       await createAiImageSuiteReferenceService({ repository: new PrismaAiImageSuiteReferenceRepository(client),
-        preparationLease: passThroughPreparationLease, download: async () => { throw new Error('Frozen source bytes must be reused'); },
+        preparationLease: passThroughPreparationLease, download: async (url: string) => {
+          const asset = transfer.assets.find(asset => asset.url === url);
+          if (!asset?.storageKey || !stored.has(asset.storageKey)) throw new Error('Only the persisted transferred source may be read');
+          return { sourceUrl: url, finalUrl: url, contentType: asset.mimeType, buffer: stored.get(asset.storageKey)!, redirectCount: 0 };
+        },
         getStorage: async () => ({ backend: 'oss' as const, uploadBuffer }),
       }).internalize({ suiteId: countSuiteId, ownerUserId: owner, actorUserId: owner, expectedRevision: 1, operationKey: `count-refs-${suffix}` });
       await createAiImageSuitePromptService({ repository: new PrismaAiImageSuitePromptRepository(client),

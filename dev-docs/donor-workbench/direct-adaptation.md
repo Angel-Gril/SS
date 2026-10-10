@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 453 真实来源图验收与套图复用修复
+
+隔离签名 Cloud453/9463 经既有账户与 DOTH pairing owner 正常配对，真实1688 `1048072018093` 读取1SKU/9图；新快照 `702f6546-25ee-43bf-87e3-de501c383865`、草稿 `draft-02e5a67f-1e45-4dd0-ac50-7bec9bdd8896` r1/v1。9图转存 COMPLETE、精确 SOURCE_ORIGINAL/OSS/尺寸/SHA/存储key 实读通过，9个公网原字节SHA一致，实际扩展9来源图匿名CORS解码通过。证据 `release-ae4d6986-fresh453-r2`。原9460读取失败已保留并清理本轮临时账号/设备；runner套壳的端口/目录/Worker时序与来源页临时遮挡已定位，通过固定展开脚本和等待可点击边界接续，不改变签名包。
+
+当前suite `cmv1w9k0x000k5ov1a68krzyr` START成功/PLANNED/r1，CONTINUE正式409 `AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT`，失败receipt `63eea03d-3a5e-4e78-9bce-4c226fd2b415`保留。原因是来源转存的JPEG92编码与旧参考图JPEG95/原件比较不相等，未识别既有 source-media-lineage/v1；失败发生在参考图准备、Provider发包/费用预扣之前，未重发CONTINUE、未改资产/binding或旧回执。
+
+修复owner `ai-image-suite-references.ts` 从现有source import owner读取lineage标识；只有准确owner/snapshot/mediaKey/sourceUrl、snapshot hash、raw source hash/MIME/bytes元数据完整匹配，且OSS存储字节重新核验SHA、大小、MIME、尺寸/帧数通过才复用，不覆写已转存资产。最小正例已真实RED（Existing source asset failed byte revalidation）→GREEN；真实隔离PostgreSQL27项包含来源转存→规划→参考复用→套图CNY合同/恢复，155 migrations/schema cleanup通过，Provider/Ozon0。新增修复须形成454候选；453不能直接公开，新QA04/canary/approval/CAS尚未执行、官网仍448。
+
 ## 2026-10-10 来源图片后台转存（本地验收完成，已提交推送）
 
 用户授权完成 V2 来源图转存并提交、推送。采集仍立即返回，事务同时保存后台待处理标记；独立 Worker 使用现有 ERP-owned OSS/R2 与 `SOURCE_ORIGINAL` MediaAsset，禁止自动使用 Ozon CDN。快照 payload/hash、媒体 key、SKU 归属、草稿版本及发布/费用合同不变。已有商品不做未经请求的批量迁移；重新采集形成的新快照进入转存。

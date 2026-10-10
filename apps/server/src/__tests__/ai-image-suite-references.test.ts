@@ -344,6 +344,48 @@ describe('AI image suite reference internalization', () => {
     expect(repo.createAsset).not.toHaveBeenCalled();
   });
 
+  it('reuses a captured source transfer after checking its stored bytes without renormalizing the source', async () => {
+    const transferredBytes = await sharp(image).png({ compressionLevel: 0 }).toBuffer();
+    const sourceHash = createHash('sha256').update(image).digest('hex');
+    const storedHash = createHash('sha256').update(transferredBytes).digest('hex');
+    const transferred = asset({ storageBackend: 'oss', url: 'https://cdn.example.com/transferred.png',
+      sha256: storedHash, sizeBytes: transferredBytes.length, sourceSha256: sourceHash,
+      metadata: { lineageVersion: 'source-media-lineage/v1', sourceCaptureHash: authority.sourceCaptureHash,
+        sourceUrl, sourceSha256: sourceHash, sourceSizeBytes: image.length, sourceMimeType: 'image/png' } });
+    for (const slot of authority.slots) for (const reference of slot.referencesSnapshot as any[]) reference.source.contentHash = sourceHash;
+    const repo = repository({ findReusableAssets: vi.fn(async () => [transferred]) });
+    const deps = dependencies(repo);
+    deps.download = vi.fn(async (url?: string) => ({ sourceUrl: url!, finalUrl: url!,
+      contentType: 'image/png', buffer: url === transferred.url ? transferredBytes : image, redirectCount: 0 }));
+    const result = await createAiImageSuiteReferenceService(deps).internalize(input);
+    expect(result.bindings[0]).toMatchObject({ assetId: transferred.id, sourceSha256: sourceHash, assetSha256: storedHash });
+    expect(deps.download).toHaveBeenCalledOnce();
+    expect(deps.download).toHaveBeenCalledWith(transferred.url, expect.objectContaining({ maxRedirects: 0 }));
+    expect(repo.createAsset).not.toHaveBeenCalled(); expect(deps.getStorage).not.toHaveBeenCalled();
+  });
+
+  it('rejects transferred source bytes that disagree with the stored digest', async () => {
+    const transferred = asset({ storageBackend: 'oss', url: 'https://cdn.example.com/transferred.png',
+      sha256: 'b'.repeat(64), metadata: { lineageVersion: 'source-media-lineage/v1',
+        sourceCaptureHash: authority.sourceCaptureHash, sourceUrl, sourceSha256: 'a'.repeat(64),
+        sourceSizeBytes: image.length, sourceMimeType: 'image/png' } });
+    const repo = repository({ findReusableAssets: vi.fn(async () => [transferred]) });
+    const deps = dependencies(repo);
+    await expect(createAiImageSuiteReferenceService(deps).internalize(input)).rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT' });
+    expect(repo.commitBindings).not.toHaveBeenCalled();
+  });
+
+  it.each(['sourceCaptureHash', 'sourceUrl', 'sourceSha256', 'sourceSizeBytes'])('rejects an incomplete or mismatched transfer %s before binding', async (field) => {
+    const transferred = asset({ storageBackend: 'oss', url: 'https://cdn.example.com/transferred.png',
+      sourceSha256: null, metadata: { lineageVersion: 'source-media-lineage/v1',
+        sourceCaptureHash: authority.sourceCaptureHash, sourceUrl, sourceSha256: 'a'.repeat(64),
+        sourceSizeBytes: image.length, sourceMimeType: 'image/png', [field]: null } });
+    const repo = repository({ findReusableAssets: vi.fn(async () => [transferred]) });
+    const deps = dependencies(repo);
+    await expect(createAiImageSuiteReferenceService(deps).internalize(input)).rejects.toMatchObject({ code: 'AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT' });
+    expect(deps.download).not.toHaveBeenCalled(); expect(repo.commitBindings).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('reuses planning-frozen original hashes and byte-observed metadata (capture dimensions absent: %s)', async (unknownDimensions) => {
     authority = await buildAuthority({ provider: 'dashscope-wanx', model: 'wanx2.1-imageedit' }, unknownDimensions);
     const reusable = asset({ storageBackend: 'oss', url: 'https://cdn.example.com/source.png' });

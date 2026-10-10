@@ -19,6 +19,7 @@ import {
 } from './source-public-image-download.js';
 import { buildSourceProductProfileFromCapture } from './source-product-profile.js';
 import { AI_MEDIA_PLANNING_SOURCE_VERSION } from './ai-media-planning-sources.js';
+import { SOURCE_MEDIA_LINEAGE_VERSION } from './source-listing-media-import.js';
 
 export const AI_IMAGE_SUITE_REFERENCE_SET_VERSION = 'ai-image-suite-reference-set/v1';
 export const AI_IMAGE_SUITE_REFERENCE_MAX_COUNT = 25;
@@ -698,6 +699,11 @@ function assertReusableAssetIdentity(
   const expectedSourceMimeType = sourceMimeType || reference.source.mimeType || assetMimeType;
   const canonicalMimeType = expectedSourceMimeType === 'image/png' ? 'image/png' : 'image/jpeg';
   const planningSource = asset.metadata?.lineageVersion === AI_MEDIA_PLANNING_SOURCE_VERSION;
+  const captureTransfer = asset.metadata?.lineageVersion === SOURCE_MEDIA_LINEAGE_VERSION;
+  if (captureTransfer && (asset.metadata?.sourceCaptureHash !== authority.sourceCaptureHash
+    || asset.metadata?.sourceUrl !== reference.source.url || !sourceSha256 || !sourceSizeBytes || !sourceMimeType)) {
+    fail('AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT', 409, 'Captured source provenance does not match the frozen suite');
+  }
   if (planningSource && (asset.metadata?.sourceSubjectId !== authority.sourceSubjectId
     || asset.metadata?.sourceCaptureHash !== authority.sourceCaptureHash
     || asset.metadata?.sourceProfileHash !== authority.sourceProfileHash
@@ -707,7 +713,7 @@ function assertReusableAssetIdentity(
     || asset.metadata?.pixelOrientationNormalized !== true)) {
     fail('AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT', 409, 'Planning source provenance does not match the frozen suite');
   }
-  const complete = (asset.metadata?.lineageVersion === AI_IMAGE_SUITE_REFERENCE_SET_VERSION || planningSource)
+  const complete = (asset.metadata?.lineageVersion === AI_IMAGE_SUITE_REFERENCE_SET_VERSION || planningSource || captureTransfer)
     && Boolean(sourceSha256 && sourceSizeBytes && sourceMimeType);
   if (asset.ownerUserId !== authority.ownerUserId
     || asset.kind !== 'SOURCE_ORIGINAL'
@@ -983,6 +989,26 @@ export function createAiImageSuiteReferenceService(
             fail('AI_MEDIA_SUITE_REFERENCE_LIMIT_EXCEEDED', 413, 'Suite source images exceed the total byte limit');
           }
           if (reusableIdentity!.complete) {
+            if (reusable.metadata?.lineageVersion === SOURCE_MEDIA_LINEAGE_VERSION) {
+              await lease.ensureOwned();
+              let stored: DownloadedPublicImage;
+              let decoded: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
+              try {
+                stored = await download(reusable.url, { maxBytes: resolvedLimits.maxBytesPerImage,
+                  maxRedirects: 0, omitReferer: true });
+                decoded = await sharp(stored.buffer, { animated: false,
+                  limitInputPixels: resolvedLimits.maxPixels }).metadata();
+              } catch (error) {
+                fail('AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT', 409, 'Captured source bytes could not be verified', error);
+              }
+              if (sha256(stored.buffer) !== reusableIdentity!.assetSha256 || stored.buffer.length !== reusable.sizeBytes
+                || normalizeMime(stored.contentType) !== normalizeMime(reusable.mimeType)
+                || decodedMime(decoded.format) !== normalizeMime(reusable.mimeType)
+                || decoded.width !== reusable.width || decoded.height !== reusable.height || (decoded.pages || 1) !== 1) {
+                fail('AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT', 409, 'Captured source bytes no longer match the frozen asset');
+              }
+              await lease.ensureOwned();
+            }
             prepared.push({
               ordinal: reference.ordinal,
               candidateId: reference.candidateId,
