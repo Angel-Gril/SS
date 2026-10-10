@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-10 `e978c9bd / 1.0.456` 双区官网公开发布完成
+
+最终源码 `e978c9bd3a30132e2a6a1a33951f44c922403842` 已推送，COM/CN 签名验签、实际MV3安装、同提交原生offline、标准双区部署/备份恢复/FULL canonical VPS、fresh normal hosted suite、正式QA04、双区REL04 canary/website approval、CAS、四个Cloud/Local匿名完整下载和最终publication verifier全部PASS。两区latest与ready真实读回456、DB/Redis正常；COM原DOTH pilot及qwen-vl-max分析、CN direct/RDS dark不扩大。原生全后端7355 passed/393既有条件skipped、实库224项与scope7项、升级回放、构建及Cloud/Local626/622通过。
+
+用户批准的455 HTTP524主图 `cmv2223nc000w5oztlv2drba7` 已经正式管理员ABANDON及原请求replay关闭，ERP CNY0.10预扣只追加一次RECONCILED_RELEASE；Provider ID仍null、dispatch/error不改、成功场景兄弟不变，供应商输出和费用UNKNOWN，未重发旧POST。456首轮套图主图明确尺寸拒绝、场景成功；主图按既有known-rejected owner关闭并释放预扣，无CHARGE，旧失败保留，不降低合格尺寸。
+
+第二轮使用同商品另一张合法来源照片及正常新采集/新草稿owner：snapshot `fac33f95-f696-4945-9cb2-60c85f41503e`、DOTH draft `draft-ca89d708-4cfc-43bc-a162-9b3b5a12055f`、suite `cmv27465r001w5oouk6pa7m87`。START/CONTINUE各1，两槽attempt1/SUCCEEDED；原1008×1344/规范900×1200、审核前PENDING UI/DB、preview、两次真实审核、store-draft assignment两条、r1/v1→r2/v2及原幂等replay通过。pending jobs/costs/recovery/workflows/suites全部0，Ozon attempts0。图片保留来源多盒与食品陈列，去掉外部促销文字，无补白，棚拍/台面光照区别可见；隔离草稿认可不确认包装数量/随附品，也不声称所有商品质量一致。
+
+正式QA04 SHA `65503b0dbba0ad70a9284fca374582925fed76637a560368c06efb466154a474`。COM/CN approval SHA分别 `8187ad1ac6e5dd41665b6407f49a012fd0a5597f300ccf57066b23860be15881` / `d7e28a2b1f4cadc467fa97b6323a7c0efa2e3df5a89a33494d861b17cc5d8ef8`。COM第一次canary误用专用unpacked随机Origin，被CORS严格拒绝；正式canary重新消费现有官网固定Origin且通过，CORS allowlist未扩大，旧拒绝回执保留。双区CAS真实从448批准摘要切到456。
+
+首次native offline在本机PG连接不可达失败、第二轮operator实例化Prisma自动注入localhost API导致Cloud HTTPS负例拒绝；失败日志不覆写，启动器先冻结环境后本机10次读检查通过，再完整九步生成PASS，无修改产品源码/测试断言。capture evidence文件重名和建草稿去重失败保留，实际新capture原响应从UI只读恢复，不重复采集写入或重写binding；assignment replay原请求/HTTP200已自动捕获，保存重名只读恢复其原件。最终controller明确引用同一456部署早于本草稿launcher的原pilot只读观察，前后实际runtime/controls一致；after后重新读取restored与已关闭targets，闭合时间序列，不改旧运行原件。
+
+本轮新增Provider POST4，ERP结算CNY0.30（首轮成功场景0.10、正式第二轮两图0.20），失败456主图ERP预扣已释放；455旧未知预扣另释放0.10。供应商实际扣费未读取，Ozon写入0。临时COM/CN发布账号session、456设备及9466专用浏览器清理完成，用户9222保留；所有草稿/资产/失败/费用/审核原件保存，不入Git。私有根 `release-e978c9bd-deploy456`、`release-e978c9bd-fresh456`及`release-e978c9bd-fresh456-r2`，发布日志按Keep a Changelog整理到456，文档提交不替换运行候选。
+
 ## 2026-10-10 用户批准524未知请求受审计终止，准备456
 
 用户本轮明确批准继续发布，并同意对455 HTTP524无Provider ID的旧主图终止ERP恢复、释放未交付CNY0.10预扣；原Provider输出/费用保持UNKNOWN，禁止重试旧POST。已有双区部署、签名、真实测试费用和官网发布授权保持原目标范围；COM原DOTH pilot、CN dark、Ozon0不扩大。

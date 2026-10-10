@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-10 `e978c9bd / 1.0.456` 双区官网公开发布完成
+
+最终456已推送、签名、原生offline、标准双区部署/备份恢复/FULL VPS、真实两图审核/store-draft assignment/幂等、正式QA04、COM/CN canary/approval、CAS、四个匿名下载及final publication verifier全部通过。两区latest/应用均456、ready/DB/Redis正常；455未知主图ERP0.10按授权释放且原UNKNOWN保留，本轮新增ERP0.30/Ozon0。临时账号/设备/9466已清理，用户9222和业务原件保留。准确失败/恢复、质量及原件边界仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-10 524未知结果终止已授权，本地owner修复准备456
 
 用户明确批准释放455未知主图ERP CNY0.10预扣并继续发布；本地新增精确count/无ID/不可变dispatch资格和受审计ABANDON，不伪造供应商无输出或零费用，不重试旧请求。定向/实库回归已通过，最终456候选待提交后offline、签名、双区部署与真实suite/正式QA04/官网门禁；生产仍455、官网448，准确事实仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
