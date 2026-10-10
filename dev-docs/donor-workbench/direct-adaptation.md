@@ -2,11 +2,13 @@
 
 ## 2026-10-10 454 真实套图尺寸拒绝边界与计费顺序修复
 
-`1.0.454` 已完成同提交原生 offline、COM 双区部署前后门禁和来源图后台转存真实验收：新快照 `6baae02f-835b-491f-af98-a97c9f33bab0`、DOTH 隔离草稿 `draft-7bfcd523-30c2-4019-855b-e2514ff3ae13`，9 张来源图 COMPLETE，公网/数据库/扩展解码 SHA 一致。来源图参考复用已通过，未再出现453的 `AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT`。
+`1.0.454` 已完成同提交原生 offline、COM/CN 标准部署和来源图后台转存真实验收：新快照 `6baae02f-835b-491f-af98-a97c9f33bab0`、DOTH 隔离草稿 `draft-7bfcd523-30c2-4019-855b-e2514ff3ae13`，9 张来源图 COMPLETE，公网/数据库/扩展解码 SHA 一致。来源图参考复用已通过，未再出现453的 `AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT`。
 
 本次两图 hosted suite 仅执行一次：场景槽成功并结算 CNY0.10；主图输出被既有 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH` 拒绝，原任务、Provider identity、主图 CNY0.10 CHARGE 和失败回执保留，未重试、未发布 Ozon。真实诊断确认该费用已经结算，不能伪称为仍在预扣或释放。
 
-新增 owner 修复顺序：`gpt-image-2-count` 在尺寸/归一化通过后才记录 Provider result evidence 和成功图片计费；对未交付的尺寸失败允许受审计 ABANDON，RECONCILIATION_REQUIRED 只释放预扣，已 SETTLED 的 CNY0.10 保留原 CHARGE 并关闭恢复，不做退款。定向 server 79项、隔离 PostgreSQL 12项套图恢复+8项账本及 schema 清理通过；正式修复候选尚需新 clean commit、offline、签名和双区部署。
+新增 owner 修复顺序：`gpt-image-2-count` 在尺寸/归一化通过后才记录 Provider result evidence 和成功图片计费；对未交付的尺寸失败允许受审计 ABANDON，RECONCILIATION_REQUIRED 只释放预扣，已 SETTLED 的 CNY0.10 保留原 CHARGE 并关闭恢复，不做退款。用户已明确批准保留该测试费。即时结算的 reservation 接收字段为空是原账本合同；已结算分支从精确 owner/job/workflow/attempt 的不可变 PROVIDER_SUBMITTED 事件核验身份、ISO时间和 payload hash，TS/SQL同步校验，不补写原账本。供应商费用仍 UNKNOWN，ERP 原收费另记 SETTLED_CHARGE_RETAINED。
+
+修复 `36c7e95a` 已推送，接收事件 follow-up 的定向 server 89项、隔离 PostgreSQL 13项套图恢复+8项账本、类型/lint及 schema 清理通过；旧中间提交完整 offline 已受控停止并保留日志，不宣称 PASS。最终 455 候选仅从后续 clean commit 运行一次完整 offline、签名与双区部署；旧454主图恢复尚未关闭，正式QA04/官网发布尚未执行，官网仍448。两次Provider提交、ERP CHARGE共CNY0.20、Ozon0，不读取供应商账单，不重试旧请求。
 
 ## 2026-10-10 453 真实来源图验收与套图复用修复
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAiProviderReconciliationAdminService } from '../services/ai-provider-reconciliation-admin.js';
 import { createAiImageSuiteProviderRuntimeSnapshot } from '../services/ai-image-suite-provider-runtime.js';
 import { createDonorGpt2FullFrameConfig } from '../services/ai-image-donor-gpt2-profile.js';
+import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 
 const NOW = new Date('2026-07-21T08:00:00.000Z');
 
@@ -131,6 +132,19 @@ function rejectedCountSuite() {
   return db;
 }
 
+function settledRejectedCountSuite() {
+  const db = rejectedCountSuite();
+  Object.assign(db.job, { errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
+    errorMessage: 'Provider output must be an upright 1008x1344 frame', actualCostCents: 10, billedUnits: 1 });
+  const payload = { providerJobId: db.job.providerJobId, providerAcceptedAt: db.reservation.providerAcceptedAt.toISOString() };
+  db.job.workflow.events = [{ workflowId: db.job.workflowId, jobId: db.job.id, ownerUserId: db.job.ownerUserId,
+    actorUserId: db.job.actorUserId, eventType: 'PROVIDER_SUBMITTED',
+    eventKey: `${db.job.workflowId}:PROVIDER_SUBMITTED:${db.job.id}:${db.job.workflowAttempt}`, payload, payloadHash: hashAiMediaPlanningJson(payload) }];
+  Object.assign(db.reservation, { status: 'SETTLED', providerRequestId: null, providerAcceptedAt: null,
+    settlements: [{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }] });
+  return db;
+}
+
 describe('AI Provider reconciliation admin service', () => {
   it('offers audited abandonment for a rejected count frame with no ERP charge or delivered asset', async () => {
     const db = rejectedCountSuite();
@@ -150,12 +164,7 @@ describe('AI Provider reconciliation admin service', () => {
   });
 
   it('closes a rejected count frame while preserving an already settled ERP charge', async () => {
-    const db = rejectedCountSuite();
-    db.job.errorCode = 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH';
-    db.job.errorMessage = 'Provider output must be an upright 1008x1344 frame';
-    db.job.actualCostCents = 10; db.job.billedUnits = 1;
-    db.reservation.status = 'SETTLED';
-    db.reservation.settlements = [{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }];
+    const db = settledRejectedCountSuite();
     const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
     const item = (await service.listReconciliations()).items[0];
     expect(item.allowedActions).toEqual(['ABANDON']);
@@ -165,8 +174,36 @@ describe('AI Provider reconciliation admin service', () => {
     await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
     expect(db.job).toMatchObject({ errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', actualCostCents: 10, billedUnits: 1 });
     expect(db.reservation.settlements).toEqual([{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }]);
-    expect([...db.providerEvents.values()][0].payload.abandonment.providerBillingDisposition).toBe('SETTLED');
+    await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
+    expect(db.providerEvents.size).toBe(1);
+    expect([...db.providerEvents.values()][0].payload.abandonment).toMatchObject({
+      providerBillingDisposition: 'UNKNOWN', erpCostDisposition: 'SETTLED_CHARGE_RETAINED',
+    });
   });
+
+  it.each(['missing', 'hash', 'foreign-owner', 'actor', 'job', 'attempt', 'provider', 'future', 'cost-identity', 'cost-time'])(
+    'rejects settled count abandonment when acceptance evidence has %s mismatch', async shape => {
+      const db = settledRejectedCountSuite(), event = db.job.workflow.events[0];
+      if (shape === 'missing') db.job.workflow.events = [];
+      if (shape === 'hash') event.payloadHash = 'b'.repeat(64);
+      if (shape === 'foreign-owner') event.ownerUserId = 'other-owner';
+      if (shape === 'actor') event.actorUserId = 'other-actor';
+      if (shape === 'job') event.jobId = 'other-job';
+      if (shape === 'attempt') event.eventKey += ':2';
+      if (shape === 'provider') event.payload.providerJobId = 'different-request';
+      if (shape === 'future') event.payload.providerAcceptedAt = new Date(NOW.getTime() + 60_000).toISOString();
+      if (shape === 'cost-identity') db.reservation.providerRequestId = 'different-request';
+      if (shape === 'cost-time') db.reservation.providerAcceptedAt = new Date(NOW.getTime() - 120_000);
+      if (shape === 'provider' || shape === 'future') event.payloadHash = hashAiMediaPlanningJson(event.payload);
+      const service = createAiProviderReconciliationAdminService({ database: db, now: () => NOW });
+      const item = (await service.listReconciliations()).items[0];
+      expect(item.allowedActions).toEqual([]);
+      await expect(service.resolveReconciliation({ jobId: db.job.id, actorUserId: 'super-admin-1', requestId: `bad-settled-${shape}`,
+        expectedStatus: 'MANUAL_REVIEW', expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash,
+        action: 'ABANDON', reason: 'An inconsistent accepted task must not be closed' })).rejects.toMatchObject({ code: 'RECONCILIATION_CHANGED' });
+      expect(db.reservation.settlements).toEqual([{ kind: 'CHARGE', actualCostMinor: 10, billedUnits: 1 }]);
+      expect(db.providerEvents.size).toBe(0);
+    });
 
   it('abandons a known rejected synchronous count suite without pretending the Provider produced no output', async () => {
     const db = rejectedCountSuite();

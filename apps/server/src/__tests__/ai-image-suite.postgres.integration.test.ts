@@ -808,7 +808,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     expect(lookups).toBe(2);
   }, 75_000);
 
-  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean; count?: boolean; successfulSibling?: boolean; countDimensions?: boolean } = {}) {
+  async function failedWanxSuiteForAbandonment(label: string, options: { fresh?: boolean; retainedRaw?: boolean; count?: boolean; successfulSibling?: boolean; countDimensions?: boolean; settledCount?: boolean } = {}) {
     const id = `${label}_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     const owner = `abandon_owner_${id}`, goods = `abandon_goods_${id}`, subject = `abandon_subject_${id}`, snapshot = `abandon_snapshot_${id}`;
     const sourceCapture = structuredClone(sourceFixture.capture);
@@ -896,6 +896,9 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         expect(await dependencies.markProviderDispatchStarted(acceptedAt)).toBe(true);
         const providerJobId = `accepted-output-${input.jobId}`;
         await dependencies.recordProviderAccepted(providerJobId, acceptedAt);
+        if (options.settledCount) {
+          await dependencies.recordProviderResultEvidence({ providerJobId, actualCostCents: 10, providerResultReceivedAt: new Date() });
+        }
         if (options.retainedRaw) {
           const receivedAt = new Date();
           await dependencies.recordProviderResultEvidence({ providerJobId, actualCostCents: 14, providerResultReceivedAt: receivedAt });
@@ -907,7 +910,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         }
         // A deterministic Provider boundary; the real coordinator/repositories
         // persist the accepted task and failed graph, with all triggers enabled.
-        throw Object.assign(new Error(options.count ? 'Known single-image response returned three candidates' : 'Known output failed the frozen dimensions'), { code: options.count ? 'INVALID_PROVIDER_RESULT' : 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
+        throw Object.assign(new Error(options.count && !options.settledCount ? 'Known single-image response returned three candidates' : 'Known output failed the frozen dimensions'), { code: options.count && !options.settledCount ? 'INVALID_PROVIDER_RESULT' : 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH',
           providerJobId, providerAcceptedAt: acceptedAt, providerResultReceived: true });
       },
     });
@@ -977,6 +980,35 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       expect(network).not.toHaveBeenCalled();
     } finally { network.mockRestore(); }
   }, 30_000);
+
+  it('closes settled count recovery abandonment without rewriting its charge or successful sibling', async () => {
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('No external request is authorized'); });
+    try {
+      const fixture = await failedWanxSuiteForAbandonment('count_settled_abandon', { count: true, successfulSibling: true, settledCount: true });
+      const service = createAiProviderReconciliationAdminService({ database: client });
+      const item = (await service.listReconciliations({ limit: 100 })).items.find((row: any) => row.id === fixture.tasks[0]!.jobId)!;
+      const include = { assets: true, costReservation: { include: { settlements: { orderBy: { id: 'asc' as const } } } } };
+      const before = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      const sibling = await client.aiImageJob.findUniqueOrThrow({ where: { id: fixture.tasks[1]!.jobId }, include });
+      expect(before).toMatchObject({ errorCode: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', status: 'FAILED', actualCostCents: 10, billedUnits: 1,
+        assets: [], providerReconciliationStatus: 'MANUAL_REVIEW', costReservation: { status: 'SETTLED' } });
+      expect(item.allowedActions).toEqual(['ABANDON']);
+      const decision = { jobId: item.id, actorUserId: fixture.owner, requestId: randomUUID(), expectedStatus: 'MANUAL_REVIEW' as const,
+        expectedRevision: item.revision, expectedEvidenceHash: item.evidenceHash, action: 'ABANDON' as const,
+        reason: 'Retain the authorized settled test charge and close recovery of the rejected count frame' };
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
+      await expect(service.resolveReconciliation(decision)).resolves.toMatchObject({ status: 'CANCELLED_OUTPUT_RETAINED', costStatus: 'SETTLED' });
+      const after = await client.aiImageJob.findUniqueOrThrow({ where: { id: item.id }, include });
+      expect(after).toMatchObject({ actualCostCents: 10, billedUnits: 1, errorCode: before.errorCode, providerJobId: before.providerJobId, assets: [] });
+      expect(after.costReservation).toEqual(before.costReservation);
+      expect(await client.aiImageJob.findUniqueOrThrow({ where: { id: sibling.id }, include })).toEqual(sibling);
+      const events = await client.aiProviderReconciliationEvent.findMany({ where: { jobId: item.id, eventType: 'PROVIDER_RECONCILIATION_ABANDON' } });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({ abandonment: { erpCostDisposition: 'SETTLED_CHARGE_RETAINED', providerBillingDisposition: 'UNKNOWN' } });
+      await client.$queryRawUnsafe('SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS result', fixture.suiteId, fixture.owner);
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  });
 
   it('rolls back count abandonment and ERP release atomically if its audit cannot persist', async () => {
     const fixture = await failedWanxSuiteForAbandonment('count_audit_failure', { count: true });

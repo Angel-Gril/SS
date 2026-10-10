@@ -194,6 +194,7 @@ function include() {
         status: true,
         reviewStatus: true,
         selectedOutputAssetId: true,
+        events: { where: { eventType: 'PROVIDER_SUBMITTED' }, orderBy: { createdAt: 'desc' }, take: 2 },
         suiteSlot: {
           include: { suite: true },
         },
@@ -257,9 +258,21 @@ function isRejectedCountSuite(job: any): boolean {
 function countAbandonmentEvidence(job: any, now: Date) {
   if (!isRejectedCountSuite(job)) return null;
   const workflow = job.workflow, slot = workflow.suiteSlot, suite = slot.suite, cost = job.costReservation;
-  const acceptedAt = cost?.providerAcceptedAt, dispatchedAt = job.providerDispatchedAt;
+  const submitted = cost?.status === 'SETTLED' && Array.isArray(workflow.events)
+    ? workflow.events.find((event: any) => event.eventKey === `${workflow.id}:PROVIDER_SUBMITTED:${job.id}:${job.workflowAttempt}`
+      && event.eventType === 'PROVIDER_SUBMITTED' && event.workflowId === workflow.id && event.jobId === job.id
+      && event.ownerUserId === job.ownerUserId && event.actorUserId === job.actorUserId
+      && event.payload?.providerJobId === job.providerJobId
+      && typeof event.payload.providerAcceptedAt === 'string'
+      && Object.keys(event.payload).sort().join(',') === 'providerAcceptedAt,providerJobId'
+      && hashAiMediaPlanningJson(event.payload) === event.payloadHash) : null;
+  const acceptedAt = cost?.status === 'SETTLED' && submitted
+    ? new Date(submitted.payload.providerAcceptedAt) : cost?.providerAcceptedAt, dispatchedAt = job.providerDispatchedAt;
+  const terminalSettlements = Array.isArray(cost?.settlements)
+    ? cost.settlements.filter((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind)) : [];
   if (!(acceptedAt instanceof Date) || !(dispatchedAt instanceof Date)
     || !Number.isFinite(acceptedAt.getTime()) || !Number.isFinite(dispatchedAt.getTime())
+    || (submitted && acceptedAt.toISOString() !== submitted.payload.providerAcceptedAt)
     || acceptedAt.getTime() > now.getTime() || dispatchedAt.getTime() > now.getTime()
     || job.status !== 'FAILED' || !isCurrentAttempt(job) || workflow.id !== job.workflowId
     || workflow.operation !== job.operation || workflow.status !== 'FAILED' || workflow.reviewStatus !== 'NOT_READY'
@@ -269,7 +282,7 @@ function countAbandonmentEvidence(job: any, now: Date) {
     || suite.cancelRequestedAt || suite.provider !== job.provider || suite.model !== job.model
     || job.attemptCount !== 1 || job.maxAttempts !== 1 || job.requestedImageCount !== 1
     || job.width !== 900 || job.height !== 1200
-    || (cost.status === 'RECONCILIATION_REQUIRED'
+    || (cost?.status === 'RECONCILIATION_REQUIRED'
       ? (job.actualCostCents !== null || job.billedUnits !== 0)
       : (job.actualCostCents !== 10 || job.billedUnits !== 1))
     || job.estimatedCostCents !== 10 || slot.estimatedCostCents !== 10 || slot.maximumCostCents !== 10
@@ -281,12 +294,16 @@ function countAbandonmentEvidence(job: any, now: Date) {
     || cost.operation !== job.operation || cost.provider !== job.provider || cost.model !== job.model
     || cost.currency !== 'CNY' || cost.estimatedCostMinor !== 10 || cost.maximumCostMinor !== 10
     || !/^[a-f0-9]{64}$/u.test(job.requestFingerprint || '') || cost.requestFingerprint !== job.requestFingerprint
-    || !String(job.providerJobId || '').trim() || cost.providerRequestId !== job.providerJobId
+    || !String(job.providerJobId || '').trim()
+    || (cost.status === 'SETTLED'
+      ? !submitted || (cost.providerRequestId !== null && cost.providerRequestId !== job.providerJobId)
+        || (cost.providerAcceptedAt !== null && iso(cost.providerAcceptedAt) !== iso(acceptedAt))
+      : cost.providerRequestId !== job.providerJobId)
     || !Array.isArray(cost.settlements)
     || (cost.status === 'RECONCILIATION_REQUIRED'
       ? cost.settlements.some((row: any) => ['CHARGE', 'RECONCILED_CHARGE', 'RELEASE', 'RECONCILED_RELEASE'].includes(row.kind))
-      : cost.settlements.length !== 1 || cost.settlements[0]?.kind !== 'CHARGE'
-        || Number(cost.settlements[0]?.actualCostMinor) !== 10 || Number(cost.settlements[0]?.billedUnits) !== 1)) return null;
+      : terminalSettlements.length !== 1 || terminalSettlements[0]?.kind !== 'CHARGE'
+        || terminalSettlements[0]?.actualCostMinor !== 10 || terminalSettlements[0]?.billedUnits !== 1)) return null;
   try {
     const config = job.operationConfig;
     const runtime = parseAiImageProviderRuntimeContract(config?.providerRuntime);
@@ -300,7 +317,8 @@ function countAbandonmentEvidence(job: any, now: Date) {
     jobId: job.id, reservationId: cost.id, attempt: job.workflowAttempt, requestFingerprint: job.requestFingerprint,
     providerJobId: job.providerJobId, providerAcceptedAt: acceptedAt.toISOString(), providerDispatchedAt: dispatchedAt.toISOString(),
     originalErrorCode: job.errorCode, originalErrorMessage: job.errorMessage || '',
-    providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: cost.status === 'SETTLED' ? 'SETTLED' : 'UNKNOWN', erpDeliveredImageCount: 0 };
+    providerOutputDisposition: 'REJECTED_UNRECOVERABLE', providerBillingDisposition: 'UNKNOWN', erpDeliveredImageCount: 0,
+    ...(cost.status === 'SETTLED' ? { erpCostDisposition: 'SETTLED_CHARGE_RETAINED' } : {}) };
 }
 
 function allowedActions(job: any, now = new Date()): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME' | 'ABANDON'> {
