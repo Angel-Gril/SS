@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-12 `809e4348` Web 单独部署完成
+
+订单筛选 UI 已在 COM/CN 两区单独构建并切换到 `809e434822759eff0d5a3a42b9c62ff0bcf56e5d`；仅 `ss-erp-web` 使用该 Web 产物，API/Worker、扩展和官网公开指针继续保持 `e978c9bd / 1.0.456`。两区 Web 登录页、服务 active、DB/Redis ready 均通过。没有扩展签名、官网 CAS、Provider/Ozon 请求或费用。
+
 ## 2026-10-10 `e978c9bd / 1.0.456` 双区官网公开发布完成
 
 最终456已推送、签名、原生offline、标准双区部署/备份恢复/FULL VPS、真实两图审核/store-draft assignment/幂等、正式QA04、COM/CN canary/approval、CAS、四个匿名下载及final publication verifier全部通过。两区latest/应用均456、ready/DB/Redis正常；455未知主图ERP0.10按授权释放且原UNKNOWN保留，本轮新增ERP0.30/Ozon0。临时账号/设备/9466已清理，用户9222和业务原件保留。准确失败/恢复、质量及原件边界仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
