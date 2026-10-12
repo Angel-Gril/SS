@@ -1,5 +1,11 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-12 订单筛选界面精简
+
+订单页 Web UI owner `apps/web/src/app/(dashboard)/orders/page.tsx` 放大上方阶段文字和二级筛选，二级按钮复用现有 Button 的正常字号/高度；全部订单入口移至同一流程卡，下方移除重复的全部/待打包/待发货/配送中/已送达/已取消栏，店铺、日期、搜索和高级筛选保留。窄屏流程可横向滚动，接口、履约归类、权限和保存筛选合同不变。
+
+本次为局部 UI 调整，用户明确要求直接提交推送且不运行测试；仅做源码读回和 Git diff 检查，没有运行测试、类型检查、构建或浏览器验收。未执行部署、扩展签名或官网指针切换；双区运行及公开扩展仍为 `e978c9bd / 1.0.456`，无 Provider/Ozon 请求或费用。
+
 ## 2026-10-10 `e978c9bd / 1.0.456` 双区官网公开发布完成
 
 最终源码 `e978c9bd3a30132e2a6a1a33951f44c922403842` 已推送，COM/CN 签名验签、实际MV3安装、同提交原生offline、标准双区部署/备份恢复/FULL canonical VPS、fresh normal hosted suite、正式QA04、双区REL04 canary/website approval、CAS、四个Cloud/Local匿名完整下载和最终publication verifier全部PASS。两区latest与ready真实读回456、DB/Redis正常；COM原DOTH pilot及qwen-vl-max分析、CN direct/RDS dark不扩大。原生全后端7355 passed/393既有条件skipped、实库224项与scope7项、升级回放、构建及Cloud/Local626/622通过。

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
+import { RefreshCw, Loader2, Package, Truck, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -134,15 +134,6 @@ function defaultOrderEndDate() {
 }
 
 type ShipmentCountdownOrder = Pick<Order, 'status' | 'subStatus' | 'shipmentDate' | 'deliveringDate' | 'deliveredAt'>;
-
-const STATUS_TABS = [
-  { key: '', label: '全部', icon: Package },
-  { key: 'awaiting_packaging', label: '待打包', icon: Clock },
-  { key: 'awaiting_deliver', label: '待发货', icon: Package },
-  { key: 'delivering', label: '配送中', icon: Truck },
-  { key: 'delivered', label: '已送达', icon: CheckCircle },
-  { key: 'cancelled', label: '已取消', icon: XCircle },
-];
 
 const PIPELINE_ICONS: Record<string, any> = {
   purchased: ShoppingCart,
@@ -617,20 +608,34 @@ export default function OrdersPage() {
       {pipeline.length > 0 && (
         <Card>
           <CardContent className="p-4">
-            <div className="flex items-center justify-between overflow-x-auto">
+            <div className="flex items-center justify-between gap-4 overflow-x-auto">
+              <Button
+                type="button"
+                variant={!status && !pipelineActive ? 'default' : 'outline'}
+                className="shrink-0"
+                aria-pressed={!status && !pipelineActive}
+                onClick={() => { setStatus(''); setPipelineActive(null); setPipelineStatus(null); setPage(0); }}
+              >
+                全部订单
+              </Button>
               {pipeline.map((stage, idx) => {
                 const Icon = PIPELINE_ICONS[stage.key] || Package;
                 const isActive = pipelineActive === stage.key;
                 return (
-                  <div key={stage.key} className="flex items-center flex-1 min-w-0">
+                  <div key={stage.key} className="flex flex-1 items-center">
                     <div
-                      className={`flex flex-col items-center gap-1 px-2 py-1 rounded-lg transition-colors min-w-[72px] ${
+                      className={`flex shrink-0 flex-col items-center gap-2 px-3 py-2 rounded-lg transition-colors min-w-[96px] ${
                         isActive
                           ? 'bg-blue-50 dark:bg-blue-950'
                           : 'hover:bg-muted'
                       }`}
                     >
-                      <button type="button" onClick={() => handlePipelineClick(stage.key)} className="flex flex-col items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handlePipelineClick(stage.key)}
+                        aria-pressed={isActive}
+                        className="flex flex-col items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
                       <div className={`relative flex items-center justify-center w-9 h-9 rounded-full border-2 transition-colors ${
                         isActive
                           ? 'border-blue-500 bg-blue-500 text-white'
@@ -649,26 +654,25 @@ export default function OrdersPage() {
                           </span>
                         )}
                       </div>
-                      <span className={`text-xs whitespace-nowrap ${
+                      <span className={`text-sm whitespace-nowrap ${
                         isActive ? 'text-blue-600 font-medium dark:text-blue-400' : 'text-muted-foreground'
                       }`}>
                         {PIPELINE_LABELS[stage.key] || stage.label}
                       </span>
                       </button>
                       {isActive && stage.children?.length ? (
-                        <div className="mt-1 flex flex-wrap justify-center gap-1">
+                        <div className="mt-1 flex items-center justify-center gap-2">
                           {stage.children.map((child) => (
-                            <button
+                            <Button
                               key={child.key}
                               type="button"
-                              onClick={(event) => { event.stopPropagation(); handlePipelineStatusClick(stage.key, child.key); }}
-                              className={cn(
-                                'rounded-full border px-1.5 py-0.5 text-[10px] transition-colors',
-                                pipelineStatus === child.key ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted',
-                              )}
+                              onClick={() => handlePipelineStatusClick(stage.key, child.key)}
+                              variant={pipelineStatus === child.key ? 'default' : 'outline'}
+                              className="rounded-full px-3"
+                              aria-pressed={pipelineStatus === child.key}
                             >
                               {child.label} {child.count > 0 ? `(${child.count})` : ''}
-                            </button>
+                            </Button>
                           ))}
                         </div>
                       ) : null}
@@ -686,23 +690,6 @@ export default function OrdersPage() {
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            {STATUS_TABS.map((tab) => (
-              <Button
-                key={tab.key}
-                size="sm"
-                variant={status === tab.key && !pipelineActive ? 'default' : 'outline'}
-                onClick={() => { setStatus(tab.key); setPipelineActive(null); setPipelineStatus(null); setPage(0); }}
-              >
-                <tab.icon className="h-3.5 w-3.5" />
-                {tab.label}
-                {stats && tab.key && stats.byStatus[tab.key] ? (
-                  <span className="ml-1 text-xs opacity-70">({stats.byStatus[tab.key]})</span>
-                ) : null}
-              </Button>
-            ))}
-          </div>
-
           <div className="flex items-center gap-3 flex-wrap">
             <select
               value={shopId}
