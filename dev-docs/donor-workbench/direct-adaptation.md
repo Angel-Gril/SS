@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 订单修复提交与 COM 保留现有开关的部署合同
+
+订单修复 `46e64efd6a50828aca6446952b16dbefe069a0de` 已提交推送，113项定向、真实隔离PG3项/清理、server build/typecheck及Web生产构建通过。双区内部456候选已签名/验签、备份恢复144/143表通过，但标准deploy因未提交的新合同改动在本机拒绝，未上传/切换应用。
+
+COM只读实查发现FULL_EDIT、INPAINT、IMAGE_TRANSLATE和publisher master均true；用户明确选择“保留当前开关，修正部署合同后上线订单修复”。唯一部署合同owner `verify-ai-media-pilot-policy.mjs` 增加固定 `IMAGE_TO_IMAGE,FULL_EDIT,INPAINT,SUITE,IMAGE_TRANSLATE,OZON_PUBLISH` 组合；原owner/shop/device/scopes、AI/source revision、翻译provider/model及BYOK关闭检查保留，不能从任意新增开关推导授权。此组合只认可现有master配置，不创建SOURCE_OZON_PUBLISHER_V2规则、listing:publish scope、command grant或发布权限；当前publisher特性规则缺失、listing仍dual_read，不能声称商品发布能力已开通。官网canary/approval的原组合合同不扩展；CN保持dark。
+
+新的完整组合最小用例在原owner上RED→GREEN，越权owner/shop/scope、BYOK、少开关和非固定组合拒绝，57项部署/官网合同回归通过。最终部署必须重新绑定包含本修正的新提交、双区签名及备份证据；中间46e64efd材料不作为最终部署证据。没有生产配置写入、Provider/Ozon请求或费用。
+
 ## 2026-10-14 Ozon 备货回读与订单详情四阶段（本地完成）
 
 用户确认卖家端只有“备货”动作，ERP“确认备货”需对应同一平台操作；平台确认备货后无需国内运单即可进入国内在途。订单详情改为采购备货、国内在途、仓库处理、出库发运四阶段，取消/异常单独提示，不继续显示旧六步进度。

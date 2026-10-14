@@ -14,10 +14,10 @@ const OPERATION_FLAGS = Object.freeze({
   FULL_EDIT: 'feature_ai_media_full_edit',
   INPAINT: 'feature_ai_media_inpaint',
   IMAGE_TRANSLATE: 'feature_image_translate',
+  OZON_PUBLISH: 'feature_source_ozon_publisher_v2',
 });
 
 const FORBIDDEN_FLAGS = Object.freeze([
-  'feature_source_ozon_publisher_v2',
   'feature_extension_byok_ai',
   'feature_extension_byok_ingest',
   'feature_extension_byok_publish',
@@ -29,8 +29,11 @@ const REQUIRED_SCOPES = Object.freeze([
   'listing:write',
   'media:execute',
 ]);
-const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE']);
+const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH']);
 const TRANSLATION_PILOT_OPERATIONS = ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'];
+// This is a deployment configuration contract. It grants no publish permission
+// and does not qualify as a website publication canary.
+const FULL_COM_DEPLOY_OPERATIONS = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'];
 
 /** Publication canaries keep the original scope, with translation only when explicitly requested. */
 export function isRestrictedAiMediaHostedPilotOperations(operations) {
@@ -97,7 +100,11 @@ export function normalizeAiMediaHostedPilotExpectation(expected) {
     || new Set(operations).size !== operations.length) {
     fail('pilot expectation.allowedOperations is invalid');
   }
-  if (operations.includes('IMAGE_TRANSLATE') && (operations.length !== TRANSLATION_PILOT_OPERATIONS.length
+  const fullComDeployment = JSON.stringify(operations) === JSON.stringify(FULL_COM_DEPLOY_OPERATIONS);
+  if (operations.includes('OZON_PUBLISH') && !fullComDeployment) {
+    fail('OZON_PUBLISH requires the exact approved COM deployment operation contract');
+  }
+  if (!fullComDeployment && operations.includes('IMAGE_TRANSLATE') && (operations.length !== TRANSLATION_PILOT_OPERATIONS.length
     || TRANSLATION_PILOT_OPERATIONS.some(operation => !operations.includes(operation)))) {
     fail('translation pilot operations must retain IMAGE_TO_IMAGE and SUITE without adding other operations');
   }

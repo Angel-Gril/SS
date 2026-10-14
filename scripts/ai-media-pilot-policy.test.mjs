@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeAiMediaHostedPilotExpectation, verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
+import { isRestrictedAiMediaHostedPilotOperations, normalizeAiMediaHostedPilotExpectation, verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
 
 const owner = 'owner-1';
 const shop = 'shop-1';
@@ -45,6 +45,31 @@ test('accepts an exact hosted pilot snapshot', () => {
   assert.deepEqual(verifyAiMediaHostedPilotPolicy(snapshot(), expected), {
     expectation: 'hosted-pilot', ...expected,
   });
+});
+
+test('accepts the explicit full COM hosted pilot contract', () => {
+  const value = snapshot();
+  value.configRows.find(row => row.key === 'feature_source_ozon_publisher_v2').value = 'true';
+  const full = { ...expected, allowedOperations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'] };
+  value.configRows.push({ key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
+    { key: 'ai_image_translation_model', value: 'qwen-mt-image' });
+  assert.deepEqual(verifyAiMediaHostedPilotPolicy(value, full), { expectation: 'hosted-pilot', ...full });
+  assert.equal(isRestrictedAiMediaHostedPilotOperations(full.allowedOperations), false, 'deployment is not website approval');
+  for (const mutate of [
+    snapshot => { snapshot.deviceSessions[0].shopIds.push('foreign-shop'); },
+    snapshot => { snapshot.deviceSessions[0].ownerUserId = 'foreign-owner'; },
+    snapshot => { snapshot.deviceSessions[0].scopes.push('listing:publish'); },
+    snapshot => { snapshot.configRows.find(row => row.key === 'feature_extension_byok_ai').value = 'true'; },
+    snapshot => { snapshot.configRows.find(row => row.key === 'feature_source_ozon_publisher_v2').value = 'false'; },
+  ]) {
+    const changed = structuredClone(value); mutate(changed);
+    assert.throws(() => verifyAiMediaHostedPilotPolicy(changed, full));
+  }
+  for (const operations of [full.allowedOperations.slice(0, -1), [...full.allowedOperations, 'TEXT_TO_IMAGE'],
+    ['IMAGE_TO_IMAGE', 'SUITE', 'OZON_PUBLISH'], [...full.allowedOperations].reverse()]) {
+    assert.throws(() => normalizeAiMediaHostedPilotExpectation({ ...full, allowedOperations: operations }));
+  }
 });
 
 for (const [label, mutate] of [
