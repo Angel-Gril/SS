@@ -1,5 +1,15 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 `83a5aee3` 订单修复双区上线完成
+
+最终运行提交 `83a5aee3deac07daa82ec55aa0262b868d8ac302` 已提交推送，包含订单修复46e64efd和用户批准的COM部署合同修正。COM/CN均经标准deploy入口重新构建、签名候选验签、源代码封存、数据库门禁及systemd切换，三个服务的cwd归同一current，关闭之前Web809e4348单独运行的版本差异。应用、服务、登录页和公网ready均实读成功，DB/Redis正常；158 migrations没有新增或待执行项。
+
+订单定向113项、真实本机PG3项及隔离schema清理、server/Web构建/类型与前轮Chrome五种四阶段组件证据通过；COM部署合同及旧官网拒绝边界57项通过。目标部署备份与上线后日常备份分别在两区恢复144/143表并清理临时库。首次FULL VPS因日常备份状态仍绑定旧提交而拒绝，失败原件保留；正常生成当前提交日常备份并恢复后，最终COM/CN FULL canonical均PASS、0 failures/1既有warning（远端备份未配置，现有备份仍为本地）。没有修改旧备份状态或重部署应用。
+
+COM canonical SHA256 `87e68e798a066461251767ed544663a0695644a6c21aa2d7076c44e8b73e6b51`，CN `4bd4396409a0e4dcfb0ff6980b5166ddf71dace5d461c2d437097a332a6c7105`。两区内部候选版本仍456，签名SHA分别 `3ef847ef5a4035adf4c335a3fa96425c70d4609279e72040110898752a696596` / `072fc6e9a9863809501a57f591562068a6b86076384988a4d45943396ec4d1a1`；不冒充官网更新。官网latest继续读取原 `e978c9bd / 1.0.456`，双区原approval保持，未生成新官网canary/QA04/approval或执行CAS。
+
+COM保留现有FULL_EDIT/INPAINT/IMAGE_TRANSLATE/publisher master值及原owner/shop/device/scopes，商品分析继续qwen-vl-max；新部署组合只核对现有配置，不授予设备listing:publish，不增publisher规则。CN保持direct/RDS和AI/BYOK/publisher dark。真实Ozon备货写入、用户账户完整点击链尚未实跑，本轮Provider/Ozon写入和新增费用均0。部署/验收私有原件根 `release-83a5aee3-orders`，未进入Git；旧current与目标systemd快照按标准部署保留，可恢复原应用及Web单独部署配置，未删除业务记录。
+
 ## 2026-10-14 订单修复提交与 COM 保留现有开关的部署合同
 
 订单修复 `46e64efd6a50828aca6446952b16dbefe069a0de` 已提交推送，113项定向、真实隔离PG3项/清理、server build/typecheck及Web生产构建通过。双区内部456候选已签名/验签、备份恢复144/143表通过，但标准deploy因未提交的新合同改动在本机拒绝，未上传/切换应用。

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-14 `83a5aee3` 订单履约修复已双区部署
+
+订单备货/V4回读、平台备货→国内在途、详情四阶段和截止时间修复已提交推送，COM/CN 的 API、Worker、Web 均运行 `83a5aee3deac07daa82ec55aa0262b868d8ac302`。双区标准部署、目标备份及日常备份恢复、FULL VPS canonical、服务和公网 ready/DB/Redis通过；COM按用户授权保留现有功能开关，CN dark。官网扩展仍公开旧 `e978c9bd / 1.0.456`，没有 Provider/Ozon 写入或费用；准确回执、未验证边界及回滚只见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-14 Ozon 备货与详情履约显示本地修复
 
 已核实官方 V4 备货→`awaiting_deliver` 与 `shipment_date` 截止语义；平台回读驱动国内在途，ERP 备货按钮及旧入口统一 owner，详情四阶段替换误判“已发货”。113项定向、真实隔离PG3项、Web构建/类型与独立Chrome组件验证通过；尚未提交/部署或操作真实Ozon，准确范围仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
