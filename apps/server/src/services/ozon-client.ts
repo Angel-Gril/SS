@@ -668,7 +668,7 @@ export class OzonClient {
     posting_number: string;
     packages: { products: { product_id: number; quantity: number }[] }[];
   }): Promise<{ result: string[] }> {
-    return this.request('/v3/posting/fbs/ship', { body: params });
+    return this.request('/v4/posting/fbs/ship', { body: params, skipRetry: true });
   }
 
   async cancelPosting(params: {

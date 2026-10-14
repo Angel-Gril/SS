@@ -153,7 +153,7 @@ export default function ShipOrdersPage() {
     );
     if (res.code === 1) {
       const ok = res.data?.results.filter((r) => r.success).length ?? 0;
-      toast({ title: '批量发货完成', description: `${ok}/${selected.size} 单成功` });
+      toast({ title: '批量处理完成', description: `${ok}/${selected.size} 单成功；未确认的订单请同步后核对` });
       setSelected(new Set());
       fetchOrders();
       fetchStats();
@@ -165,7 +165,7 @@ export default function ShipOrdersPage() {
 
   async function handleSingleShip(orderId: string) {
     const res = await api.post(`/api/orders/${orderId}/ship`, {});
-    if (res.code === 1) { toast({ title: '发货成功' }); fetchOrders(); fetchStats(); }
+    if (res.code === 1) { toast({ title: res.msg || '处理完成' }); fetchOrders(); fetchStats(); }
     else toast({ title: '发货失败', description: res.msg, variant: 'destructive' });
   }
 
@@ -265,7 +265,7 @@ export default function ShipOrdersPage() {
           {stage === 'awaiting_deliver' && (
             <Button onClick={handleBatchShip} disabled={shipping || selected.size === 0}>
               {shipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Truck className="mr-2 h-4 w-4" />}
-              批量发货 ({selected.size})
+              批量确认备货 ({selected.size})
             </Button>
           )}
         </div>
@@ -493,9 +493,7 @@ export default function ShipOrdersPage() {
                           <Button size="sm" variant="outline" onClick={() => { setBindOrderId(order.id); setBindTrackingNumber(''); setBindPurchaseId(''); }}>
                             <Link2 className="h-3.5 w-3.5 mr-1" /> 绑定物流
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => handleSingleShip(order.id)}>
-                            <Truck className="h-3.5 w-3.5 mr-1" /> 发货
-                          </Button>
+                          <Badge variant="secondary">已备货</Badge>
                         </>
                       )}
                     </div>

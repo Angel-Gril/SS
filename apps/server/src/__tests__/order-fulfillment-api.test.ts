@@ -10,11 +10,17 @@ const mocks = vi.hoisted(() => ({
   }),
   shopFindMany: vi.fn(), orderFindMany: vi.fn(), orderCount: vi.fn(), orderFindUnique: vi.fn(),
   warehouseLogFindMany: vi.fn(), warehouseLogCreate: vi.fn(), queryRaw: vi.fn(), transaction: vi.fn(),
+  postingGet: vi.fn(), postingShip: vi.fn(), orderUpdate: vi.fn(), orderUpdateMany: vi.fn(),
 }));
+vi.mock('../lib/crypto.js', () => ({ decrypt: () => 'fixture-key' }));
+vi.mock('../services/ozon-client.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../services/ozon-client.js')>();
+  return { ...actual, OzonClient: class { getPostingByNumber = mocks.postingGet; shipPackage = mocks.postingShip; request = mocks.postingShip; } };
+});
 vi.mock('../lib/auth.js', () => ({ authenticate: mocks.authenticate }));
 vi.mock('../lib/prisma.js', () => ({ prisma: {
   shop: { findMany: mocks.shopFindMany },
-  order: { findMany: mocks.orderFindMany, count: mocks.orderCount, findUnique: mocks.orderFindUnique },
+  order: { findMany: mocks.orderFindMany, count: mocks.orderCount, findUnique: mocks.orderFindUnique, update: mocks.orderUpdate, updateMany: mocks.orderUpdateMany },
   warehouseLog: { findMany: mocks.warehouseLogFindMany, create: mocks.warehouseLogCreate },
   $queryRaw: mocks.queryRaw, $transaction: mocks.transaction,
 } }));
@@ -48,8 +54,12 @@ beforeEach(() => {
   mocks.queryRaw.mockResolvedValue([{ id: 'pending' }]);
   mocks.orderFindUnique.mockResolvedValue({ id: 'pending', status: 'awaiting_packaging' });
   mocks.warehouseLogCreate.mockResolvedValue({ createdAt: preparedAt });
+  mocks.orderUpdate.mockResolvedValue({});
+  mocks.orderUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.postingShip.mockResolvedValue({ result: ['posting-1'] });
+  mocks.postingGet.mockResolvedValue({ posting_number: 'posting-1', status: 'awaiting_deliver' });
   mocks.transaction.mockImplementation(async callback => callback({
-    $queryRaw: mocks.queryRaw, order: { findUnique: mocks.orderFindUnique },
+    $queryRaw: mocks.queryRaw, order: { findUnique: mocks.orderFindUnique, updateMany: mocks.orderUpdateMany },
     warehouseLog: { findMany: mocks.warehouseLogFindMany, create: mocks.warehouseLogCreate },
   }));
 });
@@ -63,7 +73,7 @@ describe('order fulfillment owner consumers', () => {
     const data = response.json().data;
     expect(data.total).toBe(8);
     expect(data.stages.map((stage: any) => [stage.key, stage.count])).toEqual([
-      ['purchased', 1], ['domestic_transit', 1], ['warehouse_processing', 2], ['delivering', 2], ['abnormal', 2],
+      ['purchased', 0], ['domestic_transit', 2], ['warehouse_processing', 2], ['delivering', 2], ['abnormal', 2],
     ]);
     expect(data.stages[2].children).toEqual([
       { key: 'awaiting_packaging', label: '待打包', count: 1 },
@@ -151,6 +161,30 @@ describe('order fulfillment owner consumers', () => {
 });
 
 describe('mark order stock ready', () => {
+  const ozonOrder = { id: 'pending', shopId: 'shop-1', platform: 'OZON', shopStatus: 'ACTIVE', clientId: 'fixture-client', apiKeyEncrypted: 'fixture-key',
+    postingNumber: 'posting-1', status: 'awaiting_packaging', items: [{ sku: 123, quantity: 1 }] };
+
+  it('the legacy ship route consumes the same assembly owner without inventing delivery', async () => {
+    mocks.queryRaw.mockResolvedValue([ozonOrder]);
+    mocks.orderFindUnique.mockResolvedValue({ ...ozonOrder, shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'OZON' } });
+    const app = await appFor();
+    const response = await app.inject({ method: 'POST', url: '/api/orders/pending/ship', payload: {} });
+    expect(response.json()).toMatchObject({ code: 1, data: { fulfillmentStage: 'domestic_transit' } });
+    expect(mocks.orderUpdate).not.toHaveBeenCalled();
+    expect(mocks.orderUpdateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'awaiting_deliver', subStatus: null } }));
+    await app.close();
+  });
+
+  it('the legacy batch route uses assembly readback rather than a delivery override', async () => {
+    mocks.queryRaw.mockResolvedValue([ozonOrder]);
+    mocks.orderFindMany.mockResolvedValue([ozonOrder]);
+    mocks.shopFindMany.mockResolvedValue([{ id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'OZON' }]);
+    const app = await appFor();
+    const response = await app.inject({ method: 'POST', url: '/api/orders/batch-ship', payload: { orderIds: ['pending'] } });
+    expect(response.json().data.results[0]).toMatchObject({ success: true, fulfillmentStage: 'domestic_transit' });
+    expect(mocks.orderUpdate).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('records the authenticated actor and returns the canonical next stage', async () => {
     const app = await appFor();
     const response = await app.inject({ method: 'PUT', url: '/api/orders/pending/stock-ready', payload: { prepared: true } });

@@ -36,7 +36,8 @@ describe('order flow filters', () => {
       'received',
       'warehouse-aged',
     ]);
-    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'purchased', now)).toEqual(['needs-purchase', 'warehouse-label']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'purchased', now)).toEqual(['needs-purchase']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'domestic_transit', now)).toEqual(['domestic', 'warehouse-label']);
     expect(filterOrderIdsByFulfillmentStage(orders, logs, 'received', now)).toEqual(['received', 'warehouse-aged']);
   });
 
@@ -56,7 +57,7 @@ describe('order flow filters', () => {
     expect(filterOrderIdsByFulfillmentStage(orders, logs, 'abnormal', now, 'cancelled')).toEqual(['cancel']);
     expect(filterOrderIdsByFulfillmentStage(orders, logs, 'abnormal', now, 'exception')).toEqual(['exception']);
     expect(filterOrderIdsByFulfillmentStage(orders, logs, 'delivered', now)).toEqual(['delivered']);
-    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'domestic_transit', now)).toEqual(['prepared']);
+    expect(filterOrderIdsByFulfillmentStage(orders, logs, 'domestic_transit', now)).toEqual(['label-only', 'prepared']);
   });
 
   it('does not treat Ozon-dispatched postings as still awaiting seller shipment', () => {

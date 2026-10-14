@@ -1,5 +1,21 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 Ozon 备货回读与订单详情四阶段（本地完成）
+
+用户确认卖家端只有“备货”动作，ERP“确认备货”需对应同一平台操作；平台确认备货后无需国内运单即可进入国内在途。订单详情改为采购备货、国内在途、仓库处理、出库发运四阶段，取消/异常单独提示，不继续显示旧六步进度。
+
+2026-10-14 通过独立官方文档页实际读取 [V4 备货接口](https://docs.ozon.ru/api/seller/#operation/PostingAPI_ShipFbsPostingV4) 与 [订单读取接口](https://docs.ozon.ru/api/seller/#operation/PostingAPI_GetFbsPostingV3)：`/v4/posting/fbs/ship` 将订单从 `awaiting_packaging` 转为 `awaiting_deliver`；HTTP200 不保证成功，须 `/v3/posting/fbs/get` 回读，`ship_failed` 明确失败。`shipment_date` 是需完成组装/建议交接的截止时间，不是实际发货时间。旧代码用该字段推进“已发货”、生成未来的创建事件时间，两处均不成立。
+
+唯一履约判定仍为 `shared/order-fulfillment-stage`：`awaiting_deliver` 且不是 `ship_failed` 识别平台备货；异常、实际发运、入库优先。已知 Ozon 平台不再信任旧本地 `stock_ready` 单独推进；国内运单/真实国内运输信号保留，非 Ozon 内部备货合同保留。列表、pipeline 带店铺平台共同使用该 owner，正常同步已持久化 status/subStatus，无需另造采购状态或人工写备货记录。
+
+`order-stock-ready.ts` 负责身份/活动店铺、订单与店铺行锁、商品数量冻结 hash、dispatch/rejected/confirmed 审计和平台回读；网络调用在事务外。V4 提交不自动重试；并发/重连读持久化 dispatch，未知/仍处理中只查询。明确拒绝或 `ship_failed` 后可由用户重新操作；dispatch 前再次核验归属、仓库事实、商品和店铺凭据，回读不覆盖已更新的异常/发运状态。`stock_ready` 仅在回读确认后补记录，不伪造配送或改截止时间。旧单笔/批量 ship 入口消费同一 owner；标准 Ozon 备货使用整单商品，客户端拆包请求明确拒绝，需平台拆包后正常同步。本次没有 schema/migration 变化，使用既有 WarehouseLog 的 String operationType 追加审计。
+
+Web 订单列表仅保留 Ozon“确认备货”，同步后的已备货按钮从平台状态推导；处理中防连点、202 待确认不会报成功，再点击核对只查询。详情新 `OrderFulfillmentProgress` 直接消费共享 owner，只高亮当前四阶段，不用虚假完成勾选推断未采集的仓库步骤；`shipmentDate` 标签改为“发货截止”，列表履约时间也排除截止字段。`ozon-substatus.ts` 为物流事件时间 owner，正常直连/Worker 同步用真实受理/配送时间或首次观察时间；下一次正常同步仅校正有官方受理时间的既有创建事件，不批量改生产历史。
+
+验收：T2 已观察阶段/V4/备货提交与回读的 RED→GREEN；9个定向测试文件113项通过，服务端/Web类型、定向lint、Web生产构建、订单及面单静态门禁通过。真实隔离 PostgreSQL3项验证并发只提交一次、回读持久化、重连幂等、未知不重复发包及归属/入库拒绝，158 migrations/schema清理完成；HTTP仅使用合成平台fixture，无真实Ozon调用。四阶段实际React组件在独立Chrome以生成CSS验证5种状态、桌面及390px两列无溢出；初始桌面截图异常保留，不当作通过，最终全页截图核对正常。证据 `ss-erp-order-fulfillment-pg-jVrX8B`、`ss-erp-orders-fulfillment-ui-Zk6C08`。
+
+当前未提交、推送或部署；线上仍是 Web `809e4348`、API/Worker/公开扩展 `e978c9bd / 1.0.456`。真实 Ozon 备货写入和业务店铺端到端未验证，无 Provider/Ozon 写入或费用，未读取/使用新的生产店铺秘密，未改变扩展分发或配置。
+
 ## 2026-10-12 订单筛选界面精简
 
 订单页 Web UI owner `apps/web/src/app/(dashboard)/orders/page.tsx` 放大上方阶段文字和二级筛选，二级按钮复用现有 Button 的正常字号/高度；全部订单入口移至同一流程卡，下方移除重复的全部/待打包/待发货/配送中/已送达/已取消栏，店铺、日期、搜索和高级筛选保留。窄屏流程可横向滚动，接口、履约归类、权限和保存筛选合同不变。

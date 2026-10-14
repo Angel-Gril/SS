@@ -8,6 +8,7 @@ export const ORDER_FULFILLMENT_STAGE_FILTER_KEYS = ['purchased', 'domestic_trans
 export const ORDER_FULFILLMENT_STATUS_KEYS = ['awaiting_packaging', 'awaiting_deliver', 'delivering', 'delivered', 'cancelled', 'exception'] as const;
 
 export interface OrderFulfillmentStageInput {
+  platform?: string | null; shop?: { platform?: string | null } | null;
   status?: string | null; subStatus?: string | null; domesticTrackingNumber?: string | null; domesticStatus?: string | null;
   internationalTrackingNumber?: string | null; internationalStatus?: string | null; trackingNumber?: string | null;
   inProcessAt?: string | Date | null; shipmentDate?: string | Date | null; deliveringDate?: string | Date | null;
@@ -37,7 +38,8 @@ export function resolveOrderFulfillmentStage(order: OrderFulfillmentStageInput, 
   if (normalize(order.inspectionStatus) === 'failed' || [status, subStatus, domesticStatus, internationalStatus].some(value => hasAnyPart(value, ABNORMAL_STATUS_PARTS))) return STAGES.abnormal;
   if (isDelivered(order) || isDispatched(order)) return STAGES.delivering;
   if (domesticStatus === 'received' || hasDate(order.warehouseScanInAt)) return STAGES.warehouse_processing;
-  if (hasDate(order.stockPreparedAt) || domesticStatus === 'shipped' || domesticStatus === 'in_transit' || !!normalize(order.domesticTrackingNumber)) return STAGES.domestic_transit;
+  const localPrepared = normalize(order.platform ?? order.shop?.platform) !== 'ozon' && hasDate(order.stockPreparedAt);
+  if (isOrderStockPrepared(order) || localPrepared || domesticStatus === 'shipped' || domesticStatus === 'in_transit' || !!normalize(order.domesticTrackingNumber)) return STAGES.domestic_transit;
   return STAGES.purchased;
 }
 export function resolveOrderFulfillmentStatus(order: OrderFulfillmentStageInput): OrderFulfillmentStatus | null {
@@ -65,6 +67,10 @@ export function isOrderAwaitingSellerShipment(order: OrderFulfillmentStageInput)
   if (resolveOrderFulfillmentStage(order).key === 'abnormal' || isDelivered(order) || isDispatched(order)) return false;
   const status = normalize(order.status), subStatus = normalize(order.subStatus);
   return status === 'awaiting_packaging' || status === 'awaiting_deliver' || hasAnyPart(subStatus, AWAITING_SHIPMENT_SUBSTATUS_PARTS);
+}
+/** Ozon assembly is confirmed by platform status, never by a label or deadline. */
+export function isOrderStockPrepared(order: OrderFulfillmentStageInput): boolean {
+  return normalize(order.status) === 'awaiting_deliver' && normalize(order.subStatus) !== 'ship_failed';
 }
 function isDelivered(order: OrderFulfillmentStageInput): boolean { return normalize(order.status) === 'delivered' || normalize(order.internationalStatus) === 'delivered' || hasDate(order.deliveredAt) || hasAnyPart(normalize(order.subStatus), DELIVERED_SUBSTATUS_PARTS); }
 function isDispatched(order: OrderFulfillmentStageInput): boolean { return DELIVERING_STATUSES.has(normalize(order.status)) || INTERNATIONAL_DISPATCH_STATUSES.has(normalize(order.internationalStatus)) || hasDate(order.deliveringDate) || hasDate(order.warehouseScanOutAt) || hasAnyPart(normalize(order.subStatus), DELIVERING_SUBSTATUS_PARTS); }

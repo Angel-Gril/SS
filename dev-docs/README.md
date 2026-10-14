@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-14 Ozon 备货与详情履约显示本地修复
+
+已核实官方 V4 备货→`awaiting_deliver` 与 `shipment_date` 截止语义；平台回读驱动国内在途，ERP 备货按钮及旧入口统一 owner，详情四阶段替换误判“已发货”。113项定向、真实隔离PG3项、Web构建/类型与独立Chrome组件验证通过；尚未提交/部署或操作真实Ozon，准确范围仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-12 `809e4348` Web 单独部署完成
 
 订单筛选 UI 已在 COM/CN 两区单独构建并切换到 `809e434822759eff0d5a3a42b9c62ff0bcf56e5d`；仅 `ss-erp-web` 使用该 Web 产物，API/Worker、扩展和官网公开指针继续保持 `e978c9bd / 1.0.456`。两区 Web 登录页、服务 active、DB/Redis ready 均通过。没有扩展签名、官网 CAS、Provider/Ozon 请求或费用。

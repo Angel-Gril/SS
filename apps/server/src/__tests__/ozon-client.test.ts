@@ -8,6 +8,16 @@ import {
 } from '../services/ozon-client.js';
 
 describe('Ozon client errors', () => {
+  it('submits stock readiness through the current V4 assembly endpoint once', async () => {
+    const fetchRequest = vi.fn().mockResolvedValue(new Response(JSON.stringify({ result: ['fixture-1'] }), { status: 200 }));
+    const client = new OzonClient({ clientId: 'fixture-client', apiKey: 'fixture-key', requestFetch: fetchRequest });
+    const body = { posting_number: 'fixture-1', packages: [{ products: [{ product_id: 123, quantity: 1 }] }] };
+    await client.shipPackage(body);
+    expect(fetchRequest).toHaveBeenCalledWith('https://api-seller.ozon.ru/v4/posting/fbs/ship', expect.objectContaining({ body: JSON.stringify(body) }));
+    fetchRequest.mockClear().mockResolvedValue(new Response('{}', { status: 503 }));
+    await expect(client.shipPackage(body)).rejects.toThrow();
+    expect(fetchRequest).toHaveBeenCalledTimes(1);
+  });
   it('localizes blocked company errors for shop-dependent Ozon APIs', () => {
     const error = new OzonApiError(
       403,

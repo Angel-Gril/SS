@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from './ozon-client.js';
-import { describeSubstatus } from '../lib/ozon-substatus.js';
+import { describeSubstatus, resolveOzonTrackingEventTime } from '../lib/ozon-substatus.js';
 import { getRate } from './exchange-rate.js';
 
 export interface DirectSyncResult {
@@ -89,17 +89,12 @@ function pickShippingInfo(posting: any): any {
 async function recordTrackingEvent(orderId: string, posting: any): Promise<void> {
   if (!posting.substatus) return;
   const meta = describeSubstatus(posting.substatus);
-  const occurredAt =
-    posting.delivered_at ? new Date(posting.delivered_at)
-    : posting.delivering_date ? new Date(posting.delivering_date)
-    : posting.shipment_date ? new Date(posting.shipment_date)
-    : posting.in_process_at ? new Date(posting.in_process_at)
-    : new Date();
+  const occurredAt = resolveOzonTrackingEventTime(posting);
   try {
     await prisma.orderTrackingEvent.upsert({
       where: { orderId_substatus: { orderId, substatus: posting.substatus } },
       create: { orderId, substatus: posting.substatus, statusText: meta.text, source: 'ozon', occurredAt },
-      update: { statusText: meta.text },
+      update: { statusText: meta.text, ...(meta.phase === 'created' && posting.in_process_at ? { occurredAt } : {}) },
     });
   } catch {
     // non-critical

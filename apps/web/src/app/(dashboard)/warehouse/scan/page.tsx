@@ -57,8 +57,9 @@ export default function ScanShipPage() {
     const ids = scannedOrders.map((o) => o.id);
     const res = await api.post<any>('/api/orders/batch-ship', { orderIds: ids });
     if (res.code === 1) {
-      toast({ title: '批量发货成功', description: res.msg });
-      setScannedOrders([]);
+      toast({ title: '批量处理完成', description: res.msg });
+      const confirmed = new Set((res.data?.results || []).filter((item: any) => item.success).map((item: any) => item.orderId));
+      setScannedOrders(current => current.filter(order => !confirmed.has(order.id)));
     } else {
       toast({ title: '发货失败', description: res.msg, variant: 'destructive' });
     }

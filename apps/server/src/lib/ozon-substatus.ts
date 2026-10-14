@@ -58,3 +58,16 @@ export function isTerminalSubstatus(substatus: string | null | undefined): boole
   const meta = MAP[substatus];
   return !!meta && (meta.phase === 'delivered' || meta.phase === 'cancelled' || meta.phase === 'returned');
 }
+
+/** Shipment deadline is never evidence of a tracking event's occurrence. */
+export function resolveOzonTrackingEventTime(posting: {
+  substatus?: string | null; in_process_at?: string | null; shipment_date?: string | null;
+  delivering_date?: string | null; delivered_at?: string | null;
+}, observedAt: Date = new Date()): Date {
+  const phase = describeSubstatus(posting.substatus).phase;
+  const raw = phase === 'created' ? posting.in_process_at
+    : phase === 'delivered' ? posting.delivered_at
+    : phase === 'in_transit' || phase === 'arrived' ? posting.delivering_date : null;
+  const parsed = raw ? new Date(raw) : null;
+  return parsed && Number.isFinite(parsed.getTime()) && parsed <= observedAt ? parsed : observedAt;
+}

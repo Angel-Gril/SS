@@ -157,6 +157,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
         deliveringDate: true,
         deliveredAt: true,
         inspectionStatus: true,
+        shop: { select: { platform: true } },
       },
     });
     const orderIds = orders.map((order) => order.id);

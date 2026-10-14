@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, Loader2, Package, Truck, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
+import { RefreshCw, Loader2, Package, Truck, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,8 +23,9 @@ import { api } from '@/lib/api';
 import { cn, formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
 import { defaultTrackUrl } from '@/lib/tracking';
-import { isOrderAwaitingSellerShipment, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
+import { isOrderAwaitingSellerShipment, isOrderStockPrepared, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
+import { OrderFulfillmentProgress } from '@/components/orders/fulfillment-progress';
 
 interface Order {
   id: string;
@@ -244,25 +245,6 @@ function ProductImagePreview({ items }: { items: any[] }) {
   );
 }
 
-const PROGRESS_STEPS = [
-  { key: 'created', label: '已创建' },
-  { key: 'in_process', label: '处理中' },
-  { key: 'packed', label: '已打包' },
-  { key: 'shipped', label: '已发货' },
-  { key: 'delivering', label: '运输中' },
-  { key: 'delivered', label: '已送达' },
-];
-
-function getProgressStep(order: any): number {
-  if (order.status === 'cancelled') return -1;
-  if (order.deliveredAt || order.status === 'delivered') return 5;
-  if (order.deliveringDate || order.status === 'delivering') return 4;
-  if (order.shipmentDate || order.status === 'awaiting_deliver') return 3;
-  if (order.status === 'awaiting_packaging') return 2;
-  if (order.inProcessAt) return 1;
-  return 0;
-}
-
 function formatInternationalDisplayStatus(order: any): string {
   const stage = resolveOrderFulfillmentStage(order);
   if (order.fulfillmentStatus === 'delivered') return '已送达';
@@ -270,48 +252,6 @@ function formatInternationalDisplayStatus(order: any): string {
   if (stage.key === 'warehouse_processing') return '仓库处理';
   if (order.internationalTrackingNumber || order.trackingNumber) return '国际单已生成';
   return '待发出';
-}
-
-function OrderProgressBar({ order }: { order: any }) {
-  const currentStep = getProgressStep(order);
-  if (currentStep === -1) {
-    return (
-      <div className="flex items-center gap-2 py-2 px-3 bg-red-50 dark:bg-red-950/30 rounded-md">
-        <XCircle className="h-4 w-4 text-destructive" />
-        <span className="text-sm text-destructive font-medium">订单已取消</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="py-3">
-      <div className="flex items-center justify-between">
-        {PROGRESS_STEPS.map((step, idx) => (
-          <div key={step.key} className="flex items-center flex-1 last:flex-initial">
-            <div className="flex flex-col items-center gap-1">
-              <div className={`flex items-center justify-center w-7 h-7 rounded-full border-2 text-xs font-bold transition-all ${
-                idx <= currentStep
-                  ? idx === currentStep
-                    ? 'border-blue-500 bg-blue-500 text-white'
-                    : 'border-emerald-500 bg-emerald-500 text-white'
-                  : 'border-muted-foreground/30 bg-background text-muted-foreground'
-              }`}>
-                {idx < currentStep ? '✓' : idx + 1}
-              </div>
-              <span className={`text-[10px] whitespace-nowrap ${
-                idx <= currentStep
-                  ? idx === currentStep ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-muted-foreground'
-              }`}>{step.label}</span>
-            </div>
-            {idx < PROGRESS_STEPS.length - 1 && (
-              <div className={`flex-1 h-0.5 mx-1.5 rounded-full ${idx < currentStep ? 'bg-emerald-500' : 'bg-muted'}`} />
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 export default function OrdersPage() {
@@ -332,6 +272,8 @@ export default function OrdersPage() {
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
   const [batchUserTagDialogOpen, setBatchUserTagDialogOpen] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [stockReadyBusy, setStockReadyBusy] = useState<Set<string>>(new Set());
+  const [stockReadyPending, setStockReadyPending] = useState<Set<string>>(new Set());
 
   const [status, setStatus] = useState('');
   const [shopId, setShopId] = useState('');
@@ -439,13 +381,24 @@ export default function OrdersPage() {
   }
 
   async function markStockReady(order: Order) {
+    if (stockReadyBusy.has(order.id)) return;
+    setStockReadyBusy(current => new Set(current).add(order.id));
     try {
-      const response = await api.put(`/api/orders/${order.id}/stock-ready`, { prepared: true });
+      const response = await api.put<{ pending?: boolean }>(`/api/orders/${order.id}/stock-ready`, { prepared: true });
       if (response.code !== 1) throw new Error(response.msg || '确认备货失败');
-      toast({ title: '已确认备货', description: '订单已进入国内在途' });
+      setStockReadyPending(current => {
+        const next = new Set(current);
+        if (response.data?.pending) next.add(order.id); else next.delete(order.id);
+        return next;
+      });
+      toast(response.data?.pending
+        ? { title: '备货结果待确认', description: response.msg }
+        : { title: '已确认备货', description: '订单已进入国内在途' });
       await Promise.all([loadOrders(), loadPipeline()]);
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '确认备货失败', variant: 'destructive' });
+    } finally {
+      setStockReadyBusy(current => { const next = new Set(current); next.delete(order.id); return next; });
     }
   }
 
@@ -1111,7 +1064,7 @@ export default function OrdersPage() {
                           const fulfillmentStage = resolveOrderFulfillmentStage(order);
                           const showStatus = order.subStatus && meta.phase !== 'unknown';
                           // 获取最新的物流时间
-                          const latestTime = order.warehouseScanOutAt || order.deliveringDate || order.labelPrintedAt || order.shipmentDate || order.warehouseScanInAt || order.inProcessAt;
+                          const latestTime = order.warehouseScanOutAt || order.deliveringDate || order.warehouseScanInAt || order.stockPreparedAt || order.inProcessAt;
                           const formattedTime = latestTime ? new Date(latestTime).toLocaleString('zh-CN', {
                             year: '2-digit',
                             month: '2-digit',
@@ -1192,12 +1145,12 @@ export default function OrdersPage() {
                         <div className="space-y-0.5 leading-5">
                           <div><span className="text-muted-foreground/80">创建</span> {formatCompactDate(order.createdAt)}</div>
                           {order.labelPrintedAt && <div><span className="text-muted-foreground/80">面单</span> {formatCompactDate(order.labelPrintedAt)}</div>}
-                          {order.shipmentDate && <div><span className="text-muted-foreground/80">发货</span> {formatCompactDate(order.shipmentDate)}</div>}
+                          {order.shipmentDate && <div><span className="text-muted-foreground/80">截止</span> {formatCompactDate(order.shipmentDate)}</div>}
                         </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap px-2.5 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <Button
+                          {order.shop.platform !== 'OZON' && <Button
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7"
@@ -1206,16 +1159,16 @@ export default function OrdersPage() {
                             onClick={() => setShipOrder(order)}
                           >
                             <Send className="h-3.5 w-3.5" />
-                          </Button>
+                          </Button>}
                           <Button
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[10px]"
-                            disabled={Boolean(order.stockPreparedAt) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
-                            title={order.stockPreparedAt ? '已确认备货' : '确认已备货，进入国内在途'}
+                            disabled={stockReadyBusy.has(order.id) || (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
+                            title={isOrderStockPrepared(order) ? 'Ozon 已确认备货' : stockReadyPending.has(order.id) ? '只查询上次备货结果，不重复提交' : '确认备货后进入国内在途'}
                             onClick={() => void markStockReady(order)}
                           >
-                            {order.stockPreparedAt ? '已备货' : '确认备货'}
+                            {stockReadyBusy.has(order.id) ? '确认中…' : (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) ? '已备货' : stockReadyPending.has(order.id) ? '核对备货' : '确认备货'}
                           </Button>
                           <Button
                             size="icon"
@@ -1472,9 +1425,9 @@ function OrderDetailDialog({ orderId, onClose }: {
             <ShipmentCountdown order={detail} />
 
             <div className="border rounded-md">
-              <div className="px-3 py-2 text-xs font-medium border-b bg-muted/40">发货流程</div>
+              <div className="px-3 py-2 text-xs font-medium border-b bg-muted/40">履约流程</div>
               <div className="px-4 py-2">
-                <OrderProgressBar order={detail} />
+                <OrderFulfillmentProgress order={detail} />
               </div>
             </div>
 
@@ -1488,7 +1441,7 @@ function OrderDetailDialog({ orderId, onClose }: {
               <div className="p-3 grid grid-cols-2 gap-2 text-xs">
                 <div><span className="text-muted-foreground">创建：</span>{formatDate(detail.createdAt)}</div>
                 <div><span className="text-muted-foreground">受理：</span>{detail.inProcessAt ? formatDate(detail.inProcessAt) : '-'}</div>
-                <div><span className="text-muted-foreground">发货：</span>{detail.shipmentDate ? formatDate(detail.shipmentDate) : '-'}</div>
+                <div><span className="text-muted-foreground">发货截止：</span>{detail.shipmentDate ? formatDate(detail.shipmentDate) : '-'}</div>
                 <div><span className="text-muted-foreground">面单打印：</span>{detail.labelPrintedAt ? formatDate(detail.labelPrintedAt) : '-'}</div>
                 <div><span className="text-muted-foreground">配送：</span>{detail.deliveringDate ? formatDate(detail.deliveringDate) : '-'}</div>
                 <div><span className="text-muted-foreground">送达：</span>{detail.deliveredAt ? formatDate(detail.deliveredAt) : '-'}</div>
@@ -1672,7 +1625,7 @@ function LabelPreviewDialog({ order, onClose }: {
               <div className="text-center space-y-2 max-w-md px-4">
                 <div className="text-destructive font-medium">{error}</div>
                 <p className="text-xs text-muted-foreground">
-                  面单仅在订单已发货（awaiting_deliver）后可用。如果订单仍在"待打包"状态，请先执行发货操作。
+                  面单在 Ozon 确认备货后可用。如果订单仍在待打包状态，请先点击“确认备货”。
                 </p>
               </div>
             </div>
@@ -1708,7 +1661,7 @@ function ShipOrderDialog({ order, onClose, onSuccess }: {
     const res = await api.post(`/api/orders/${order.id}/ship`, { trackingNumber: trackingNumber || undefined });
     setSubmitting(false);
     if (res.code === 1) {
-      toast({ title: '发货成功' });
+      toast({ title: res.msg || '处理完成' });
       onSuccess();
     } else {
       toast({ title: res.msg || '发货失败', variant: 'destructive' });

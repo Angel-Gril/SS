@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient, type OzonPosting } from '../services/ozon-client.js';
 import { createNotification } from '../routes/notification.js';
-import { describeSubstatus } from '../lib/ozon-substatus.js';
+import { describeSubstatus, resolveOzonTrackingEventTime } from '../lib/ozon-substatus.js';
 import { getRate } from '../services/exchange-rate.js';
 
 const QUEUE_NAME = 'order-sync';
@@ -307,12 +307,7 @@ async function recordTrackingEvent(orderId: string, posting: OzonPosting) {
   const sub = posting.substatus;
   if (!sub) return;
   const meta = describeSubstatus(sub);
-  const occurredAt =
-    posting.delivered_at ? new Date(posting.delivered_at)
-    : posting.delivering_date ? new Date(posting.delivering_date)
-    : posting.shipment_date ? new Date(posting.shipment_date)
-    : posting.in_process_at ? new Date(posting.in_process_at)
-    : new Date();
+  const occurredAt = resolveOzonTrackingEventTime(posting);
 
   try {
     await prisma.orderTrackingEvent.upsert({
@@ -324,7 +319,7 @@ async function recordTrackingEvent(orderId: string, posting: OzonPosting) {
         source: 'ozon',
         occurredAt,
       },
-      update: { statusText: meta.text },
+      update: { statusText: meta.text, ...(meta.phase === 'created' && posting.in_process_at ? { occurredAt } : {}) },
     });
   } catch (e: any) {
     console.warn(`[OrderSync] tracking event upsert failed for ${orderId}:`, e.message);

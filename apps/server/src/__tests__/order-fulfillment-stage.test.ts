@@ -2,20 +2,37 @@ import { describe, expect, it } from 'vitest';
 import { resolveOrderFulfillmentStage, resolveOrderFulfillmentStatus, ORDER_FULFILLMENT_PIPELINE } from 'shared/order-fulfillment-stage';
 
 describe('resolveOrderFulfillmentStage', () => {
+  it('recognizes platform stock readiness without an ERP marker or domestic tracking', () => {
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_deliver' }).key).toBe('domestic_transit');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_packaging' }).key).toBe('purchased');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_deliver', subStatus: 'ship_failed' }).key).toBe('purchased');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_deliver', warehouseScanInAt: new Date() }).key).toBe('warehouse_processing');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_deliver', subStatus: 'posting_sent_by_seller' }).key).toBe('delivering');
+  });
+  it('does not let a legacy local Ozon marker substitute for platform readiness', () => {
+    expect(resolveOrderFulfillmentStage({ shop: { platform: 'OZON' }, status: 'awaiting_packaging', stockPreparedAt: new Date() }).key).toBe('purchased');
+    expect(resolveOrderFulfillmentStage({ shop: { platform: 'OZON' }, status: 'awaiting_deliver' }).key).toBe('domestic_transit');
+    expect(resolveOrderFulfillmentStage({ platform: 'OTHER', stockPreparedAt: new Date() }).key).toBe('domestic_transit');
+  });
+  it('keeps a newly created posting at purchasing even with a future shipment deadline', () => {
+    expect(resolveOrderFulfillmentStage({ platform: 'OZON', status: 'awaiting_packaging', subStatus: 'posting_created',
+      inProcessAt: '2026-10-14T01:13:00Z', shipmentDate: '2026-10-19T13:00:00Z' }).key).toBe('purchased');
+  });
   it('does not treat a generated international tracking number as shipped', () => {
     const stage = resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       internationalStatus: 'pending',
     });
-    expect(stage.key).toBe('purchased');
-    expect(stage.label).toBe('采购备货');
+    expect(stage.key).toBe('domestic_transit');
+    expect(stage.label).toBe('国内在途');
 
     expect(resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       labelPrintedAt: new Date().toISOString(),
-    }).label).toBe('采购备货');
+    }).label).toBe('国内在途');
+    expect(resolveOrderFulfillmentStage({ status: 'awaiting_packaging', internationalTrackingNumber: 'OZON123', labelPrintedAt: new Date() }).key).toBe('purchased');
   });
 
   it('shows outbound dispatch only after a real shipping signal', () => {
@@ -80,8 +97,8 @@ describe('resolveOrderFulfillmentStage', () => {
       status: 'awaiting_deliver',
       shipmentDate: new Date().toISOString(),
     })).toMatchObject({
-      key: 'purchased',
-      label: '采购备货',
+      key: 'domestic_transit',
+      label: '国内在途',
     });
   });
 

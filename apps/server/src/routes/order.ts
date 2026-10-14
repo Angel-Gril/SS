@@ -1,11 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
-import { createOrderStockReadyService } from '../services/order-stock-ready.js';
+import { createOrderStockReadyService, type StockReadyResult } from '../services/order-stock-ready.js';
 import { buildOrderListScope } from '../services/order-list-scope.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
@@ -21,6 +21,14 @@ import {
 } from 'shared/order-fulfillment-stage';
 
 const fulfillmentStageKeys = ORDER_FULFILLMENT_STAGE_FILTER_KEYS;
+
+function replyStockReady(reply: FastifyReply, result: StockReadyResult) {
+  if (result.kind === 'not_found') return reply.status(404).send({ code: 0, msg: '订单不存在' });
+  if (result.kind === 'immutable') return reply.status(409).send({ code: 0, msg: '订单当前状态不可确认已备货' });
+  if (result.kind === 'rejected') return reply.status(409).send({ code: 0, msg: result.message });
+  if (result.kind === 'pending') return reply.status(202).send({ code: 1, msg: result.message, data: { id: result.id, pending: true, fulfillmentStage: result.stage, fulfillmentStatus: result.status } });
+  return reply.send({ code: 1, msg: result.replayed ? '已备货状态已存在' : '已确认备货', data: { id: result.id, stockPreparedAt: result.stockPreparedAt, fulfillmentStage: result.stage, fulfillmentStatus: result.status } });
+}
 
 type OrderStageFilterInput = OrderFulfillmentStageInput & {
   id: string;
@@ -167,9 +175,7 @@ export async function orderRoutes(app: FastifyInstance) {
     if (body?.prepared !== true || Object.keys(body || {}).some((key) => key !== 'prepared')) return reply.status(400).send({ code: 0, msg: '仅允许 prepared=true' });
 
     const result = await stockReady.mark({ orderId: id, ownerUserId: userId, actorUserId });
-    if (result.kind === 'not_found') return reply.status(404).send({ code: 0, msg: '订单不存在' });
-    if (result.kind === 'immutable') return reply.status(409).send({ code: 0, msg: '订单当前状态不可确认已备货' });
-    return reply.send({ code: 1, msg: result.replayed ? '已备货状态已存在' : '已确认备货', data: { id: result.id, stockPreparedAt: result.stockPreparedAt, fulfillmentStage: result.stage, fulfillmentStatus: result.status } });
+    return replyStockReady(reply, result);
   });
 
   // GET /api/orders/service-tags — 获取可用标签列表
@@ -403,6 +409,7 @@ export async function orderRoutes(app: FastifyInstance) {
           deliveringDate: true,
           deliveredAt: true,
           inspectionStatus: true,
+          shop: { select: { platform: true } },
         },
       });
       const candidateOrderIds = candidateOrders.map((order) => order.id);
@@ -650,7 +657,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const body = request.body as { orderIds: string[]; trackingNumbers?: Record<string, string> };
 
-    if (!body.orderIds?.length) {
+    if (!Array.isArray(body?.orderIds) || !body.orderIds.length || body.orderIds.length > 100 || body.orderIds.some(id => typeof id !== 'string' || !id)) {
       return reply.status(400).send({ code: 0, msg: '请选择订单' });
     }
 
@@ -668,7 +675,7 @@ export async function orderRoutes(app: FastifyInstance) {
       },
     });
 
-    const results: { orderId: string; success: boolean; msg: string }[] = [];
+    const results: { orderId: string; success: boolean; msg: string; pending?: boolean; fulfillmentStage?: string }[] = [];
 
     for (const order of orders) {
       const shop = shopMap.get(order.shopId);
@@ -678,17 +685,12 @@ export async function orderRoutes(app: FastifyInstance) {
       }
 
       try {
-        if (shop.platform === 'OZON' && order.postingNumber) {
-          const client = new OzonClient({
-            clientId: shop.clientId!,
-            apiKey: decrypt(shop.apiKeyEncrypted),
-          });
-          await client.request('/v2/posting/fbs/ship', {
-            body: {
-              posting_number: [order.postingNumber],
-              with: { additional_data: true },
-            },
-          });
+        if (shop.platform === 'OZON') {
+          const result = await stockReady.mark({ orderId: order.id, ownerUserId: userId, actorUserId: (request as any).user.actorUserId ?? userId });
+          results.push({ orderId: order.id, success: result.kind === 'marked',
+            pending: result.kind === 'pending', fulfillmentStage: 'stage' in result ? result.stage : undefined,
+            msg: result.kind === 'marked' ? 'Ozon 已确认备货' : result.kind === 'pending' || result.kind === 'rejected' ? result.message : '订单当前状态不可备货' });
+          continue;
         }
 
         const trackingNumber = body.trackingNumbers?.[order.id] || order.trackingNumber;
@@ -705,7 +707,7 @@ export async function orderRoutes(app: FastifyInstance) {
     const successCount = results.filter((r) => r.success).length;
     return reply.send({
       code: 1,
-      msg: `批量发货完成: ${successCount}/${orders.length} 成功`,
+      msg: `批量处理完成: ${successCount}/${orders.length} 成功`,
       data: { results },
     });
   });
@@ -727,36 +729,13 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
-    if (order.status !== 'awaiting_packaging' && order.status !== 'awaiting_deliver') {
-      return reply.send({ code: 0, msg: `当前状态 ${order.status} 不允许发货` });
+    if (order.shop.platform === 'OZON') {
+      if (body?.packages !== undefined) return reply.status(400).send({ code: 0, msg: 'Ozon 确认备货使用完整订单商品，请通过平台处理拆包后同步订单' });
+      return replyStockReady(reply, await stockReady.mark({ orderId: id, ownerUserId: userId, actorUserId: (request as any).user.actorUserId ?? userId }));
     }
 
-    if (order.shop.platform === 'OZON' && order.postingNumber) {
-      const client = new OzonClient({
-        clientId: order.shop.clientId!,
-        apiKey: decrypt(order.shop.apiKeyEncrypted),
-      });
-
-      let packages = body.packages;
-      if (!packages || packages.length === 0) {
-        const items = (order.items as any[]) || [];
-        const products = items
-          .filter((it) => it.product_id || it.sku)
-          .map((it) => ({
-            product_id: Number(it.product_id ?? it.sku),
-            quantity: Number(it.quantity ?? 1),
-          }));
-        if (products.length === 0) {
-          return reply.send({ code: 0, msg: '订单缺少商品信息，无法生成发货包裹' });
-        }
-        packages = [{ products }];
-      }
-
-      try {
-        await client.shipPackage({ posting_number: order.postingNumber, packages });
-      } catch (e: any) {
-        return reply.send({ code: 0, msg: `OZON 发货失败: ${e.message}` });
-      }
+    if (order.status !== 'awaiting_packaging' && order.status !== 'awaiting_deliver') {
+      return reply.send({ code: 0, msg: `当前状态 ${order.status} 不允许发货` });
     }
 
     await prisma.order.update({
