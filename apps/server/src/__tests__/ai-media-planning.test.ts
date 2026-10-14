@@ -72,6 +72,18 @@ function authority(): AiMediaPlanningAuthority {
 }
 
 describe('AI media planning rule worker', () => {
+  it('preserves every captured SKU owner of a shared image while planning only the selected SKU', () => {
+    const source = authority();
+    source.capture.skus.push({ ...structuredClone(source.capture.skus[0]!), key: 'red-large' });
+    source.capture.media[0]!.skuKeys = ['red-single', 'red-large'];
+    const original = structuredClone(source.capture);
+    const resolved = resolveRuleBasedAiMediaPlanningInput({ ...planningInput(), galleryGoals: ['scene'] }, source);
+    const result = buildRuleBasedAiMediaPlanningArtifacts(resolved);
+    expect((result.inputSnapshot.candidates as any[])[0].skuKeys).toEqual(['red-single', 'red-large']);
+    expect(result.plan.slots.filter(slot => slot.ownership.level === 'sku').map(slot => slot.ownership.key)).toEqual(['red-single']);
+    expect(result.plan.slots).toHaveLength(2);
+    expect(source.capture).toEqual(original);
+  });
   it('resolves copied offers only through internal current-draft authority, keeping the original capture hash and immutable capture', async () => {
     const source = authority(); source.capture.skus[0]!.mediaKeys = ['main-1'];
     const workflow = createSourceListingWorkflowService({ repository: new InMemoryOzonListingDraftRepository() });

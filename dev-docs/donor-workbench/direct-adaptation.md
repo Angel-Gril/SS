@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 商品928561537986真实采集测试与共享图片归属修复
+
+用户指定1688男士T恤928561537986及sku5977314154567进行正常采集生图；沿用COM/DOTH、真实费用授权，不提交Ozon。签名Cloud456在隔离9470正常配对，来源页42SKU/39图采集通过，准确绿色XL、39图转存及正常隔离草稿/两槽plan/START已完成。首轮快照v1被另一台用户设备的新采集v2取代，扩展停止继续；旧PLANNED原件保留，无Provider请求。正常重新采集v3及新隔离草稿后CONTINUE正式409 `AI_MEDIA_SUITE_REFERENCE_SOURCE_CHANGED`，无子工作流或Provider费用预扣。
+
+实库证据确认绿色照片共属于7个尺码，采集不可变原件有7个skuKeys、800×800转存及raw SHA正常；rule planner却在candidate skuKeys中过滤为当前选中的XL。套图claim冻结这个截断归属，参考owner严格逐项重验完整capture而拒绝。唯一修复owner `ai-media-planning.ts` 保留candidate完整来源skuKeys，只有传入提示词输出生成器时筛到输出SKU；不改capture/binding/旧plan、不放宽reference匹配。最小共享图用例真实RED→GREEN，输出仍仅1个SKU主图+1张scene、capture不改，相关planner/source/reference/extension plan167项及server构建通过。
+
+修复待提交及受控部署后以正常新plan验证；当前仍无实际生图、审核或assignment结果。v3 draft `draft-2a1ca375-82c9-4721-9a0c-d0a4db916863`、suite `cmv803ao0001j5ofhriswngh7` 的失败不复用作成功证据；私有原件 `product-928561537986-20261014` 及其r2，9470/本轮临时session待最终清理，用户9222保留。
+
 ## 2026-10-14 `83a5aee3` 订单修复双区上线完成
 
 最终运行提交 `83a5aee3deac07daa82ec55aa0262b868d8ac302` 已提交推送，包含订单修复46e64efd和用户批准的COM部署合同修正。COM/CN均经标准deploy入口重新构建、签名候选验签、源代码封存、数据库门禁及systemd切换，三个服务的cwd归同一current，关闭之前Web809e4348单独运行的版本差异。应用、服务、登录页和公网ready均实读成功，DB/Redis正常；158 migrations没有新增或待执行项。

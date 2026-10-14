@@ -887,7 +887,9 @@ export function resolveRuleBasedAiMediaPlanningInput(
     height: media.height ?? preparedByKey.get(media.key)?.height ?? null,
     mimeType: media.mimeType ?? preparedByKey.get(media.key)?.sourceMimeType ?? null,
     role: media.role,
-    skuKeys: media.skuKeys.filter((skuKey) => selectedSkuSet.has(skuKey)),
+    // Source membership is immutable provenance, not the requested output SKU set.
+    // Shared colour images can belong to multiple sizes even for a one-SKU plan.
+    skuKeys: [...media.skuKeys],
     contentHash: preparedByKey.get(media.key)?.sourceSha256 || null,
   }));
   return jsonClone({
@@ -924,11 +926,13 @@ export function buildRuleBasedAiMediaPlanningArtifacts(
     modelOutput: null,
   });
   const decisions = new Map(curation.decisions.map((decision) => [decision.candidateId, decision]));
+  const outputSkuKeys = new Set(input.skus.map(sku => sku.skuKey));
   const basePlan = createRuleBasedImagePromptPlan({
     skus: input.skus,
     images: input.candidates.filter((candidate) => selected.has(candidate.id)).map((candidate) => ({
       candidateId: candidate.id,
-      skuKeys: [...candidate.skuKeys],
+      // Prompt output selection is scoped separately from frozen source provenance.
+      skuKeys: candidate.skuKeys.filter(skuKey => outputSkuKeys.has(skuKey)),
       contentRole: decisions.get(candidate.id)?.contentRole || 'unknown',
       evidenceIds: [selectedCandidateEvidenceId(input.sourceCaptureSnapshotId, candidate.id)],
     })),
