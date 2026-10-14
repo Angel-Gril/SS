@@ -755,7 +755,10 @@ preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root')
     return saveEditor('COPY_CANDIDATE',value,false,beforeDispatch);
   },approveCopy:candidateId=>saveEditor('COPY_APPROVE',{candidateId}),
   onCompleted:step=>{
-    if(step==='analysis-manual'&&preparation?.state().stepId==='analysis'){
+    const flow=preparation?.state();
+    if(!flow||flow.shopId!==selectedShopId||!['WAITING_INPUT','RECOVERY_REQUIRED'].includes(flow.status)
+      ||preparation.isRunning())return;
+    if(step==='analysis-manual'&&flow.stepId==='analysis'){
       preparation.continueManually('analysis');queueMicrotask(()=>{void continuePreparation().catch(report);});return;
     }
     if(step==='analysis'&&preparation?.state().status==='RECOVERY_REQUIRED')preparation.markRecovered();
@@ -1528,7 +1531,7 @@ async function openProductAnalysis(){
    await loadEditor();
    if(currentEditorForPublish()?.category){
      await attributes.load(true);await preparationAnalysis.open();
-     if(preparationAnalysis.current()||preparationAnalysis.state().operation||preparationAnalysis.state().application)return;
+     return;
    }
  }
  if(preparationAnalysis.current()||preparationAnalysis.state().operation||preparationAnalysis.state().application){

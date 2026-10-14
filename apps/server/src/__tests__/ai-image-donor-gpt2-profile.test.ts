@@ -102,7 +102,25 @@ describe('isolated donor GPT Image 2 portrait profile', () => {
     expect(metadata.exif).toBeUndefined(); expect(metadata.icc).toBeUndefined();
   });
 
-  it.each([[1007, 1344], [1008, 1343], [768, 1024], [900, 1200], [1024, 1024], [1024, 1536]])('rejects unverified output %sx%s instead of repairing its frame', async (width, height) => {
+  it('preserves all edges of the observed 1086x1448 count portrait without padding or unequal scaling', async () => {
+    const patch = (color: string) => ({ input: { create: { width: 120, height: 120, channels: 3 as const, background: color } } });
+    const source = await sharp({ create: { width: 1086, height: 1448, channels: 3, background: '#df2020' } })
+      .composite([{ ...patch('#00ff00'), left: 0, top: 0 }, { ...patch('#0000ff'), left: 966, top: 0 },
+        { ...patch('#ffff00'), left: 0, top: 1328 }, { ...patch('#00ffff'), left: 966, top: 1328 },
+        { ...patch('#000000'), left: 483, top: 664 }]).png().toBuffer();
+    const result = await normalizeDonorGpt2ProviderOutput({ buffer: source, mimeType: 'image/png' });
+    expect(result).toMatchObject({ width: 900, height: 1200, providerOutput: { width: 1086, height: 1448 } });
+    const { data, info } = await sharp(result.buffer).raw().toBuffer({ resolveWithObject: true });
+    const at = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
+    expect(at(0, 0)).toEqual([0, 255, 0]); expect(at(899, 0)).toEqual([0, 0, 255]);
+    expect(at(0, 1199)).toEqual([255, 255, 0]); expect(at(899, 1199)).toEqual([0, 255, 255]);
+    const black = (rgb: number[]) => rgb.every(channel => channel < 20);
+    const spanX = Array.from({ length: 900 }, (_, x) => x).filter(x => black(at(x, 600)));
+    const spanY = Array.from({ length: 1200 }, (_, y) => y).filter(y => black(at(450, y)));
+    expect(spanX.length).toBe(spanY.length); expect(spanX.length).toBeGreaterThan(95);
+  });
+
+  it.each([[1007, 1344], [1008, 1343], [1085, 1448], [1086, 1447], [1086, 1344], [768, 1024], [900, 1200], [1024, 1024], [1024, 1536]])('rejects unverified output %sx%s instead of repairing its frame', async (width, height) => {
       await expect(normalizeDonorGpt2ProviderOutput({ buffer: await image(width, height), mimeType: 'image/png' }))
         .rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_DIMENSIONS_MISMATCH' });
     });

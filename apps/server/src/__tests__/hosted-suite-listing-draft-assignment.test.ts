@@ -386,8 +386,10 @@ describe('hosted suite listing-draft atomic batch assignment', () => {
     return changed;
   };
 
-  it('applies approved count full-frame outputs through the existing atomic assignment owner', async () => {
-    const { service, committed } = serviceFor({ authority: countAuthority() });
+  it.each([[1008, 1344], [1086, 1448]])('applies approved count %sx%s full-frame outputs through the existing atomic assignment owner', async (width, height) => {
+    const authority = countAuthority();
+    for (const slot of authority.slots) Object.assign((slot as any).rawOutputAsset, { width, height });
+    const { service, committed } = serviceFor({ authority });
     await expect(service.assign(command())).resolves.toMatchObject({ replayed: false, boundDraftRevision: 6 });
     expect(committed()!.records).toHaveLength(2);
   });
@@ -401,6 +403,8 @@ describe('hosted suite listing-draft atomic batch assignment', () => {
       slot => { slot.currentJob.operationConfig.providerRuntime.currency = 'USD'; },
       slot => { slot.outputAsset.metadata.normalizerVersion = 'ai-image-suite-output-normalizer/v1'; },
       slot => { slot.rawOutputAsset = null; }, slot => { slot.rawOutputAsset.height = 1024; },
+      slot => { slot.rawOutputAsset.width = 1086; },
+      slot => { slot.rawOutputAsset.width = 1085; slot.rawOutputAsset.height = 1448; },
       slot => { slot.rawOutputAsset.ownerUserId = 'owner-2'; }, slot => { slot.rawOutputAsset.aiImageJobId = 'other-job'; },
       slot => { slot.rawOutputAsset.metadata.normalizedSha256 = 'f'.repeat(64); },
     ];

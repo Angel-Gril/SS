@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 商品928真实尺寸失败、隔离校准与覆盖界面诊断
+
+共享SKU归属修复 `7250c766d9cde47a8cf08779bef83e6c115b8718` 已推送、两区签名并标准部署，COM/CN API/Worker/Web均同current、DB/Redis与ready正常；目标及日常备份恢复144/143表、FULL canonical VPS均PASS，仍有既有远端备份未配置warning。官网继续分发 `e978c9bd / 1.0.456`，本次不是官网公开发布。
+
+新签名9470正常采集42SKU/39图，v4 snapshot `21c1d4bf-3881-42ad-bcd2-2d66feba5b1e`、绿色XL隔离draft `draft-5e6ea9eb-05f3-4834-b81e-eb462467713a`、suite `cmv81ssm7000c5oehi1pgbk2l`。真实UI计划批准、START/CONTINUE通过，参考冻结保留7尺码完整归属，两槽均attempt1并产生Provider请求。两槽最终 `PROVIDER_OUTPUT_DIMENSIONS_MISMATCH`，原供应商ID保留，ERP资产0/CHARGE0；既有管理员ABANDON及原请求replay各一次释放CNY0.10预扣，原FAILED/error/accepted身份不改。两张旧结果的实际尺寸未被原执行owner持久化，不能事后声称它们等于新校准尺寸。
+
+独立一张诊断请求仍使用当前精确endpoint/model、1008×1344/n1、原冻结绿色参考及prompt；guard记录一次POST，原图先私有保存再读取元数据，真实1086×1448 PNG、SHA `98216abc994f090996ebc87bb60114e6c59c1a96daebc052524a3e0fc056c286`，是完整3:4竖图，无ERP预扣/结算。原精铺默认请求768×1024；当前ERP的1008×1344唯一原图尺寸检查过严，1086×1448可等比例缩到900×1200而无裁剪/补白。新增这一个验证尺寸的normalizer/assignment最小正例先RED，TypeScript owner修复后91项GREEN；真实本机PG先用旧158 migrations验证1086×1448仍被SQL raw-output guard拒绝，原1008×1344通过，隔离schema已清理。前向SQL接线与正式GREEN/新部署尚未完成，不能把本地91项当成生产修复或完整suite成功。
+
+用户新截图要求先分析：类目/属性/文案/定价的全屏覆盖来自 `precision-workbench.css` 中ID选择器强制dialog width/height100%、取消最大宽高与边框圆角，覆盖原category-dialog的960px/88vh；半透明dialog/settings-body使底层主工作台透出。它们仍是同一1688标签内的DOM弹窗，不是导航。修复已恢复有界白色面板、轻遮罩、标题/页脚固定和内容独立滚动，390px下暂时解除祖先缩放；隔离浏览器15组窗口验证通过。另修复商品AI分析能力不可用时的fallthrough，以及停止流程回调复活属性窗；分析入口6项/准备流程8项回归通过。来源工作台已有COLLECT/CREATE_DRAFT同窗服务端调用，不要求把每项编辑或生图交给Web页面。
+
+新增迁移 `20261014200000_admit_verified_count_portrait_output` 已通过旧158→102项历史迁移PG升级及当前绿色回放；服务端输出owner和assignment同时接受精确1008×1344与经独立校准的1086×1448 raw尺寸，规范成品仍900×1200。当前尚未提交、签名或部署，不能将本地尺寸GREEN描述为线上可用。
+
+当前源码工作树保留未提交的尺寸验收修复与测试；临时9470/两轮QA设备与账户session待任务最终清理，用户9222保留。私有根 `product-928561537986-20261014-r3`，诊断远端 `product928-size-calibration-1791978908025`，均不入Git。本轮Provider POST共3，ERP实际图片CHARGE0、原两图预扣CNY0.20已释放；供应商账单未读取、实际费用未知，Ozon写入0。旧v1/v3失败与本轮失败均不改写，校准图不嫁接到正式suite/assignment。
+
 ## 2026-10-14 商品928561537986真实采集测试与共享图片归属修复
 
 用户指定1688男士T恤928561537986及sku5977314154567进行正常采集生图；沿用COM/DOTH、真实费用授权，不提交Ozon。签名Cloud456在隔离9470正常配对，来源页42SKU/39图采集通过，准确绿色XL、39图转存及正常隔离草稿/两槽plan/START已完成。首轮快照v1被另一台用户设备的新采集v2取代，扩展停止继续；旧PLANNED原件保留，无Provider请求。正常重新采集v3及新隔离草稿后CONTINUE正式409 `AI_MEDIA_SUITE_REFERENCE_SOURCE_CHANGED`，无子工作流或Provider费用预扣。

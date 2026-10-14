@@ -844,6 +844,76 @@ async function run() {
     await screenshot('selected-draft');
     await until(() => workspace('document.getElementById("editor-save-btn").disabled===false'), 'draft editor loaded');
     await until(()=>workspace('document.getElementById("precision-preparation-state").textContent.includes("选择官方类目")'), 'continuous preparation pauses at explicit official category review');
+    if (process.argv.includes('--bounded-dialogs')) {
+      const problems = [], windows = [];
+      async function inspectDialog(id, name, closeSelector, bodySelector = '.settings-body') {
+        for (const [width, height] of [[1920, 1080], [1280, 900], [390, 844]]) {
+          await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+          await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+          const measurement = await workspace(`(()=>{
+            const modal=document.getElementById(${JSON.stringify(id)}),dialog=modal.querySelector('.settings-dialog,.precision-image-dialog'),
+              head=modal.querySelector('.settings-head,.precision-image-head'),body=modal.querySelector(${JSON.stringify(bodySelector)}),
+              close=modal.querySelector(${JSON.stringify(closeSelector)}),foot=modal.querySelector('.settings-foot,.image-manager-foot');
+            const rect=n=>n?.getBoundingClientRect().toJSON(),hit=n=>{const r=n.getBoundingClientRect();const e=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return e===n||n.contains(e);};
+            return {id:modal.id,viewport:{width:window.innerWidth,height:window.innerHeight},dialog:rect(dialog),head:rect(head),body:rect(body),foot:rect(foot),
+              close:rect(close),closeReachable:hit(close),background:window.getComputedStyle(dialog).backgroundColor,
+              pageWidth:document.documentElement.scrollWidth,visibleWindows:[...document.querySelectorAll('.settings-modal')].filter(e=>!e.hidden).map(e=>e.id),
+              scrollTop:body.scrollTop,scrollHeight:body.scrollHeight,clientHeight:body.clientHeight};})()`);
+          windows.push({ name, ...measurement });
+          await screenshot(`bounded-${name}-${width}`);
+          const gutter = width > 620 ? 16 : 8;
+          const { dialog, viewport } = measurement;
+          if (dialog.x < gutter - 1 || dialog.y < gutter - 1 || dialog.right > viewport.width - gutter + 1 || dialog.bottom > viewport.height - gutter + 1)
+            problems.push(`${name} at ${width}px covers the viewport instead of leaving a visible window boundary`);
+          if (width > 620 && dialog.width > Math.min(1240, viewport.width - 2 * gutter) + 1)
+            problems.push(`${name} at ${width}px has no desktop width bound`);
+          if (measurement.background !== 'rgb(255, 255, 255)') problems.push(`${name} at ${width}px lets the editor show through the panel`);
+          if (!measurement.closeReachable || measurement.close.bottom > viewport.height || measurement.close.y < 0)
+            problems.push(`${name} at ${width}px hides or covers the close button`);
+          if (measurement.foot && (measurement.foot.bottom > dialog.bottom + 1 || measurement.foot.top < dialog.top))
+            problems.push(`${name} at ${width}px hides its confirmation footer`);
+          if (measurement.pageWidth > viewport.width) problems.push(`${name} at ${width}px overflows the page horizontally`);
+          if (measurement.visibleWindows.length !== 1) problems.push(`${name} at ${width}px stacks modal overlays`);
+          if (bodySelector === '.settings-body' && measurement.scrollHeight > measurement.clientHeight + 50) {
+            await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: measurement.body.x + 3,
+              y: measurement.body.y + measurement.body.height / 2, deltaX: 0, deltaY: 300 });
+            await until(() => workspace(`document.getElementById(${JSON.stringify(id)}).querySelector('.settings-body').scrollTop > ${measurement.scrollTop}`), 'dialog content scrolls independently');
+            const after = await workspace(`document.getElementById(${JSON.stringify(id)}).querySelector('.settings-head').getBoundingClientRect().top`);
+            assert.equal(after, measurement.head.top, 'scrolling content keeps the title and close button fixed');
+            await workspace(`document.getElementById(${JSON.stringify(id)}).querySelector('.settings-body').scrollTop=0`);
+          }
+        }
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      }
+      await until(() => workspace('document.querySelectorAll("#editor-category-modal .category-auto-card").length>0'), 'category recommendation cards');
+      await inspectDialog('editor-category-modal', 'category', '.settings-head button', '.category-dialog__body');
+      await click('#editor-category-modal .category-auto-card');
+      await until(() => workspace('!document.querySelector("[data-category-confirm]").disabled'), 'category attribute preview');
+      await click('[data-category-confirm]');
+      await until(() => workspace('!document.getElementById("precision-attribute-suggestions-modal").hidden&&!document.getElementById("precision-attribute-suggestions-close").disabled'), 'automatic attribute preview');
+      await inspectDialog('precision-attribute-suggestions-modal', 'attributes', '#precision-attribute-suggestions-close');
+      await click('#precision-attribute-suggestions-close');
+      await click('#precision-preparation-stop');
+      await click('#pricing-tool-btn');
+      await until(() => workspace('!document.getElementById("precision-pricing-modal").hidden'), 'pricing window');
+      await inspectDialog('precision-pricing-modal', 'pricing', '#precision-pricing-close');
+      await click('#precision-pricing-close');
+      await click('#editor-copy-btn');
+      await until(() => workspace('!document.getElementById("precision-copy-modal").hidden'), 'Russian copy window');
+      await inspectDialog('precision-copy-modal', 'russian-copy', '#precision-copy-close');
+      await click('#precision-copy-close');
+      await click('#precision-preparation-analysis-open');
+      await until(() => workspace('!document.getElementById("precision-preparation-analysis-modal").hidden'), 'AI preparation window');
+      await inspectDialog('precision-preparation-analysis-modal', 'analysis', '#precision-preparation-analysis-close');
+      await click('#precision-preparation-analysis-close');
+      summary.boundedDialogs = { windows, problems, physicalClicks: true, viewportWidths: [1920, 1280, 390], actualContentScroll: true };
+      summary.ok = problems.length === 0;
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify({ ok: summary.ok, artifacts, problems, providerRequests: 0, ozonRequests: 0 }, null, 2));
+      assert.deepEqual(problems, [], 'subwindows stay opaque, bounded, scrollable and operable');
+      return;
+    }
     if (process.argv.includes('--source-media-display')) {
       await click('#editor-category-modal .settings-head button');
       const priceSelector = 'input[data-row-index="1"][data-field-key="价格，CNY"]';

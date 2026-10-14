@@ -118,8 +118,8 @@ function dependencies(
 }
 
 describe('AI image suite paid Provider dispatch boundary', () => {
-  it('runs the donor full-frame dispatcher with actual 1008x1344 pixels and retains one frozen charge', async () => {
-    const source = await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#df2020' } }).png().toBuffer();
+  it.each([[1008, 1344], [1086, 1448]])('runs the donor full-frame dispatcher with actual %sx%s pixels and retains one frozen charge', async (width, height) => {
+    const source = await sharp({ create: { width, height, channels: 3, background: '#df2020' } }).png().toBuffer();
     const request = input();
     Object.assign(request.suite, { provider: 'custom', model: 'gpt-image-2' });
     Object.assign(request.job, { provider: 'custom', model: 'gpt-image-2' });
@@ -131,7 +131,7 @@ describe('AI image suite paid Provider dispatch boundary', () => {
     });
     await expect(executeAiImageSuitePaidProvider(request, deps)).resolves.toBe('completed');
     expect(fetch).toHaveBeenCalledOnce();
-    expect(deps.recordProviderOutput).toHaveBeenCalledWith(expect.objectContaining({ width: 1008, height: 1344,
+    expect(deps.recordProviderOutput).toHaveBeenCalledWith(expect.objectContaining({ width, height,
       metadata: expect.objectContaining({ normalizerVersion: 'ai-image-donor-gpt2-output-normalizer/v1', actualCostCents: 8 }),
     }));
     expect(deps.complete).toHaveBeenCalledWith(expect.objectContaining({ actualCostCents: 8,

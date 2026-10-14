@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AI_IMAGE_DONOR_GPT2_COUNT_MODEL, AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION,
-  validDonorGpt2SuiteConfig } from './ai-image-donor-gpt2-profile.js';
+  validDonorGpt2SuiteConfig, isDonorGpt2ProviderOutputSize } from './ai-image-donor-gpt2-profile.js';
 import { parseAiImageProviderRuntimeContract } from './ai-image-provider-runtime-contract.js';
 import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from './ai-image-suite-output-normalizer.js';
 
@@ -70,7 +70,7 @@ export function admittedAiImageSuiteOutputNormalizer(input: {
     || !text(raw.storageKey) || /^https?:\/\//iu.test(raw.storageKey)
     || !['image/png', 'image/jpeg', 'image/webp'].includes(raw.mimeType)
     || !Number.isSafeInteger(raw.sizeBytes) || raw.sizeBytes < 1 || raw.sizeBytes > 20 * 1024 * 1024
-    || raw.width !== 1008 || raw.height !== 1344 || !hashPattern.test(String(raw.sha256 || ''))
+    || !isDonorGpt2ProviderOutputSize(raw.width, raw.height) || !hashPattern.test(String(raw.sha256 || ''))
     || metadata.version !== 'ai-image-suite-provider-output/v1'
     || metadata.normalizerVersion !== AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION
     || metadata.sourceCaptureSnapshotId !== input.sourceCaptureSnapshotId

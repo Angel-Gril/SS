@@ -345,7 +345,8 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     await client?.$disconnect();
   });
 
-  it('runs normal donor count planning, frozen CNY 10 pricing and two full-frame settlements with database guards active', async () => {
+  it.each([[1008, 1344], [1086, 1448]])('runs count planning and two %sx%s full-frame settlements with database guards active', async (rawWidth, rawHeight) => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
     const owner = `count_suite_owner_${suffix}`;
     const goods = `count_suite_goods_${suffix}`;
     const subject = `count_suite_subject_${suffix}`;
@@ -368,7 +369,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       actorUserId: owner, ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only', capturedAt: new Date(),
     } });
     const sourceBytes = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#dbe9f2' } }).jpeg().toBuffer();
-    const outputBytes = await sharp({ create: { width: 1008, height: 1344, channels: 3, background: '#247852' } }).png().toBuffer();
+    const outputBytes = await sharp({ create: { width: rawWidth, height: rawHeight, channels: 3, background: '#247852' } }).png().toBuffer();
     const stored = new Map<string, Buffer>();
     const uploadBuffer = async (buffer: Buffer, filename: string) => {
       const key = `${owner}/${createHash('sha256').update(buffer).digest('hex')}/${filename}`;
@@ -553,7 +554,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
         expect(charges).toHaveLength(1);
         expect(charges[0]!.actualCostMinor).toBe(10);
         expect(job.assets).toEqual(expect.arrayContaining([
-          expect.objectContaining({ ownerUserId: owner, kind: 'AI_PROVIDER_OUTPUT', width: 1008, height: 1344 }),
+          expect.objectContaining({ ownerUserId: owner, kind: 'AI_PROVIDER_OUTPUT', width: rawWidth, height: rawHeight }),
           expect.objectContaining({ ownerUserId: owner, kind: 'AI_GENERATED', width: 900, height: 1200 }),
         ]));
       }

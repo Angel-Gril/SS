@@ -6,6 +6,11 @@ export const AI_IMAGE_DONOR_GPT2_REQUEST_PROFILE = 'DONOR_GPT_IMAGE_2_PORTRAIT_E
 export const AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION = 'ai-image-donor-gpt2-output-normalizer/v1' as const;
 export const AI_IMAGE_DONOR_GPT2_COUNT_MODEL = 'gpt-image-2-count';
 export const AI_IMAGE_DONOR_GPT2_COUNT_API_BASE = 'https://ai.big-model-api.top/v1';
+/** The count service also returned an independently decoded 1086x1448 frame
+ * for the frozen 1008x1344 request. Both preserve the exact 3:4 full frame. */
+export function isDonorGpt2ProviderOutputSize(width: unknown, height: unknown): boolean {
+  return (width === 1008 && height === 1344) || (width === 1086 && height === 1448);
+}
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_METADATA_PIXELS = 16_000_000;
 export const AI_IMAGE_DONOR_GPT2_PROFILE = Object.freeze({
@@ -87,10 +92,10 @@ export interface NormalizedDonorGpt2ProviderOutput {
   height: 1200;
   sha256: string;
   normalizerVersion: typeof AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION;
-  providerOutput: { width: 1008; height: 1344 };
+  providerOutput: { width: number; height: number };
 }
 
-/** Only the exact requested frame is admitted. Other 3:4 sizes need separate Provider evidence. */
+/** Only the requested and independently verified frames are admitted. */
 export async function normalizeDonorGpt2ProviderOutput(input: { buffer: Buffer; mimeType: string }): Promise<NormalizedDonorGpt2ProviderOutput> {
   if (!Buffer.isBuffer(input?.buffer) || input.buffer.length < 1) {
     throw new AiImageDonorGpt2ProfileError('PROVIDER_OUTPUT_INVALID_IMAGE', 'Provider output bytes are empty or invalid');
@@ -120,15 +125,15 @@ export async function normalizeDonorGpt2ProviderOutput(input: { buffer: Buffer; 
   if (Number(metadata.pages ?? 1) !== 1 || (Array.isArray(metadata.delay) && metadata.delay.length > 0)) {
     throw new AiImageDonorGpt2ProfileError('PROVIDER_OUTPUT_MULTIPAGE', 'Provider output must be one still frame');
   }
-  if (metadata.width !== AI_IMAGE_DONOR_GPT2_PROFILE.width || metadata.height !== AI_IMAGE_DONOR_GPT2_PROFILE.height
+  if (!isDonorGpt2ProviderOutputSize(metadata.width, metadata.height)
     || (metadata.orientation !== undefined && metadata.orientation >= 5)) {
-    throw new AiImageDonorGpt2ProfileError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', 'Provider output must be an upright 1008x1344 frame');
+    throw new AiImageDonorGpt2ProfileError('PROVIDER_OUTPUT_DIMENSIONS_MISMATCH', 'Provider output must be a verified upright 3:4 frame (1008x1344 or 1086x1448)');
   }
   let normalized: Buffer;
   try {
     // A width-only resize derives height from the verified ratio. It cannot
     // introduce canvas padding, crop an edge or apply unequal X/Y scale.
-    normalized = await sharp(input.buffer, { animated: false, failOn: 'warning', limitInputPixels: 1008 * 1344 })
+    normalized = await sharp(input.buffer, { animated: false, failOn: 'warning', limitInputPixels: metadata.width! * metadata.height! })
       .autoOrient().toColourspace('srgb')
       .resize({ width: 900, kernel: sharp.kernel.lanczos3, fastShrinkOnLoad: false })
       .flatten({ background: '#ffffff' })
@@ -144,5 +149,5 @@ export async function normalizeDonorGpt2ProviderOutput(input: { buffer: Buffer; 
   return { buffer: normalized, mimeType: 'image/png', width: 900, height: 1200,
     sha256: createHash('sha256').update(normalized).digest('hex'),
     normalizerVersion: AI_IMAGE_DONOR_GPT2_NORMALIZER_VERSION,
-    providerOutput: { width: 1008, height: 1344 } };
+    providerOutput: { width: metadata.width!, height: metadata.height! } };
 }
