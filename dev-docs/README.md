@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-14 `5071312a` 窗口及竖图修复双区部署完成
+
+`5071312a72afb89d7786e4ee80437b5a39d60bd8` 已推送、区域签名及标准COM/CN部署，API/Worker/Web同current、DB/Redis与ready正常；目标及日常备份恢复、两区FULL VPS canonical均PASS。内部候选仍456，官网继续原 `e978c9bd / 1.0.456`；未执行官网CAS。签名包已在9470原隔离profile更新并保留合法设备会话，指定商品928561537986的新来源页被真实1688滑块遮挡，尚未提交新采集/套图、无本轮新增Provider/Ozon/费用。用户手动验证后从现有窗口继续同窗草稿、两图、审核、assignment与幂等；准确回执与原件仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-14 `7250c766` 双区部署，指定商品真实套图待尺寸接线
 
 共享SKU归属修复已两区部署，FULL VPS/备份恢复/ready通过；928561537986绿色XL新采集、计划与真实START/CONTINUE通过，但供应商结果未通过严格原图尺寸检查。两图ERP预扣CNY0.20已由既有owner释放，原失败保留；独立校准得到1086×1448完整3:4竖图，尺寸owner91项本地GREEN，SQL真实RED已确认，前向SQL/正式验收/部署未完成。用户最新要求先分析类目及文案全屏覆盖，原因与真实费用边界只见[直接适配owner](donor-workbench/direct-adaptation.md)；官网仍原456。

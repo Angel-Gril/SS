@@ -1,5 +1,17 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-14 `5071312a` 修复推送、签名与双区部署完成，真实采集待滑块
+
+用户明确授权推送、签名、部署并继续采集生图。运行提交 `5071312a72afb89d7786e4ee80437b5a39d60bd8` 已推送 `feat/ai-media-prompt-registry`；COM/CN区域内部候选仍 `1.0.456`，各自干净提交打包、签名验签和封存通过，未声称新的公开扩展版本。两区标准部署完成新增前向尺寸迁移，API/Worker/Web同current，三个服务active、DB/Redis和ready正确读回；COM现有owner/DOTH/device/六操作配置保持，CN direct/RDS和AI/BYOK/publisher dark保持。
+
+两区目标部署备份和部署后日常备份恢复均通过，COM144表/CN143表，临时恢复库清理。FULL VPS canonical均PASS、0 failures/1既有远端备份未配置warning；COM SHA `65e8509b4db932f5052449348238f412bf722ab663bb02fcc84d6cf9d12d38c3`，CN `5abfb1bf123c03f526f61761f32006e8205f3d6687d6e6e1b5f38a3b6e0c32e3`。COM签名SHA `303071ca484016957be370fb37b377fbf3c2ec10f5316323bc5dd8da1a524d3f`，CN `48bba60f8438cf9797bc6d93a2b774ec15079cf052821d33673b746966f52378`；签名时间从对应VPS读取，正式原件根 `release-5071312a-orders` 不入Git。官网两区继续原 `e978c9bd / 1.0.456` approval/pointer，本轮未执行新的QA04、官网canary/approval/CAS/distribution。
+
+源码验证为server全量7389 passed/395既有条件skipped，输出/plan等138项定向、当前AI媒体PG52项（0 skipped）及 populated历史迁移升级、TypeScript/lint/server build通过；扩展静态618项与工作台68项、真实Chrome5子窗×1920/1280/390共15组、原SKU图片/类目恢复回归通过。独立小屏子窗口为实色有界面板、正文滚动、页脚/关闭可见，不与属性窗叠加；图片管理既有布局保留。窗口证据 `ss-erp-precision-ui-evidence-ZtSZF3`，旧RED原件 `V2J3QX` 留存。
+
+9470签名Cloud在原专用profile同路径更新到新提交，旧解压目录可恢复，合法session `d70387ca-373a-46cf-8e0a-fba0ccd68640`、extension ID `fbeflcebbalmegclpliglimdlfgbcejk`实际读回保持，不手工写凭据或重新配对。升级后的settings首次在document未就绪时只读检查失败，等待真实页面ready后原session正常验证，失败不作通过。已创建当前提交受控QA账户session，私有root `/var/lib/ss-erp-private/fresh456-1791983773418`、TTL7200；token不输出/入Git。新的trial根 `product-928561537986-20261014-r4`，商品页target `9DBAA07E3DC62B463E771894069D8ABC`，尚未建立precision-frame、采集快照、草稿或计划。
+
+来源页加载后真实1688 CAPTCHA iframe遮住入口，物理点击就绪检查安全超时；已通知用户在现有9470窗口手动验证，不自动破解/隐藏遮罩、不从其他入口绕过验证码、不重建浏览器。待“已通过”后正常新采集、来源页物理选择绿色XL/建DOTH隔离草稿、不打开ERP编辑标签、两图最高ERP CNY0.20、审核前证据、真实预览/审核/assignment和原请求replay。旧v1/v3/v4失败和校准原件保留，未知Provider请求不重发。本轮新增Provider/Ozon/费用0，之前两图ERP预扣已释放事实不变；9470及QAsession因待用户验证保留，用户9222不动，任务结束后清理本轮临时身份。
+
 ## 2026-10-14 商品928真实尺寸失败、隔离校准与覆盖界面诊断
 
 共享SKU归属修复 `7250c766d9cde47a8cf08779bef83e6c115b8718` 已推送、两区签名并标准部署，COM/CN API/Worker/Web均同current、DB/Redis与ready正常；目标及日常备份恢复144/143表、FULL canonical VPS均PASS，仍有既有远端备份未配置warning。官网继续分发 `e978c9bd / 1.0.456`，本次不是官网公开发布。
