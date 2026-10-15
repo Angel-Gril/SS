@@ -318,7 +318,7 @@ function loadCollectPermissionApi(chrome) {
     /function isHostAccessError\(error\) \{[\s\S]*?\n\}/,
   );
   const permissionSource = collectBackgroundSource.match(
-    /function sellerOzonAccessError\(errorCode, message\) \{[\s\S]*?\n\}\n\nfunction parseCookieValueFromString/,
+    /function sellerOzonAccessError\(errorCode, message\) \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction parseCookieValueFromString/,
   );
   assert.ok(normalizeSource, 'collect background must expose error normalization for VM regression');
   assert.ok(hostErrorSource, 'collect background must classify Chrome host-access errors');
