@@ -329,7 +329,7 @@ function loadCollectPermissionApi(chrome) {
   vm.createContext(context);
   vm.runInContext(
     `${constantSource}\n${normalizeSource[0]}\n${hostErrorSource[0]}\n`
-      + `${permissionSource[0].replace(/\n\nfunction parseCookieValueFromString$/, '')}\n`
+      + `${permissionSource[0].replace(/\r?\n\r?\nfunction parseCookieValueFromString$/, '')}\n`
       + 'globalThis.permissionApi = {'
       + 'chromePermissionsInspect, ensureSellerOzonHostAccess, executeScriptWithHostAccess};',
     context,
