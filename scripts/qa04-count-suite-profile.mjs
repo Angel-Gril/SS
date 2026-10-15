@@ -15,7 +15,11 @@ const FINAL_OUTPUT = Object.freeze({ profile: 'ozon-suite-3x4-900x1200/v1', widt
 const PRICING_VERSION = 'ai-image-suite-price-cny/v1:' + sha256(sortedJson({ version: 'ai-image-suite-price-cny/v1',
   provider: 'custom', model: 'gpt-image-2-count', unitCostCents: 10, currency: 'CNY' })).slice(0, 32);
 
-export function verifyCountSuiteRecord(row, database, { rawImages, binding, suiteId, slot, quote }) {
+export function verifiedCountSuiteOutputSize(width, height, observedPortrait = false) {
+  return (width === 1008 && height === 1344) || (observedPortrait && width === 1086 && height === 1448);
+}
+
+export function verifyCountSuiteRecord(row, database, { rawImages, binding, suiteId, slot, quote, observedPortrait = false }) {
   const config = row.job.operationConfig;
   exactKeys(config, ['version', 'outputProfile', 'width', 'height', 'slotPromptId', 'promptBindingHash', 'referenceSetHash',
     'providerRuntime', 'providerRequest', 'requestProfile', 'finalOutput'], CODE);
@@ -51,7 +55,7 @@ export function verifyCountSuiteRecord(row, database, { rawImages, binding, suit
     && raw.id !== output.id && raw.jobIdSha256 === row.job.idSha256 && raw.kind === 'AI_PROVIDER_OUTPUT'
     && raw.ownerSha256 === binding.ownerSha256 && output.ownerSha256 === binding.ownerSha256
     && row.workflow.inputAssets[0].ownerSha256 === binding.ownerSha256
-    && raw.width === 1008 && raw.height === 1344 && raw.width === image.width && raw.height === image.height
+    && verifiedCountSuiteOutputSize(raw.width, raw.height, observedPortrait) && raw.width === image.width && raw.height === image.height
     && raw.mimeType === image.mimeType && raw.sizeBytes === image.bytes && raw.storageBackend === 'oss');
   const metadata = raw.metadata;
   exactKeys(metadata, ['version', 'sourceCaptureSnapshotId', 'providerJobId', 'actualCostCents',

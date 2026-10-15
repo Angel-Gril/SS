@@ -8,7 +8,7 @@ import test from 'node:test';
 import { deflateSync } from 'node:zlib';
 import { QA04_OFFLINE_STEPS } from './qa04-offline-gate.mjs';
 import { evidenceReader, imageEvidence } from './qa04-final-evidence.mjs';
-import { countSuiteFlowFixture, suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
+import { countSuiteFlowFixture, sourcePageCountSuiteFlowFixture, suiteFlowFixture } from './qa04-final-suite-fixture.mjs';
 
 let subject = {};
 try { subject = await import('./qa04-final-acceptance.mjs'); }
@@ -1034,6 +1034,47 @@ test('count suite v4 binds exact CNY10 runtime, raw portrait bytes, pending revi
   assert.equal(proof.verifiedIdempotencyReplay, true);
   assert.equal(proof.evidence.rawProviderImageSha256.length, 2);
   assert.doesNotMatch(JSON.stringify(proof), /private-suite|private-credential|provider-0/u);
+});
+
+test('source-page count suite v5 admits verified full-frame output with exact same-tab draft evidence', t => {
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+  const proof = f.verify().report.provenance.normalErp;
+  assert.equal(proof.actualCostMinor, 20); assert.equal(proof.verifiedIdempotencyReplay, true);
+  assert.equal(proof.sourcePageWorkflowVerified, true);
+});
+
+test('source-page v5 accepts the exact approved COM configuration but rejects added operations and stale offline ordering', t => {
+  const full = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'];
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+  f.change(f.input.normalErp.controllerStatus, value => { value.before.result.allowedOperations = full; value.after.result.allowedOperations = full; });
+  assert.equal(f.verify().report.provenance.normalErp.sourcePageWorkflowVerified, true);
+  f.change(f.input.normalErp.controllerStatus, value => { value.before.result.allowedOperations.push('TEXT_TO_IMAGE'); value.after.result.allowedOperations.push('TEXT_TO_IMAGE'); });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  const fresh = sourcePageCountSuiteFlowFixture(fixture(t), png);
+  fresh.changeMapped('workbench', value => { value.launchedAt = '2026-09-16T10:19:00.000Z'; });
+  assert.throws(() => fresh.verify(), error => ['QA04_SUITE_INVALID','QA04_OFFLINE_INVALID'].includes(error.code));
+});
+
+test('source-page v5 refuses changed page identity, draft ownership, navigation and unverified dimensions', t => {
+  for (const [key, mutate] of [
+    ['sourceEntry', value => { value.pagesAfter[0].url = 'https://app.ss-erp.com/collect/source'; }],
+    ['sourceEntry', value => { value.pagesAfter.push({ id: 'D'.repeat(32), url: 'https://app.ss-erp.com' }); }],
+    ['sourceEntry', value => { value.sourcePageTargetId = 'D'.repeat(32); }],
+    ['sourceEntry', value => { value.draftId = 'different-draft'; }],
+    ['sourceEntry', value => { value.gitCommit = '1'.repeat(40); }],
+    ['sourceEntry', value => { value.actualUi = false; }],
+    ['sourceEntry', value => { value.at = '2026-09-16T11:00:00.000Z'; }],
+    ['workbench', value => { value.sourcePageTargetId = value.workbenchTargetId; }],
+    ['workbench', value => { value.ownerSha256 = hash('another-owner'); }],
+  ]) {
+    const f = sourcePageCountSuiteFlowFixture(fixture(t), png); f.changeMapped(key, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
+  for (const [width, height] of [[1086, 1447], [1085, 1448], [1086, 1344], [768, 1024], [1024, 1024]]) {
+    const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+    f.change(f.input.normalErp.acceptance, value => { value.rawProviderImages[0] = f.put('wrong-v5-frame.png', png(width, height)); });
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
 });
 
 test('count suite v4 refuses endpoint, model, frozen price, credential, request and normalization drift', t => {

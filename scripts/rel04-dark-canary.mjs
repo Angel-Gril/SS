@@ -19,6 +19,7 @@ import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { publicOriginForPublication } from './extension-release-publication-contract.mjs';
 import { verifyAiMediaDarkPolicy } from './verify-ai-media-dark-policy.mjs';
 import {
+  isApprovedAiMediaHostedPublicationOperations,
   isRestrictedAiMediaHostedPilotOperations,
   normalizeAiMediaHostedPilotExpectation,
   verifyAiMediaHostedPilotPolicy,
@@ -273,7 +274,9 @@ function aiMediaRolloutExpectation(environment) {
   try {
     const hostedPilot = normalizeAiMediaHostedPilotExpectation(parsed);
     if (hostedPilot.ownerUserIds.length !== 1
-      || !isRestrictedAiMediaHostedPilotOperations(hostedPilot.allowedOperations)) {
+      || !isApprovedAiMediaHostedPublicationOperations(hostedPilot.allowedOperations)
+      || (!isRestrictedAiMediaHostedPilotOperations(hostedPilot.allowedOperations)
+        && environment.REL04_REGION !== 'COM')) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }
     return { expectation, hostedPilot };
@@ -735,7 +738,9 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }
     if (hostedPilotExpectation.ownerUserIds.length !== 1
-      || !isRestrictedAiMediaHostedPilotOperations(hostedPilotExpectation.allowedOperations)
+      || !isApprovedAiMediaHostedPublicationOperations(hostedPilotExpectation.allowedOperations)
+      || (!isRestrictedAiMediaHostedPilotOperations(hostedPilotExpectation.allowedOperations)
+        && input.releaseBinding?.candidate?.region !== 'COM')
       || !hostedPilotExpectation.shopIds.includes(shopId)) {
       fail('AI_MEDIA_PILOT_EXPECTATION_INVALID');
     }

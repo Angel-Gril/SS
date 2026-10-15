@@ -190,3 +190,31 @@ export function countSuiteFlowFixture(f, png) {
   };
   return { ...result, changeMapped };
 }
+
+export function sourcePageCountSuiteFlowFixture(f, png) {
+  const result = countSuiteFlowFixture(f, png), manifest = result.manifest;
+  const binding = f.get(manifest.workbench);
+  const sourcePageTargetId = 'C'.repeat(32);
+  result.changeMapped('workbench', value => {
+    value.launch = 'ACTUAL_SOURCE_IMAGE_BUTTON'; value.uiSurface = 'ACTUAL_SOURCE_PRECISION_IFRAME';
+    value.sourcePageTargetId = sourcePageTargetId; value.noNewTabs = true; value.erpPageOpened = false;
+    delete value.ownedWebTargetId;
+  });
+  const pages = [{ id: sourcePageTargetId, url: 'https://detail.1688.com/offer/928561537986.html?skuId=5977314154567' }];
+  const sourceEntry = f.put('suite-source-entry.json', {
+    kind: 'REAL_SOURCE_WORKBENCH_DRAFT_ENTRY', gitCommit: f.targetGitCommit, extensionVersion: binding.extensionVersion,
+    at: '2026-09-16T10:24:30.000Z', actualUi: true, sourcePageTargetId, workbenchTargetId: binding.workbenchTargetId,
+    snapshotId: binding.snapshotId, collectId: binding.collectId, shopId: binding.shopId, draftId: binding.draftId,
+    revision: binding.revision, draftVersion: binding.draftVersion, pagesBefore: pages, pagesAfter: pages,
+    noNewTabs: true, erpPageOpened: false,
+  });
+  const rawImages = [f.put('suite-raw-observed-hero.png', png(1086, 1448, 83)), f.put('suite-raw-observed-scene.png', png(1086, 1448, 89))];
+  for (const phase of ['generated', 'restored']) f.change(f.input.normalErp[phase], value => {
+    value.rows.forEach((row, index) => Object.assign(row.rawOutput, {
+      sha256: rawImages[index].sha256, width: 1086, height: 1448, sizeBytes: readFileSync(rawImages[index].path).length,
+    }));
+  });
+  Object.assign(manifest, { schemaVersion: 5, sourceEntry, rawProviderImages: rawImages });
+  f.input.normalErp.acceptance = f.put('source-page-count-suite-inputs.json', manifest);
+  return result;
+}

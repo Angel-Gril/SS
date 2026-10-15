@@ -1,6 +1,6 @@
 import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
-import { isRestrictedAiMediaHostedPilotOperations } from './verify-ai-media-pilot-policy.mjs';
-import { COUNT_SUITE_PROFILE, verifyCountSuiteRecord } from './qa04-count-suite-profile.mjs';
+import { isRestrictedAiMediaHostedPilotOperations, isApprovedAiMediaHostedPublicationOperations } from './verify-ai-media-pilot-policy.mjs';
+import { COUNT_SUITE_PROFILE, verifyCountSuiteRecord, verifiedCountSuiteOutputSize } from './qa04-count-suite-profile.mjs';
 
 const CODE = 'QA04_SUITE_INVALID';
 const check = condition => requireThat(condition, CODE);
@@ -22,7 +22,8 @@ const sourceDraftJson = value => value === null || typeof value !== 'object' ? J
 // This variant consumes only original local records. It cannot create tasks,
 // rewrite old evidence, bridge historical execution, or grant production access.
 export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
-  const countProfile = manifest.schemaVersion === 4;
+  const sourcePageWorkflow = manifest.schemaVersion === 5;
+  const countProfile = manifest.schemaVersion === 4 || sourcePageWorkflow;
   const derivedGeneratedPhase = manifest.schemaVersion === 3;
   const explicitExecution = manifest.schemaVersion === 2 || derivedGeneratedPhase || countProfile;
   const unitCost = countProfile ? 10 : 14, taskCost = unitCost * 2;
@@ -31,7 +32,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     'submitted', 'startRequest', 'startResponse', 'continueRequest', 'continueResponse', 'applyRequest', 'queue', 'browser', 'previews', 'reviews',
     ...(explicitExecution ? ['executionGitCommit', 'executionOfflineQa04'] : []),
     ...(derivedGeneratedPhase ? ['databaseEvidenceMode'] : []),
-    ...(countProfile ? ['providerProfile', 'rawProviderImages', 'replayRequest', 'replayResponse'] : [])], CODE);
+    ...(countProfile ? ['providerProfile', 'rawProviderImages', 'replayRequest', 'replayResponse'] : []),
+    ...(sourcePageWorkflow ? ['sourceEntry'] : [])], CODE);
   check((manifest.schemaVersion === 1 || explicitExecution)
     && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
   if (derivedGeneratedPhase) check(manifest.databaseEvidenceMode === 'POST_APPLICATION_EVENT_DERIVATION_V1');
@@ -52,7 +54,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   const rawImages = countProfile ? (() => {
     check(Array.isArray(manifest.rawProviderImages) && manifest.rawProviderImages.length === 2);
     const values = manifest.rawProviderImages.map(ref => imageEvidence(reader, ref, CODE));
-    check(values.every(image => image.width === 1008 && image.height === 1344 && image.bytes <= 20 * 1024 * 1024)
+    check(values.every(image => verifiedCountSuiteOutputSize(image.width, image.height, sourcePageWorkflow) && image.bytes <= 20 * 1024 * 1024)
       && values[0].sha256 !== values[1].sha256);
     return values;
   })() : [];
@@ -65,12 +67,32 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   native(applied, 'REAL_HOSTED_SUITE_ERP_DRAFT_ASSIGNMENT');
   native(queue, 'REAL_HOSTED_SUITE_QUEUE_READBACK'); native(browser, 'NORMAL_IMAGE_SUITE_BROWSER_EXECUTION');
   check(binding.gitCommit === commit && isSha256(owner) && binding.caseId === 'suite' && binding.operation === 'IMAGE_TO_IMAGE'
-    && binding.launch === 'ACTUAL_ERP_DRAFT_BUTTON' && binding.sourceSha256 === source.sha256
+    && (sourcePageWorkflow ? binding.launch === 'ACTUAL_SOURCE_IMAGE_BUTTON' : binding.launch === 'ACTUAL_ERP_DRAFT_BUTTON') && binding.sourceSha256 === source.sha256
     && text(binding.sourceMediaKey) && (text(binding.sourceAssetId) || (derivedGeneratedPhase && binding.sourceAssetId === null))
     && text(binding.snapshotId) && text(binding.draftId)
     && text(binding.shopId) && text(binding.collectId) && positive(binding.revision) && positive(binding.draftVersion)
-    && /^[0-9A-F]{32}$/u.test(binding.workbenchTargetId) && /^[0-9A-F]{32}$/u.test(binding.ownedWebTargetId)
-    && binding.workbenchTargetId !== binding.ownedWebTargetId && /^\d+\.\d+\.\d+$/u.test(binding.extensionVersion));
+    && /^[0-9A-F]{32}$/u.test(binding.workbenchTargetId)
+    && (sourcePageWorkflow ? /^[0-9A-F]{32}$/u.test(binding.sourcePageTargetId)
+      && binding.sourcePageTargetId !== binding.workbenchTargetId && binding.uiSurface === 'ACTUAL_SOURCE_PRECISION_IFRAME'
+      && binding.noNewTabs === true && binding.erpPageOpened === false && binding.ownedWebTargetId === undefined
+      : /^[0-9A-F]{32}$/u.test(binding.ownedWebTargetId) && binding.workbenchTargetId !== binding.ownedWebTargetId)
+    && /^\d+\.\d+\.\d+$/u.test(binding.extensionVersion));
+  if (sourcePageWorkflow) {
+    const entry = read(manifest.sourceEntry);
+    check(entry.kind === 'REAL_SOURCE_WORKBENCH_DRAFT_ENTRY' && entry.gitCommit === commit
+      && entry.extensionVersion === binding.extensionVersion && entry.actualUi === true
+      && entry.sourcePageTargetId === binding.sourcePageTargetId && entry.workbenchTargetId === binding.workbenchTargetId
+      && ['snapshotId', 'collectId', 'shopId', 'draftId', 'revision', 'draftVersion'].every(key => entry[key] === binding[key])
+      && entry.noNewTabs === true && entry.erpPageOpened === false
+      && Array.isArray(entry.pagesBefore) && entry.pagesBefore.length > 0 && entry.pagesBefore.length <= 20
+      && equal(entry.pagesBefore, entry.pagesAfter)
+      && entry.pagesBefore.every(page => /^[0-9A-F]{32}$/u.test(page.id) && typeof page.url === 'string' && page.url.length <= 4096
+        && !/^https:\/\/(?:app\.)?ss-erp\.(?:com|cn)(?:\/|$)/u.test(page.url))
+      && new Set(entry.pagesBefore.map(page => page.id)).size === entry.pagesBefore.length
+      && time(entry.at) >= time(offline.completedAt) && time(entry.at) <= time(binding.launchedAt));
+    const page = entry.pagesBefore.find(value => value.id === binding.sourcePageTargetId);
+    check(page && /^https:\/\/detail\.1688\.com\/offer\/[0-9]+\.html(?:\?|$)/u.test(page.url));
+  }
   const suiteId = ui.suiteId, projection = ui.projection, slots = pair(projection?.suite?.slots), plan = projection.plan;
   unique(slots.map(slot => slot.id)); unique(slots.map(slot => slot.slotKey)); unique(slots.map(slot => slot.workflowId));
   check(text(suiteId) && projection.executionMode === 'ERP_HOSTED' && projection.suite.id === suiteId
@@ -187,7 +209,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
         && output.width === image.width && output.height === image.height && output.mimeType === image.mimeType
         && output.sizeBytes === image.bytes && output.storageBackend === 'oss');
       if (countProfile) {
-        const verified = verifyCountSuiteRecord(row, database, { rawImages, binding, suiteId, slot, quote: projection.quote });
+        const verified = verifyCountSuiteRecord(row, database, { rawImages, binding, suiteId, slot, quote: projection.quote, observedPortrait: sourcePageWorkflow });
         if (phase === 'generated') countRows.push(verified);
         else check(equal(originalRows.find(value => value.job.id === job.id)?.rawOutput, row.rawOutput)
           && equal(generated.suiteRuntime, database.suiteRuntime));
@@ -352,7 +374,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
         && /^\d+\.\d+\.\d+$/u.test(value.version) && value.region === 'COM'
         && value.providerRequests === 0 && value.ozonWrites === 0 && value.result?.expectation === 'hosted-pilot'
         && value.result.ownerSha256 === owner && equal(value.result.shopIds, [binding.shopId])
-        && positive(value.result.deviceCount) && isRestrictedAiMediaHostedPilotOperations(value.result.allowedOperations)
+        && positive(value.result.deviceCount) && (sourcePageWorkflow ? isApprovedAiMediaHostedPublicationOperations(value.result.allowedOperations)
+          : isRestrictedAiMediaHostedPilotOperations(value.result.allowedOperations))
         && positive(value.result.rolloutRevision) && text(value.result.sourcePolicyRevision));
       return value;
     };
@@ -426,6 +449,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     provider, model, currency: 'CNY', unitCostMinor: unitCost,
     successfulImages: 2, actualCostMinor: taskCost, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
     ...(countProfile ? { providerProfile: COUNT_SUITE_PROFILE, verifiedIdempotencyReplay: true } : {}),
+    ...(sourcePageWorkflow ? { sourcePageWorkflowVerified: true } : {}),
     configurationRestored: true, image: images[0], images, source, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
     sourceSha256: source.sha256, referenceSha256: reference.sha256,
     ...(derivedGeneratedPhase ? { generatedPhaseEvidence: manifest.databaseEvidenceMode } : {}),

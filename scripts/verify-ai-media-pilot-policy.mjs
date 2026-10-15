@@ -31,14 +31,20 @@ const REQUIRED_SCOPES = Object.freeze([
 ]);
 const OPERATIONS = new Set(['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH']);
 const TRANSLATION_PILOT_OPERATIONS = ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'];
-// This is a deployment configuration contract. It grants no publish permission
-// and does not qualify as a website publication canary.
+// This exact approved COM configuration grants no publish permission. Website
+// canaries must still verify the server capability and exact device scopes.
 const FULL_COM_DEPLOY_OPERATIONS = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'];
 
-/** Publication canaries keep the original scope, with translation only when explicitly requested. */
+/** Preserve the original restricted scope independently of approved COM publication checks. */
 export function isRestrictedAiMediaHostedPilotOperations(operations) {
   return JSON.stringify(operations) === JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE'])
     || JSON.stringify(operations) === JSON.stringify(TRANSLATION_PILOT_OPERATIONS);
+}
+
+/** Read-only publication verification of existing approved configuration, never a grant. */
+export function isApprovedAiMediaHostedPublicationOperations(operations) {
+  return isRestrictedAiMediaHostedPilotOperations(operations)
+    || JSON.stringify(operations) === JSON.stringify(FULL_COM_DEPLOY_OPERATIONS);
 }
 
 function fail(message) {

@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-15 来源页正式发布合同与457候选准备
+
+前轮已完成 `5071312a` 指定商品928561537986/绿色XL的来源页真实物理UI采集、单SKU DOTH草稿、两图suite `cmv85simq000a5ocntdvgw4lj`。快照 `b638f662-d759-41c6-865c-5587aa1c2797`、草稿 `draft-bb84879e-496f-4477-a36e-75e3925e63fb`，两图attempt1/SUCCEEDED；真实原1086×1448、规范900×1200、PENDING UI/DB、preview、APPROVE、两条store-draft assignment、r1/v1→r2/v2及原请求幂等返回相同batch通过。ERP两笔CNY0.10 settled、Ozon0；棚拍主图与暖墙斜光场景区别可见、无后处理补白，图案文字不宣称逐像素一致。两个QA设备/三轮QA账户私有token与9470已清理、用户9222及ACTIVE设备保留；原失败/校准/费用/草稿/图片不删。幂等复核后HTTP200/replayed实际响应保留，CDP interception请求计数为0，不用该计数冒充抓包证据。私有原件 `product-928561537986-20261014-r4`。
+
+用户现明确要求官网切换最新构建。发布消费者仍只有旧schema4精确1008×1344及ACTUAL_ERP_DRAFT_BUTTON，不能接受真实来源页路径；COM生产用户批准的固定FULL_EDIT/INPAINT/IMAGE_TRANSLATE/publisher master组合也只能通过部署合同，旧网站canary仍拒绝。当前T2新增schema5，严格绑定同一执行提交、native offline先于启动、新来源页建草稿及相同页面列表/target、原始图字节/真实尺寸、原账本两笔CNY10、PENDING→预览→审核→assignment→原请求replay；schema1-4语义保持。只接受已测1008×1344或1086×1448，不放宽任意比例或替换旧回执。
+
+独立publication predicate仅接受旧2/3操作或用户已批准的精确6操作COM配置，原restricted predicate仍拒绝6项；CN候选不能复用，现有owner/shop/device/scopes/BYOK关闭及服务端publisher capability.enabled=false保持。canary只读/临时设备生命周期，不增加listing:publish、发布grant或规则。新增回归先真实RED再GREEN，准备457新签名候选、native offline及一次按顺序保存的新真实两图证据后正式QA04/双区canary/approval/CAS/distribution。前轮507成功不是缺少native offline时间序列的替代；真实测试费用沿用授权，不读取Provider账单或提交Ozon。当前未签457、未切官网指针，双区仍507/官网原e978456。
+
 ## 2026-10-14 `5071312a` 修复推送、签名与双区部署完成，真实采集待滑块
 
 用户明确授权推送、签名、部署并继续采集生图。运行提交 `5071312a72afb89d7786e4ee80437b5a39d60bd8` 已推送 `feat/ai-media-prompt-registry`；COM/CN区域内部候选仍 `1.0.456`，各自干净提交打包、签名验签和封存通过，未声称新的公开扩展版本。两区标准部署完成新增前向尺寸迁移，API/Worker/Web同current，三个服务active、DB/Redis和ready正确读回；COM现有owner/DOTH/device/六操作配置保持，CN direct/RDS和AI/BYOK/publisher dark保持。

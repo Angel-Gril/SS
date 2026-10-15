@@ -349,7 +349,7 @@ function bindCandidate(value) {
   value.darkCanaryBytes = readFileSync(value.darkCanaryPath);
 }
 
-function bindRestrictedPilotCandidate(value) {
+function bindRestrictedPilotCandidate(value, allowedOperations = ['IMAGE_TO_IMAGE', 'SUITE']) {
   bindCandidate(value);
   const policy = {
     expectation: 'hosted-pilot',
@@ -358,7 +358,7 @@ function bindRestrictedPilotCandidate(value) {
     deviceSessionIds: ['device-session-01', 'device-session-02'],
     rolloutRevision: 15,
     sourcePolicyRevision: 'pilot-source-revision-15',
-    allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
+    allowedOperations,
   };
   value.darkCanary.schemaVersion = 3;
   value.darkCanary.kind = 'SS_ERP_REL04_RESTRICTED_HOSTED_PILOT_CANARY';
@@ -367,6 +367,10 @@ function bindRestrictedPilotCandidate(value) {
     policySha256: sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8')),
   };
   value.darkCanary.checks = value.darkCanary.checks.map((check) => {
+    if (allowedOperations.includes('OZON_PUBLISH') && check.id === 'publish-reconciliation-read') {
+      return { ...check, evidence: { ...check.evidence,
+        capabilityReason: 'policy_revision_mismatch', capabilityRevision: 'source-policy-16', capabilityLegacyAllowed: false } };
+    }
     if (check.id === 'default-off-policy') {
       return { id: 'restricted-pilot-policy', status: 'PASS', evidence: policy };
     }
@@ -406,7 +410,7 @@ function runSigner(value, overrides = {}) {
   });
 }
 
-function signedFixture({ restrictedPilot = false } = {}) {
+function signedFixture({ restrictedPilot = false, approvedCom = false } = {}) {
   const value = fixture();
   const result = runSigner(value);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -414,7 +418,9 @@ function signedFixture({ restrictedPilot = false } = {}) {
   value.signatureBytes = readFileSync(value.signaturePath);
   value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
   assert.equal(value.signatureBytes.toString('utf8'), canonicalReleaseSignatureJson(value.signature));
-  if (restrictedPilot) bindRestrictedPilotCandidate(value);
+  if (approvedCom) bindRestrictedPilotCandidate(value,
+    ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH']);
+  else if (restrictedPilot) bindRestrictedPilotCandidate(value);
   else bindCandidate(value);
   const approvalResult = runWebsiteApprovalSigner(value);
   assert.equal(approvalResult.status, 0, `${approvalResult.stdout}\n${approvalResult.stderr}`);
@@ -613,6 +619,15 @@ test('signs, probes, and verifies a restricted hosted pilot publication canary',
   assert.equal(receipt.darkCanarySha256, sha256(value.darkCanaryBytes));
   const verified = verifyExtensionPublication(verificationInput(value));
   assert.equal(verified.version, value.version);
+  assert.equal(verified.gitCommit, value.gitCommit);
+  assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
+});
+
+test('signs, probes, and verifies the exact approved COM operation configuration with publisher denied', async () => {
+  const value = signedFixture({ approvedCom: true });
+  const { receipt } = await completePublication(value);
+  assert.equal(receipt.darkCanarySha256, sha256(value.darkCanaryBytes));
+  const verified = verifyExtensionPublication(verificationInput(value));
   assert.equal(verified.gitCommit, value.gitCommit);
   assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
 });

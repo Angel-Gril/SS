@@ -22,7 +22,11 @@ import {
   sha256,
   websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
-import { isRestrictedAiMediaHostedPilotOperations, normalizeAiMediaHostedPilotExpectation } from './verify-ai-media-pilot-policy.mjs';
+import {
+  isApprovedAiMediaHostedPublicationOperations,
+  isRestrictedAiMediaHostedPilotOperations,
+  normalizeAiMediaHostedPilotExpectation,
+} from './verify-ai-media-pilot-policy.mjs';
 
 const MAX_DARK_CANARY_BYTES = 256 * 1024;
 const MAX_DARK_CANARY_AGE_MS = 24 * 60 * 60 * 1000;
@@ -300,7 +304,7 @@ function validateDarkPolicyEvidence(value) {
   }
 }
 
-function validateRestrictedPilotEvidence(value, rollout) {
+function validateRestrictedPilotEvidence(value, rollout, candidateRegion) {
   const policy = exactKeys(value, [
     'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
     'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
@@ -320,7 +324,9 @@ function validateRestrictedPilotEvidence(value, rollout) {
   }
   if (policy.expectation !== 'hosted-pilot'
     || normalized.ownerUserIds.length !== 1
-    || !isRestrictedAiMediaHostedPilotOperations(normalized.allowedOperations)) {
+    || !isApprovedAiMediaHostedPublicationOperations(normalized.allowedOperations)
+    || (!isRestrictedAiMediaHostedPilotOperations(normalized.allowedOperations)
+      && candidateRegion !== 'COM')) {
     fail('REL-04 restricted pilot scope is invalid');
   }
   const binding = exactKeys(rollout, ['expectation', 'policySha256'], 'REL-04 rollout binding');
@@ -518,7 +524,7 @@ export function validateRel04DarkCanarySummary(summary, input) {
   }
   validateExistingPublication(deployment.existingPublication);
   if (restrictedPilot) {
-    validateRestrictedPilotEvidence(evidence['restricted-pilot-policy'], bindings.rollout);
+    validateRestrictedPilotEvidence(evidence['restricted-pilot-policy'], bindings.rollout, bindings.release?.candidate?.region);
     const hosted = exactKeys(evidence['hosted-route-readiness'], [
       'providerDispatchMethodUsed', 'ready', 'reasonCode', 'routeReachable',
       'suiteEnabled', 'webMediaEnabled', 'workflowEnabled',

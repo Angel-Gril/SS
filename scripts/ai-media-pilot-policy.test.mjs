@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isRestrictedAiMediaHostedPilotOperations, normalizeAiMediaHostedPilotExpectation, verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
+import * as publicationPolicy from './verify-ai-media-pilot-policy.mjs';
 
 const owner = 'owner-1';
 const shop = 'shop-1';
@@ -10,6 +11,19 @@ const expected = {
   rolloutRevision: 15, sourcePolicyRevision: 'pilot-16',
   allowedOperations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE'],
 };
+
+test('publication policy accepts only existing restricted operations or the exact approved COM combination', () => {
+  const allowed = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'];
+  assert.equal(publicationPolicy.isApprovedAiMediaHostedPublicationOperations(allowed), true);
+  assert.equal(isRestrictedAiMediaHostedPilotOperations(allowed), false);
+  for (const operations of [['IMAGE_TO_IMAGE', 'SUITE'], ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE']]) {
+    assert.equal(publicationPolicy.isApprovedAiMediaHostedPublicationOperations(operations), true);
+  }
+  for (const operations of [[], null, allowed.slice(0, -1), [...allowed, 'TEXT_TO_IMAGE'],
+    [...allowed].reverse(), ['IMAGE_TO_IMAGE', 'SUITE', 'OZON_PUBLISH']]) {
+    assert.equal(publicationPolicy.isApprovedAiMediaHostedPublicationOperations(operations), false);
+  }
+});
 
 function snapshot(overrides = {}) {
   const sourceFeatures = {
@@ -55,7 +69,7 @@ test('accepts the explicit full COM hosted pilot contract', () => {
     { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
     { key: 'ai_image_translation_model', value: 'qwen-mt-image' });
   assert.deepEqual(verifyAiMediaHostedPilotPolicy(value, full), { expectation: 'hosted-pilot', ...full });
-  assert.equal(isRestrictedAiMediaHostedPilotOperations(full.allowedOperations), false, 'deployment is not website approval');
+  assert.equal(isRestrictedAiMediaHostedPilotOperations(full.allowedOperations), false, 'the original restricted operation predicate remains unchanged');
   for (const mutate of [
     snapshot => { snapshot.deviceSessions[0].shopIds.push('foreign-shop'); },
     snapshot => { snapshot.deviceSessions[0].ownerUserId = 'foreign-owner'; },

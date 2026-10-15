@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-15 官网最新构建发布准备
+
+用户授权切换公开下载。前轮507指定商品同窗采集、两张1086×1448原图→900×1200成品、审核/两条store-draft assignment及幂等已通过，ERP CNY0.20/Ozon0，临时9470与QA身份已清理；原记录保留。当前补齐QA04来源页schema5及COM固定六项配置的发布消费者，准备可识别的新候选457及其完整门禁，官网仍原456；事实与原件只见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-14 `5071312a` 窗口及竖图修复双区部署完成
 
 `5071312a72afb89d7786e4ee80437b5a39d60bd8` 已推送、区域签名及标准COM/CN部署，API/Worker/Web同current、DB/Redis与ready正常；目标及日常备份恢复、两区FULL VPS canonical均PASS。内部候选仍456，官网继续原 `e978c9bd / 1.0.456`；未执行官网CAS。签名包已在9470原隔离profile更新并保留合法设备会话，指定商品928561537986的新来源页被真实1688滑块遮挡，尚未提交新采集/套图、无本轮新增Provider/Ozon/费用。用户手动验证后从现有窗口继续同窗草稿、两图、审核、assignment与幂等；准确回执与原件仅见[直接适配owner](donor-workbench/direct-adaptation.md)。

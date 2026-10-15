@@ -51,6 +51,8 @@ const pilotExpectation = Object.freeze({
   sourcePolicyRevision: 'pilot-source-revision-15',
   allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE'],
 });
+const approvedComExpectation = { ...pilotExpectation,
+  allowedOperations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'] };
 
 test.afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -147,7 +149,12 @@ function fixtureFetcher(options = {}) {
   const calls = [];
   const config = options.pilot ? pilotConfigValues() : darkConfigValues();
   if (options.enabledFlag) config.set(options.enabledFlag, 'true');
-  if (options.translationPilot) {
+  if (options.approvedCom) {
+    for (const key of ['feature_ai_media_full_edit', 'feature_ai_media_inpaint', 'feature_source_ozon_publisher_v2']) {
+      config.set(key, 'true');
+    }
+  }
+  if (options.translationPilot || options.approvedCom) {
     config.set('feature_image_translate', 'true');
     config.set('ai_image_translation_provider', 'dashscope-qwen-mt-image');
     config.set('ai_image_translation_model', 'qwen-mt-image');
@@ -294,8 +301,8 @@ function fixtureFetcher(options = {}) {
         id,
         deviceId: `device-${id}`,
         status: 'ACTIVE',
-        scopes: ['capture:write', 'listing:write', 'listing:review', 'media:execute'],
-        shopIds: [shopId],
+        scopes: options.pilotScopes || ['capture:write', 'listing:write', 'listing:review', 'media:execute'],
+        shopIds: options.pilotShopIds || [shopId],
         expiresAt: '2030-01-02T00:00:00.000Z',
       })) : [];
       return jsonResponse({
@@ -335,7 +342,7 @@ function fixtureFetcher(options = {}) {
       assert.equal(url.searchParams.get('shopId'), shopId);
       return jsonResponse({
         code: 1,
-        data: options.badPublishCapability
+        data: options.publishCapability || (options.badPublishCapability
           ? {
               enabled: false,
               legacyAllowed: false,
@@ -347,7 +354,7 @@ function fixtureFetcher(options = {}) {
               legacyAllowed: true,
               reason: 'master_off',
               revision: 'master-off',
-            },
+            }),
       });
     }
     if (url.pathname === `/api/source-listing-workflows/${workflowId}/publish-attempts/${attemptId}`) {
@@ -641,6 +648,66 @@ test('accepts an explicitly restricted translation pilot without issuing transla
   policy.allowedOperations.push('FULL_EDIT');
   widened.bindings.rollout.policySha256 = sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`, 'utf8'));
   assert.throws(() => validateRel04DarkCanarySummary(widened, expected), /pilot|scope/iu);
+});
+
+test('reads the exact approved COM configuration without granting publish scopes or dispatching media', async () => {
+  const publishCapability = { enabled: false, legacyAllowed: false, reason: 'policy_revision_mismatch', revision: 'source-policy-16' };
+  const fetcher = fixtureFetcher({ pilot: true, approvedCom: true, publishCapability });
+  const summary = await runRel04DarkCanary(input({ rolloutExpectation: 'hosted-pilot', hostedPilotExpectation: approvedComExpectation,
+    publishWorkflowId: null, publishAttemptId: null, publishReconciliationNotBefore: null,
+    publishReconciliationRegressionSha256: 'e'.repeat(64),
+    expectedPublishCapability: { reason: publishCapability.reason, revision: publishCapability.revision, legacyAllowed: false } }), { fetcher });
+  assert.equal(summary.status, 'PASS', JSON.stringify(summary));
+  assert.deepEqual(summary.checks.find(check => check.id === 'restricted-pilot-policy').evidence.allowedOperations,
+    approvedComExpectation.allowedOperations);
+  assert.equal(summary.requestAudit.providerDispatchSent, false);
+  assert.equal(summary.requestAudit.erpIngestSent, false);
+  assert.equal(summary.requestAudit.ozonMutationSent, false);
+  assert.ok(fetcher.calls.filter(call => call.method === 'POST').every(call =>
+    ['/api/extension-device/pairing-codes', '/api/extension-device/pairing-claims',
+      '/api/extension-device/refresh', '/api/extension-device/byok-media/readiness'].includes(call.path)));
+  assert.deepEqual(fetcher.calls.find(call => call.path === '/api/extension-device/pairing-codes').body.scopes, ['byok:media:ingest']);
+  const expected = { expectedGitCommit: gitCommit, expectedApiOrigin: apiOrigin, expectedCandidate: releaseBinding().candidate,
+    expectedReleaseSignedAt: '2029-12-31T23:57:00.000Z', requireReleaseBinding: true };
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, expected));
+  const enabled = structuredClone(summary);
+  enabled.checks.find(check => check.id === 'publish-reconciliation-read').evidence.capabilityEnabled = true;
+  assert.throws(() => validateRel04DarkCanarySummary(enabled, expected), /reconciliation/iu);
+  const cn = structuredClone(summary);
+  cn.bindings.apiOrigin = 'https://api.example.cn';
+  cn.bindings.release.candidate.apiOrigin = cn.bindings.apiOrigin;
+  cn.bindings.release.candidate.region = 'CN';
+  assert.throws(() => validateRel04DarkCanarySummary(cn, { ...expected, expectedApiOrigin: cn.bindings.apiOrigin,
+    expectedCandidate: cn.bindings.release.candidate }), /pilot|scope/iu);
+});
+
+test('approved COM operation contract retains exact scopes, shops and server publisher capability denial', async () => {
+  for (const changes of [
+    { pilotScopes: ['capture:write', 'listing:review', 'listing:write', 'media:execute', 'listing:publish'] },
+    { pilotShopIds: [shopId, 'foreign-shop'] },
+    { publishCapability: { enabled: true, legacyAllowed: true, reason: 'master_off', revision: 'master-off' } },
+  ]) {
+    const fetcher = fixtureFetcher({ pilot: true, approvedCom: true, ...changes });
+    const summary = await runRel04DarkCanary(input({ rolloutExpectation: 'hosted-pilot',
+      hostedPilotExpectation: approvedComExpectation }), { fetcher });
+    assert.equal(summary.status, 'FAIL');
+    assert.equal(fetcher.calls.some(call => call.path === '/api/extension-device/pairing-codes'), false);
+  }
+});
+
+test('approved COM operations cannot be used for a CN candidate or widened before requests', async () => {
+  const binding = releaseBinding();
+  binding.candidate.apiOrigin = 'https://api.example.cn'; binding.candidate.region = 'CN';
+  const fetcher = fixtureFetcher({ pilot: true, approvedCom: true });
+  for (const changes of [
+    { apiOrigin: binding.candidate.apiOrigin, releaseBinding: binding },
+    { hostedPilotExpectation: { ...approvedComExpectation, allowedOperations: [...approvedComExpectation.allowedOperations, 'TEXT_TO_IMAGE'] } },
+    { hostedPilotExpectation: { ...approvedComExpectation, ownerUserIds: [pilotOwner, 'foreign-owner'] } },
+  ]) {
+    await assert.rejects(() => runRel04DarkCanary(input({ rolloutExpectation: 'hosted-pilot',
+      hostedPilotExpectation: approvedComExpectation, ...changes }), { fetcher }), /PILOT_EXPECTATION_INVALID/u);
+  }
+  assert.equal(fetcher.calls.length, 0);
 });
 
 test('CN dark canary explicitly accepts an empty shop inventory without treating it as publisher success', async () => {
@@ -1012,6 +1079,7 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   assert.deepEqual(parsedPilot.hostedPilotExpectation, pilotExpectation);
   const translationExpectation = { ...pilotExpectation, allowedOperations: ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'] };
   assert.deepEqual(parse({ ...pilotEnvironment, REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(translationExpectation) }).hostedPilotExpectation, translationExpectation);
+  assert.deepEqual(parse({ ...pilotEnvironment, REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(approvedComExpectation) }).hostedPilotExpectation, approvedComExpectation);
   for (const allowedOperations of [['IMAGE_TRANSLATE'], ['IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE'],
     ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE', 'FULL_EDIT'], ['IMAGE_TO_IMAGE', 'SUITE', 'UNKNOWN_OPERATION']]) {
     assert.throws(() => parse({ ...pilotEnvironment,
@@ -1044,6 +1112,10 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   const parsedCn = parseCn(cnEnvironment);
   assert.equal(parsedCn.noShopDarkCanary, true);
   assert.equal(parsedCn.expectedPublishCapability, null);
+  assert.throws(() => parseCn({ ...cnEnvironment, REL04_SHOP_ID: shopId, REL04_NO_SHOP_DARK_CANARY: undefined,
+    REL04_EXPECTED_PUBLISH_CAPABILITY_REASON: 'policy_revision_mismatch', REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION: 'source-policy-16',
+    REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED: 'false', REL04_AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot',
+    REL04_AI_MEDIA_PILOT_EXPECTATIONS_JSON: JSON.stringify(approvedComExpectation) }), /PILOT_EXPECTATION_INVALID/u);
   for (const changes of [
     { REL04_NO_SHOP_DARK_CANARY: 'invalid' },
     { REL04_REGION: 'COM' },
