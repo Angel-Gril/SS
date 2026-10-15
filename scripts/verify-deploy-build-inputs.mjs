@@ -42,32 +42,6 @@ const BUILD_PATHS = [
   ':(exclude)packages/shared/*.tsbuildinfo',
 ];
 
-// Git's pathspec exclude magic is not applied consistently by the Windows Git
-// builds used for deployment checkouts (directory pathspecs can re-include an
-// ignored child). Keep the generated-output allowlist explicit here as a
-// second, platform-independent filter. Any ignored path outside this list is
-// still treated as an unexpected build input and fails closed.
-const GENERATED_OUTPUT_PREFIXES = [
-  'apps/server/node_modules/',
-  'apps/server/dist/',
-  'apps/server/coverage/',
-  'apps/server/public/uploads/',
-  'apps/server/public/watermarked/',
-  'apps/server/public/resized/',
-  'apps/web/node_modules/',
-  'apps/web/.next/',
-  'apps/web/.next-dev/',
-  'apps/web/coverage/',
-  'packages/shared/node_modules/',
-  'packages/shared/dist/',
-];
-
-function isGeneratedOutput(relativePath) {
-  const normalized = relativePath.split('\\').join('/');
-  return GENERATED_OUTPUT_PREFIXES.some((prefix) => normalized.startsWith(prefix))
-    || /^(?:apps\/(?:server|web)|packages\/shared)\/[^/]+\.tsbuildinfo$/u.test(normalized);
-}
-
 function fail(message) {
   throw new Error(message);
 }
@@ -117,8 +91,7 @@ function main() {
   const ignoredPaths = ignored
       .toString('utf8')
       .split('\0')
-      .filter((value) => value && value !== allowedRuntimeEnvironment)
-      .filter((value) => !isGeneratedOutput(value));
+      .filter((value) => value && value !== allowedRuntimeEnvironment);
   if (ignoredPaths.length > 0) {
     const paths = ignoredPaths
       .slice(0, 10)

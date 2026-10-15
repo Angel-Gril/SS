@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -11,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { materializeGitCommitTree } from './git-commit-tree.mjs';
+import { materializeGitCommitTree, readGitCommitTree } from './git-commit-tree.mjs';
 
 function run(command, args, cwd, env = process.env) {
   return spawnSync(command, args, {
@@ -28,7 +27,7 @@ function write(root, relative, contents) {
   writeFileSync(file, contents);
 }
 
-test('deployment build input verifier rejects ignored source while allowing generated output', () => {
+function verifyDeploymentBuildInputs(lineEnding) {
   const root = mkdtempSync(join(tmpdir(), 'ss-erp-deploy-build-inputs-'));
   try {
     write(root, '.gitignore', [
@@ -43,14 +42,11 @@ test('deployment build input verifier rejects ignored source while allowing gene
     write(root, 'apps/server/src/index.ts', 'export const server = true;\n');
     write(root, 'apps/web/src/app/page.tsx', 'export default function Page() { return null; }\n');
     mkdirSync(join(root, 'scripts'), { recursive: true });
-    copyFileSync(
-      join(process.cwd(), 'scripts', 'verify-deploy-build-inputs.mjs'),
-      join(root, 'scripts', 'verify-deploy-build-inputs.mjs'),
-    );
-    copyFileSync(
-      join(process.cwd(), 'scripts', 'git-commit-tree.mjs'),
-      join(root, 'scripts', 'git-commit-tree.mjs'),
-    );
+    for (const filename of ['verify-deploy-build-inputs.mjs', 'git-commit-tree.mjs']) {
+      const source = readFileSync(join(process.cwd(), 'scripts', filename), 'utf8')
+        .replace(/\r?\n/gu, lineEnding === 'CRLF' ? '\r\n' : '\n');
+      write(root, `scripts/${filename}`, source);
+    }
     const emptyTemplate = join(root, 'empty-git-template');
     const emptyHooks = join(root, 'empty-git-hooks');
     mkdirSync(emptyTemplate);
@@ -74,13 +70,18 @@ test('deployment build input verifier rejects ignored source while allowing gene
       'fixture',
     ], root).status, 0);
     const head = run('git', ['rev-parse', 'HEAD'], root).stdout.trim();
+    // Deployment compares raw blobs, so the fixture must use committed bytes
+    // even when its source checkout was converted to CRLF by Windows Git.
+    const committed = readGitCommitTree({ repositoryRoot: root, commit: head });
+    for (const entry of committed.entries) write(root, entry.pathname, entry.bytes);
     const verify = (allowedRuntimeEnvironment) => run(process.execPath, [
       'scripts/verify-deploy-build-inputs.mjs',
       head,
       ...(allowedRuntimeEnvironment ? [allowedRuntimeEnvironment] : []),
     ], root);
 
-    assert.equal(verify().status, 0);
+    const baseline = verify();
+    assert.equal(baseline.status, 0, baseline.stderr);
     write(root, 'apps/web/.next-dev/cache.bin', 'generated');
     write(root, 'apps/server/dist/index.js', 'generated');
     assert.equal(verify().status, 0, 'known generated outputs must remain excluded');
@@ -201,4 +202,10 @@ test('deployment build input verifier rejects ignored source while allowing gene
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}
+
+for (const lineEnding of ['LF', 'CRLF']) {
+  test(`deployment build input verifier rejects ignored source while allowing generated output (${lineEnding})`, () => {
+    verifyDeploymentBuildInputs(lineEnding);
+  });
+}

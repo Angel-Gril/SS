@@ -1,5 +1,9 @@
 # 旧扩展直接适配 SS ERP
 
+### 457 native offline 换行夹具修正
+
+947f候选的offline在`deploy-build-inputs.test.mjs`第83行空白基线失败，原件保留。已复现CRLF脚本被fixture的LF属性归一化后，工作树字节与Git blob不同；并非`.next-dev`/`dist`排除失效。LF/CRLF双路径先得到明确RED，再由raw Git tree恢复fixture提交字节后GREEN；原部署输入owner、ignored源码拒绝及隐藏字节改动检查不变。中间56bc加入的额外过滤已撤回；未使用其未完成的offline作为正式证据。最终候选需重新完成原生offline、签名、双区部署及新来源页套图/QA04与公开门禁，官网仍原456。
+
 ## 2026-10-15 来源页正式发布合同与457候选准备
 
 前轮已完成 `5071312a` 指定商品928561537986/绿色XL的来源页真实物理UI采集、单SKU DOTH草稿、两图suite `cmv85simq000a5ocntdvgw4lj`。快照 `b638f662-d759-41c6-865c-5587aa1c2797`、草稿 `draft-bb84879e-496f-4477-a36e-75e3925e63fb`，两图attempt1/SUCCEEDED；真实原1086×1448、规范900×1200、PENDING UI/DB、preview、APPROVE、两条store-draft assignment、r1/v1→r2/v2及原请求幂等返回相同batch通过。ERP两笔CNY0.10 settled、Ozon0；棚拍主图与暖墙斜光场景区别可见、无后处理补白，图案文字不宣称逐像素一致。两个QA设备/三轮QA账户私有token与9470已清理、用户9222及ACTIVE设备保留；原失败/校准/费用/草稿/图片不删。幂等复核后HTTP200/replayed实际响应保留，CDP interception请求计数为0，不用该计数冒充抓包证据。私有原件 `product-928561537986-20261014-r4`。
