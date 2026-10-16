@@ -1424,8 +1424,10 @@
           syncInputFieldValue(inputCard, 'cost', state.inputs.cost, true);
           compute();
         }
-      }).catch(function () {
-        configCard.innerHTML = '<h3>配置状态</h3><div class="ozon-calc-muted">读取插件配置失败。</div>';
+      }).catch(function (error) {
+        configCard.innerHTML = '<h3>配置状态</h3><div class="ozon-calc-muted">' +
+          (error && error.code === 'extension_context_invalidated'
+            ? '扩展已更新，请刷新当前 Ozon 页面后重试。' : '读取插件配置失败。') + '</div>';
       });
       if (typeof window.OZON_CALC_CONFIG_STORE.readOfficialSnapshot === 'function') {
         window.OZON_CALC_CONFIG_STORE.readOfficialSnapshot().then(function (officialSnapshot) {

@@ -1,5 +1,17 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 Ozon 列表展开、工具栏和采集入口本地修复
+
+用户截图在官网458发现列表“展开”无响应、工具入口缺失及context invalidated/CORS。已在原代码隔离执行确认：`66161400`移除旧工作台时误删`attachOverlay`的展开点击监听，保留了按钮DOM；同时删掉`ensureListWorkbenchBar`定义却保留scanRoot调用，导致首次scan异常、快捷工具栏与MutationObserver未安装。原23项相关静态/局部测试仍通过，没有覆盖完整启动与按钮绑定；不是已证实的Ozon接口变更。利润计算器本体未删，原采集/跟卖入口被旧清理扩大移除且没有替代。
+
+T2先取得列表启动/展开/采集3项RED、detail6项业务RED及config/host22项RED，再由原owner修复。列表不再调用已删除模块，展开读取当前卡片缓存、同窗定位/收起；恢复每卡“采集/跟卖”按钮和detail独立工具入口，均复用既有`spb-self-hosted:fetch-ozon-product-to-erp`完整采集owner。只明确点击发送，不恢复旧上架modal、Provider/发布入口或在纯计算器中混入生图。必须收到ERP`pushed.code=1`且`saved>0`才显示成功；同SKU待处理锁、端口失联/超时/缺少保存回执保留未知并禁止盲重试，已知失败才允许用户新点击。detail SPA更换产品时替换旧闭包，防止采集上一个商品。
+
+config-store的4读2写统一Promise边界捕获Chrome同步/异步上下文失效，规范`extension_context_invalidated`且不返回健康假配置；计算器显示“扩展已更新，请刷新当前 Ozon 页面后重试”。源码manifest、Cloud/Local builder及verifier仅加入`https://global-help.ozon.com/*`精确权限，不增加该站content script、web资源、外部调用者或任意必选host；真实帮助站/重定向响应是否仍有其他限制未在本轮访问验证，不能宣称线上佣金同步成功。新host权限可能需要已安装Chrome重新确认，升级后旧Ozon标签页需刷新。
+
+本地定向88/88、Cloud verifier626/Local622（0 failures/0 warnings）通过；完整源码在隔离Chrome用拦截的合成列表/详情与runtime响应验证物理展开/收起、工具栏利润测算/重新计算、旧上下文提示、单次明确采集、动态新增卡片和SPA产品身份，控制台异常0。没有加载用户登录profile、真实采集写入或外部Provider/Ozon请求；这证明前端交互，不冒充生产MV3后台/真实数据验收。可重放命令`pnpm test:extension:ozon-ui`，使用新临时profile并仅关闭该Chrome；回执/截图保留在私有临时目录`ss-erp-ozon-regression-pSlNLU`。此前fixture错误把聚合响应item写成data的失败原件保留，没有修改产品数据合同迁就fixture。
+
+新增及改动脚本ESLint通过；历史list/detail两个老JS显式lint基线38项，当前35项，无新增诊断，不能称整个扩展lint零错误。原样式和布局不重设计，新测试已注册到preflight对应Ozon lane。用户随后明确要求提交、签名/发布，当前源码提交准备新459区域签名候选及标准双区发布；Cloud/Local原开发产物不是新公开版本。正式QA04、候选部署、canary/批准/CAS/下载探针尚待本轮原生证据，线上/官网仍`2e97c9d3 / 1.0.458`。当前请求不默认为额外付费suite授权，已单独询问一次两图最高CNY0.20；未发新Provider请求。
+
 ## 2026-10-16 `2e97c9d3 / 1.0.458` 双区官网公开发布完成
 
 最终源码 `2e97c9d39ed6eb075830ad6aabe5d386cbdc8761` 已推送并生成区域匹配的458签名候选，COM/CN均经标准部署，native offline、真实签名包MV3安装/Worker、目标及日常备份恢复、FULL VPS canonical通过。COM保持原DOTH/固定六项配置及`qwen-vl-max`商品分析，CN保持direct/RDS dark；没有为通过发布临时开关功能或扩大设备权限。

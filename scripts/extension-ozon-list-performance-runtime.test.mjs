@@ -289,7 +289,7 @@ function loadExpandedPortalRuntime() {
     classList: { remove() {} },
     getBoundingClientRect: () => ({ left: 200, right: 500, top: -420, bottom: -120, width: 300, height: 300 }),
   };
-  const expandBtn = { textContent: '收起' };
+  const expandBtn = { textContent: '收起', setAttribute(name, value) { this[name] = value; } };
   const sandbox = {
     document: { documentElement: { clientHeight: 900, clientWidth: 1440 } },
     window: { innerHeight: 900, innerWidth: 1440 },

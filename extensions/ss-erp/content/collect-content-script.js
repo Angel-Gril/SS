@@ -42,6 +42,7 @@
   const SourceProductCaptureV2 = globalThis.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2 || {};
   const MarketplaceCollector = globalThis.SS_ERP_MARKETPLACE_PRODUCT_COLLECTOR || {};
   let lastOzonUrl = "";
+  const ozonQuickCollections = new Map();
 
   injectPageBridge();
   initOzonOverlay();
@@ -1071,12 +1072,15 @@
   }
 
   function renderOzonQuickActions(productId) {
-    if (!productId || document.getElementById(OZON_QUICK_ACTIONS_ID)) {
-      return;
-    }
+    if (!productId) return;
+    const existing = document.getElementById(OZON_QUICK_ACTIONS_ID);
+    if (existing && existing.dataset.productId === productId) return;
+    if (existing) existing.remove();
 
     const panel = document.createElement("aside");
     panel.id = OZON_QUICK_ACTIONS_ID;
+    panel.dataset.productId = productId;
+    const sourceUrl = location.href;
     panel.style.cssText = [
       "position:fixed",
       "right:10px",
@@ -1099,6 +1103,7 @@
         <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>
         <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>
       </div>
+      <button type="button" data-role="quick-collect" title="完整采集当前商品至 ERP，准备跟卖草稿，不自动上架" style="${quickActionButtonStyle(SS_ERP_PRODUCT_THEME.primary, "#ffffff")}">采集/跟卖</button>
       <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
       <button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
       <button type="button" data-role="quick-selection-settings" title="打开选品规则设置入口" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">设置选品</button>
@@ -1106,6 +1111,11 @@
     `;
 
     document.body.appendChild(panel);
+    panel.querySelector("[data-role='quick-collect']").addEventListener("click", () => {
+      collectOzonFromQuickAction(productId, sourceUrl);
+    });
+    const pendingCollection = ozonQuickCollections.get(productId);
+    if (pendingCollection) updateOzonQuickCollection(productId, pendingCollection);
     panel.querySelector("[data-role='quick-profit']").addEventListener("click", () => {
       openOzonProfitCalculatorFromQuickAction();
       setOzonQuickStatus(panel, "利润测算已打开");
@@ -1117,6 +1127,53 @@
       openExtensionSettingsPage("selection");
       setOzonQuickStatus(panel, "设置已打开");
     });
+  }
+
+  function updateOzonQuickCollection(productId, state) {
+    const panel = document.getElementById(OZON_QUICK_ACTIONS_ID);
+    if (!panel || panel.dataset.productId !== productId) return;
+    const button = panel.querySelector("[data-role='quick-collect']");
+    button.disabled = state.pending || state.unknown;
+    button.textContent = state.pending ? "采集中..." : state.unknown ? "结果待核对" : "采集/跟卖";
+    button.setAttribute("aria-busy", state.pending ? "true" : "false");
+    setOzonQuickStatus(panel, state.message);
+  }
+
+  async function collectOzonFromQuickAction(productId, sourceUrl) {
+    if (ozonQuickCollections.has(productId)) return;
+    if (parseOzonProductIdFromUrl(location.href) !== productId) return;
+    const state = { pending: true, unknown: false, message: "正在完整采集，尚未上架" };
+    ozonQuickCollections.set(productId, state);
+    updateOzonQuickCollection(productId, state);
+    try {
+      const response = await sendRuntimeMessage({
+        type: "spb-self-hosted:fetch-ozon-product-to-erp",
+        productIds: [productId],
+        productUrls: [sourceUrl],
+        collectMode: "complete"
+      });
+      const data = response && response.data;
+      const pushed = data && data.pushed;
+      const saved = pushed && pushed.data && pushed.data.saved;
+      const errors = data && Array.isArray(data.errors) ? data.errors : [];
+      const backendErrors = pushed && pushed.data && Array.isArray(pushed.data.errors) ? pushed.data.errors : [];
+      const firstError = errors.concat(backendErrors).find((item) => item && typeof item.error === "string" && item.error);
+      if (response && response.ok === true && pushed && pushed.code === 1 && Number.isSafeInteger(saved) && saved > 0) {
+        state.message = `已采集 ${saved} 件，未上架${firstError ? "；部分数据失败：" + firstError.error : ""}`;
+      } else if ((response && response.ok === false) || (pushed && pushed.code === 0) || (saved === 0 && firstError)) {
+        state.message = "采集失败：" + ((response && response.error) || (firstError && firstError.error) || (pushed && pushed.msg) || "ERP 未保存商品");
+      } else {
+        state.unknown = true;
+      }
+    } catch {
+      // A closed response channel does not prove the ERP mutation failed.
+      state.unknown = true;
+    } finally {
+      state.pending = false;
+      if (state.unknown) state.message = "采集结果待核对，请先到 ERP 采集记录核对，勿重复采集";
+      else ozonQuickCollections.delete(productId);
+      updateOzonQuickCollection(productId, state);
+    }
   }
 
   function openOzonProfitCalculatorFromQuickAction() {
@@ -1167,7 +1224,7 @@
     const status = panel && panel.querySelector("[data-role='quick-status']");
     if (status) {
       status.textContent = text || "";
-      status.style.color = /失败|请先/.test(String(text || "")) ? "#ef4444" : "#2563eb";
+      status.style.color = /失败|请先|待核对/.test(String(text || "")) ? "#ef4444" : "#2563eb";
     }
   }
 

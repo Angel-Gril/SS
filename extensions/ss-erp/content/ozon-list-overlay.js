@@ -6,7 +6,8 @@
 //   4. SS ERP 缓存（其他用户已提交的数据）
 //   5. 实在拿不到的字段显示 "--"，不阻塞卡片渲染
 // 设计原则：
-//   - 列表页只做分析和筛选投影，不发起 ERP 采集、图片或发布写入。
+//   - 列表页自动加载只读分析；仅明确点击采集按钮才交给已有 ERP 采集 owner。
+//   - 不从列表发起图片任务或 Ozon 发布。
 //   - 进入视口自动加载 Premium 数据，不等用户展开。
 
 (function () {
@@ -51,6 +52,7 @@
   const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
   const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
   const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
+  const collectionStates = new Map();
   const DEFAULT_DISPLAY_FIELD_IDS = [
     'sku',
     'category',
@@ -488,15 +490,15 @@
           done = true;
           clearTimeout(timer);
           if (chrome.runtime.lastError) {
-            resolve({ ok: false, msg: chrome.runtime.lastError.message || '通信失败' });
+            resolve({ ok: false, transportFailed: true, msg: chrome.runtime.lastError.message || '通信失败' });
             return;
           }
-          resolve(resp || { ok: false, msg: '无响应' });
+          resolve(resp || { ok: false, transportFailed: true, msg: '无响应' });
         });
       } catch (e) {
         done = true;
         clearTimeout(timer);
-        resolve({ ok: false, msg: e && e.message ? e.message : String(e) });
+        resolve({ ok: false, transportFailed: true, msg: e && e.message ? e.message : String(e) });
       }
     });
   }
@@ -1661,6 +1663,7 @@
       '<div class="ss-erp-selection-tags" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;margin:-2px 0 7px 0;min-height:0;"></div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
       '<div class="ss-erp-actions" style="display:flex;gap:6px">',
+      `  <button type="button" data-role="collect-follow" title="采集到 ERP，后续编辑与跟卖准备不自动发布" style="flex:1;padding:5px 10px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};border-radius:6px;background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};cursor:pointer;font-size:11px;font-weight:600">采集/跟卖</button>`,
       '</div>',
       `<button class="ss-erp-expand-btn" type="button" style="width:100%;margin-top:6px;padding:5px 10px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};border-radius:6px;background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};cursor:pointer;font-size:11px;font-weight:600">展开</button>`,
     ].join('');
@@ -1765,7 +1768,10 @@
       current.expanded.style.display = 'none';
       current.expanded.setAttribute('aria-hidden', 'true');
     }
-    if (current.expandBtn) current.expandBtn.textContent = '展开';
+    if (current.expandBtn) {
+      current.expandBtn.textContent = '展开';
+      current.expandBtn.setAttribute('aria-expanded', 'false');
+    }
     if (current.wrap) {
       current.wrap.classList.remove('ss-erp-overlay-card-expanded');
       current.wrap.style.zIndex = '1';
@@ -2780,6 +2786,52 @@
 
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
+    const expandBtn = wrap.querySelector('.ss-erp-expand-btn');
+    expandBtn.setAttribute('aria-expanded', 'false');
+    expandBtn.addEventListener('click', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      const willOpen = expanded.style.display === 'none';
+      if (willOpen) {
+        expanded.innerHTML = renderExpandedFields(sku, wrap.__ssErpDom || dom, wrap.__ssErpPremium || getBestCachedPremium(sku));
+        expanded.setAttribute('data-rendered', '1');
+      }
+      setExpandedPanelOpen(wrap, expanded, expandBtn, willOpen);
+      expandBtn.setAttribute('aria-expanded', String(willOpen));
+    });
+    const collectBtn = wrap.querySelector('[data-role="collect-follow"]');
+    const previousCollection = collectionStates.get(sku);
+    if (previousCollection) {
+      collectBtn.disabled = previousCollection.locked;
+      collectBtn.textContent = previousCollection.label;
+      collectBtn.title = previousCollection.note;
+    }
+    collectBtn.addEventListener('click', async (event) => {
+      event.preventDefault(); event.stopPropagation();
+      if (collectBtn.disabled || collectionStates.get(sku)?.locked) return;
+      const display = (label, note, locked) => {
+        collectionStates.set(sku, { label, note, locked });
+        collectBtn.textContent = label; collectBtn.title = note; collectBtn.disabled = locked;
+      };
+      display('采集中…', '正在采集到 ERP，不会发布 Ozon', true);
+      try {
+        const response = await send({ type: 'spb-self-hosted:fetch-ozon-product-to-erp',
+          productIds: [sku], productUrls: [dom.url], collectMode: 'complete' }, 60000);
+        const pushed = response?.data?.pushed, errors = response?.data?.errors;
+        const failure = response?.error || response?.msg || (Array.isArray(errors) && errors.find(item => item?.error)?.error);
+        const saved = pushed?.data?.saved;
+        if (response?.ok === true && pushed?.code === 1 && Number.isInteger(saved) && saved > 0) {
+          display('✓ 已采集', Array.isArray(errors) && errors.length
+            ? '已采集，部分规格失败：' + (failure || '请核对采集记录') : '已保存到 ERP，尚未发布 Ozon', true);
+        } else if (!response?.timedOut && !response?.transportFailed && (response?.ok === false || pushed?.code === 0 || saved === 0 && failure)) {
+          display('采集失败·重试', failure || '没有收到成功采集记录', false);
+        } else {
+          display('结果待核对', '请先到 ERP 采集记录核对，勿重复采集', true);
+        }
+      } catch {
+        display('结果待核对', '请先到 ERP 采集记录核对，勿重复采集', true);
+      }
+    });
+
     // 进入视口后自动加载 Premium 数据，不等用户展开
     const premium = await fetchPublicProduct(sku, {
       includeDetail: selectedListFieldsNeedDetail(),
@@ -2860,7 +2912,6 @@
     });
     if (options.refreshUi) {
       cleanupDetachedExpandedPanels();
-      ensureListWorkbenchBar();
       ensureListQuickActions();
     }
   }

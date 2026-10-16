@@ -1193,6 +1193,7 @@ if (expectedReleaseOrigins && packageTarget === 'cloud') {
     'https://globalcalculator.ozon.ru/*',
     'https://docs.ozon.ru/*',
     'https://docs.ozon.com/*',
+    'https://global-help.ozon.com/*',
     'https://open.er-api.com/*',
     'https://*.ozon.ru/*',
     'https://*.ozon.kz/*',

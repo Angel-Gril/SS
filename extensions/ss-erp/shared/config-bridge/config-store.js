@@ -28,7 +28,7 @@
     try {
       return text(chrome.runtime && chrome.runtime.getManifest
         && chrome.runtime.getManifest().version);
-    } catch (_error) {
+    } catch {
       return '';
     }
   }
@@ -124,8 +124,24 @@
     };
   }
 
+  function storageOperation(method, input) {
+    // An updated/reloaded extension can leave content scripts alive on old tabs.
+    // Chrome may throw before returning a Promise; keep every storage access in
+    // this boundary so existing callers can handle the failure with .catch().
+    return Promise.resolve().then(function () {
+      return chrome.storage.local[method](input);
+    }).catch(function (error) {
+      if (/extension context invalidated/i.test(text(error && error.message))) {
+        var invalidated = new Error('扩展已更新，请刷新当前页面后重试。');
+        invalidated.code = 'extension_context_invalidated';
+        throw invalidated;
+      }
+      throw error;
+    });
+  }
+
   function readSnapshot() {
-    return chrome.storage.local.get([
+    return storageOperation('get', [
       LOGISTICS_CALCULATOR_STATE_KEY,
       DEVICE_CREDENTIAL_KEY,
       SNAPSHOT_KEY,
@@ -159,20 +175,20 @@
   }
 
   function writeSnapshot(snapshot) {
-    return chrome.storage.local.set({
+    return storageOperation('set', {
       [SNAPSHOT_KEY]: snapshot,
       [UPDATED_AT_KEY]: new Date().toISOString(),
     });
   }
 
   function writeLogisticsCalculatorState(state) {
-    return chrome.storage.local.set({
+    return storageOperation('set', {
       [LOGISTICS_CALCULATOR_STATE_KEY]: state,
     });
   }
 
   function readOfficialSnapshot() {
-    return chrome.storage.local.get([
+    return storageOperation('get', [
       LOGISTICS_CALCULATOR_STATE_KEY,
       DEVICE_CREDENTIAL_KEY,
       OFFICIAL_SNAPSHOT_KEY,
@@ -190,13 +206,13 @@
   }
 
   function readCommissionSnapshot() {
-    return chrome.storage.local.get([COMMISSION_SNAPSHOT_KEY]).then(function (result) {
+    return storageOperation('get', [COMMISSION_SNAPSHOT_KEY]).then(function (result) {
       return result[COMMISSION_SNAPSHOT_KEY] || null;
     });
   }
 
   function readFxSnapshot() {
-    return chrome.storage.local.get([FX_SNAPSHOT_KEY]).then(function (result) {
+    return storageOperation('get', [FX_SNAPSHOT_KEY]).then(function (result) {
       return result[FX_SNAPSHOT_KEY] || null;
     });
   }

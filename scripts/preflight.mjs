@@ -123,7 +123,9 @@ const LOCAL_STEPS = [
   {
     name: 'extension Ozon list performance runtime contract',
     command: 'node',
-    args: ['--test', 'scripts/extension-ozon-list-performance-runtime.test.mjs'],
+    args: ['--test', 'scripts/extension-ozon-list-performance-runtime.test.mjs',
+      'scripts/extension-ozon-list-interactions.test.mjs', 'scripts/extension-ozon-detail-capture-entry.test.mjs',
+      'scripts/extension-config-store-lifecycle.test.mjs', 'scripts/extension-commission-host-permissions.test.mjs'],
   },
   {
     name: 'extension Seller origin access contract',
