@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 Ozon 修复459提交与双区签名完成，付费验收暂缓
+
+用户要求提交/签名发布后，源码修复 `68490e89`、浏览器runner格式收尾 `a4beee98`及前置复核发现的未知采集回执锁定修复 `43a8007c1bb8144d321325d6983088ffdd4733ce`均已推送；最终候选精确绑定43a8007c，不用中间提交签名。前置复核证明原后台仍会透传`device_collect_outcome_unknown`但可能丢失outcome，新UI现优先识别该errorCode、UNKNOWN_OUTCOME及automaticRetryAllowed=false并保持待核对锁。两处真实RED→GREEN、13项回归及独立只读复核通过；未绕过原owner或未知结果重试规则。
+
+COM/CN `1.0.459` 区域候选已通过完整打包、Ed25519签署/验签和真实签名包MV3安装、工作台默认/普通来源入口、popup及伪造来源拒绝验收。签名SHA分别 `a676342022bd12cdbbd22c458cc5d8f42190149afc03a50623985dd849099409` / `7065b04fc79d78488a3f91d6bddbcde81d42b127c9818a410d4116b15373d761`；签名时间取对应VPS UTC，不使用本机未来时间。原runner SHA `3e6855dad62198e67f80a0e18c13acc175458d9872a6e01287dea2dc01be03e2`，仅允许repository root、已验签ZIP解压根、Cloud名称和调用入口四项操作适配。pageErrors/blockedRequests均0；这是候选安装验收，不等于正式发布。
+
+新版佣金公开GET探针确认manifest精确host存在。首轮redirect:error主动拒绝同origin 307（仅增加__rr=1）而得到TypeError，不能归因DNS/CORS或声称站点故障。随后在专用459 Worker做有界、无凭据、仅允许该公开origin/path的观察，仍未拿到可确认费率，ruleCount0/未验证。未把本地fallback冒充当前官方同步成功，也未追加无限请求、换代理或绕过站点验证。
+
+用户随后明确选择“仅提交和签名，付费验收暂缓”。此时两区签名及目标备份恢复已通过，标准部署已启动但current尚未切换；COM已到无待迁移项的159 migrations核验，CN仍在候选验证。按新范围以canonical deploy lock核对精确父PID和旧current后，只停止本轮部署树；两区只读查询均确认unfinished migration=0，再恢复原服务。COM/CN API/Worker/Web active、ready的DB/Redis及运行commit均为原 `2e97c9d3 / 1.0.458`。本地offline在完整preflight中受控停止，原失败/部分日志保留，未生成native PASS或正式QA04，不能用定向绿色冒充全量回执。最初Windows raw Git字节恢复后的索引统计差异已由现有read-tree路径处理并逐blob核验；第一次非clean拒绝原件保留。
+
+没有新Provider POST、设备配对、生产采集或Ozon业务写入/新增费用；没有website canary/approval、CAS、distribution probe或公开pointer切换。专用9470及安装验收浏览器已关闭，用户9222未触碰；本轮未创建生产QA设备/账号令牌。被中止的两区目标release/封存目录、备份/原始停止日志及候选均保留，未递归删除；之后若恢复部署须走未完成release的受控恢复，不可直接覆盖既有release。COM迁移门禁期间的暂时API/Worker停机已结束，原服务已真实恢复，不能把这轮记成部署成功。
+
+签名/目标备份/安装/停止回执私有根 `release-43a8007c-orders`，部分offline在 `release-43a8007c-website459`，专用来源页只读准备与佣金观察在 `release-43a8007c-fresh459`；均不入Git。源码及候选交付已完成，费用验收与官网公开发布按用户选择明确暂缓；CHANGELOG保持Unreleased，不新增459公开发布日期。本次收尾提交只更新文档，不改43a8007c签名身份。
+
 ## 2026-10-16 Ozon 列表展开、工具栏和采集入口本地修复
 
 用户截图在官网458发现列表“展开”无响应、工具入口缺失及context invalidated/CORS。已在原代码隔离执行确认：`66161400`移除旧工作台时误删`attachOverlay`的展开点击监听，保留了按钮DOM；同时删掉`ensureListWorkbenchBar`定义却保留scanRoot调用，导致首次scan异常、快捷工具栏与MutationObserver未安装。原23项相关静态/局部测试仍通过，没有覆盖完整启动与按钮绑定；不是已证实的Ozon接口变更。利润计算器本体未删，原采集/跟卖入口被旧清理扩大移除且没有替代。
