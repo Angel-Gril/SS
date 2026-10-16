@@ -117,5 +117,3 @@ try {
   console.error(JSON.stringify({error:error.message,root,errors,state:session?await c.evaluate(session,'({url:location.href,cards:document.querySelectorAll(".ss-erp-overlay-card").length,text:document.body.innerText.slice(-1600),messages:__messages?.map(m=>m.type)})').catch(()=>null):null}));
   throw error;
 } finally { off(); await c.send('Browser.close').catch(()=>{});c.close(); }
-
-
