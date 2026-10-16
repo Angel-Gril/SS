@@ -1,5 +1,31 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 正式457 QA04/CN公开通过，COM下载消费者遗漏已复现并回滚
+
+用户登录后，r9旧profile入口仍指向r8已应用草稿；未发Provider前保留原拒绝/采集原件，正常新标签重新采集后单SKU新DOTH草稿 `draft-f473f08a-cb7e-4341-99c0-8faf95c37564`、snapshot `96b09b94-aa8a-447d-9743-f5a12b721b95`，suite `cmvai78eb00685olo2hjxzbx7` 正常物理UI START/CONTINUE一次、两槽attempt1/SUCCEEDED，原1086×1448→900×1200，两笔ERP CNY0.10 CHARGE，Ozon0。PENDING UI/数据库、两次原生preview及原字节、审核前目视记录、两次MEDIA_REVIEW/响应、原生assignment与r1/v1→r2/v2均已完整保存。重放HTTP200/replayed=true/相同batch，网络guard已保存实际`replay-request-1/response-1`；脚本随后重复保存同名文件遭EEXIST，原拒绝保留，正式输入直接引用原始network响应，不重写或重复外部写入。five pending全0、队列REMOVE_ON_COMPLETE及两slot实际读回通过，关闭专用来源页后取得完整browser回执，9222保留。
+
+正式QA04 SHA `88896514615f9d8554448acad242ea40dbf244431fd84807f5cdb243feba825e`，双区新版canary和approval通过。COM/CN批准摘要分别 `12c399ae5a893fa7a5f9994342942d37824fb6f1196f9ff63373310b2c5092a3` / `2d846ec66b11cf7781ced7793e610d88322a6384520049c4ed9c910fde828674`，两区native CAS均ACTIVATED。CN四件套实际匿名下载Cloud/Local和final publication verifier PASS；COM同样探针立即取得404“扩展发布证据不完整或无效”，没有将其记为发布成功。
+
+准确遗漏在 `apps/server/src/services/extension-website-publication.ts`，仍只接受旧2/3操作；前轮f4仅更新scripts发布批准消费者，未更新运行API。COM于 `2026-10-16T05:13:23.729Z` 在原canonical部署锁下校验旧456 approval签名/区域/origin/候选及当前新指针摘要，使用既有durable atomic writer恢复旧 `8187…5881 / e978c9bd / 1.0.456`；原失败457 pointer及原签署bundle保留，不改写新canary或批准。CN继续a899/457公开，双区应用仍a899/457；后续修复须新的版本候选，不能声称完整双区公开目标已完成。
+
+用户当前公开发布范围内的最小owner修复：COM独立接受已批准的固定顺序六操作组合，CN不接受；原owner/shop/device/policy digest、publisher capability.enabled=false、额外scope/未知组合拒绝保持。实际已有 `extensions-download.test.ts` 签名fixture/Fastify GET latest及Cloud/Local下载正例先RED，再service GREEN；相关文件48 passed/3既有Windows权限skip。最终458仅从新干净提交签名/标准双区部署、native offline及新同提交正常suite/正式QA04后再公开；不修改count精确执行提交门禁，也不复用r9为新提交执行。当前r9应用账号/合法QA设备仍暂保留以继续授权验收；COM/CN发布账号独立1h session待收尾清理，Provider/Ozon旧请求不重试。原件私有根 `product-928561537986-20261014-r9`，费用本轮r9 CNY0.20、本日r8+r9共CNY0.40、供应商账单未读取。
+
+## 2026-10-16 `a8998f55 / 1.0.457` 双区部署与服务器清理，官网等待最后原件
+
+当前源码及COM/CN运行提交为 `a8998f550d60b4956826507cee3e2f2d6de34be7 / 1.0.457`；双区签名、签名包真实MV3、活动Worker/Unicode、标准部署、目标及日常备份恢复、FULL VPS canonical均已通过。COM保留已批准的DOTH/六操作及商品分析，CN direct/RDS dark保持。`release-a8998f55-website-r2` 的同提交原生offline已完整PASS；前轮CRLF工作树的静态断言失败原件保留，独立checkout恢复原始Git字节并隔离Git系统换行配置后重跑，没有降低产品断言或改写失败为通过。源码和业务运行合同不因该操作脚本而变化。
+
+10月15日r6/r7两个新suite分别 `cmv9pcbbu000a5oloh88t33qy`、`cmv9pynci001w5olod0k45ni4`，四个count请求均供应商HTTP503 `model_service_unavailable`、Provider ID null、输出为空。既有管理员ABANDON/原请求replay按现有owner通过，ERP预扣合计CNY0.40已各释放一次，原FAILED/error/dispatch及供应商输出/费用UNKNOWN保留，没有重试旧请求。10月16日只读模型列表及状态HTTP200后另建r8正常来源页快照 `9cc858e6-7444-4ea7-8533-9fd08ff2cd9c`，绿色XL隔离DOTH草稿 `draft-d13ea811-c751-4478-aee8-0b8fea4460ba`，suite `cmvahgr2g004s5olo0hye1xea` 两槽attempt1/SUCCEEDED，原1086×1448/成品900×1200、两笔CNY0.10 CHARGE，Ozon0。PENDING UI及原生数据库已保存；原参考和供应商图片已下载保留。
+
+用户明确确认在9470手动审核并应用了r8两图；服务端两次MEDIA_REVIEW回执和同一合法QA device `572e45ca-7e2e-4f47-b295-db91c7b4d08c` 的两条assignment正常，草稿在 `2026-10-16T04:46:08.639Z` r1/v1→r2/v2。该动作早于Agent预览/审核原响应采集，因此旧r1 plan读取被mode-lock准确判stale，route对外映射503；不是生成图丢失。不得把事后只读回执冒充原始preview/review或倒改binding。当前不能以r8材料签正式QA04。
+
+用户原测试/费用授权仍在原范围内。最后取证r9复用专用profile和合法QA设备，原headless尝试被1688要求登录，已停止且保留拒绝；9470已切回有界面Chrome等待人工登录验证，不绕过人机门禁、不影响9222。r9尚未采集新快照或提交Provider，无新增费用；登录后只做正常新来源页草稿和一次两图，先保存native PENDING/preview，再审核/assignment/replay，正式QA04、双区canary/approval/CAS/probe都仍未执行。官网两区实读仍 `e978c9bd / 1.0.456`。本日新增Provider POST2、ERP CHARGE共CNY0.20、未读取供应商账单、Ozon0；用户已被告知等待自动取证期间勿再手动审核应用。
+
+本次服务器清理使用明确路径/不可变计划SHA、inode/mtime/非symlink及无运行进程检查：COM `/opt/ss-erp/shared/backups` 删除6份20260727至20260801过期后台gzip，共221023609字节；CN同目录删除6份同期间gzip，共50565826字节。两区各保留状态引用的最后一份20260802备份和status；被删旧gzip不可直接恢复，但当前独立恢复验证备份保留。两区现有 `/var/backups/ss-erp` 与 `-runtime` 的7天native规则无可删除孤儿，历史attestation引用的约13.3GiB备份未删除、保留规则未改变。
+
+另仅清理超过7天且未运行的 `/opt/ss-erp/failed-releases/*` 下固定node_modules、dist、.next生成目录：COM90个目录16849711104字节、CN18个目录3380555776字节；源码、失败回执、正式release/current、签名候选/官网pointer、数据库及图片不动，生成产物可按对应提交/lockfile重建。清理后COM磁盘78%→63%、约40GiB可用；CN81%→72%、约11GiB可用，三个服务及公网ready/DB/Redis正常。实际有效与保存的backup remote配置两区均disabled、bucket为空，未找到可明确归属的R2数据库备份桶，因此没有删除任何R2/OSS对象，未使用图片桶凭据代替备份配置。
+
+清理/计划/审计原件在私有 `release-a8998f55-cleanup-20261016` 与各VPS `/var/lib/ss-erp-private/backup-cleanup-20261016`；r8/r9真实证据分别在 `product-928561537986-20261014-r8/r9`。删除资格已有native retention4项回归通过，本次没有产品源码/schema/权限/部署策略修改；文档T0读回/diff验收，不把清理或原成功图片冒充官网公开完成。
+
 ### 457 native offline 换行夹具修正
 
 947f候选的offline在`deploy-build-inputs.test.mjs`第83行空白基线失败，原件保留。已复现CRLF脚本被fixture的LF属性归一化后，工作树字节与Git blob不同；并非`.next-dev`/`dist`排除失效。LF/CRLF双路径先得到明确RED，再由raw Git tree恢复fixture提交字节后GREEN；原部署输入owner、ignored源码拒绝及隐藏字节改动检查不变。中间56bc加入的额外过滤已撤回；未使用其未完成的offline作为正式证据。最终候选需重新完成原生offline、签名、双区部署及新来源页套图/QA04与公开门禁，官网仍原456。

@@ -475,7 +475,7 @@ function identifierList(value: unknown, label: string) {
   return result;
 }
 
-function validateRestrictedPilotPolicy(value: unknown, rollout: unknown) {
+function validateRestrictedPilotPolicy(value: unknown, rollout: unknown, region: WebsitePublicationApproval['region']) {
   const policy = exactObject(value, [
     'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
     'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
@@ -484,10 +484,17 @@ function validateRestrictedPilotPolicy(value: unknown, rollout: unknown) {
   const shopIds = identifierList(policy.shopIds, 'REL-04 pilot shopIds');
   const deviceSessionIds = identifierList(policy.deviceSessionIds, 'REL-04 pilot deviceSessionIds');
   const allowedOperations = policy.allowedOperations;
+  // Verify the already approved COM configuration, never grant publish capability.
+  const operationContracts = [
+    ['IMAGE_TO_IMAGE', 'SUITE'],
+    ['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'],
+    ...(region === 'COM' ? [[
+      'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH',
+    ]] : []),
+  ].map(operations => JSON.stringify(operations));
   if (policy.expectation !== 'hosted-pilot'
     || !Array.isArray(allowedOperations)
-    || ![JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE']),
-      JSON.stringify(['IMAGE_TO_IMAGE', 'SUITE', 'IMAGE_TRANSLATE'])].includes(JSON.stringify(allowedOperations))
+    || !operationContracts.includes(JSON.stringify(allowedOperations))
     || !Number.isSafeInteger(policy.rolloutRevision)
     || Number(policy.rolloutRevision) < 0
     || typeof policy.sourcePolicyRevision !== 'string'
@@ -623,6 +630,7 @@ function validateCanary(
     validateRestrictedPilotPolicy(
       rel04Evidence(checks, REL04_PILOT_CHECK_IDS[1]),
       bindings.rollout,
+      approval.region,
     );
     const hostedReady = exactObject(rel04Evidence(checks, REL04_PILOT_CHECK_IDS[2]), [
       'providerDispatchMethodUsed', 'ready', 'reasonCode', 'routeReachable',

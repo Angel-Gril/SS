@@ -20,6 +20,9 @@ import { loadPublishedExtensionRelease } from '../services/extension-website-pub
 const gitCommit = 'a'.repeat(40);
 const publicationPointerFilename = 'current.website-publication-approval.json';
 const roots: string[] = [];
+const approvedComPilotOperations = [
+  'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH',
+];
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -457,7 +460,7 @@ async function publishedFixture(input: {
       return check;
     });
   }
-  if (input.region === 'CN') {
+  if (input.region === 'CN' && input.canaryVersion !== 3) {
     darkCanary.bindings.noShopDarkCanary = true;
     darkCanary.checks = darkCanary.checks.slice(0, 4);
     darkCanary.checks[3].evidence = {
@@ -772,6 +775,82 @@ describe('extensionDownloadRoutes', () => {
         keyringPath: candidate.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
         expectedRegion: 'COM', trustedOwnerUid: null })).rejects.toThrow(/restricted pilot/u);
     }
+  });
+
+  it('serves both signed downloads for the exact approved COM six-operation configuration', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3,
+      pilotOperations: approvedComPilotOperations, mutateDarkCanary(canary) {
+        const checks = canary.checks as Array<{ id: string; evidence: Record<string, unknown> }>;
+        Object.assign(checks.find(check => check.id === 'publish-reconciliation-read')!.evidence, {
+          capabilityReason: 'policy_revision_mismatch', capabilityRevision: 'source-policy-16', capabilityLegacyAllowed: false,
+        });
+      } });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null,
+    })).resolves.toMatchObject({ approvalSha256: published.approvalSha256 });
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    try {
+      const latest = await app.inject({ method: 'GET', url: '/latest' });
+      expect(latest.statusCode).toBe(200);
+      for (const target of ['cloud', 'local'] as const) {
+        const download = await app.inject({ method: 'GET', url: routePath(latest.json().data.targets[target].downloadUrl) });
+        expect(download.statusCode).toBe(200);
+        expect(download.headers['x-publication-approval-sha256']).toBe(published.approvalSha256);
+        expect(download.rawPayload.equals(target === 'cloud' ? published.release.cloudBytes : published.release.localBytes)).toBe(true);
+      }
+    } finally { await app.close(); }
+  });
+
+  it('rejects the approved COM six-operation configuration in a correctly signed CN bundle', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3,
+      pilotOperations: approvedComPilotOperations, region: 'CN' });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.cn',
+      expectedRegion: 'CN', trustedOwnerUid: null,
+    })).rejects.toThrow(/restricted pilot/u);
+  });
+
+  it.each([
+    ['unknown operation', [...approvedComPilotOperations, 'UNKNOWN_OPERATION']],
+    ['extra generation operation', [...approvedComPilotOperations, 'TEXT_TO_IMAGE']],
+    ['extra publish scope', [...approvedComPilotOperations, 'listing:publish']],
+    ['reordered operations', [...approvedComPilotOperations].reverse()],
+    ['missing approved operation', approvedComPilotOperations.slice(0, -1)],
+    ['duplicate operation', [...approvedComPilotOperations, 'SUITE']],
+  ])('rejects a correctly signed COM publication with %s', async (_label, pilotOperations) => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3, pilotOperations });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null,
+    })).rejects.toThrow(/restricted pilot/u);
+  });
+
+  it.each([
+    ['enabled publisher capability', (canary: any) => {
+      canary.checks.find((check: any) => check.id === 'publish-reconciliation-read').evidence.capabilityEnabled = true;
+    }],
+    ['extra device scope evidence', (canary: any) => {
+      canary.checks.find((check: any) => check.id === 'restricted-pilot-policy').evidence.scopes = ['listing:publish'];
+    }],
+    ['changed policy digest', (canary: any) => { canary.bindings.rollout.policySha256 = '0'.repeat(64); }],
+  ])('rejects approved COM operations with %s', async (_label, mutateDarkCanary) => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3,
+      pilotOperations: approvedComPilotOperations, mutateDarkCanary });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null,
+    })).rejects.toThrow(/pilot|reconciliation/u);
   });
 
   it.each(['SS_ERP_DARK_MAINTENANCE_BASELINE', 'SS_ERP_DARK_MAINTENANCE_ACCEPTANCE',

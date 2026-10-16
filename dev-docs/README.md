@@ -1,5 +1,13 @@
 # SS ERP 内部开发真源
 
+## 2026-10-16 正式457 QA04通过，CN已公开，COM下载消费者修复准备458
+
+最后r9已完整保存两图PENDING→preview→审核→两条store-draft assignment→原请求replay，正式QA04 PASS；双区canary/approval/CAS通过，CN匿名Cloud/Local下载及final verifier通过。COM匿名probe真实404，定位服务端下载消费者漏接已批准六项配置；已在canonical部署锁下恢复原签名456指针，CN457及应用a899保持。唯一service及实际Fastify下载测试最小RED→GREEN，准备新的458候选标准部署/发布，不改写457原件或绕过fresh suite门禁。准确原件、短暂404及回滚、清理数量与当前未完成边界仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
+## 2026-10-16 最新构建已部署，官网发布等待最后来源页原件
+
+双区已运行 `a8998f55 / 1.0.457`，同提交 native offline、签名包MV3、备份恢复及FULL VPS验收通过；官网仍公开原456。供应商两轮503未决均已受审计关闭并释放ERP预扣，本日新的两图已成功，用户确认在9470手动审核并应用，草稿及两条assignment正确，但正式验收的预览/审核原响应未被采集，不能补造QA04。最后一次独立run尚未发出Provider请求，9470已显示1688登录验证，等待用户仅完成登录后由Agent继续取证。两区已清理过期后台备份及失败部署副本的生成缓存，R2数据库备份未配置、图片桶未动；准确数量、回执、未验证边界仅见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-15 官网最新构建发布准备
 
 用户授权切换公开下载。前轮507指定商品同窗采集、两张1086×1448原图→900×1200成品、审核/两条store-draft assignment及幂等已通过，ERP CNY0.20/Ozon0，临时9470与QA身份已清理；原记录保留。当前补齐QA04来源页schema5及COM固定六项配置的发布消费者，准备可识别的新候选457及其完整门禁，官网仍原456；事实与原件只见[直接适配owner](donor-workbench/direct-adaptation.md)。
