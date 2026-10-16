@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-17 460真实套图闭合，正式发布被QA04单店合同拒绝
+
+用户授权的COM/DOTH两图已成功，CNY0.20；审核前原件、审核/store-draft assignment/幂等、pending全0及队列读回通过。QA04仍将真实DOTH+BINI pilot强制等同单店，原生拒绝`QA04_SUITE_INVALID`，未改写证据或公开指针。新增合同修复范围待用户确认，本轮不再新增费用；测试设备/会话及9470已清理。首次默认BINI误建的隔离草稿、正确DOTH草稿、准确原件与官网未完成边界统一见[直接适配owner](donor-workbench/direct-adaptation.md)。双区应用460/官网458保持。
+
 ## 2026-10-16 佣金修复460已推送、签名并双区部署
 
 COM/CN均运行 `5b7ba450 / 1.0.460`，native offline、双区签名MV3、备份恢复/FULL VPS/ready通过。用户明确授权后COM pilot已通过现有管理员配置owner扩至DOTH+BINI，CN保持dark；COM签名460真实佣金同步/断网保留通过。官网仍458，付费正式验收与公开切换未执行；新签名包已交付本机Downloads用于教程。OGL精确规则与新增公开API仍未核验，不混入佣金修复。唯一部署/策略/费用及证据记录见[直接适配owner](donor-workbench/direct-adaptation.md)。

@@ -1,5 +1,17 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-17 460真实两图/审核/assignment通过，官网被QA04单店合同冲突拒绝
+
+用户重新明确批准官网公开发布，并单独授权COM/DOTH一次两图最高CNY0.20、不发布Ozon、不重试未知结果。已复核两区current及签名均`5b7ba450 / 1.0.460`且健康、官网仍458；旧458套图经原source bridge实际拒绝`QA04_ERP_SOURCE_CHANGED`，未降级门禁。新专用9470沿用只属于QA的1688 profile并加载精确签名460，不接管9222、不复制其cookie；通过正常account/device owner取得临时会话，设备按此前已批准的DOTH+BINI完整pilot配对，业务目标仅DOTH，执行前后原生配置/权限快照保持两店。
+
+首次来源页UI默认选择了按列表排首的BINI，实际新建一SKU隔离草稿`draft-7d9e1571-b4b5-4b0f-9e32-f30d76806d61`，DOTH读回等待超时。无Provider/审核/assignment/Ozon请求；先保存实际UI及账号GET回执，确认只有该BINI草稿且无DOTH草稿，没有重发原请求或删除记录。随后通过真实店铺选择UI明确切换DOTH，修正操作脚本的异步modal等待后确认按钮显示DOTH，再正常创建本次草稿`draft-95c12f9b-34c1-48ec-af81-d882401dd3c2`；前一选择脚本曾在modal render稳定前写select而失败、未发create，原失败均保留。未修改产品代码以迁就脚本或伪造DOTH归属。BINI遗留草稿仅隔离未发布数据，未授权删除，明确保留。
+
+实际来源商品928561537986/绿色XL SKU5977314154567，新快照`10f4590f-5675-4d03-87ed-35c10882d20a`。DOTH计划`cmvb6jmbu000k5o7th7e17jrz`经正常同窗owner审核，suite`cmvb6k1ks000u5o7tldd6x3j0`仅一次START/CONTINUE、两槽attempt1/SUCCEEDED；CNY0.10两笔CHARGE，共CNY0.20，未超额、不读取供应商账单、不重试旧请求。原始1086×1448及归一900×1200已持久保存，完整PENDING UI/数据库、START/CONTINUE原响应、两次真实preview原字节、两次审核原回执、两条store-draft assignment及相同原请求replay全部取得。草稿r1/v1→r2/v2，replay返回同batch且未多写；five pending全0、队列REMOVE_ON_COMPLETE两槽读回通过。棚拍和窗光墙面背景清楚不同、竖幅无补白，只认可隔离候选，不宣称印花逐像素无改动。
+
+正式QA04生成原生拒绝`QA04_SUITE_INVALID`。已从未修改的checker栈确定唯一拒绝在`qa04-final-suite-evidence.mjs`的pilot检查：要求`equal(value.result.shopIds, [binding.shopId])`，与真实且此前明确批准的DOTH+BINI策略冲突；两次原生pilot快照正确包含两店，本次实际binding及全部画像/费用/审核/assignment均DOTH。没有把快照改成单店、伪造通过、手工补binding或把offline冒充正式QA04。controller/manifest/input/失败诊断及所有业务原件原样保留；新确认项请求允许修正多店发布验收合同、再核验本次证据能否合法复用，本轮不再发Provider或新增费用。尚未修改该owner或source bridge，也未生成website canary/approval/CAS/distribution，官网继续旧458。
+
+本轮私有原件`release-5b7ba450-fresh460`；测试设备`11a29319-f9b0-4351-9ac9-af9aab834b94`仅本轮已通过正常owner撤销，临时account Redis session及远端/本地token已精确清理，专用9470关闭、9222不动；原用户设备/两店policy、两张图片、两区应用、DOTH/BINI草稿与费用记录保留。`normal-browser-final.json`等原执行回执未被cleanup覆盖；cleanup单独保存。当前免费/真实通过边界是套图与草稿应用，不是官网公开发布完成。
+
 ## 2026-10-16 `5b7ba450 / 1.0.460` 佣金修复双区部署完成
 
 用户明确要求修复后提交、签名并部署。最终源码 `5b7ba450d33bc7fb863bb16b39432d3f7250b980` 已推送，COM/CN分别生成不可变460候选并经Ed25519签署/验签；签名SHA为 `15e714cc2a5665e3d3f4f0b5a74f532bbea19afea4c3c959a8347141b0981000` / `0ea7827cc24b9167daf12f3d019518c4f89d72e819a2e1e85018f9322a178bea`，签名时间取各VPS实际UTC，旧459原件不覆盖。双区签名ZIP的真实MV3安装、默认精铺/普通商品/popup入口、来源图展示及伪造来源拒绝通过；COM签名460在全新9473真实点击同步取得10789条普通佣金规则，断网重读保留原快照与成功时间并显示警告。该签名实际取证原件在Temp `ss-erp-commission-fix-evidence-H9TNla`；未以开发包成功代替此结果。
