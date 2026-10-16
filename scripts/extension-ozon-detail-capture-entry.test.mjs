@@ -136,7 +136,9 @@ test('fetched data is not claimed as saved when the backend reports no saved pro
 });
 
 test('missing or malformed save receipts remain unknown and cannot automatically resubmit', async () => {
-  for (const receipt of [undefined, { ok: true }, { ok: true, data: { collected: 1 } }, { ok: true, data: { collected: 1, pushed: { code: 1, data: { saved: 0, errors: [] } }, errors: [] } }]) {
+  for (const receipt of [undefined, { ok: true }, { ok: false, errorCode: 'device_collect_outcome_unknown', error: '核对结果' },
+    { ok: false, outcome: 'UNKNOWN_OUTCOME', automaticRetryAllowed: false },
+    { ok: true, data: { collected: 1 } }, { ok: true, data: { collected: 1, pushed: { code: 1, data: { saved: 0, errors: [] } }, errors: [] } }]) {
     const run = harness();
     const panel = run.render('123456789');
     const button = collectButton(panel);

@@ -69,6 +69,8 @@ test('list collect/follow is explicit, single-flight, and never says success for
 
 test('missing save receipt and timeout keep same-product capture locked without retry', async () => {
   for (const response of [{ ok: true, data: { collected: 1 } }, { ok: false, timedOut: true, msg: '通信超时' },
+    { ok: false, errorCode: 'device_collect_outcome_unknown', error: '请核对采集结果' },
+    { ok: false, outcome: 'UNKNOWN_OUTCOME', automaticRetryAllowed: false },
     { ok: false, transportFailed: true, msg: 'The message port closed before a response was received.' },
     { ok: true, data: { collected: 1, pushed: { code: 1, data: { saved: 0 } }, errors: [] } }]) {
     const f = attached(); await f.sandbox.attachOverlay(f.card);

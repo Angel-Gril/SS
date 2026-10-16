@@ -2819,7 +2819,10 @@
         const pushed = response?.data?.pushed, errors = response?.data?.errors;
         const failure = response?.error || response?.msg || (Array.isArray(errors) && errors.find(item => item?.error)?.error);
         const saved = pushed?.data?.saved;
-        if (response?.ok === true && pushed?.code === 1 && Number.isInteger(saved) && saved > 0) {
+        if (response?.errorCode === 'device_collect_outcome_unknown' || response?.outcome === 'UNKNOWN_OUTCOME'
+          || response?.automaticRetryAllowed === false) {
+          display('结果待核对', '请先到 ERP 采集记录核对，勿重复采集', true);
+        } else if (response?.ok === true && pushed?.code === 1 && Number.isInteger(saved) && saved > 0) {
           display('✓ 已采集', Array.isArray(errors) && errors.length
             ? '已采集，部分规格失败：' + (failure || '请核对采集记录') : '已保存到 ERP，尚未发布 Ozon', true);
         } else if (!response?.timedOut && !response?.transportFailed && (response?.ok === false || pushed?.code === 0 || saved === 0 && failure)) {

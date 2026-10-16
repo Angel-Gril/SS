@@ -1158,7 +1158,10 @@
       const errors = data && Array.isArray(data.errors) ? data.errors : [];
       const backendErrors = pushed && pushed.data && Array.isArray(pushed.data.errors) ? pushed.data.errors : [];
       const firstError = errors.concat(backendErrors).find((item) => item && typeof item.error === "string" && item.error);
-      if (response && response.ok === true && pushed && pushed.code === 1 && Number.isSafeInteger(saved) && saved > 0) {
+      if (response && (response.errorCode === 'device_collect_outcome_unknown'
+        || response.outcome === 'UNKNOWN_OUTCOME' || response.automaticRetryAllowed === false)) {
+        state.unknown = true;
+      } else if (response && response.ok === true && pushed && pushed.code === 1 && Number.isSafeInteger(saved) && saved > 0) {
         state.message = `已采集 ${saved} 件，未上架${firstError ? "；部分数据失败：" + firstError.error : ""}`;
       } else if ((response && response.ok === false) || (pushed && pushed.code === 0) || (saved === 0 && firstError)) {
         state.message = "采集失败：" + ((response && response.error) || (firstError && firstError.error) || (pushed && pushed.msg) || "ERP 未保存商品");
