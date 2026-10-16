@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.0.461] - 2026-10-17
+
 ### Fixed
 
 - 多店试点的发布验收按真实批准名单核验实际操作店铺，不再要求整个试点只有一家店；保留原始套图和收费证据，验收脚本修复无需重复付费生图。
@@ -23,6 +25,7 @@
 
 ### Changed
 
+- COM/CN 应用与官网 Cloud/Local 下载公开更新至 `efd4f4ad / 1.0.461`；正式 QA04 合法复用 460 的完整两图原件，双区 canary、签署批准、CAS 和四包匿名下载验签通过，没有新增生图费用。
 - QA04 完整离线流程复用本次已经成功的全仓类型检查，避免内部 preflight 重复执行；独立 preflight 仍保持完整。
 
 ## [1.0.458] - 2026-10-16
@@ -282,7 +285,8 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/2e97c9d39ed6eb075830ad6aabe5d386cbdc8761...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/efd4f4ad4fd513db6dcaf72c0c7617271c311d4b...HEAD
+[1.0.461]: https://github.com/Angel-Gril/SS/compare/2e97c9d39ed6eb075830ad6aabe5d386cbdc8761...efd4f4ad4fd513db6dcaf72c0c7617271c311d4b
 [1.0.458]: https://github.com/Angel-Gril/SS/compare/e978c9bd3a30132e2a6a1a33951f44c922403842...2e97c9d39ed6eb075830ad6aabe5d386cbdc8761
 [1.0.456]: https://github.com/Angel-Gril/SS/compare/66c9396c48e3b934a18257fca945363be0c742e6...e978c9bd3a30132e2a6a1a33951f44c922403842
 [1.0.448]: https://github.com/Angel-Gril/SS/compare/149855518f39e0475571e8ab6fc382530a177b7f...66c9396c48e3b934a18257fca945363be0c742e6

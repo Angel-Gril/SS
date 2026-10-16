@@ -1,8 +1,8 @@
 # SS ERP 内部开发真源
 
-## 2026-10-17 多店QA04修复已授权，准备免费复用460原执行
+## 2026-10-17 `efd4f4ad / 1.0.461` 双区官网公开发布完成
 
-用户允许修复多店验收并核验原件复用，不再新增Provider/费用。当前仅四个QA04脚本/测试及文档修复，19项定向通过、完整回归与签前复核进行中；计划新461候选，原460所有业务回执保留。两区应用460/官网458不变，未补写旧QA04或绕过公开门禁。具体当前状态见[直接适配owner](donor-workbench/direct-adaptation.md)，来源桥与schema2边界见[验证owner](release-validation.md)。
+多店 QA04 修复已推送，461 自身完整 native offline、签名包 MV3、双区标准部署/备份恢复/FULL VPS 通过。原 460 两图及 CNY0.20 收费原件不变，当前模型/价格与完整数据库只读核验通过，正式 QA04、COM v3/CN v2 canary、官网批准/CAS、四包匿名下载及最终验签均通过；两区应用和官网均为461。本轮新增Provider/费用/Ozon均0，临时发布设备与账号凭据已撤销清理；COM 保持 DOTH+BINI 与商品分析，CN 保持 dark。COM 本地网络下载超时及实际成功原件均保留，不宣称所有网络路径稳定。准确候选、回执及剩余边界只见[直接适配owner](donor-workbench/direct-adaptation.md)，受限复用合同见[验证owner](release-validation.md)。
 
 ## 2026-10-17 460真实套图闭合，正式发布被QA04单店合同拒绝
 

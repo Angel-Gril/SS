@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-17 `efd4f4ad / 1.0.461` 双区官网公开发布完成
+
+用户允许修正多店验收合同并免费核验原件复用后，最终修复提交 `efd4f4ad4fd513db6dcaf72c0c7617271c311d4b` 已推送。仅四个 QA04 消费者/测试及文档变化，没有修改扩展或服务端业务运行代码；19项定向、152项受影响回归和签前独立复核通过。COM/CN 各自461候选均经 Ed25519 签名、验签及真实签名ZIP的MV3安装/工作台/popup/来源拒绝验收；签名SHA分别为 `1aa2b4b580be3d1be99da8a0a5252b4672246f5a60ea41c223b0600bb33324c6` / `ceed1129ba108197c1d5022592ea56e2ef8a92427f2f664c034eedba41ae8630`，不覆盖旧460原件。
+
+目标提交独立 clean checkout 的完整 native offline 九阶段于 `2026-10-16T17:37:02.089Z` PASS，后端7400 passed/395既有环境skip、PostgreSQL scope/revocation与AI媒体集成/升级回放及双模式包验证通过；不把skip记为实测。双区目标/日常备份恢复分别144/143表，标准部署、FULL VPS canonical与最后ready实读同提交，API/Web/Worker active、DB/Redis正常。标准迁移门禁期间API/Worker曾暂停，不能记为无停机；两区FULL各0 failure/1既有local-only备份warning，未改变远端备份策略。COM原DOTH+BINI、六操作及商品分析保持，CN原direct/RDS/AI dark保持。
+
+原 `release-5b7ba450-fresh460` 的suite `cmvb6k1ks000u5o7tldd6x3j0`、schema1控制、来源页/START/CONTINUE/PENDING/preview/审核/assignment/replay、两笔CNY0.10 CHARGE均原样保留。新461输入通过受限Git来源桥，另取得461 offline之后的原生当前runtime、pending/final数据库READ ONLY读回和schema2清理回执，引用原schema1 SHA；完整图仍2条assignment，五项pending均0，活动设备由原2降至1，未新增业务写入。正式QA04在 `2026-10-16T17:37:50.406Z` PASS，SHA `5148318b09a098d8b7e6f6fb81e105c25ed6969214ee239804a8f1668de5606b`，没有反写460或重复付费生成。
+
+COM首轮canary明确拒绝临时签名安装目录派生的扩展ID（生产CORS不接受）；失败原件保留，未扩大CORS。新canary使用已存在且当前生产CORS读回确认的canonical origin，候选签名/VPS/QA04仍461绑定，临时安装身份仅证明安装验收、不冒充生产CORS身份。CN原已授权验收账号现有1家店，旧none-shop选择拒绝后保留原件；只复用同一历史owner哈希，通过其正常GET店铺/能力后走现有有店铺dark canary，不换用其他用户、不创建账号或删除店铺、不改变CN开关。最终COM v3/CN v2 canary均PASS，真实设备配对/refresh/禁用路径/撤销后401通过，canary自身Provider/ingest/Ozon写入均false，临时设备已清理。
+
+双区website approval及native CAS均ACTIVATED，COM批准SHA `0193ddc3e6ba58d33e49659f16dc1eb0bdad87c6c50c6ad7eeef026f998ed2b5`、CN `e5cf6bdc626052adaa1fae1a5238c12679823ca4c4dd0f306968271108f48635`。Google/Cloudflare独立DNS quorum、公网TLS/匿名无凭据/禁止跳转的原生探针实际下载四包HTTP200、字节数及SHA匹配，最终publication verifier双区通过；COM/CN distribution SHA分别 `90965cc5e6c26ca934108794e8f8b5cdc73741d2adf8dbeb1e4f46cdee3fa2e8` / `1ca26ed9a586cdbbf63fb3d3942f7d30f72f45b38e71e704f1527278e62e39c8`。COM两轮首选CF地址ZIP触发30秒超时，原记录保留；源站/VPS公网均200且快速，经同双DNS确认的另一公网地址在原30秒/字节/SHA限制下完成原生探针（Cloud4.056秒、Local8.249秒），没有降低门禁或仅看latest判成功。其后独立curl仍观察到本机下载吞吐波动，因此不宣称所有COM网络路径稳定或网络问题已完全修复。
+
+最终两区 `/api/extensions/latest` 与服务健康实读均 `efd4f4ad / 1.0.461`。发布账号Redis会话已精确撤销（COM1/CN2），本轮远端/本地token副本已删除；未创建新浏览器，用户9222及原DOTH/BINI草稿、图片、费用与失败证据保留。新增Provider/Ozon请求及生图费用均0，原460实际CNY0.20不变；OGL独立规则/API适配仍未验证，不随本次晋升。签名/部署原件在私有 `release-efd4f4ad-orders`，offline/当前读回/正式QA04/canary/批准/CAS/分发/清理原件在 `release-efd4f4ad-website461`，均不入Git。CHANGELOG以真实公开日期归入461，459/460不伪记官网公开；文档收尾提交不改变候选身份。
+
 ## 2026-10-17 多店验收合同修复进行中，460原suite保留
 
 用户已明确批准修正多店发布验收合同、检查本次证据合法复用，不新增Provider请求或费用。当前修改仅四个QA04验收脚本/测试与真源/CHANGELOG：名单从写死单店改为按现有pilot合法ID合同限制1–50、唯一且包含执行店铺，前后完整权限仍精确相等；count接受现有schema2后续只读清理，但必须引用原schema1 executionControl并检查原before/after、费用profile及原浏览器时间，当前pending/final完整图和deviceCount不增长保持。原460来源/套图/审核/费用/assignment/replay/控制记录一字不改；schema1严格原时序不放宽。
