@@ -375,10 +375,14 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     const targetCleanup = controller.schemaVersion === 2;
     const cleanupCommit = targetCleanup ? input.targetGitCommit : commit;
     const pilot = (value, runtimeCommit) => {
+      const shops = value?.result?.shopIds;
+      check(Array.isArray(shops) && shops.length > 0 && shops.length <= 50
+        && shops.every(shop => typeof shop === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(shop))
+        && new Set(shops).size === shops.length && shops.includes(binding.shopId));
       check(value?.kind === 'SS_ERP_CURRENT_HOSTED_PILOT_RUNTIME_ACCEPTANCE' && value.gitCommit === runtimeCommit
         && /^\d+\.\d+\.\d+$/u.test(value.version) && value.region === 'COM'
         && value.providerRequests === 0 && value.ozonWrites === 0 && value.result?.expectation === 'hosted-pilot'
-        && value.result.ownerSha256 === owner && equal(value.result.shopIds, [binding.shopId])
+        && value.result.ownerSha256 === owner
         && positive(value.result.deviceCount) && (sourcePageWorkflow ? isApprovedAiMediaHostedPublicationOperations(value.result.allowedOperations)
           : isRestrictedAiMediaHostedPilotOperations(value.result.allowedOperations))
         && positive(value.result.rolloutRevision) && text(value.result.sourcePolicyRevision));
@@ -400,8 +404,21 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       && samePilot
       && time(beforePilot.observedAt) <= time(binding.launchedAt)
       && time(afterPilot.observedAt) >= time(applied.at));
-    if (countProfile) check(controller.schemaVersion === 1 && controller.unitCostCents === unitCost
+    if (countProfile) check((controller.schemaVersion === 1 || targetCleanup) && controller.unitCostCents === unitCost
       && controller.providerProfile === COUNT_SUITE_PROFILE);
+    if (countProfile && targetCleanup) {
+      check(isRecord(controller.executionControl));
+      const original = read(controller.executionControl);
+      check(original.schemaVersion === 1 && original.kind === controller.kind && original.gitCommit === commit
+        && original.version === binding.extensionVersion && original.ownerSha256 === owner && original.region === 'COM'
+        && original.currency === 'CNY' && original.unitCostCents === unitCost && original.maximumTaskCostCents === taskCost
+        && original.providerProfile === COUNT_SUITE_PROFILE && original.configurationChanged === false
+        && equal(original.pending, expectedPending) && equal(original.before, controller.before));
+      const originalAfter = pilot(original.after, commit);
+      check(equal(originalAfter.result, controller.before.result)
+        && time(originalAfter.observedAt) >= time(applied.at) && time(originalAfter.observedAt) <= time(browser.completedAt)
+        && time(afterPilot.observedAt) >= time(originalAfter.observedAt));
+    }
     if (targetCleanup) {
       check(controller.executionGitCommit === commit);
       // Later maintenance is evidence about the current runtime, never a

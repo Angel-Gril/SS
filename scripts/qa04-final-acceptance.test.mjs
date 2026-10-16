@@ -1138,6 +1138,63 @@ test('source-page v5 accepts the exact approved COM configuration but rejects ad
   assert.throws(() => fresh.verify(), error => ['QA04_SUITE_INVALID','QA04_OFFLINE_INVALID'].includes(error.code));
 });
 
+test('source-page suite accepts an unchanged multi-shop pilot containing its exact execution shop', t => {
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+  f.change(f.input.normalErp.controllerStatus, value => {
+    value.before.result.shopIds.push('approved-second-shop');
+    value.after.result.shopIds.push('approved-second-shop');
+  });
+  assert.equal(f.verify().report.provenance.normalErp.successfulImages, 2);
+});
+
+for (const [name, mutate] of [
+  ['missing execution shop', value => { value.before.result.shopIds = ['another-shop']; value.after.result.shopIds = ['another-shop']; }],
+  ['duplicate shops', value => { value.before.result.shopIds.push(value.before.result.shopIds[0]); value.after.result.shopIds.push(value.after.result.shopIds[0]); }],
+  ['blank shop', value => { value.before.result.shopIds.push(' '); value.after.result.shopIds.push(' '); }],
+  ['noncanonical shop', value => { value.before.result.shopIds.push(' another-shop '); value.after.result.shopIds.push(' another-shop '); }],
+  ['URL as shop id', value => { value.before.result.shopIds.push('https://untrusted.invalid/shop'); value.after.result.shopIds = [...value.before.result.shopIds]; }],
+  ['path as shop id', value => { value.before.result.shopIds.push('../shop'); value.after.result.shopIds = [...value.before.result.shopIds]; }],
+  ['too many shops', value => { value.before.result.shopIds.push(...Array.from({ length: 50 }, (_, index) => 'shop-' + index)); value.after.result.shopIds = [...value.before.result.shopIds]; }],
+  ['authority growth', value => { value.after.result.shopIds.push('new-unapproved-shop'); }],
+]) {
+  test('multi-shop execution still refuses ' + name, t => {
+    const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+    f.change(f.input.normalErp.controllerStatus, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  });
+}
+
+test('count suite supports later read-only cleanup without changing original execution receipts', t => {
+  const f = historicalCountReuseFixture(t), previous = f.get(f.input.normalErp.controllerStatus);
+  const original = [...f.originals];
+  previous.version = f.get(f.manifest.workbench).extensionVersion;
+  previous.before.version = previous.version; previous.after.version = previous.version;
+  const executionControl = f.put('count-consistent-execution-control.json', previous);
+  const pending = f.put('count-current-pending.json', {
+    kind: 'REAL_HOSTED_SUITE_PENDING_READBACK', caseId: 'suite', phase: 'pending',
+    gitCommit: f.input.targetGitCommit, readbackRuntimeCommit: f.input.targetGitCommit,
+    databaseId: 'production-com-primary', ownerSha256: previous.ownerSha256,
+    observedAt: '2026-09-16T11:52:00.000Z', readOnly: true, pending: previous.pending,
+  });
+  const final = f.put('count-current-db.json', { ...f.get(f.input.normalErp.restored),
+    gitCommit: f.input.targetGitCommit, readbackRuntimeCommit: f.input.targetGitCommit,
+    observedAt: '2026-09-16T11:53:00.000Z' });
+  const controller = { ...previous, schemaVersion: 2, gitCommit: f.input.targetGitCommit,
+    executionGitCommit: f.executionCommit, executionControl, pendingReadback: pending, finalReadback: final,
+    after: { ...previous.after, gitCommit: f.input.targetGitCommit, observedAt: '2026-09-16T11:51:00.000Z',
+      result: { ...previous.after.result, deviceCount: 1 } } };
+  f.input.normalErp.controllerStatus = f.put('count-current-controller.json', controller);
+  assert.equal(f.verify().report.provenance.normalErp.executionCommit, f.executionCommit);
+  for (const ref of original) assert.equal(hash(readFileSync(ref.path)), ref.sha256);
+  for (const mutate of [value => { value.unitCostCents = 14; }, value => { value.providerProfile = 'different-profile'; },
+    value => { value.after.result.deviceCount = 3; }, value => { value.after.result.shopIds.push('unapproved'); },
+    value => { delete value.executionControl; }]) {
+    f.change(f.input.normalErp.controllerStatus, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+    Object.assign(f.input.normalErp.controllerStatus, f.put('count-current-controller.json', controller));
+  }
+});
+
 test('source-page v5 refuses changed page identity, draft ownership, navigation and unverified dimensions', t => {
   for (const [key, mutate] of [
     ['sourceEntry', value => { value.pagesAfter[0].url = 'https://app.ss-erp.com/collect/source'; }],

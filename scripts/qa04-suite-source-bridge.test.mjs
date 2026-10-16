@@ -28,6 +28,8 @@ function fixture(t) {
     'apps/server/prisma/schema.prisma', 'extensions/ss-erp/manifest.json', 'scripts/build.mjs', 'package.json']) write(name, 'original\n');
   write('extensions/ss-erp/pages/precision-workbench.css', '.panel { color: black; }\n');
   write('dev-docs/README.md', '# Original\n');
+  for (const name of ['qa04-final-suite-evidence.mjs', 'qa04-final-acceptance.test.mjs',
+    'qa04-suite-source-bridge.mjs', 'qa04-suite-source-bridge.test.mjs']) write('scripts/' + name, 'original verifier\n');
   git('add', '--', 'apps', 'packages', 'pnpm-lock.yaml', 'extensions', 'scripts', 'package.json', 'dev-docs');
   git('commit', '-qm', 'execution source');
   const executionCommit = git('rev-parse', 'HEAD');
@@ -59,10 +61,51 @@ test('pure CSS reuse explicitly leaves fresh target UI verification mandatory', 
   assert.equal(result.changes[0].kind, 'CSS_PRESENTATION');
 });
 
+for (const name of ['qa04-final-suite-evidence.mjs', 'qa04-final-acceptance.test.mjs',
+  'qa04-suite-source-bridge.mjs', 'qa04-suite-source-bridge.test.mjs']) {
+  test('suite reuse allows an existing QA04 evidence-consumer correction only: ' + name, t => {
+    const f = fixture(t), filename = 'scripts/' + name;
+    f.write(filename, 'reviewed verifier correction\n');
+    const result = f.verify(f.commit(filename));
+    assert.equal(result.changes[0].kind, 'QA04_EVIDENCE_CONSUMER');
+    assert.equal(result.requiresFreshTargetUiVerification, false);
+  });
+}
+
+test('an evidence-consumer change never permits a neighboring generation change', t => {
+  const f = fixture(t), filename = 'scripts/qa04-final-suite-evidence.mjs';
+  f.write(filename, 'reviewed verifier correction\n'); f.commit(filename);
+  f.write('apps/server/src/suite.ts', 'unreviewed runtime\n');
+  assert.throws(() => f.verify(f.commit('apps/server/src/suite.ts')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
+for (const action of ['add', 'remove', 'executable', 'symlink']) {
+  test('evidence consumers cannot be newly added, removed, executable or symlinked: ' + action, t => {
+    const f = fixture(t), filename = 'scripts/qa04-final-suite-evidence.mjs';
+    if (action === 'add') {
+      f.git('rm', '--', filename); f.git('commit', '-qm', 'no original verifier');
+      const execution = f.git('rev-parse', 'HEAD'); f.write(filename, 'new verifier\n');
+      assert.throws(() => subject.verifySuiteSourceBridge(f.root, execution, f.commit(filename)), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+    } else if (action === 'remove') {
+      f.git('rm', '--', filename); f.git('commit', '-qm', 'remove verifier');
+      assert.throws(() => f.verify(f.git('rev-parse', 'HEAD')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+    } else if (action === 'executable') {
+      f.git('update-index', '--chmod=+x', filename); f.git('commit', '-qm', 'executable verifier');
+      assert.throws(() => f.verify(f.git('rev-parse', 'HEAD')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+    } else {
+      const object = f.git('hash-object', '-w', '--stdin');
+      f.git('update-index', '--cacheinfo', '120000,' + object + ',' + filename); f.git('commit', '-qm', 'linked verifier');
+      assert.throws(() => f.verify(f.git('rev-parse', 'HEAD')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+    }
+  });
+}
+
 for (const filename of ['apps/server/src/suite.ts', 'apps/web/src/app/page.tsx', 'packages/shared/contract.ts',
   'apps/server/prisma/schema.prisma', 'apps/server/prisma/migrations/new/migration.sql', 'pnpm-lock.yaml',
   'package.json', 'apps/web/package.json', '.npmrc', '.gitattributes', 'config/runtime.json', '.github/workflows/build.yml',
   'extensions/ss-erp/manifest.json', 'extensions/ss-erp/pages/workbench.js', 'scripts/build.mjs',
+  'scripts/qa04-final-evidence.mjs', 'scripts/qa04-final-suite-fixture.mjs', 'scripts/qa04-count-suite-profile.mjs',
+  'scripts/qa04-suite-current-runtime.mjs', 'scripts/qa04-offline-gate.mjs', 'scripts/qa04-final-suite-evidence-extra.mjs',
   'dev-docs/looks-like-a-document.mjs', 'apps/server/src/document.md', 'unknown.css']) {
   test(`suite reuse fails closed for protected or unknown change ${filename}`, t => {
     const f = fixture(t); f.write(filename, 'changed behavior\n');

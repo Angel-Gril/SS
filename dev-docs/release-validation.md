@@ -44,7 +44,7 @@ pnpm validate:change --build --run --output "C:\私有证据\new-run-2" --resume
 
 ## 原始套图证据的受限复用
 
-`qa04-suite-source-bridge.mjs` 比较原执行与目标提交的完整 Git tree，并要求原提交为目标祖先。只允许指定文档或已有纯 CSS blob 变化；未知代码、依赖、schema、权限、manifest、配置、构建/发布脚本及下载service仍拒绝。CSS含外部URL、import、转义或可执行构造也拒绝。没有用静态import猜测任意业务代码“肯定无关”。
+`qa04-suite-source-bridge.mjs` 比较原执行与目标提交的完整 Git tree，并要求原提交为目标祖先。允许指定文档或已有纯 CSS blob 变化；2026-10-17用户明确批准多店验收修复后，另只允许四个现存QA04证据消费者及其测试：`qa04-final-suite-evidence.mjs`、`qa04-final-acceptance.test.mjs`、`qa04-suite-source-bridge.mjs`、`qa04-suite-source-bridge.test.mjs`（均在scripts下）。四路径须原/目标同时存在且均100644，不允许新增、删除、可执行或symlink转换；记录独立`QA04_EVIDENCE_CONSUMER`变更种类，不豁免原业务证据。其他代码、依赖、schema、权限、manifest、配置、构建/发布脚本、证据producer/fixture/金额profile及下载service仍拒绝。CSS含外部URL、import、转义或可执行构造也拒绝。没有用静态import猜测任意业务代码“肯定无关”。
 
 原套图的来源页、START/CONTINUE、PENDING、预览、审核、费用、assignment/replay、执行commit及其native offline原件全部保持不变。目标提交仍需自己的fresh native offline及新的双区VPS、canary、批准/CAS/下载证据。新输入可增加：
 
@@ -56,6 +56,8 @@ pnpm validate:change --build --run --output "C:\私有证据\new-run-2" --resume
 ```
 
 `qa04-suite-current-runtime.mjs` 通过现有suite配置owner读取当前选用的Provider快照；PostgreSQL强制只读，输出仅模型/价格/凭据修订等合同生成的摘要，不能从旧job frozenConfig伪造current。须匹配原suiteRuntime的hash/pricing及费用合同，观察时间在目标offline之后且距核验不超过一小时。单张收费owner未改变。命令使用 `node --import ./apps/server/node_modules/tsx/dist/loader.mjs scripts/qa04-suite-current-runtime.mjs --commit <target> --output <new-private-file>`；凭据从既有私有环境注入，不写入命令参数或回执。
+
+多店pilot原生名单须为1–50个合法、唯一ID并包含实际binding.shopId；执行前后完整授权字段仍须相同，不将单次DOTH操作误报为只授权DOTH。count费用profile的schema2后续只读清理沿用现有pending/final图完整比对、当前commit/time/readOnly及deviceCount不增长检查，并必须新增`executionControl`引用原schema1控制回执，严格核验原before/after、原模型费用profile和浏览器执行时间；不能删除BINI权限、修改原after时间或把历史任务配置当当前配置。schema1原时序及设备数量相同约束保持。新候选需完整自己的离线/签名/部署/当前runtime证据，此修复不授权新增生图、改费用或省略官网门禁。
 
 CSS复用还由 `qa04-suite-target-ui-readback.mjs` 只读检查已打开的专用浏览器：签名候选、ZIP SHA、完整安装目录、活动Worker主文件、当前工作台可见控件、目标CSS blob与实际CSSOM、实际截图。不会导航、reload、点击、配对或提交业务请求；`--help`列出精确输入。QA04读取该截图字节和时间/commit；COM REL04再绑定当前区域签名，CN dark保留独立区域签名及同版本身份。当前producer只支持来源页工作台已加载的扩展pages CSS，Web CSS或content CSS不因此自动获准复用。目标UI仍需人工/浏览器覆盖具体改动；可见控件/截图不等于完整交互验收。
 

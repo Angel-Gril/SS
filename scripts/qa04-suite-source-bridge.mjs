@@ -6,11 +6,18 @@ const CODE = 'QA04_ERP_SOURCE_CHANGED';
 const check = value => requireThat(value, CODE);
 const DOCUMENT = /^(?:(?:docs|dev-docs)\/(?:[^/]+\/)*[^/]+\.md|(?:README|CHANGELOG|CONTRIBUTING|LICENSE)\.md)$/u;
 const PRESENTATION = /^(?:extensions\/ss-erp\/(?:pages|content)|apps\/web\/src)\/(?:[^/]+\/)*[^/]+\.css$/u;
+const EVIDENCE_CONSUMERS = new Set([
+  'scripts/qa04-final-suite-evidence.mjs',
+  'scripts/qa04-final-acceptance.test.mjs',
+  'scripts/qa04-suite-source-bridge.mjs',
+  'scripts/qa04-suite-source-bridge.test.mjs',
+]);
 
-// This is deliberately an allowlist of inert presentation/document changes,
+// This is deliberately an allowlist of inert presentation/document changes
+// and four existing, reviewed QA04 evidence consumers (never runtime producers),
 // not an import-graph guess. Every other tracked path remains protected,
 // including build scripts, credentials/config contracts, package manifests,
-// schema, migrations, shared contracts, extension permissions and all JS/TS.
+// schema, migrations, shared contracts, extension permissions and all runtime JS/TS.
 export function verifySuiteSourceBridge(root, executionCommit, targetCommit) {
   check(isCommit(executionCommit) && isCommit(targetCommit));
   const git = args => {
@@ -47,6 +54,9 @@ export function verifySuiteSourceBridge(root, executionCommit, targetCommit) {
       && (target === undefined || target.mode === '100644 blob'));
     let kind;
     if (DOCUMENT.test(filename) && !filename.split('/').some(part => part.startsWith('.'))) kind = 'DOCUMENTATION';
+    else if (EVIDENCE_CONSUMERS.has(filename) && execution?.mode === '100644 blob' && target?.mode === '100644 blob') {
+      kind = 'QA04_EVIDENCE_CONSUMER';
+    }
     else if (PRESENTATION.test(filename) && execution && target) {
       for (const entry of [execution, target]) {
         const css = git(['cat-file', 'blob', entry.objectId]);

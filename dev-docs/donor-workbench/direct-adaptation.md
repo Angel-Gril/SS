@@ -1,5 +1,11 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-17 多店验收合同修复进行中，460原suite保留
+
+用户已明确批准修正多店发布验收合同、检查本次证据合法复用，不新增Provider请求或费用。当前修改仅四个QA04验收脚本/测试与真源/CHANGELOG：名单从写死单店改为按现有pilot合法ID合同限制1–50、唯一且包含执行店铺，前后完整权限仍精确相等；count接受现有schema2后续只读清理，但必须引用原schema1 executionControl并检查原before/after、费用profile及原浏览器时间，当前pending/final完整图和deviceCount不增长保持。原460来源/套图/审核/费用/assignment/replay/控制记录一字不改；schema1严格原时序不放宽。
+
+来源桥仅额外识别四个两端现存100644的QA04证据消费者，新增/删除/mode/symlink或任何相邻producer/fixture/金额profile/构建/runtime变更仍拒绝；目标新候选计划461，须自身native offline、签名、双区部署与当前数据库只读runtimeHash一致后才能接受460原执行。精确范围唯一见[验证owner](../release-validation.md)，不会以未提交的新checker给旧460直接补PASS。已取得多店/schema2/来源桥6项真实RED，再补非法ID/原控制缺失RED并GREEN；19项定向和QA04/source-bridge/current-runtime/target-UI/REL04完整相关回归152项通过，0 skipped，脚本lint/diff通过，签名前独立复核无新增阻断。尚无新签名、部署或官网切换，Provider/费用/Ozon新增均0。
+
 ## 2026-10-17 460真实两图/审核/assignment通过，官网被QA04单店合同冲突拒绝
 
 用户重新明确批准官网公开发布，并单独授权COM/DOTH一次两图最高CNY0.20、不发布Ozon、不重试未知结果。已复核两区current及签名均`5b7ba450 / 1.0.460`且健康、官网仍458；旧458套图经原source bridge实际拒绝`QA04_ERP_SOURCE_CHANGED`，未降级门禁。新专用9470沿用只属于QA的1688 profile并加载精确签名460，不接管9222、不复制其cookie；通过正常account/device owner取得临时会话，设备按此前已批准的DOTH+BINI完整pilot配对，业务目标仅DOTH，执行前后原生配置/权限快照保持两店。

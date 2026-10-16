@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-17 多店QA04修复已授权，准备免费复用460原执行
+
+用户允许修复多店验收并核验原件复用，不再新增Provider/费用。当前仅四个QA04脚本/测试及文档修复，19项定向通过、完整回归与签前复核进行中；计划新461候选，原460所有业务回执保留。两区应用460/官网458不变，未补写旧QA04或绕过公开门禁。具体当前状态见[直接适配owner](donor-workbench/direct-adaptation.md)，来源桥与schema2边界见[验证owner](release-validation.md)。
+
 ## 2026-10-17 460真实套图闭合，正式发布被QA04单店合同拒绝
 
 用户授权的COM/DOTH两图已成功，CNY0.20；审核前原件、审核/store-draft assignment/幂等、pending全0及队列读回通过。QA04仍将真实DOTH+BINI pilot强制等同单店，原生拒绝`QA04_SUITE_INVALID`，未改写证据或公开指针。新增合同修复范围待用户确认，本轮不再新增费用；测试设备/会话及9470已清理。首次默认BINI误建的隔离草稿、正确DOTH草稿、准确原件与官网未完成边界统一见[直接适配owner](donor-workbench/direct-adaptation.md)。双区应用460/官网458保持。
