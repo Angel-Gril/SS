@@ -520,12 +520,17 @@
     return window.OZON_CALC_COMMISSION_RATES.matchCommissionRate(state.commissionSnapshot, {
       scheme: formState.commissionScheme || 'rfbs',
       categoryHints: product.categoryHints || [product.title, product.specificationSummary],
+      brand: product.brand || product.brandName || '',
       priceRUB: priceToRUB(product.pagePriceValue || state.inputs.priceRMB, product.pagePriceValue ? product.pagePriceCurrency : 'CNY', state),
       manualRatePct: manualRate,
     });
   }
 
   function commissionMatchText(match) {
+    if (match && match.source === 'local-fallback') return '本地备用佣金：' + match.ratePct + '% · 未取得最新官方费率，请核对';
+    if (match && match.reason === 'brand_required') return '手动佣金：' + match.ratePct + '% · 尚未确认品牌，无法自动选择品牌费率';
+    if (match && match.reason === 'ambiguous_category') return '手动佣金：' + match.ratePct + '% · 商品类型存在不同费率，请核对';
+    if (match && match.reason === 'type_required') return '手动佣金：' + match.ratePct + '% · 尚未确认具体商品类型';
     if (!match || match.source !== 'official') {
       return match && match.ratePct > 0 ? ('手动佣金：' + match.ratePct + '%') : '手动佣金率';
     }
@@ -587,7 +592,7 @@
     var formState = state && state.configSnapshot && state.configSnapshot.formState ? state.configSnapshot.formState : {};
     if (formState.autoCommissionSync !== false && !state.commissionSyncPending && snapshotAgeHours(state.commissionSnapshot) > 24) {
       state.commissionSyncPending = true;
-      sendRuntimeMessage({ type: 'ozon-calculator:sync-commission-rates' }).then(function (response) {
+      sendRuntimeMessage({ type: 'ozon-calculator:sync-commission-rates', automatic: true }).then(function (response) {
         state.commissionSnapshot = response && response.snapshot ? response.snapshot : state.commissionSnapshot;
         recomputeAfterMarketDataUpdate(state, onMarketDataUpdated);
       }).catch(function () {}).finally(function () {
@@ -1216,7 +1221,7 @@
         ruleMap.get(rule.serviceId).push(rule);
       });
       state.commissionMatch = resolveCommissionForState(state);
-      if (state.commissionMatch && state.commissionMatch.source === 'official' && state.commissionMatch.ratePct > 0) {
+      if (state.commissionMatch && ['official', 'local-fallback'].includes(state.commissionMatch.source) && state.commissionMatch.ratePct > 0) {
         state.inputs.commissionPct = state.commissionMatch.ratePct;
         state.commissionInputAutoFilled = true;
         syncInputFieldValue(inputCard, 'commissionPct', state.inputs.commissionPct);

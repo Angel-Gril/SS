@@ -107,6 +107,7 @@
     return matcher.matchCommissionRate(status.commissionSnapshot, {
       scheme: formState.commissionScheme || 'rfbs',
       categoryHints: ozon.categoryHints || [ozon.title],
+      brand: ozon.brand || ozon.brandName || '',
       priceRUB: inputs.fxRate > 0 ? inputs.priceRMB / inputs.fxRate : 0,
       manualRatePct: manualRate
     });

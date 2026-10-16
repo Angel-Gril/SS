@@ -413,11 +413,14 @@
       setHealthState(healthLogisticsNode, '待同步：没有物流目录', 'warn');
     }
 
-    if (commissionRules) {
+    var commissionState = globalThis.OZON_CALC_COMMISSION_RATES.snapshotStatus(
+      currentStatus && currentStatus.commissionSnapshot, currentStatus && currentStatus.commissionSyncState);
+    if (commissionState.ready) {
       setHealthState(healthCommissionNode, '已就绪：' + commissionRules + ' 个类目，更新 ' + formatTime(currentStatus && currentStatus.commissionUpdatedAt), 'good');
     } else {
       missing.push('同步官方佣金');
-      setHealthState(healthCommissionNode, '待同步：商品页会使用手动佣金兜底', 'warn');
+      setHealthState(healthCommissionNode, commissionState.state === 'fallback' ? '未取得官方费率：使用本地备用费率'
+        : commissionState.state === 'cached' ? '本次同步失败：保留上次官方费率' : '待同步：商品页会使用手动佣金兜底', 'warn');
     }
 
     if (fxCurrencies) {
@@ -462,10 +465,16 @@
     renderSelectedSummary(currentSnapshot);
     renderStrategy(currentSnapshot);
     if (commissionSyncStatusNode) {
+      var commissionState = globalThis.OZON_CALC_COMMISSION_RATES.snapshotStatus(
+        currentStatus.commissionSnapshot, currentStatus.commissionSyncState);
+      var commissionText = commissionState.state === 'fallback' ? '未取得官方费率，正在使用本地备用费率；请核对或手动填写。'
+        : commissionState.state === 'cached' ? ('本次同步失败，保留上次官方费率：' + commissionRules + ' 个类目，更新 ' + formatTime(commissionState.fetchedAt))
+        : commissionState.ready ? ('佣金费率：' + commissionRules + ' 个类目，更新 ' + formatTime(commissionState.fetchedAt))
+        : '尚未同步 Ozon 佣金费率。';
       setStatus(
         commissionSyncStatusNode,
-        commissionRules ? ('佣金费率：' + commissionRules + ' 个类目，更新 ' + formatTime(currentStatus && currentStatus.commissionUpdatedAt)) : '尚未同步 Ozon 佣金费率。',
-        commissionRules ? 'success' : 'warn'
+        commissionText,
+        commissionState.ready ? 'success' : 'warn'
       );
     }
     if (fxSyncStatusNode) {
@@ -642,7 +651,8 @@
     setStatus(commissionSyncStatusNode, '正在从 Ozon 帮助中心同步佣金费率...', 'warn');
     return sendMessage({ type: 'ozon-calculator:sync-commission-rates' }).then(function (response) {
       if (!response || !response.ok) {
-        setStatus(commissionSyncStatusNode, '佣金费率同步失败：' + (response && response.error ? response.error : '未知错误'), 'error');
+        setStatus(commissionSyncStatusNode, '佣金费率同步失败：' + (response && response.error ? response.error : '未知错误'), 'warn');
+        loadStatus();
         return false;
       }
       setStatus(commissionSyncStatusNode, '佣金费率已同步：' + (response.ruleCount || 0) + ' 个类目。', 'success');

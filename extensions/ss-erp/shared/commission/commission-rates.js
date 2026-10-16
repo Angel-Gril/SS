@@ -337,7 +337,9 @@
       group: group,
       category: category,
       categoryIds: categoryIds,
-      aliases: uniqueStrings((Array.isArray(value.aliases) ? value.aliases : []).concat(buildAliases(category, group))),
+      brand: toText(value.brand),
+      typeSpecific: value.typeSpecific === true,
+      aliases: uniqueStrings((Array.isArray(value.aliases) ? value.aliases : []).concat(value.typeSpecific === true ? [] : buildAliases(category, group))),
       bands: (Array.isArray(value.bands) ? value.bands : []).map(normalizeBand).filter(function (band) {
         return band.rfbs > 0 || band.fbp > 0;
       }),
@@ -350,7 +352,7 @@
       schemaVersion: SCHEMA_VERSION,
       sourceUrl: toText(value.sourceUrl) || DEFAULT_SOURCE_URL,
       source: toText(value.source) || 'official-docs',
-      fetchedAt: toText(value.fetchedAt) || new Date().toISOString(),
+      fetchedAt: value.source === 'local-fallback' ? '' : (toText(value.fetchedAt) || new Date().toISOString()),
       rules: (Array.isArray(value.rules) ? value.rules : []).map(normalizeRule).filter(function (rule) {
         return rule.category && rule.bands.length;
       }),
@@ -404,7 +406,7 @@
     var normalizedHints = uniqueStrings(hints).map(normalizeKey).filter(Boolean);
     var normalizedCategoryIds = uniqueIds(categoryIds).map(normalizeKey).filter(Boolean);
     if (!normalizedHints.length && !normalizedCategoryIds.length) return 0;
-    var candidates = uniqueStrings([rule.category, rule.group].concat(rule.aliases || [])).map(normalizeKey).filter(Boolean);
+    var candidates = uniqueStrings([rule.category, rule.typeSpecific ? '' : rule.group].concat(rule.aliases || [])).map(normalizeKey).filter(Boolean);
     var ruleCategoryIds = uniqueIds(rule.categoryIds).map(normalizeKey).filter(Boolean);
     var score = 0;
     ruleCategoryIds.forEach(function (candidate) {
@@ -416,7 +418,7 @@
       normalizedHints.forEach(function (hint) {
         if (!candidate || !hint) return;
         if (candidate === hint) score = Math.max(score, 100);
-        else if (hint.indexOf(candidate) >= 0 || candidate.indexOf(hint) >= 0) score = Math.max(score, Math.min(candidate.length, hint.length));
+        else if (!rule.typeSpecific && (hint.indexOf(candidate) >= 0 || candidate.indexOf(hint) >= 0)) score = Math.max(score, Math.min(candidate.length, hint.length));
       });
     });
     return score;
@@ -432,6 +434,16 @@
     };
   }
 
+  function snapshotStatus(snapshot, syncState) {
+    var source = toText(snapshot && snapshot.source);
+    var count = snapshot && Array.isArray(snapshot.rules) ? snapshot.rules.length : 0;
+    var state = !count ? 'unavailable' : source === 'local-fallback' ? 'fallback'
+      : source === 'system-category-db' ? 'maintained' : source === 'official-docs' ? 'official' : 'unavailable';
+    if (state === 'official' && syncState && syncState.status === 'failed') state = 'cached';
+    return { state: state, ruleCount: count, fetchedAt: state === 'fallback' ? '' : toText(snapshot && snapshot.fetchedAt),
+      ready: state === 'official' || state === 'maintained' };
+  }
+
   function maxOfficialBandMatch(snapshot, scheme, priceRUB) {
     if (!(priceRUB > 0)) return null;
     var best = null;
@@ -443,7 +455,7 @@
         if (!best || rate > best.ratePct) {
           best = {
             ratePct: rate,
-            source: 'official',
+            source: snapshot.source === 'local-fallback' ? 'local-fallback' : 'official',
             category: '未知类目最高档参考',
             categoryGroup: '',
             scheme: scheme,
@@ -464,6 +476,7 @@
     var hints = Array.isArray(input.categoryHints) ? input.categoryHints : [];
     var categoryIds = Array.isArray(input.categoryIds) ? input.categoryIds : [];
     var priceRUB = toNumber(input.priceRUB, 0);
+    var brand = normalizeKey(input.brand);
     var rankedRules = normalized.rules.map(function (rule) {
       return { rule: rule, score: scoreRule(rule, hints, categoryIds) };
     }).filter(function (item) {
@@ -471,6 +484,24 @@
     }).sort(function (left, right) {
       return right.score - left.score;
     });
+    var bestScore = rankedRules.length ? rankedRules[0].score : 0;
+    if (!brand && rankedRules.some(function (item) { return item.rule.brand && item.score >= bestScore; })) {
+      return Object.assign(manualMatch(input.manualRatePct), { reason: 'brand_required' });
+    }
+    rankedRules = rankedRules.filter(function (item) { return !item.rule.brand || normalizeKey(item.rule.brand) === brand; });
+    rankedRules.sort(function (left, right) { return right.score - left.score || Number(Boolean(right.rule.brand)) - Number(Boolean(left.rule.brand)); });
+    if (rankedRules.length && rankedRules[0].rule.typeSpecific) {
+      var top = rankedRules[0];
+      var rates = rankedRules.filter(function (item) {
+        return item.score === top.score && Boolean(item.rule.brand) === Boolean(top.rule.brand);
+      }).map(function (item) {
+        var band = item.rule.bands.find(function (value) { return bandContainsPrice(value, priceRUB); });
+        return band ? band[scheme] : null;
+      });
+      if (rates.some(function (rate) { return rate == null || rate !== rates[0]; })) {
+        return Object.assign(manualMatch(input.manualRatePct), { reason: 'ambiguous_category' });
+      }
+    }
 
     for (var index = 0; index < rankedRules.length; index += 1) {
       var rule = rankedRules[index].rule;
@@ -481,7 +512,7 @@
       if (rate > 0) {
         return {
           ratePct: rate,
-          source: 'official',
+          source: normalized.source === 'local-fallback' ? 'local-fallback' : 'official',
           category: rule.category,
           categoryGroup: rule.group,
           scheme: scheme,
@@ -490,6 +521,9 @@
           fetchedAt: normalized.fetchedAt,
         };
       }
+    }
+    if (normalized.rules.some(function (rule) { return rule.typeSpecific; })) {
+      return Object.assign(manualMatch(input.manualRatePct), { reason: 'type_required' });
     }
     var maxBandMatch = maxOfficialBandMatch(normalized, scheme, priceRUB);
     if (maxBandMatch) return maxBandMatch;
@@ -500,6 +534,7 @@
     SCHEMA_VERSION: SCHEMA_VERSION,
     DEFAULT_SOURCE_URL: DEFAULT_SOURCE_URL,
     normalizeSnapshot: normalizeSnapshot,
+    snapshotStatus: snapshotStatus,
     buildSnapshotFromHtml: buildSnapshotFromHtml,
     matchCommissionRate: matchCommissionRate,
   };

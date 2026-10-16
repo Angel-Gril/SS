@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 官方佣金动态读取及备用误报本地修复
+
+用户要求分析、测试、修复佣金在线同步。此前独立签名459在9471真实物理点击得到HTTP200的Nuxt空壳（无费率表），后台写入4条local-fallback，设置页却显示“同步成功/已就绪”；同一失败也会覆盖以前的官方快照并将失败时间当作更新时间。此轮为T2同步/匹配/缓存与T3公开网站/MV3行为修复；先取得9项实际RED，再逐项补动态文档、品牌、缓存、异常和不可信输入的RED→GREEN，不以包校验代替真实在线证据。
+
+公开空profile正常导航确认实际数据来自帮助站`document-manager-api/global-help/api/v3/document/public/by-path`，绑定`path=/commissions/ozon-fees/commissions`、`lang=zh`、`childDocsRegion=CHN`与公开内容策略。正文`document.contentJson`链接普通`Tarifs_CN`与独立WHD表；普通表最后修改2026-08-12、生效2025-12-01，不是新OGL运费规则。新`shared/commission/commission-sync.js`拥有同步/单飞/失败冷却/缓存，`commission-workbook.js`只接受明确普通附件、Full ChinaHK表头/三价档/有效日期；34项定向覆盖备用不得成功、保留上次缓存、时间不刷新、WHD/未知HTML拒绝、品牌/同名冲突拒绝、并发、存储失败、ZIP/字节/公式/外链边界。独立HTTP的正文接口会307，正常帮助页可读；`commission-public-document.js`仅临时后台打开精确公开页、同源读取正文并finally关闭该新tab，不复用用户页、不复制cookie/token、不处理人机验证。下载附件无凭据且拒绝跳转；公开CORS支持当前附件，无新增manifest权限、外部调用者或content script。
+
+普通原始表10795行、去重10789条，54条品牌行归一48条，保留type/category/brand与rFBS/FBP六费率，不混WHD、不执行公式/外链；numeric百分数精确保留20.5等小数。仅精确商品类型命中才自动选费率，品牌未知、同分费率冲突或缺商品类型时返回手动核对；SKU旧匹配器不得绕过此拒绝。已有静态备用仍可用但来源明确为local-fallback，不再标成official或伪造抓取时间。后台薄适配返回明确ok/state，设置页及利润面板按来源提示；刷新失败保留原官方快照及原成功时间，自动失败5分钟内不重复联网。
+
+最终87项定向/相关回归通过，新增模块/脚本和被改共享owner lint通过，Cloud/Local strict verifier632/628通过。实际开发MV3在全新9473 profile物理点击取得官方10789条、附件SHA `be7832ff9dbd09ee7021aaefe9018a02287332bc22e4c6b470d6cfe0b3649cf0`，随后拦断网络再同步/刷新，官方快照和更新时间不变且显示失败警告。最终原件/截图在本机Temp `ss-erp-commission-fix-evidence-SVeL2o`；此前QAA43o及两次失败诊断原件保留。最初runner未把备用警告识别为结束而超时，不是成功；最后runner明确读回storage/UI和附件SHA。独立复核发现的模糊type误选、同名冲突和WHD HTML晋升均已新增RED→GREEN关闭。
+
+扩大执行的旧`extension-ozon-sku-workbench-integration.test.mjs`为12通过/1失败，失败断言仍要求已删除的`normalizeListWorkbenchMode`旧列表工作台；已在当前HEAD原始Git blob的隔离目录重放同一失败，未改断言或恢复旧模块。旧`sku-workbench.js`显式lint仍有3个既有unused catch诊断，不能声称全扩展lint/全部回归通过。该旧测试原件在Temp `ss-erp-commission-baseline-xjdNiv`。
+
+本轮源码/文档仍未提交、推送、签名、部署或切换官网；先前交付Downloads的459签名包原字节未动，不含本修复。双区线上/官网仍原458，不伪称460或正式发布通过。仅公开免费GET和隔离Chrome本地storage写入；Provider/Ozon业务写入/生产写入/新增费用均0，用户9222不动，9472/9473自有浏览器已关闭。后续候选须从最终提交重新签名/验收，既有不付费选择保持；本地佣金成功不替代正式QA04/官网门禁。
+
 ## 2026-10-16 Ozon 修复459提交与双区签名完成，付费验收暂缓
 
 用户要求提交/签名发布后，源码修复 `68490e89`、浏览器runner格式收尾 `a4beee98`及前置复核发现的未知采集回执锁定修复 `43a8007c1bb8144d321325d6983088ffdd4733ce`均已推送；最终候选精确绑定43a8007c，不用中间提交签名。前置复核证明原后台仍会透传`device_collect_outcome_unknown`但可能丢失outcome，新UI现优先识别该errorCode、UNKNOWN_OUTCOME及automaticRetryAllowed=false并保持待核对锁。两处真实RED→GREEN、13项回归及独立只读复核通过；未绕过原owner或未知结果重试规则。

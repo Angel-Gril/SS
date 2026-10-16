@@ -526,7 +526,7 @@
     return hints;
   }
 
-  function resolveSharedCommission(snapshot, categoryHints, categoryIds, priceRub, scheme) {
+  function resolveSharedCommission(snapshot, categoryHints, categoryIds, priceRub, scheme, brand) {
     var runtimeRoot = typeof globalThis !== 'undefined' ? globalThis : {};
     var matcher = runtimeRoot.OZON_CALC_COMMISSION_RATES;
     if (!matcher || typeof matcher.matchCommissionRate !== 'function' || !snapshot) return null;
@@ -536,6 +536,7 @@
         categoryHints: categoryHints,
         categoryIds: categoryIds,
         priceRUB: priceRub,
+        brand: brand || '',
       });
       var rate = toNumber(match && match.ratePct);
       if (!(rate > 0)) return null;
@@ -557,6 +558,7 @@
   function resolveOfficialCommission(snapshot, categoryHints, priceRub, scheme) {
     snapshot = asObject(snapshot);
     var rules = Array.isArray(snapshot.rules) ? snapshot.rules : [];
+    if (rules.some(function (rule) { return rule.typeSpecific || rule.brand; })) return null;
     if (!rules.length || !(priceRub > 0)) return null;
     var key = normalizeCommissionScheme(scheme);
     var ranked = rules.map(function (rule) {
@@ -593,9 +595,9 @@
     var hints = buildCommissionCategoryHints(metrics);
     var ids = categoryIdHints(metrics);
     var scheme = /FBO|FBP/i.test(String(metrics.salesSchema || '')) ? 'fbp' : 'rfbs';
-    var officialRfbs = resolveSharedCommission(snapshot, hints, ids, priceRub, 'rfbs')
+    var officialRfbs = resolveSharedCommission(snapshot, hints, ids, priceRub, 'rfbs', metrics.brand)
       || resolveOfficialCommission(snapshot, hints, priceRub, 'rfbs');
-    var officialFbp = resolveSharedCommission(snapshot, hints, ids, priceRub, 'fbp')
+    var officialFbp = resolveSharedCommission(snapshot, hints, ids, priceRub, 'fbp', metrics.brand)
       || resolveOfficialCommission(snapshot, hints, priceRub, 'fbp');
     var preferred = scheme === 'fbp' ? officialFbp : officialRfbs;
     return {

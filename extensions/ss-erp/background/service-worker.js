@@ -261,7 +261,7 @@ const OZON_COMMISSION_FALLBACK_SNAPSHOT = {
     },
   ],
   diagnostics: {
-    fallbackReason: 'Ozon help pages can reject extension background fetches with 403 or redirect loops',
+    fallbackReason: 'Local reference rates are not a verified current Ozon fee schedule',
   },
 };
 globalThis.OZON_COMMISSION_FALLBACK_SNAPSHOT = OZON_COMMISSION_FALLBACK_SNAPSHOT;
@@ -330,6 +330,9 @@ try {
   importScripts('../shared/calculator-core/rule-engine.js');
   importScripts('../shared/calculator-core/har-import.js');
   importScripts('../shared/commission/commission-rates.js');
+  importScripts('../shared/commission/commission-workbook.js');
+  importScripts('../shared/commission/commission-public-document.js');
+  importScripts('../shared/commission/commission-sync.js');
   importScripts('../shared/currency/fx-rates.js');
   importScripts('../shared/config-bridge/sync-schema.js');
 } catch (error) {
@@ -5946,14 +5949,6 @@ function buildCaptureCounts(entries) {
   return counts;
 }
 
-async function fetchTextOrThrow(url) {
-  const response = await fetch(url, { cache: 'no-store', credentials: 'include' });
-  if (!response || !response.ok) {
-    throw new Error(`请求失败：${response ? response.status : 'no-response'}`);
-  }
-  return response.text();
-}
-
 async function fetchJsonOrThrow(url) {
   const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
   if (!response || !response.ok) {
@@ -5962,47 +5957,17 @@ async function fetchJsonOrThrow(url) {
   return response.json();
 }
 
-async function syncCommissionSnapshot() {
+async function syncCommissionSnapshot(automatic = false) {
   const parser = globalThis.OZON_CALC_COMMISSION_RATES;
-  if (!parser || typeof parser.buildSnapshotFromHtml !== 'function') {
+  const runtime = globalThis.OZON_CALC_COMMISSION_SYNC;
+  if (!parser || !runtime) {
     throw new Error('佣金费率解析器未加载');
   }
-  let html = '';
-  let sourceUrl = '';
-  let lastError = null;
-  for (const url of OZON_COMMISSION_DOC_URLS) {
-    try {
-      html = await fetchTextOrThrow(url);
-      sourceUrl = url;
-      break;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  if (!html) {
-    const fallback = parser.normalizeSnapshot(Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT, {
-      fetchedAt: new Date().toISOString(),
-      diagnostics: Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT.diagnostics, {
-        onlineSyncError: lastError && lastError.message ? lastError.message : String(lastError || '无法请求 Ozon 佣金文档'),
-      }),
-    }));
-    await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: fallback });
-    return fallback;
-  }
-  const snapshot = parser.buildSnapshotFromHtml(html, sourceUrl);
-  if (!snapshot || !Array.isArray(snapshot.rules) || !snapshot.rules.length) {
-    const fallback = parser.normalizeSnapshot(Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT, {
-      fetchedAt: new Date().toISOString(),
-      diagnostics: Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT.diagnostics, {
-        onlineSyncError: '未能从 Ozon 帮助中心解析到佣金费率表',
-        sourceUrl,
-      }),
-    }));
-    await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: fallback });
-    return fallback;
-  }
-  await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: snapshot });
-  return snapshot;
+  return runtime.synchronize({ parser, storage: chrome.storage.local, fetchImpl: fetch.bind(globalThis),
+    automatic,
+    readPublicDocument: globalThis.OZON_CALC_COMMISSION_PUBLIC_DOCUMENT
+      ? () => globalThis.OZON_CALC_COMMISSION_PUBLIC_DOCUMENT.read({ tabs: chrome.tabs, scripting: chrome.scripting }) : null,
+    urls: OZON_COMMISSION_DOC_URLS, fallbackSnapshot: OZON_COMMISSION_FALLBACK_SNAPSHOT });
 }
 
 async function syncFxSnapshot(manualRubRate) {
@@ -8268,7 +8233,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:status') {
-    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_CALC_CONFIG_UPDATED_AT_KEY, OZON_OFFICIAL_SNAPSHOT_KEY, OZON_COMMISSION_SNAPSHOT_KEY, OZON_FX_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_CALC_CONFIG_UPDATED_AT_KEY, OZON_OFFICIAL_SNAPSHOT_KEY, OZON_COMMISSION_SNAPSHOT_KEY, globalThis.OZON_CALC_COMMISSION_SYNC.STATE_KEY, OZON_FX_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then((result) => {
       const entries = Array.isArray(result[OZON_CALC_CAPTURE_ENTRIES_KEY]) ? result[OZON_CALC_CAPTURE_ENTRIES_KEY] : [];
       const logisticsState = isLogisticsDistributionFeatureEnabled()
         ? result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] || null
@@ -8294,6 +8259,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         fxCurrencyCount: fxSnapshot && fxSnapshot.cnyPerCurrency ? Object.keys(fxSnapshot.cnyPerCurrency).length : 0,
         fxUpdatedAt: fxSnapshot ? toText(fxSnapshot.fetchedAt) : '',
         commissionSnapshot,
+        commissionSyncState: result[globalThis.OZON_CALC_COMMISSION_SYNC.STATE_KEY] || null,
         fxSnapshot,
         logisticsState,
         snapshot,
@@ -8428,13 +8394,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:sync-commission-rates') {
-    syncCommissionSnapshot().then((snapshot) => {
-      sendResponse({
-        ok: true,
-        snapshot,
-        ruleCount: snapshot.rules.length,
-      });
-    }).catch((error) => {
+    syncCommissionSnapshot(message.automatic === true).then(sendResponse).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
     return true;
