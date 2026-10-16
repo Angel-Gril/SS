@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-16 `2e97c9d3 / 1.0.458` 双区官网公开发布完成
+
+COM/CN 应用及官网 Cloud/Local 下载均为 `2e97c9d39ed6eb075830ad6aabe5d386cbdc8761 / 1.0.458`。同提交 native offline、签名包 MV3、备份恢复、FULL VPS、真实来源页两图套图、审核、store-draft assignment/幂等、正式 QA04、双区 canary/approval/CAS、四包匿名下载及最终 publication verifier 均通过；COM 下载消费者遗漏已真实关闭。临时发布/QA 凭据与专用9470已清理，用户9222和业务原件保留。两区过期备份/失败部署生成物清理已完成；未识别到可删除的 R2 数据库备份桶，图片桶未动。准确费用、质量边界、回执及保留项仅见[直接适配owner](donor-workbench/direct-adaptation.md)。本次收尾提交仅更新日志和文档，不改变运行候选身份。
+
 ## 2026-10-16 正式457 QA04通过，CN已公开，COM下载消费者修复准备458
 
 最后r9已完整保存两图PENDING→preview→审核→两条store-draft assignment→原请求replay，正式QA04 PASS；双区canary/approval/CAS通过，CN匿名Cloud/Local下载及final verifier通过。COM匿名probe真实404，定位服务端下载消费者漏接已批准六项配置；已在canonical部署锁下恢复原签名456指针，CN457及应用a899保持。唯一service及实际Fastify下载测试最小RED→GREEN，准备新的458候选标准部署/发布，不改写457原件或绕过fresh suite门禁。准确原件、短暂404及回滚、清理数量与当前未完成边界仅见[直接适配owner](donor-workbench/direct-adaptation.md)。

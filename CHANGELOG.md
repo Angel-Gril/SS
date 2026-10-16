@@ -7,8 +7,11 @@
 
 ## [Unreleased]
 
+## [1.0.458] - 2026-10-16
+
 ### Changed
 
+- COM/CN 应用及官网 Cloud/Local 下载公开切换到 `2e97c9d39ed6eb075830ad6aabe5d386cbdc8761 / 1.0.458`；来源页采集、两图套图、审核、草稿应用、幂等及四包匿名下载验收通过。
 - 订单状态筛选统一到上方履约流程，放大阶段及二级筛选按钮，移除下方重复状态栏；保留全部订单、店铺、日期和搜索入口。
 
 ### Fixed
@@ -261,7 +264,8 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/e978c9bd3a30132e2a6a1a33951f44c922403842...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/2e97c9d39ed6eb075830ad6aabe5d386cbdc8761...HEAD
+[1.0.458]: https://github.com/Angel-Gril/SS/compare/e978c9bd3a30132e2a6a1a33951f44c922403842...2e97c9d39ed6eb075830ad6aabe5d386cbdc8761
 [1.0.456]: https://github.com/Angel-Gril/SS/compare/66c9396c48e3b934a18257fca945363be0c742e6...e978c9bd3a30132e2a6a1a33951f44c922403842
 [1.0.448]: https://github.com/Angel-Gril/SS/compare/149855518f39e0475571e8ab6fc382530a177b7f...66c9396c48e3b934a18257fca945363be0c742e6
 [1.0.429]: https://github.com/Angel-Gril/SS/compare/3fdc5c430bd1d04990ba3894c2225449a855a867...566f146b9dc494bb581f6cf1d97b2b1757ac7b05

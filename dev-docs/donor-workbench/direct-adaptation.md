@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 `2e97c9d3 / 1.0.458` 双区官网公开发布完成
+
+最终源码 `2e97c9d39ed6eb075830ad6aabe5d386cbdc8761` 已推送并生成区域匹配的458签名候选，COM/CN均经标准部署，native offline、真实签名包MV3安装/Worker、目标及日常备份恢复、FULL VPS canonical通过。COM保持原DOTH/固定六项配置及`qwen-vl-max`商品分析，CN保持direct/RDS dark；没有为通过发布临时开关功能或扩大设备权限。
+
+458正常取证从真实1688商品 `928561537986`、SKU `5977314154567`（绿色XL）建立新快照、隔离DOTH草稿及独立suite，两槽attempt1/SUCCEEDED；业务记录标识仅保留在私有回执。两张供应商1086×1448原件归一化900×1200，原生PENDING UI/数据库→preview及字节→两次MEDIA_REVIEW→两条store-draft assignment完整保存，草稿r1/v1→r2/v2；相同原请求及幂等键replay HTTP200、replayed=true、同batch，数据库仍2条assignment。首次审核准备遇到控件暂不可用，未发mutation；实际已显示候选后通过现有物理UI审核入口完成，不重发已知或未知结果。five pending全0，队列REMOVE_ON_COMPLETE/两slot读回通过。棚拍与衣架斜光场景有明显区别、完整竖幅未补白；只认可隔离草稿候选，不声称文字或印花逐像素一致、模型质量全面对齐。
+
+最终正式QA04 `387381ec1d36a83f0f4825e845e90ef2bb8302fad61ee19172477f5107acb51b` PASS，绑定schema5实际来源页及同提交完整native offline。COM v3/CN v2 canary、区域签署approval通过；两区native CAS分别在 `2026-10-16T06:00` / `06:02` UTC完成，approval SHA分别 `c12c4eade0f58a0d97e5c397de982e799164c2e348c1c2331bfb665565ace505` / `e701aca556bd4f257bdd98c8c52d53589d16083235942f8396f9279952ea6287`。独立Google/Cloudflare DNS quorum、TLS、匿名无凭据/禁止重定向探针实际下载COM/CN Cloud/Local四包均HTTP200，字节数和SHA匹配签名候选，双区最终publication verifier PASS；之前COM457匿名404未被掩盖，失败/回滚原件保留。最终两区latest及ready实读458/current同提交，API/Web/Worker active，DB/Redis正常。
+
+本轮458只执行一次两图SUITE（两个Provider POST，每槽attempt1），ERP两笔CNY0.10 CHARGE合计CNY0.20；本日r8+r9+458合计ERP CNY0.60。没有重试旧请求、读取供应商控制台/账单或发布Ozon；审核、assignment、replay及官网收尾不新增生图费用。临时COM/CN发布账号session、当前QA设备、明确归属r6/r7、r8/r9及458的三个account credential root均已撤销或清理，凭据副本删除；专用9470关闭，用户9222保留，草稿、图片、费用/失败及签署原件保留。正常配对前驱旧设备保持OWNER_REVOKED，不以扩大scope恢复本轮会话。
+
+此前用户授权清理已完成：COM/CN各删除6份过期后台gzip，共221023609/50565826字节；失败部署副本仅删除生成目录90/18个，共16849711104/3380555776字节。正式current/回滚release、源码、失败回执、签名候选、数据库与图片未动；历史attestation引用备份保留。生成物可重建，被删旧gzip不可直接恢复但当前独立恢复验证备份保留。两区remote backup仍disabled/bucket为空，未找到明确可删除的R2数据库备份桶，因此没有删除任何R2/OSS对象，不能把图片存储当备份删除。详细清理资格及原件仍见下方清理记录。
+
+458原件私有根 `release-2e97c9d3-fresh458`，区域签名/部署/备份/FULL VPS及最终health在 `release-2e97c9d3-orders`；官方公开记录已转入CHANGELOG的 `[1.0.458] - 2026-10-16`。收尾Git提交仅含本日志及真源文档，运行和官网候选继续精确绑定2e97c9d3，不因文档提交重新收费验收。
+
 ## 2026-10-16 正式457 QA04/CN公开通过，COM下载消费者遗漏已复现并回滚
 
 用户登录后，r9旧profile入口仍指向r8已应用草稿；未发Provider前保留原拒绝/采集原件，正常新标签重新采集后单SKU新DOTH草稿 `draft-f473f08a-cb7e-4341-99c0-8faf95c37564`、snapshot `96b09b94-aa8a-447d-9743-f5a12b721b95`，suite `cmvai78eb00685olo2hjxzbx7` 正常物理UI START/CONTINUE一次、两槽attempt1/SUCCEEDED，原1086×1448→900×1200，两笔ERP CNY0.10 CHARGE，Ozon0。PENDING UI/数据库、两次原生preview及原字节、审核前目视记录、两次MEDIA_REVIEW/响应、原生assignment与r1/v1→r2/v2均已完整保存。重放HTTP200/replayed=true/相同batch，网络guard已保存实际`replay-request-1/response-1`；脚本随后重复保存同名文件遭EEXIST，原拒绝保留，正式输入直接引用原始network响应，不重写或重复外部写入。five pending全0、队列REMOVE_ON_COMPLETE及两slot实际读回通过，关闭专用来源页后取得完整browser回执，9222保留。
