@@ -1,5 +1,19 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-16 `5b7ba450 / 1.0.460` 佣金修复双区部署完成
+
+用户明确要求修复后提交、签名并部署。最终源码 `5b7ba450d33bc7fb863bb16b39432d3f7250b980` 已推送，COM/CN分别生成不可变460候选并经Ed25519签署/验签；签名SHA为 `15e714cc2a5665e3d3f4f0b5a74f532bbea19afea4c3c959a8347141b0981000` / `0ea7827cc24b9167daf12f3d019518c4f89d72e819a2e1e85018f9322a178bea`，签名时间取各VPS实际UTC，旧459原件不覆盖。双区签名ZIP的真实MV3安装、默认精铺/普通商品/popup入口、来源图展示及伪造来源拒绝通过；COM签名460在全新9473真实点击同步取得10789条普通佣金规则，断网重读保留原快照与成功时间并显示警告。该签名实际取证原件在Temp `ss-erp-commission-fix-evidence-H9TNla`；未以开发包成功代替此结果。
+
+COM预检确实发现合法设备同时绑定DOTH+BINI，而旧策略仅DOTH；初始拒绝原件保留。用户随后明确选择“保留两店设备授权，允许将COM pilot扩展到DOTH+BINI”。通过现有管理员`PUT /api/admin/system-config/batch`、真实临时管理员account session、expectedRevision=105完成唯一`source_workflow_rollout_policy`更新，实际revision=106、策略revision=`pilot-460-doth-bini-20261016`；只为SOURCE_LISTING_WORKFLOW加入BINI，保留owner、其他feature规则、阶段、平台、模型、价格和设备授权，不手写grant或扩大scope。服务端审计已读回，临时Redis account session已在finally撤销；before/receipt保留于COM私有`release460-pilot-doth-bini`，部署expectation由同份明确授权派生并由原pilot owner验证owners1/shops2/devices1/原六操作通过。CN保持direct/RDS dark，未开AI功能。
+
+最终87项定向重新通过；同5b原始Git字节的独立checkout完整native offline九项PASS，含workspace lint/typecheck、完整preflight/build、后端7400 passed/395既有环境skip、隔离PostgreSQL scope/revocation及AI媒体集成/升级回放、双模式包验证。不把原来另行执行的旧列表静态测试失败和旧扩展lint基线改写为通过；边界仍见下方本地修复记录。native回执于2026-10-16T13:48:19.829Z完成，没有正式QA04或Provider实测。
+
+两区目标备份恢复和日常运行备份恢复通过（COM144表、CN143表），标准部署封存/迁移门禁后切换current并恢复API/Worker/Web；ready实读同5b提交、DB/Redis正常。迁移门禁期间API/Worker曾暂停，不记为全程无停机。双区FULL VPS canonical均PASS、failures0、warnings1；唯一既有警告是远端备份未配置、当前只有本地备份，没有为消告警新增远端存储或改备份策略。区域签名/证据/原生部署和VPS原件在私有`release-5b7ba450-orders`，完整offline在`release-5b7ba450-website460`，未入Git。
+
+本轮只有明确授权的pilot管理员配置变更、标准部署与备份操作，没有Provider POST、Ozon业务写入或新增生图费用。COM/CN官网仍公开原 `2e97c9d3 / 1.0.458`；未执行新的fresh normal suite、正式QA04、website canary/approval/CAS或distribution probe，用户“不付费验收”选择保持，不能声称官网公开460。新签名Cloud/Local四包、分离公开签名与已解压Cloud目录已校验复制到本机Downloads `SS-ERP-1.0.460`，附安装说明可录教程；旧Downloads459未动，CHANGELOG仍Unreleased。收尾Git提交只更新部署记录，不改变运行候选身份。
+
+OGL补查只读结束：官方中国卖家站索引支持OGL方案存在；新的正常空profile首页正文可读，主页updated=2026-10-07 13:33:47，实际fulfillment栏目本次返回临时技术故障，未取得最新OGL运费表、全面切换公告或新增公开Seller API定义。帮助正文JSON接口不等于物流报价/发运API；不得将此次未核验写成官方未发布，更不能将本次普通佣金表冒充OGL运费。后续独立物流适配仍需官方规则与真实只读合同证据；本版未改旧物流费率或渠道映射。9473/9474及其专用脚本已关闭，用户9222保持。
+
 ## 2026-10-16 官方佣金动态读取及备用误报本地修复
 
 用户要求分析、测试、修复佣金在线同步。此前独立签名459在9471真实物理点击得到HTTP200的Nuxt空壳（无费率表），后台写入4条local-fallback，设置页却显示“同步成功/已就绪”；同一失败也会覆盖以前的官方快照并将失败时间当作更新时间。此轮为T2同步/匹配/缓存与T3公开网站/MV3行为修复；先取得9项实际RED，再逐项补动态文档、品牌、缓存、异常和不可信输入的RED→GREEN，不以包校验代替真实在线证据。

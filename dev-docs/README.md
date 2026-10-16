@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-16 佣金修复460已推送、签名并双区部署
+
+COM/CN均运行 `5b7ba450 / 1.0.460`，native offline、双区签名MV3、备份恢复/FULL VPS/ready通过。用户明确授权后COM pilot已通过现有管理员配置owner扩至DOTH+BINI，CN保持dark；COM签名460真实佣金同步/断网保留通过。官网仍458，付费正式验收与公开切换未执行；新签名包已交付本机Downloads用于教程。OGL精确规则与新增公开API仍未核验，不混入佣金修复。唯一部署/策略/费用及证据记录见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-16 官方佣金同步与备用误报本地修复
 
 已从官方动态正文及普通Excel读取费率，修复备用冒充同步成功、失败覆盖缓存和品牌/类型误选；87项定向、Cloud/Local632/628及全新MV3真实同步/断网刷新通过。工作树尚未提交或发布，已交付签名459不含此修复，线上/官网仍458；旧列表静态测试及旧lint的已复现基线不计通过。具体owner、原始证据和不付费发布边界只见[直接适配owner](donor-workbench/direct-adaptation.md)。
