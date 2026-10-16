@@ -348,7 +348,7 @@ function readTokenFile(file, repositoryRoot, field) {
   }
 }
 
-function readQa04Acceptance(file, expectedSha256, repositoryRoot, expectedGitCommit) {
+function readQa04Acceptance(file, expectedSha256, repositoryRoot, expectedGitCommit, candidate) {
   const bytes = readPrivateFileBytes(file, repositoryRoot, 'QA04_ACCEPTANCE', 64 * 1024);
   try {
     if (sha256(bytes) !== expectedSha256) fail('QA04_ACCEPTANCE_SHA256_MISMATCH');
@@ -387,6 +387,10 @@ function readQa04Acceptance(file, expectedSha256, repositoryRoot, expectedGitCom
       || externalEffects?.ozonWrites !== 0) {
       fail('QA04_ACCEPTANCE_INVALID');
     }
+    const bridge = value?.provenance?.normalErp?.sourceBridge;
+    if (bridge?.requiresFreshTargetUiVerification === true
+      && (!bridge.currentUi || candidate.region === 'COM' && bridge.currentUi.releaseSignatureSha256 !== candidate.releaseSignatureSha256
+        || bridge.currentUi.version !== candidate.version)) fail('QA04_TARGET_UI_BINDING_INVALID');
     return {
       completedAt: value.completedAt,
       durationSeconds: value.durationSeconds,
@@ -549,6 +553,7 @@ export function parseRel04DarkCanaryEnvironment(
       publishReconciliation.regressionSha256,
       trustedRepositoryRoot,
       expectedGitCommit,
+      releaseBinding.candidate,
     );
     if (Date.parse(acceptance.completedAt) > Date.parse(observedAt)) {
       fail('QA04_ACCEPTANCE_INVALID');

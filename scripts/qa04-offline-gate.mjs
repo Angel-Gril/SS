@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
+import { preflightSteps } from './preflight.mjs';
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -233,35 +234,65 @@ export function runQa04OfflineGate({
   }
   stdout.write(`Git commit: ${initialProvenance.gitCommit}\n`);
 
+  let workspaceTypecheckPassed = false;
   for (const step of QA04_OFFLINE_STEPS) {
     stdout.write(`\n[qa04-offline] ${step.name}\n`);
     stdout.write(`$ ${displayCommand(step)}\n`);
 
-    let result;
-    try {
-      const resolved = spawnSpec(step, platform, comSpec);
-      result = runner(resolved.command, resolved.args, {
-        cwd: repositoryRoot,
-        shell: false,
-        stdio: 'inherit',
-        windowsHide: true,
-      });
-    } catch (error) {
-      stderr.write(`[qa04-offline] failed to start ${step.id}: ${error.message}\n`);
+    // The same parent invocation has just completed the workspace typecheck.
+    // Compose the shared full manifest here: no external skip flag, cached
+    // receipt, environment assertion, or caller-supplied success is accepted.
+    const isPreflight = step.id === 'preflight-build';
+    if (isPreflight && !workspaceTypecheckPassed) {
+      stderr.write('[qa04-offline] preflight requires its completed workspace-typecheck\n');
       return 1;
     }
-
-    if (result.error) {
-      stderr.write(`[qa04-offline] failed to start ${step.id}: ${result.error.message}\n`);
-      return 1;
+    const executionSteps = isPreflight
+      ? preflightSteps({ build: true }).filter(child => !['server-typecheck', 'web-typecheck'].includes(child.id))
+      : [step];
+    if (isPreflight) {
+      stdout.write('SS ERP preflight\nOptions: --build\n');
+      stdout.write('[preflight] server/web typechecks covered by completed workspace-typecheck in this QA04 run\n');
     }
+    for (const executionStep of executionSteps) {
+      if (isPreflight) {
+        stdout.write(`\n=== ${executionStep.name} ===\n$ ${displayCommand(executionStep)}\n`);
+      }
+      let result;
+      try {
+        const resolved = spawnSpec(executionStep, platform, comSpec);
+        const env = { ...process.env };
+        for (const [key, value] of Object.entries(executionStep.env || {})) {
+          if (value === undefined) delete env[key];
+          else env[key] = value;
+        }
+        result = runner(resolved.command, resolved.args, {
+          cwd: repositoryRoot,
+          shell: false,
+          stdio: 'inherit',
+          windowsHide: true,
+          env,
+        });
+      } catch (error) {
+        stderr.write(`[qa04-offline] failed to start ${executionStep.id}: ${error.message}\n`);
+        return 1;
+      }
 
-    const status = Number.isInteger(result.status) ? result.status : 1;
-    if (status !== 0) {
-      const signal = result.signal ? ` (signal ${result.signal})` : '';
-      stderr.write(`[qa04-offline] FAILED at ${step.id}: exit ${status}${signal}\n`);
-      return status;
+      if (result.error) {
+        stderr.write(`[qa04-offline] failed to start ${executionStep.id}: ${result.error.message}\n`);
+        return 1;
+      }
+
+      const status = Number.isInteger(result.status) ? result.status : 1;
+      if (status !== 0) {
+        const signal = result.signal ? ` (signal ${result.signal})` : '';
+        if (isPreflight) stderr.write(`[preflight] FAILED: ${executionStep.name} exited with ${status}\n`);
+        stderr.write(`[qa04-offline] FAILED at ${step.id}: exit ${status}${signal}\n`);
+        return status;
+      }
     }
+    if (isPreflight) stdout.write('\n[preflight] all selected checks passed\n');
+    if (step.id === 'workspace-typecheck') workspaceTypecheckPassed = true;
   }
 
   let finalProvenance;

@@ -1,13 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
-const args = new Set(process.argv.slice(2));
-const includeRemote = args.has('--remote') || args.has('--remote-core') || args.has('--remote-oss') || args.has('--all');
-const includeRemoteCore = args.has('--remote-core') || args.has('--all');
-const includeRemoteOss = args.has('--remote-oss') || args.has('--all');
-const includeBuild = args.has('--build') || args.has('--all');
-
-const steps = [
+const LOCAL_STEPS = [
   {
     name: 'preflight child-process exit contract',
     command: 'node',
@@ -17,6 +12,14 @@ const steps = [
     name: 'QA-04 original evidence aggregation contract',
     command: 'node',
     args: ['--test', 'scripts/qa04-final-acceptance.test.mjs'],
+  },
+  {
+    name: 'change-scoped validation and immutable suite reuse contracts',
+    command: 'node',
+    args: ['--test', 'scripts/change-validation-plan.test.mjs', 'scripts/change-validation-runner.test.mjs',
+      'scripts/change-validation.test.mjs', 'scripts/qa04-suite-source-bridge.test.mjs',
+      'scripts/qa04-suite-current-runtime.test.mjs', 'scripts/qa04-suite-target-ui.test.mjs',
+      'scripts/qa04-suite-target-ui-readback.test.mjs'],
   },
   {
     name: 'server typecheck',
@@ -805,61 +808,91 @@ const steps = [
   },
 ];
 
-if (includeBuild) {
-  steps.push(
-    {
-      name: 'server build',
-      command: 'pnpm',
-      args: ['--filter', 'server', 'build'],
-    },
-    {
-      name: 'web build',
-      command: 'pnpm',
-      args: ['--filter', 'web', 'build'],
-    },
-  );
-}
-
-if (includeRemote) {
-  steps.push({
-    name: 'remote public smoke',
-    command: 'pnpm',
-    args: ['smoke:remote'],
-  });
-}
-
-if (includeRemoteCore) {
-  const remoteCoreEnv = {
-    SMOKE_EXPECT_RUNTIME: 'any',
-    SMOKE_EXPECT_UPLOAD: 'false',
-    SMOKE_EXPECT_OSS: 'false',
-  };
-  if (!process.env.SMOKE_USER_TOKEN && !process.env.SMOKE_USER_COOKIE) {
-    remoteCoreEnv.SMOKE_CREATE_TEMP_USER = 'true';
+// One complete manifest is shared by the standalone entry and QA04's composition.
+// It intentionally has no option for skipping a required check.
+export function preflightSteps({
+  build = false, remote = false, remoteCore = false, remoteOss = false, env = process.env,
+} = {}) {
+  const steps = [...LOCAL_STEPS];
+  if (build) {
+    steps.push(
+      {
+        name: 'server build',
+        command: 'pnpm',
+        args: ['--filter', 'server', 'build'],
+      },
+      {
+        name: 'web build',
+        command: 'pnpm',
+        args: ['--filter', 'web', 'build'],
+      },
+    );
   }
-  steps.push({
-    name: 'remote authenticated core smoke',
-    command: 'pnpm',
-    args: ['smoke:remote'],
-    env: remoteCoreEnv,
-  });
-}
 
-if (includeRemoteOss) {
-  const remoteOssEnv = {
-    SMOKE_EXPECT_UPLOAD: 'true',
-    SMOKE_EXPECT_OSS: 'true',
-    SMOKE_EXPECT_RUNTIME: undefined,
-  };
-  if (!process.env.SMOKE_USER_TOKEN && !process.env.SMOKE_USER_COOKIE) {
-    remoteOssEnv.SMOKE_CREATE_TEMP_USER = 'true';
+  if (remote || remoteCore || remoteOss) {
+    steps.push({
+      name: 'remote public smoke',
+      command: 'pnpm',
+      args: ['smoke:remote'],
+    });
   }
-  steps.push({
-    name: 'remote R2/OSS upload smoke',
-    command: 'pnpm',
-    args: ['smoke:remote'],
-    env: remoteOssEnv,
-  });
+
+  if (remoteCore) {
+    const remoteCoreEnv = {
+      SMOKE_EXPECT_RUNTIME: 'any',
+      SMOKE_EXPECT_UPLOAD: 'false',
+      SMOKE_EXPECT_OSS: 'false',
+    };
+    if (!env.SMOKE_USER_TOKEN && !env.SMOKE_USER_COOKIE) {
+      remoteCoreEnv.SMOKE_CREATE_TEMP_USER = 'true';
+    }
+    steps.push({
+      name: 'remote authenticated core smoke',
+      command: 'pnpm',
+      args: ['smoke:remote'],
+      env: remoteCoreEnv,
+    });
+  }
+
+  if (remoteOss) {
+    const remoteOssEnv = {
+      SMOKE_EXPECT_UPLOAD: 'true',
+      SMOKE_EXPECT_OSS: 'true',
+      SMOKE_EXPECT_RUNTIME: undefined,
+    };
+    if (!env.SMOKE_USER_TOKEN && !env.SMOKE_USER_COOKIE) {
+      remoteOssEnv.SMOKE_CREATE_TEMP_USER = 'true';
+    }
+    steps.push({
+      name: 'remote R2/OSS upload smoke',
+      command: 'pnpm',
+      args: ['smoke:remote'],
+      env: remoteOssEnv,
+    });
+  }
+
+  const pnpmIds = {
+    'server typecheck': 'server-typecheck',
+    'web typecheck': 'web-typecheck',
+    'single-submit AI image sandbox strict typecheck': 'sandbox-typecheck',
+    'server tests': 'server-test',
+    'extension static verification': 'extension-verify',
+    'server build': 'server-build',
+    'web build': 'web-build',
+    'remote public smoke': 'remote-public',
+    'remote authenticated core smoke': 'remote-core',
+    'remote R2/OSS upload smoke': 'remote-oss',
+  };
+  const ids = new Set();
+  return Object.freeze(steps.map(step => {
+    const entry = step.args.find(arg => arg.startsWith('scripts/'));
+    const id = step.command === 'node' ? entry?.slice('scripts/'.length).replace(/(?:\.test)?\.mjs$/u, '')
+      : pnpmIds[step.name];
+    if (!id || ids.has(id)) throw new Error(`Invalid or duplicate preflight step ID: ${step.name}`);
+    ids.add(id);
+    return Object.freeze({ id, ...step, args: Object.freeze([...step.args]),
+      ...(step.env ? { env: Object.freeze({ ...step.env }) } : {}) });
+  }));
 }
 
 function formatCommand(step) {
@@ -906,15 +939,24 @@ function runStep(step) {
   });
 }
 
-console.log('SS ERP preflight');
-console.log(`Options: ${process.argv.slice(2).join(' ') || '(default local checks)'}`);
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const args = new Set(process.argv.slice(2));
+  const steps = preflightSteps({
+    build: args.has('--build') || args.has('--all'),
+    remote: args.has('--remote'),
+    remoteCore: args.has('--remote-core') || args.has('--all'),
+    remoteOss: args.has('--remote-oss') || args.has('--all'),
+  });
+  console.log('SS ERP preflight');
+  console.log(`Options: ${process.argv.slice(2).join(' ') || '(default local checks)'}`);
 
-for (const step of steps) {
-  const code = await runStep(step);
-  if (code !== 0) {
-    console.error(`\n[preflight] FAILED: ${step.name} exited with ${code}`);
-    process.exit(code);
+  for (const step of steps) {
+    const code = await runStep(step);
+    if (code !== 0) {
+      console.error(`\n[preflight] FAILED: ${step.name} exited with ${code}`);
+      process.exit(code);
+    }
   }
-}
 
-console.log('\n[preflight] all selected checks passed');
+  console.log('\n[preflight] all selected checks passed');
+}

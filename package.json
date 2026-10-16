@@ -16,6 +16,8 @@
     "db:studio": "pnpm --filter server db:studio",
     "db:seed": "pnpm --filter server db:seed",
     "preflight": "node scripts/preflight.mjs",
+    "validate:change": "node scripts/change-validation.mjs",
+    "test:validation-flow": "node --experimental-vm-modules --test scripts/change-validation-plan.test.mjs scripts/change-validation-runner.test.mjs scripts/change-validation.test.mjs scripts/preflight-process-exit.test.mjs scripts/qa04-suite-source-bridge.test.mjs scripts/qa04-suite-current-runtime.test.mjs scripts/qa04-suite-target-ui.test.mjs scripts/qa04-suite-target-ui-readback.test.mjs scripts/rel04-dark-canary.test.mjs",
     "qa:04:offline": "node scripts/qa04-offline-gate.mjs",
     "qa:04:offline:list": "node scripts/qa04-offline-gate.mjs --list",
     "test:qa04:offline-contract": "node scripts/qa04-offline-gate-contract.test.mjs",

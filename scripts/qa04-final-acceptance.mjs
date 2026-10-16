@@ -7,6 +7,7 @@ import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { gitCommitTreeEnvironment, gitCommitTreeSafeDirectoryArgs } from './git-commit-tree.mjs';
 import { QA04_OFFLINE_STEPS, parseQa04OfflineEvidence, readQa04GitProvenance } from './qa04-offline-gate.mjs';
 import { verifySuiteNormalErp } from './qa04-final-suite-evidence.mjs';
+import { verifySuiteSourceBridge } from './qa04-suite-source-bridge.mjs';
 import {
   canonicalJson, canonicalTimestamp, evidenceReader, exactKeys, fail, isCommit, isRecord,
   isSha256, isWithin, pngEvidence, privateOutputPath, realDirectory, requireThat, sha256, sortedJson,
@@ -117,7 +118,10 @@ function scoped(code, action) {
 }
 
 function validateInput(value) {
-  exactKeys(value, ['schemaVersion', 'kind', 'scope', 'targetGitCommit', 'offline', 'technical', 'counterexamples', 'normalErp']);
+  exactKeys(value, ['schemaVersion', 'kind', 'scope', 'targetGitCommit', 'offline', 'technical', 'counterexamples', 'normalErp',
+    ...(Object.hasOwn(value, 'suiteReuse') ? ['suiteReuse'] : [])]);
+  if (Object.hasOwn(value, 'suiteReuse')) exactKeys(value.suiteReuse,
+    ['currentRuntime', ...(Object.hasOwn(value.suiteReuse, 'currentUi') ? ['currentUi'] : [])], 'QA04_SUITE_REUSE_INVALID');
   requireThat(value.schemaVersion === 1 && value.kind === 'SS_ERP_QA04_FINAL_INPUTS'
     && value.scope === SCOPE && isCommit(value.targetGitCommit), 'QA04_INPUT_INVALID');
   exactKeys(value.offline, ['receipt', 'log']);
@@ -798,8 +802,10 @@ function verifyNormalErp(reader, input, root, now) {
   return scoped('QA04_ERP_INVALID', () => {
     const code = 'QA04_ERP_INVALID', refs = input.normalErp, acceptance = reader.json(refs.acceptance, code);
     if (acceptance.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS') return verifySuiteNormalErp(reader, input, acceptance, now,
-      (executionCommit, targetCommit) => verifyErpSource(root, executionCommit, targetCommit),
+      (executionCommit, targetCommit) => acceptance.schemaVersion >= 4 && executionCommit !== targetCommit
+        ? verifySuiteSourceBridge(root, executionCommit, targetCommit) : verifyErpSource(root, executionCommit, targetCommit),
       (offline, executionCommit, asOf) => verifyOffline(reader, { targetGitCommit: executionCommit, offline }, asOf));
+    requireThat(!Object.hasOwn(input, 'suiteReuse'), 'QA04_SUITE_REUSE_INVALID');
     if (acceptance.kind === 'NORMAL_IMAGE_DRAFT_FLOW_INPUTS') return verifyDraftNormalErp(reader, input, acceptance, root, now);
     const generated = reader.json(refs.generated, code), applied = reader.json(refs.applied, code), restored = reader.json(refs.restored, code);
     const controller = reader.json(refs.controllerStatus, code, { nativeCompact: true }), image = pngEvidence(reader, refs.image, code);

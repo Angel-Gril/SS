@@ -1,6 +1,7 @@
 import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
 import { isRestrictedAiMediaHostedPilotOperations, isApprovedAiMediaHostedPublicationOperations } from './verify-ai-media-pilot-policy.mjs';
 import { COUNT_SUITE_PROFILE, verifyCountSuiteRecord, verifiedCountSuiteOutputSize } from './qa04-count-suite-profile.mjs';
+import { verifyCurrentSuiteUiEvidence } from './qa04-suite-target-ui.mjs';
 
 const CODE = 'QA04_SUITE_INVALID';
 const check = condition => requireThat(condition, CODE);
@@ -19,8 +20,9 @@ const sourceDraftJson = value => value === null || typeof value !== 'object' ? J
     : `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => `${JSON.stringify(key)}:${sourceDraftJson(item)}`).join(',')}}`;
 
-// This variant consumes only original local records. It cannot create tasks,
-// rewrite old evidence, bridge historical execution, or grant production access.
+// This variant consumes only original records. Reuse requires an independent
+// conservative Git source bridge and a fresh read of current runtime config;
+// original execution records and their execution/offline identities stay exact.
 export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
   const sourcePageWorkflow = manifest.schemaVersion === 5;
   const countProfile = manifest.schemaVersion === 4 || sourcePageWorkflow;
@@ -38,7 +40,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && manifest.kind === 'NORMAL_IMAGE_SUITE_DRAFT_FLOW_INPUTS' && manifest.operation === 'IMAGE_TO_IMAGE');
   if (derivedGeneratedPhase) check(manifest.databaseEvidenceMode === 'POST_APPLICATION_EVENT_DERIVATION_V1');
   const executionCommit = explicitExecution ? manifest.executionGitCommit : input.targetGitCommit;
-  if (countProfile) check(manifest.providerProfile === COUNT_SUITE_PROFILE && executionCommit === input.targetGitCommit);
+  if (countProfile) check(manifest.providerProfile === COUNT_SUITE_PROFILE);
+  const reusingCountSuite = countProfile && executionCommit !== input.targetGitCommit;
   const executionOfflineRefs = explicitExecution ? manifest.executionOfflineQa04 : input.offline;
   check(/^[a-f0-9]{40}$/u.test(executionCommit));
   if (explicitExecution) exactKeys(executionOfflineRefs, ['receipt', 'log'], CODE);
@@ -46,6 +49,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   const refs = input.normalErp, read = ref => reader.json(ref, CODE, { nativeCompact: true });
   const generated = read(refs.generated), restored = read(refs.restored), applied = read(refs.applied);
   const binding = read(manifest.workbench), ui = read(manifest.generatedUi), submitted = read(manifest.submitted);
+  if (countProfile) check([binding, ui, generated].every(value => value.gitCommit === executionCommit));
+  requireThat(reusingCountSuite === Object.hasOwn(input, 'suiteReuse'), 'QA04_SUITE_REUSE_INVALID');
   const start = read(manifest.startRequest), startResponse = read(manifest.startResponse), continueRequest = read(manifest.continueRequest),
     continueResponse = read(manifest.continueResponse), applyRequest = read(manifest.applyRequest), queue = read(manifest.queue), browser = read(manifest.browser);
   const controllerRecord = read(refs.controllerStatus), controller = controllerRecord?.result?.qualification ?? controllerRecord;
@@ -445,6 +450,29 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && time(browser.startedAt) <= time(binding.launchedAt)
     && time(browser.completedAt) >= time(derivedGeneratedPhase ? applied.at : restored.observedAt) && time(browser.completedAt) <= time(now));
   const sourceBridge = verifySource(commit, input.targetGitCommit);
+  if (reusingCountSuite) {
+    const code = 'QA04_SUITE_REUSE_INVALID';
+    exactKeys(input.suiteReuse, ['currentRuntime', ...(sourceBridge.requiresFreshTargetUiVerification ? ['currentUi'] : [])], code);
+    const reference = input.suiteReuse.currentRuntime, current = reader.json(reference, code, { nativeCompact: true });
+    exactKeys(current, ['schemaVersion', 'kind', 'gitCommit', 'observedAt', 'readOnly', 'databaseReadOnly',
+      'configured', 'executionReady', 'testOnly', 'providerRequests', 'ozonWrites', 'providerConfig'], code);
+    const currentTime = canonicalTimestamp(current.observedAt, code);
+    const targetOffline = reader.json(input.offline.receipt, code);
+    requireThat(current.schemaVersion === 1 && current.kind === 'SS_ERP_HOSTED_SUITE_CURRENT_RUNTIME'
+      && current.gitCommit === input.targetGitCommit && current.readOnly === true && current.databaseReadOnly === true
+      && current.configured === true && current.executionReady === true && current.testOnly === false
+      && current.providerRequests === 0 && current.ozonWrites === 0
+      && currentTime >= canonicalTimestamp(targetOffline.completedAt, code)
+      && currentTime <= time(now) && time(now) - currentTime <= 60 * 60 * 1000, code);
+    const suite = generated.suiteRuntime;
+    const expectedConfig = Object.fromEntries(Object.entries(suite)
+      .filter(([key]) => !['itemCount', 'estimatedCostCents', 'maximumCostCents'].includes(key)));
+    requireThat(equal(current.providerConfig, expectedConfig), code);
+    sourceBridge.currentRuntime = { receiptSha256: reference.sha256, observedAt: current.observedAt,
+      providerConfigHash: current.providerConfig.providerConfigHash, pricingVersion: current.providerConfig.pricingVersion };
+    if (sourceBridge.requiresFreshTargetUiVerification) sourceBridge.currentUi = verifyCurrentSuiteUiEvidence(reader,
+      input.suiteReuse.currentUi, sourceBridge, targetOffline.completedAt, now);
+  }
   return { executionCommit: commit, completedAt: browser.completedAt, operation: 'IMAGE_TO_IMAGE', workflowKind: 'SUITE',
     provider, model, currency: 'CNY', unitCostMinor: unitCost,
     successfulImages: 2, actualCostMinor: taskCost, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,

@@ -1069,6 +1069,21 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   assert.equal(parsed.adminToken, adminToken);
   assert.equal(parsed.releaseBinding.candidate.version, '1.2.3');
   assert.equal(parsed.releaseBinding.vpsVerificationSha256, environment.REL04_VPS_VERIFICATION_SHA256);
+  // Reused paid execution cannot smuggle a screenshot from another candidate.
+  const reuse = { ...acceptance, provenance: { normalErp: { sourceBridge: {
+    kind: 'UNCHANGED_HOSTED_SUITE_RUNTIME_V1', requiresFreshTargetUiVerification: true,
+    currentUi: { releaseSignatureSha256: environment.REL04_RELEASE_SIGNATURE_SHA256, version: '1.2.3' },
+  } } } };
+  const checkReuse = value => {
+    const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`); writeFileSync(acceptanceFile, bytes);
+    return parse({ ...environment, REL04_PUBLISH_RECONCILIATION_REGRESSION_SHA256: sha256(bytes) });
+  };
+  assert.doesNotThrow(() => checkReuse(reuse));
+  const missingUi = structuredClone(reuse); delete missingUi.provenance.normalErp.sourceBridge.currentUi;
+  assert.throws(() => checkReuse(missingUi), /QA04_TARGET_UI_BINDING_INVALID/u);
+  const wrongUi = structuredClone(reuse); wrongUi.provenance.normalErp.sourceBridge.currentUi.releaseSignatureSha256 = 'e'.repeat(64);
+  assert.throws(() => checkReuse(wrongUi), /QA04_TARGET_UI_BINDING_INVALID/u);
+  writeFileSync(acceptanceFile, acceptanceBytes);
   const pilotEnvironment = {
     ...environment,
     REL04_AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot',
@@ -1112,6 +1127,10 @@ test('CLI configuration verifies canonical target-bound QA-04 evidence outside t
   const parsedCn = parseCn(cnEnvironment);
   assert.equal(parsedCn.noShopDarkCanary, true);
   assert.equal(parsedCn.expectedPublishCapability, null);
+  const cssCnBytes = Buffer.from(`${JSON.stringify(reuse, null, 2)}\n`);
+  writeFileSync(acceptanceFile, cssCnBytes);
+  assert.doesNotThrow(() => parseCn({ ...cnEnvironment, REL04_PUBLISH_RECONCILIATION_REGRESSION_SHA256: sha256(cssCnBytes) }));
+  writeFileSync(acceptanceFile, acceptanceBytes);
   assert.throws(() => parseCn({ ...cnEnvironment, REL04_SHOP_ID: shopId, REL04_NO_SHOP_DARK_CANARY: undefined,
     REL04_EXPECTED_PUBLISH_CAPABILITY_REASON: 'policy_revision_mismatch', REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION: 'source-policy-16',
     REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED: 'false', REL04_AI_MEDIA_ROLLOUT_EXPECTATION: 'hosted-pilot',

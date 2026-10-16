@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { preflightSteps } from './preflight.mjs';
 import * as qa04Gate from './qa04-offline-gate.mjs';
 import {
   QA04_OFFLINE_STEPS,
@@ -31,6 +32,9 @@ const expectedSteps = [
   ['extension-local', 'pnpm', ['build:extension:local']],
 ];
 const currentCommit = 'a'.repeat(40);
+const composedPreflight = preflightSteps({ build: true })
+  .filter(step => !['server-typecheck', 'web-typecheck'].includes(step.id));
+const expectedExecutionSteps = QA04_OFFLINE_STEPS.flatMap(step => step.id === 'preflight-build' ? composedPreflight : [step]);
 
 function gitRunnerSequence({
   repositoryRoot,
@@ -151,7 +155,24 @@ const success = runQa04OfflineGate({
   },
 });
 assert.equal(success, 0);
-assert.equal(successCalls.length, expectedSteps.length);
+
+test('QA04 composes the complete preflight after one successful workspace typecheck', () => {
+  assert.equal(successCalls.filter(call => call.command === 'pnpm' && call.args.join(' ') === 'typecheck').length, 1);
+  assert.equal(successCalls.filter(call => call.command === 'pnpm' && call.args[0] === 'preflight').length, 0,
+    'QA04 must compose its verified preflight manifest instead of spawning a duplicate full gate');
+  for (const target of ['server', 'web']) {
+    assert.equal(successCalls.filter(call => call.args.join(' ') === `--filter ${target} typecheck`).length, 0);
+  }
+  assert.ok(successCalls.some(call => call.args.join(' ') === '--filter server test'));
+  assert.ok(successCalls.some(call => call.args.join(' ') === '--filter server build'));
+  assert.ok(successCalls.some(call => call.args.join(' ') === '--filter web build'));
+  assert.ok(successCalls.some(call => call.args.join(' ') === 'verify:extension'));
+  assert.match(successStdout.value(), /\[preflight\].*workspace-typecheck/u);
+});
+
+assert.deepEqual(successCalls.map(call => [call.command, call.args]),
+  expectedExecutionSteps.map(step => [step.command === 'node' ? process.execPath : step.command, [...step.args]]),
+  'composition must retain every other preflight command, build and original order');
 assert.equal(successGit.calls.length, 6, 'the gate must bind clean Git state before and after all steps');
 assert.equal(successStderr.value(), '');
 assert.match(successStdout.value(), /Formal QA-04 completion still requires complete QA-02/u);
@@ -180,6 +201,42 @@ assert.equal(failure, 23, 'the gate must preserve the first failing exit status'
 assert.equal(failureCalls.length, 3, 'the gate must not run later steps after a failure');
 assert.equal(failureGit.calls.length, 3, 'a failed step must not be mislabeled with a post-run Git check');
 assert.match(failureStderr.value(), /FAILED at workspace-lint: exit 23/u);
+
+test('failed workspace typecheck stops before any composed preflight check', () => {
+  const calls = [];
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  assert.equal(runQa04OfflineGate({
+    repositoryRoot, platform: 'linux', stdout, stderr,
+    gitRunner: gitRunnerSequence({ repositoryRoot }).runner,
+    runner(command, args) {
+      calls.push({ command, args });
+      return { status: args.join(' ') === 'typecheck' ? 31 : 0 };
+    },
+  }), 31);
+  assert.equal(calls.length, 4);
+  assert.equal(stdout.value().includes('[preflight]'), false);
+  assert.match(stderr.value(), /FAILED at workspace-typecheck: exit 31/u);
+});
+
+test('a composed preflight failure preserves its exit and stops builds and all later QA04 stages', () => {
+  const calls = [];
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  assert.equal(runQa04OfflineGate({
+    repositoryRoot, platform: 'linux', stdout, stderr,
+    gitRunner: gitRunnerSequence({ repositoryRoot }).runner,
+    runner(command, args) {
+      calls.push({ command, args });
+      return { status: args.join(' ') === '--filter server test' ? 32 : 0 };
+    },
+  }), 32);
+  assert.equal(calls.at(-1).args.join(' '), '--filter server test');
+  assert.equal(stdout.value().includes('[preflight] all selected checks passed'), false);
+  assert.equal(stdout.value().includes('[qa04-offline] all offline rehearsal checks passed'), false);
+  assert.match(stderr.value(), /\[preflight\] FAILED: server tests exited with 32/u);
+  assert.match(stderr.value(), /FAILED at preflight-build: exit 32/u);
+});
 
 const startFailureCalls = [];
 const startFailureStderr = memoryWriter();
@@ -318,11 +375,11 @@ test('real Git proves clean, unstaged, staged, untracked, root and post-run work
       repositoryRoot: root, stdout: memoryWriter(), stderr,
       runner() {
         executed += 1;
-        if (executed === QA04_OFFLINE_STEPS.length) writeFileSync(tracked, 'export const value = 3;\n');
+        if (executed === expectedExecutionSteps.length) writeFileSync(tracked, 'export const value = 3;\n');
         return { status: 0 };
       },
     }), 1);
-    assert.equal(executed, QA04_OFFLINE_STEPS.length);
+    assert.equal(executed, expectedExecutionSteps.length);
     assert.match(stderr.value(), /Git provenance rejected after checks: worktree is not clean/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -385,7 +442,7 @@ test('writes native non-final offline evidence only after all steps and final cl
       },
     });
     assert.equal(status, 0);
-    assert.equal(calls, expectedSteps.length);
+    assert.equal(calls, expectedExecutionSteps.length);
     assert.equal(git.calls.length, 6);
     assert.equal(existsSync(output), true, 'a successful gate must produce the requested native receipt');
     assert.equal(readFileSync(output, 'utf8'), `${JSON.stringify(offlineEvidence(), null, 2)}\n`);

@@ -103,7 +103,9 @@ function fixture(t) {
     scripts: { test: 'node --test', build: 'node --version', postinstall: 'node --version' },
     devDependencies: { example: '1.0.0' }, packageManager: 'pnpm@10.0.0' }));
   writeFileSync(path.join(repositoryRoot, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
-  git('add', '--', 'apps/server', 'packages/shared', 'pnpm-lock.yaml', 'tsconfig.base.json', 'package.json', 'pnpm-workspace.yaml');
+  mkdirSync(path.join(repositoryRoot, 'extensions/ss-erp/pages'), { recursive: true });
+  writeFileSync(path.join(repositoryRoot, 'extensions/ss-erp/pages/precision-workbench.css'), '.panel { color: black; }\n');
+  git('add', '--', 'apps/server', 'packages/shared', 'pnpm-lock.yaml', 'tsconfig.base.json', 'package.json', 'pnpm-workspace.yaml', 'extensions');
   git('commit', '-qm', 'original ERP rules');
   const erpCommit = git('rev-parse', 'HEAD');
   mkdirSync(path.join(repositoryRoot, 'apps/web'), { recursive: true });
@@ -1041,6 +1043,87 @@ test('source-page count suite v5 admits verified full-frame output with exact sa
   const proof = f.verify().report.provenance.normalErp;
   assert.equal(proof.actualCostMinor, 20); assert.equal(proof.verifiedIdempotencyReplay, true);
   assert.equal(proof.sourcePageWorkflowVerified, true);
+});
+
+function historicalCountReuseFixture(t, filename = 'dev-docs/README.md') {
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png), executionCommit = f.targetGitCommit;
+  const originals = [...Object.values(f.input.normalErp), ...Object.values(f.input.offline),
+    ...Object.values(f.manifest).filter(value => value?.path), ...f.manifest.previews, ...f.manifest.reviews]
+    .map(ref => ({ path: ref.path, sha256: hash(readFileSync(ref.path)) }));
+  mkdirSync(path.dirname(path.join(f.repositoryRoot, filename)), { recursive: true });
+  writeFileSync(path.join(f.repositoryRoot, filename), filename.endsWith('.css') ? '.panel { color: navy; }\n' : '# Release notes\n');
+  f.git('add', '--', filename); f.git('commit', '-qm', 'presentation or documentation only');
+  f.input.targetGitCommit = f.git('rev-parse', 'HEAD');
+  f.input.offline = {
+    receipt: f.put('reuse-target-offline.json', { ...f.get(f.input.offline.receipt), gitCommit: f.input.targetGitCommit,
+      startedAt: '2026-09-16T11:00:00.000Z', completedAt: '2026-09-16T11:20:00.000Z' }),
+    log: f.put('reuse-target-offline.log', readFileSync(f.input.offline.log.path, 'utf8').replace(executionCommit, f.input.targetGitCommit)),
+  };
+  const runtime = f.get(f.input.normalErp.generated).suiteRuntime;
+  const currentRuntime = f.put('current-suite-runtime.json', {
+    schemaVersion: 1, kind: 'SS_ERP_HOSTED_SUITE_CURRENT_RUNTIME', gitCommit: f.input.targetGitCommit,
+    observedAt: '2026-09-16T11:50:00.000Z', readOnly: true, databaseReadOnly: true,
+    configured: true, executionReady: true, testOnly: false, providerRequests: 0, ozonWrites: 0,
+    providerConfig: Object.fromEntries(Object.entries(runtime).filter(([key]) => !['itemCount', 'estimatedCostCents', 'maximumCostCents'].includes(key))),
+  });
+  f.input.suiteReuse = { currentRuntime };
+  return { ...f, originals, executionCommit, currentRuntime };
+}
+
+test('count suite can reuse complete immutable execution for a documentation-only target with fresh runtime and offline', t => {
+  const f = historicalCountReuseFixture(t), proof = f.verify().report.provenance.normalErp;
+  assert.equal(proof.executionCommit, f.executionCommit);
+  assert.notEqual(proof.executionCommit, f.input.targetGitCommit);
+  assert.equal(proof.sourceBridge.kind, 'UNCHANGED_HOSTED_SUITE_RUNTIME_V1');
+  assert.equal(proof.sourceBridge.currentRuntime.receiptSha256, f.currentRuntime.sha256);
+  assert.equal(proof.sourceBridge.requiresFreshTargetUiVerification, false);
+  assert.equal(proof.verifiedIdempotencyReplay, true);
+  for (const original of f.originals) assert.equal(hash(readFileSync(original.path)), original.sha256);
+});
+
+test('count suite reuse still requires fresh target offline and current selected runtime, never historical job configuration', t => {
+  const f = historicalCountReuseFixture(t), original = f.get(f.currentRuntime);
+  for (const mutate of [value => { value.gitCommit = f.executionCommit; }, value => { value.readOnly = false; },
+    value => { value.databaseReadOnly = false; }, value => { value.providerRequests = 1; },
+    value => { value.providerConfig.providerConfigHash = hash('changed-runtime'); },
+    value => { value.providerConfig.pricingVersion = 'changed-price'; },
+    value => { value.executionReady = false; }, value => { value.testOnly = true; },
+    value => { value.observedAt = '2026-09-16T10:36:00.000Z'; }, value => { value.observedAt = '2026-09-16T12:01:00.000Z'; }]) {
+    f.change(f.currentRuntime, mutate);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_REUSE_INVALID');
+    Object.assign(f.currentRuntime, f.put('current-suite-runtime.json', original));
+  }
+  assert.throws(() => f.verify({ now: '2026-09-16T13:00:00.000Z' }), error => error.code === 'QA04_SUITE_REUSE_INVALID');
+  f.input.offline = f.manifest.executionOfflineQa04;
+  assert.throws(() => f.verify(), error => error.code === 'QA04_OFFLINE_INVALID');
+});
+
+test('CSS count-suite reuse additionally requires fresh current-candidate UI screenshot and applied styles', t => {
+  const cssPath = 'extensions/ss-erp/pages/precision-workbench.css', f = historicalCountReuseFixture(t, cssPath);
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_REUSE_INVALID');
+  const record = { schemaVersion: 1, kind: 'SS_ERP_SUITE_TARGET_UI_READBACK', gitCommit: f.input.targetGitCommit,
+    version: '1.0.459', observedAt: '2026-09-16T11:51:00.000Z', releaseSignatureSha256: hash('candidate-signature'),
+    cloudZipSha256: hash('cloud'), installedTreeSha256: hash('installed'), workerScriptSha256: hash('worker'),
+    runtimeWorkerScriptSha256: hash('worker'), visible: true, sourcePageVisible: true, controlsVisible: true, mutations: 0,
+    viewport: { width: 1200, height: 900 }, screenshot: f.put('current-css-ui.png', png(1200, 900, 24)),
+    css: [{ path: cssPath, targetObjectId: f.git('rev-parse', f.input.targetGitCommit + ':' + cssPath), applied: true }] };
+  const ref = f.put('current-css-ui.json', record); f.input.suiteReuse.currentUi = ref;
+  const result = f.verify().report.provenance.normalErp.sourceBridge;
+  assert.equal(result.requiresFreshTargetUiVerification, true);
+  assert.equal(result.currentUi.releaseSignatureSha256, record.releaseSignatureSha256);
+  f.change(ref, value => { value.css[0].applied = false; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_TARGET_UI_REQUIRED');
+});
+
+test('count suite reuse refuses missing runtime, unknown source and incomplete original review/replay evidence', t => {
+  const f = historicalCountReuseFixture(t), reuse = f.input.suiteReuse;
+  delete f.input.suiteReuse;
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_REUSE_INVALID');
+  f.input.suiteReuse = reuse;
+  f.changeMapped('replayResponse', value => { value.body.data.replayed = false; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  const changed = historicalCountReuseFixture(t, 'extensions/ss-erp/pages/workbench.js');
+  assert.throws(() => changed.verify(), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
 });
 
 test('source-page v5 accepts the exact approved COM configuration but rejects added operations and stale offline ordering', t => {
