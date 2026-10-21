@@ -92,6 +92,7 @@ function parsePolicy(rows, key) {
 }
 
 export function normalizeAiMediaHostedPilotExpectation(expected) {
+  const explicitDeviceShops = expected && typeof expected === 'object' && Object.hasOwn(expected, 'deviceShopIds');
   exactObject(expected, [
     'ownerUserIds',
     'shopIds',
@@ -99,6 +100,7 @@ export function normalizeAiMediaHostedPilotExpectation(expected) {
     'rolloutRevision',
     'sourcePolicyRevision',
     'allowedOperations',
+    ...(explicitDeviceShops ? ['deviceShopIds'] : []),
   ], 'pilot expectation');
   const operations = expected.allowedOperations;
   if (!Array.isArray(operations) || operations.length < 1 || operations.length > OPERATIONS.size
@@ -120,13 +122,26 @@ export function normalizeAiMediaHostedPilotExpectation(expected) {
   if (typeof expected.sourcePolicyRevision !== 'string' || !expected.sourcePolicyRevision.trim()) {
     fail('pilot expectation.sourcePolicyRevision is invalid');
   }
+  const shopIds = identifierList(expected.shopIds, 'pilot expectation.shopIds');
+  const deviceSessionIds = identifierList(expected.deviceSessionIds, 'pilot expectation.deviceSessionIds');
+  const deviceShopIds = explicitDeviceShops ? Object.fromEntries(
+    Object.entries(exactObject(expected.deviceShopIds, deviceSessionIds, 'pilot expectation.deviceShopIds'))
+      .map(([id, shops]) => {
+        const grants = identifierList(shops, `pilot expectation.deviceShopIds.${id}`);
+        if (grants.some(shopId => !shopIds.includes(shopId))) {
+          fail('device shop expectation is outside the explicit pilot shop allowlist');
+        }
+        return [id, grants];
+      }),
+  ) : null;
   return {
     ownerUserIds: identifierList(expected.ownerUserIds, 'pilot expectation.ownerUserIds'),
-    shopIds: identifierList(expected.shopIds, 'pilot expectation.shopIds'),
-    deviceSessionIds: identifierList(expected.deviceSessionIds, 'pilot expectation.deviceSessionIds'),
+    shopIds,
+    deviceSessionIds,
     rolloutRevision: expected.rolloutRevision,
     sourcePolicyRevision: expected.sourcePolicyRevision,
     allowedOperations: [...operations],
+    ...(explicitDeviceShops ? { deviceShopIds } : {}),
   };
 }
 
@@ -224,7 +239,8 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
     }
     sameList(identifierList(session.scopes, `device session ${session.id}.scopes`), REQUIRED_SCOPES,
       `device session ${session.id}.scopes`);
-    sameList(identifierList(session.shopIds, `device session ${session.id}.shopIds`), expected.shopIds,
+    sameList(identifierList(session.shopIds, `device session ${session.id}.shopIds`),
+      expected.deviceShopIds?.[session.id] ?? expected.shopIds,
       `device session ${session.id}.shopIds`);
   }
   return {
@@ -235,6 +251,7 @@ export function verifyAiMediaHostedPilotPolicy(snapshot, rawExpected) {
     rolloutRevision: expected.rolloutRevision,
     sourcePolicyRevision: expected.sourcePolicyRevision,
     allowedOperations: expected.allowedOperations,
+    ...(expected.deviceShopIds ? { deviceShopIds: expected.deviceShopIds } : {}),
   };
 }
 

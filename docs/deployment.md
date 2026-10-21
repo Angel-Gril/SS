@@ -10,6 +10,8 @@ Release-mode API、Worker、Web 使用 `/opt/ss-erp-node/v22.23.4/bin/node`，�
 
 CLI构建、原生扩展和服务进程应使用同一版本验证。切换后核对三服务`/proc/<PID>/exe`、`node`/内置OpenSSL、Sharp原生库与`/ready`；原Node系统包、旧release和unit快照保留。系统OpenSSL使用发行版安全回补包，不能仅凭上游小版本号判断缺补丁；应用部署与官网公开下载仍分别验收。
 
+Hosted pilot的部署expectation可显式附带`deviceShopIds`对象：key必须完整且精确对应`deviceSessionIds`，每台设备的值为其实际非空店铺授权数组，且全部位于原`shopIds`试点范围内。校验仍要求实际设备授权与该数组逐项相同，不授予额外权限；未提供此对象时保留原“每设备等于全部试点店铺”的严格合同。
+
 ## 日本/COM 最新部署（2026-09-05）
 
 - COM VPS 已切换到不可变提交 `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8`；扩展 `1.0.313`

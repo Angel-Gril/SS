@@ -61,6 +61,35 @@ test('accepts an exact hosted pilot snapshot', () => {
   });
 });
 
+test('accepts explicit exact per-device shop grants inside the unchanged multi-shop pilot', () => {
+  const value = snapshot();
+  const policy = value.configRows.find(row => row.key === 'source_workflow_rollout_policy');
+  const source = JSON.parse(policy.value);
+  source.features.SOURCE_LISTING_WORKFLOW.shopIds.push('shop-2');
+  policy.value = JSON.stringify(source);
+  value.deviceSessions[1].shopIds = ['shop-2'];
+  const multi = { ...expected, shopIds: [shop, 'shop-2'],
+    deviceShopIds: { 'device-1': [shop], 'device-2': ['shop-2'] } };
+  assert.deepEqual(verifyAiMediaHostedPilotPolicy(value, multi), { expectation: 'hosted-pilot', ...multi });
+  const oldContract = { ...multi };
+  delete oldContract.deviceShopIds;
+  assert.throws(() => verifyAiMediaHostedPilotPolicy(value, oldContract), /shopIds/);
+  for (const map of [
+    { 'device-1': [shop] },
+    { ...multi.deviceShopIds, foreign: [shop] },
+    { ...multi.deviceShopIds, 'device-1': [] },
+    { ...multi.deviceShopIds, 'device-1': [shop, shop] },
+    { ...multi.deviceShopIds, 'device-1': ['foreign-shop'] },
+  ]) assert.throws(() => verifyAiMediaHostedPilotPolicy(value, { ...multi, deviceShopIds: map }));
+  for (const mutate of [
+    s => { s.deviceSessions[0].shopIds.push('shop-2'); },
+    s => { s.deviceSessions[0].shopIds = ['shop-2']; },
+    s => { s.deviceSessions[0].scopes.push('listing:publish'); },
+    s => { s.deviceSessions[0].ownerUserId = 'foreign-owner'; },
+    s => { s.deviceSessions[0].id = 'foreign-device'; },
+  ]) { const changed = structuredClone(value); mutate(changed); assert.throws(() => verifyAiMediaHostedPilotPolicy(changed, multi)); }
+});
+
 test('accepts the explicit full COM hosted pilot contract', () => {
   const value = snapshot();
   value.configRows.find(row => row.key === 'feature_source_ozon_publisher_v2').value = 'true';

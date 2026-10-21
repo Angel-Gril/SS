@@ -24,4 +24,8 @@ sharp0.35.5、undici8.12.3、busboy3.2.3、fast-uri3.1.9（保持3线）、brace
 - 安装新Node不先停服务；切换前保存旧release/units/系统包状态并核对待处理任务。签名、源身份、权限或策略异常即停止；健康失败恢复原units/current并确认ready，不能继续切另一地区。
 - 原官网461 pointer保持；不因后端依赖变化补造或复用旧正式suite，不发新Provider请求。应用部署成功与官网公开下载分别记录。
 
-当前状态：两区官方22.23.4已验证签名/SHA并独立安装，系统CA更新，旧应用进程保持健康；依赖与启动owner本地实现完成，最小2项RED→GREEN、Windows12项通过/10项POSIXskip，Linux原回归初轮21通过/1因镜像缺git失败，补齐隔离测试容器工具后22项全部通过、0skip（镜像digest `sha256:5991875dfb80938dd8a6ba3fe3e96fd04929e70792762b3319d8caadbbe229bc`）。本机实际Sharp0.35.5/librsvg2.63.2/undici8.12.3读回，脚本ESLint及diff通过。真实npm audit为0Critical/1High/14Moderate/2Low，剩余High仅braces，不把静态CI合同通过当真实audit全绿。签前独立复核无代码阻断；准备源码提交及独立完整offline，尚未切新release。操作证据保存在私有`security-update-20261022-*`，不入Git。完成时更新本页与README。
+当前状态：两区官方22.23.4已验证签名/SHA并独立安装，系统CA更新，旧应用进程保持健康；依赖与启动owner本地实现完成，最小2项RED→GREEN、Windows12项通过/10项POSIXskip，Linux原回归初轮21通过/1因镜像缺git失败，补齐隔离测试容器工具后22项全部通过、0skip（镜像digest `sha256:5991875dfb80938dd8a6ba3fe3e96fd04929e70792762b3319d8caadbbe229bc`）。本机实际Sharp0.35.5/librsvg2.63.2/undici8.12.3读回，脚本ESLint及diff通过。真实npm audit为0Critical/1High/14Moderate/2Low，剩余High仅braces，不把静态CI合同通过当真实audit全绿。
+
+首版源码`6a5f3755`已推送并生成462双区签名/MV3通过；CN目标备份恢复143表通过，但COM预检正确拒绝旧“每设备须拥有全部试点店铺”合同：当前用户设备`33a6824a-b0b8-4f9d-b2e9-a219bb0674ee`只授BINI，服务端policy仍DOTH+BINI，未越权。没有擅自扩大设备grant或修改policy。最小修复在原`verify-ai-media-pilot-policy.mjs`增加显式`deviceShopIds` expectation：keys精确覆盖当前全部deviceSessionIds，每值合法、非空、唯一且为原policy shops子集；每设备实际grant继续与其期望完全相等，未传map的旧默认仍严格全部店铺。owner/scope/操作/revision/BYOK边界不变。30项原policy测试含真实RED→GREEN及缺key/外店铺/额外scope/错owner/错device负例，部署/canary/批准相关回归进行中。
+
+462原件与失败保留，未部署；原完整offline在新owner修正后停止，不能给新commit复用。policy30项及部署/canary/批准相关回归98 passed/1既有POSIXskip通过，新增映射独立复核无授权放宽；首次lint发现测试局部未使用变量已修正。官网approval消费者对新map仍fail closed、不宣称新map已通过官网发布。本轮只部署应用，下一候选从最终clean commit生成463并重新完整offline；旧461官网保持，无Provider/费用。操作日志保存在私有`security-update-20261022-*`，不入Git。
