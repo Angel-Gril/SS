@@ -1,8 +1,8 @@
 # SS ERP 内部开发真源
 
-## 2026-10-22 双区安全补丁维护进行中
+## 2026-10-22 双区安全补丁维护完成
 
-用户授权更新COM/CN。已实际读取两区旧Node22.22.1，官方22.23.4经release签名与SHA分别安装到独立目录，系统CA更新，原服务仍健康运行旧release。已发布依赖补丁的本地更新将High从11降至1；剩余braces上游无正式修复，未忽略告警或宣称全绿。启动owner与测试修改中，尚未切换三服务或新应用release，官网仍461，无新增Provider/Ozon/费用。精确范围、验证与恢复只见[安全运行时维护](security-runtime-maintenance.md)。
+COM/CN应用均运行`d9566394 / 1.0.463`；三服务实际进程为独立Node22.23.4，内置OpenSSL3.5.9、Sharp0.35.5/librsvg2.63.2、Undici8.12.3及系统CA已实读确认。目标备份/日常恢复、完整native offline、签名MV3及双区FULL VPS通过，DB/Redis正常；COM原试点及商品分析、CN dark保持。High由11降至1，braces仍无上游发布修复，未忽略CI告警；官网仍公开461，未CAS、无新Provider/Ozon/费用，Premium未改。准确版本、失败/取消记录、回滚材料与剩余边界仅见[安全运行时维护](security-runtime-maintenance.md)。
 
 ## 2026-10-17 `efd4f4ad / 1.0.461` 双区官网公开发布完成
 
