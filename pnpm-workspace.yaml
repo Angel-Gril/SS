@@ -4,17 +4,19 @@ packages:
 overrides:
   form-data: 3.0.5
   '@prisma/config>deepmerge-ts': 8.0.0
-  '@fastify/ajv-compiler>fast-uri': 3.1.6
-  'fast-json-stringify@6>fast-uri': 3.1.6
-  'ajv>fast-uri': 3.1.6
-  'minimatch@>=10>brace-expansion': 5.0.9
+  '@fastify/ajv-compiler>fast-uri': 3.1.9
+  'fast-json-stringify@6>fast-uri': 3.1.9
+  'ajv>fast-uri': 3.1.9
+  'minimatch@>=10>brace-expansion': 5.0.12
+  '@fastify/busboy': 3.2.3
+  source-map-js: 1.2.2
   '@alicloud/credentials>ini': 1.3.8
   'socks>ip-address': 10.3.1
   browserslist: 4.28.7
   find-my-way: 9.9.0
   nanoid: 3.3.18
   postcss: 8.5.28
-  sharp: 0.35.4
+  sharp: 0.35.5
 allowBuilds:
   '@alicloud/openapi-core': false
   '@prisma/client': true

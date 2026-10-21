@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22.23.4-bookworm-slim AS build
 
 ARG DEPLOY_SOURCE_ARCHIVE_SHA256
 WORKDIR /app
@@ -17,7 +17,7 @@ RUN pnpm --filter server db:generate
 RUN pnpm --filter server build
 RUN pnpm deploy --legacy --filter server --prod /prod/server
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
 
 ARG DEPLOY_TARGET_GIT_COMMIT
 ARG DEPLOY_SOURCE_ARCHIVE_SHA256

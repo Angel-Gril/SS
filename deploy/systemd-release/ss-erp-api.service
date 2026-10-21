@@ -12,7 +12,7 @@ Environment=NODE_ENV=production
 Environment=SERVER_HOST=127.0.0.1
 Environment=RUN_WORKERS=0
 EnvironmentFile=/opt/ss-erp/shared/.env.staging
-ExecStart=/usr/bin/node dist/index.js
+ExecStart=/opt/ss-erp-node/v22.23.4/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

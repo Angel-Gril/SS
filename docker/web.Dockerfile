@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22.23.4-bookworm-slim AS build
 
 ARG DEPLOY_SOURCE_ARCHIVE_SHA256
 WORKDIR /app
@@ -30,7 +30,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter web build
 RUN pnpm deploy --legacy --filter web --prod /prod/web
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
 
 ARG DEPLOY_TARGET_GIT_COMMIT
 ARG DEPLOY_SOURCE_ARCHIVE_SHA256

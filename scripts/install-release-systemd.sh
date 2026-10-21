@@ -18,6 +18,7 @@ ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 UNIT_SRC_DIR="${UNIT_SRC_DIR:-deploy/systemd-release}"
 UNIT_DST_DIR="${UNIT_DST_DIR:-/etc/systemd/system}"
 UNIT_SNAPSHOT_DIR="${UNIT_SNAPSHOT_DIR:-}"
+NODE_EXECUTABLE="${DEPLOY_NODE_EXECUTABLE:-/opt/ss-erp-node/v22.23.4/bin/node}"
 API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
@@ -229,6 +230,20 @@ for service in "${SERVICES[@]}"; do
   assert_real_regular_file "$UNIT_SRC_DIR/$service.service" "release unit template"
 done
 
+assert_runtime_node() {
+  canonical_absolute_path "$NODE_EXECUTABLE" || fail "Node runtime path must be canonical and absolute"
+  [[ "$NODE_EXECUTABLE" =~ ^/[A-Za-z0-9/._+-]+$ ]] || fail "Node runtime path contains unsafe characters"
+  assert_root_ancestor_chain "$(dirname -- "$NODE_EXECUTABLE")"
+  assert_real_regular_file "$NODE_EXECUTABLE" "Node runtime"
+  [ -x "$NODE_EXECUTABLE" ] || fail "Node runtime must be executable"
+  local version
+  version="$("$NODE_EXECUTABLE" --version)"
+  [[ "$version" =~ ^v22\.([0-9]+)\.([0-9]+)$ ]] || fail "Node runtime must use the supported Node 22 release line"
+  (( BASH_REMATCH[1] > 23 || (BASH_REMATCH[1] == 23 && BASH_REMATCH[2] >= 4) )) \
+    || fail "Node runtime must be version 22.23.4 or newer in Node 22"
+}
+assert_runtime_node
+
 if [ -e "$UNIT_SNAPSHOT_DIR" ] || [ -L "$UNIT_SNAPSHOT_DIR" ]; then
   fail "unit snapshot path already exists: $UNIT_SNAPSHOT_DIR"
 fi
@@ -312,11 +327,11 @@ assert_effective_unit() {
     || fail "$service ExecStart does not match the release contract"
 }
 
-assert_effective_unit "$API_SERVICE" "$CURRENT_LINK/apps/server" "/usr/bin/node dist/index.js"
-assert_effective_unit "$WORKER_SERVICE" "$CURRENT_LINK/apps/server" "/usr/bin/node dist/worker.js"
+assert_effective_unit "$API_SERVICE" "$CURRENT_LINK/apps/server" "$NODE_EXECUTABLE dist/index.js"
+assert_effective_unit "$WORKER_SERVICE" "$CURRENT_LINK/apps/server" "$NODE_EXECUTABLE dist/worker.js"
 assert_effective_unit \
   "$WEB_SERVICE" "$CURRENT_LINK/apps/web" \
-  "/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1"
+  "$NODE_EXECUTABLE node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1"
 
 if [ "$RESTART" = true ]; then
   echo "[systemd] Restarting services"

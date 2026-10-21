@@ -10,7 +10,7 @@ Group=deploy
 WorkingDirectory=/opt/ss-erp/current/apps/server
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/ss-erp/shared/.env.staging
-ExecStart=/usr/bin/node dist/worker.js
+ExecStart=/opt/ss-erp-node/v22.23.4/bin/node dist/worker.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45

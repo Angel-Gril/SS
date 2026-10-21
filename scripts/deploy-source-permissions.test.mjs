@@ -162,6 +162,22 @@ test('release deployment atomically transitions systemd units before service ver
   assert.match(installer, /Install failed; restoring previous unit files/u);
 });
 
+test('release units use the verified patched runtime and reject missing or untrusted Node before unit writes', () => {
+  const expectedNode = '/opt/ss-erp-node/v22.23.4/bin/node';
+  for (const service of ['api', 'worker', 'web']) {
+    const unit = readFileSync(join(process.cwd(), 'deploy', 'systemd-release', `ss-erp-${service}.service`), 'utf8');
+    assert.ok(unit.includes(`ExecStart=${expectedNode} `));
+    assert.ok(!unit.includes('ExecStart=/usr/bin/node'));
+  }
+  const installer = readFileSync(join(process.cwd(), 'scripts', 'install-release-systemd.sh'), 'utf8');
+  const guard = installer.indexOf('assert_runtime_node');
+  const snapshot = installer.indexOf('run_root install -d -o root -g root -m 0700 "$UNIT_SNAPSHOT_DIR"');
+  assert.ok(guard >= 0 && guard < snapshot, 'runtime trust must be checked before capturing or installing units');
+  assert.ok(installer.includes('"$NODE_EXECUTABLE" --version'));
+  assert.ok(installer.includes('assert_root_ancestor_chain "$(dirname -- "$NODE_EXECUTABLE")"'));
+  assert.ok(installer.includes('assert_real_regular_file "$NODE_EXECUTABLE" "Node runtime"'));
+});
+
 test('all systemd deployment entrypoints use the bounded health retry contract', () => {
   const helper = readFileSync(
     join(process.cwd(), 'scripts', 'deploy-health-check.sh'),
@@ -464,6 +480,7 @@ test('release systemd installer snapshots, verifies, restores, and auto-recovers
   const bin = join(root, 'bin');
   const firstSnapshot = join(root, 'snapshot-first');
   const failedSnapshot = join(root, 'snapshot-failed');
+  const runtimeNode = join(bin, 'runtime-node');
   const services = {
     api: `ss-erp-test-${process.pid}-api`,
     worker: `ss-erp-test-${process.pid}-worker`,
@@ -477,6 +494,8 @@ test('release systemd installer snapshots, verifies, restores, and auto-recovers
     mkdirSync(source);
     mkdirSync(destination);
     mkdirSync(bin);
+    copyFileSync(process.execPath, runtimeNode);
+    chmodSync(runtimeNode, 0o755);
     symlinkSync(release, current, 'dir');
     writeFileSync(join(base, 'shared', '.env.staging'), 'NODE_ENV=production\n', { mode: 0o640 });
     for (const service of Object.values(services)) {
@@ -497,9 +516,9 @@ test('release systemd installer snapshots, verifies, restores, and auto-recovers
       '    else printf "%s/current/apps/server\\n" "$TEST_DEPLOY_BASE"; fi ;;',
       '  EnvironmentFiles) printf "%s/shared/.env.staging (ignore_errors=no)\\n" "$TEST_DEPLOY_BASE" ;;',
       '  ExecStart)',
-      '    if [ "$service" = "$TEST_API_SERVICE" ]; then printf "/usr/bin/node dist/index.js\\n";',
-      '    elif [ "$service" = "$TEST_WORKER_SERVICE" ]; then printf "/usr/bin/node dist/worker.js\\n";',
-      '    else printf "/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1\\n"; fi ;;',
+      '    if [ "$service" = "$TEST_API_SERVICE" ]; then printf "%s dist/index.js\\n" "$DEPLOY_NODE_EXECUTABLE";',
+      '    elif [ "$service" = "$TEST_WORKER_SERVICE" ]; then printf "%s dist/worker.js\\n" "$DEPLOY_NODE_EXECUTABLE";',
+      '    else printf "%s node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1\\n" "$DEPLOY_NODE_EXECUTABLE"; fi ;;',
       '  *) exit 2 ;;',
       'esac',
       '',
@@ -518,7 +537,24 @@ test('release systemd installer snapshots, verifies, restores, and auto-recovers
       TEST_API_SERVICE: services.api,
       TEST_WORKER_SERVICE: services.worker,
       TEST_WEB_SERVICE: services.web,
+      DEPLOY_NODE_EXECUTABLE: runtimeNode,
     };
+    for (const [label, mode, target] of [
+      ['writable', 0o775, runtimeNode],
+      ['missing', 0o755, join(bin, 'missing-node')],
+    ]) {
+      chmodSync(runtimeNode, mode);
+      const rejectedSnapshot = join(root, `snapshot-runtime-${label}`);
+      const rejected = run('bash', [installer], {
+        env: { ...environment, DEPLOY_NODE_EXECUTABLE: target, UNIT_SNAPSHOT_DIR: rejectedSnapshot },
+      });
+      assert.notEqual(rejected.status, 0);
+      assert.ok(!existsSync(rejectedSnapshot), 'untrusted runtime must be rejected before snapshot writes');
+      for (const service of Object.values(services)) {
+        assert.equal(readFileSync(join(destination, `${service}.service`), 'utf8'), `legacy-${service}\n`);
+      }
+    }
+    chmodSync(runtimeNode, 0o755);
     let result = run('bash', [installer], {
       env: { ...environment, UNIT_SNAPSHOT_DIR: firstSnapshot },
     });

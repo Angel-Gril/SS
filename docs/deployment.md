@@ -2,6 +2,14 @@
 
 本文档描述云端 SaaS 部署骨架。本地 Windows 离线包继续使用 `build/scripts`，不要和云端部署混用。
 
+## Release 模式的 Node 安全运行时
+
+Release-mode API、Worker、Web 使用 `/opt/ss-erp-node/v22.23.4/bin/node`，保持Node22支持线；Docker使用同版本基础镜像。部署前应按服务器x64/arm64选择官方发行包，通过Node官方release-keys公钥环验证`SHASUMS256.txt.asc`，再校验tar的SHA-256；在root所有、不可由group/world写入的独立目录解压安装。不要覆盖apt管理的`/usr/bin/node`，原系统包可用于恢复旧unit。
+
+`install-release-systemd.sh`在创建unit快照之前检查运行时的真实文件、可信祖先、执行权限及Node22安全版本下限。缺少运行时或目录权限不正确会拒绝部署；仅改变PATH无法切换systemd的绝对执行路径。自定义`DEPLOY_NODE_EXECUTABLE`时必须同时提供使用相同执行路径的受信unit模板，该参数不会改写模板。恢复`--restore`仍可在新运行时不可用时恢复原unit。
+
+CLI构建、原生扩展和服务进程应使用同一版本验证。切换后核对三服务`/proc/<PID>/exe`、`node`/内置OpenSSL、Sharp原生库与`/ready`；原Node系统包、旧release和unit快照保留。系统OpenSSL使用发行版安全回补包，不能仅凭上游小版本号判断缺补丁；应用部署与官网公开下载仍分别验收。
+
 ## 日本/COM 最新部署（2026-09-05）
 
 - COM VPS 已切换到不可变提交 `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8`；扩展 `1.0.313`

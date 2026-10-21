@@ -25,8 +25,8 @@ function atLeast(value, floor) {
 test('pins directly owned production dependencies above audited high-severity floors', () => {
   assert.equal(atLeast(webPackage.dependencies.next, '15.5.21'), true);
   assert.equal(atLeast(serverPackage.dependencies.fastify, '5.12.3'), true);
-  assert.equal(atLeast(serverPackage.dependencies.sharp, '0.35.0'), true);
-  assert.equal(atLeast(serverPackage.dependencies.undici, '8.9.0'), true);
+  assert.equal(atLeast(serverPackage.dependencies.sharp, '0.35.5'), true);
+  assert.equal(atLeast(serverPackage.dependencies.undici, '8.12.3'), true);
 });
 
 test('makes dependency and static security findings blocking CI gates', () => {
