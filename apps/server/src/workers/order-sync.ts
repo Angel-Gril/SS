@@ -7,7 +7,7 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient, type OzonPosting } from '../services/ozon-client.js';
 import { createNotification } from '../routes/notification.js';
 import { describeSubstatus, resolveOzonTrackingEventTime } from '../lib/ozon-substatus.js';
-import { getRate } from '../services/exchange-rate.js';
+import { iterateOzonPostingPages, calculateOzonOrderTotalRub } from '../services/ozon-order-sync-contract.js';
 
 const QUEUE_NAME = 'order-sync';
 
@@ -110,37 +110,14 @@ async function syncOrdersCore(shopId: string, since: string, shop: any) {
     apiKey: decrypt(shop.apiKeyEncrypted),
   });
 
-  // 🚀 性能优化：预加载汇率缓存，避免每个订单都查询数据库
-  const orderDate = new Date();
   const rateCache = new Map<string, number>();
-  const currencies = ['USD', 'CNY', 'RUB', 'EUR', 'KZT', 'BYN'];
 
-  console.log('[OrderSync] 预加载汇率缓存...');
-  for (const currency of currencies) {
-    const { rate } = await getRate(currency, orderDate);
-    rateCache.set(currency, rate);
-  }
-  const rubToCny = rateCache.get('RUB')!;
-  console.log('[OrderSync] 汇率缓存加载完成:', Object.fromEntries(rateCache));
-
-  let offset = 0;
   let totalSynced = 0;
   let soloFeeTotal = 0;
-  const limit = 50;
   const toDate = new Date().toISOString();
 
-  while (true) {
-    const result = await client.getPostingsList({
-      dir: 'DESC',
-      filter: { since, to: toDate },
-      limit,
-      offset,
-      with: { analytics_data: false, financial_data: false },
-    });
-
-    if (!result.postings.length) break;
-
-    for (const posting of result.postings) {
+  for await (const postings of iterateOzonPostingPages(client, since, toDate)) {
+    for (const posting of postings) {
       const enrichedProducts = await enrichItemsWithImages(shopId, posting.products);
       const intlTracking = posting.tracking_number || null;
 
@@ -148,25 +125,7 @@ async function syncOrdersCore(shopId: string, since: string, shop: any) {
       // OZON 平台订单成交价使用 RUB（卢布），不是合同货币 CNY
       const orderCurrency = shop.platform === 'OZON' ? 'RUB' : 'CNY';
 
-      // 🚀 性能优化：使用缓存的汇率，而不是每次都查询数据库
-      const calculateTotalAmount = () => {
-        let total = 0;
-        for (const p of posting.products) {
-          const price = parseFloat(p.price);
-          const currencyCode = (p as any).currency_code?.toUpperCase() || 'RUB';
-
-          if (currencyCode === 'RUB') {
-            total += price * p.quantity;
-          } else {
-            // 使用缓存的汇率
-            const rateToCny = rateCache.get(currencyCode) || 1;
-            const priceInCny = price * rateToCny;
-            const priceInRub = priceInCny / rubToCny;
-            total += priceInRub * p.quantity;
-          }
-        }
-        return Math.round(total * 100) / 100;
-      };
+      const totalAmount = await calculateOzonOrderTotalRub(posting.products, new Date(), rateCache);
 
       const upserted = await prisma.order.upsert({
         where: {
@@ -184,7 +143,7 @@ async function syncOrdersCore(shopId: string, since: string, shop: any) {
           trackingNumber: intlTracking,
           internationalTrackingNumber: intlTracking,
           items: enrichedProducts,
-          totalAmount: calculateTotalAmount(),
+          totalAmount,
           currency: orderCurrency,
           inProcessAt: posting.in_process_at ? new Date(posting.in_process_at) : null,
           shipmentDate: posting.shipment_date ? new Date(posting.shipment_date) : null,
@@ -197,7 +156,7 @@ async function syncOrdersCore(shopId: string, since: string, shop: any) {
           trackingNumber: intlTracking ?? undefined,
           internationalTrackingNumber: intlTracking ?? undefined,
           items: enrichedProducts,
-          totalAmount: calculateTotalAmount(),
+          totalAmount,
           inProcessAt: posting.in_process_at ? new Date(posting.in_process_at) : null,
           shipmentDate: posting.shipment_date ? new Date(posting.shipment_date) : null,
           deliveringDate: posting.delivering_date ? new Date(posting.delivering_date) : null,
@@ -235,8 +194,6 @@ async function syncOrdersCore(shopId: string, since: string, shop: any) {
       }
     }
 
-    offset += limit;
-    if (!result.has_next) break;
     await sleep(1000);
   }
 

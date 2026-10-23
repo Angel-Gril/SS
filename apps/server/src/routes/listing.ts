@@ -1233,7 +1233,8 @@ export async function refreshListingProductPushJob(
       for (const operation of plan.operations) {
         try {
           const resolvedImages = await resolveImageUrls(operation.rawImages, job.shopId, job.shop.userId);
-          await client.importProductPictures({ product_id: operation.productId, images: resolvedImages });
+          const pictureTask = await client.importProductPictures({ offer_id: operation.offerId, images: resolvedImages });
+          await client.waitForImportTask(pictureTask.task_id);
           recordPictureUploadDiagnostic(pictureDiagnostics, {
             offerId: operation.offerId,
             productId: operation.productId,

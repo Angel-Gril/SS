@@ -5892,7 +5892,9 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
                   }
                   try {
                     const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
-                    await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
+                    if (!offerId) throw new Error('导入结果缺少 offer_id，无法补传图片');
+                    const pictureTask = await client.importProductPictures({ offer_id: offerId, images: resolvedImages });
+                    await client.waitForImportTask(pictureTask.task_id);
                     recordPictureUploadDiagnostic(fallbackPictureUploads, {
                       offerId,
                       productId: it.product_id,

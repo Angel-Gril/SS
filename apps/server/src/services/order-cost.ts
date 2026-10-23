@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { convertAmountToCny } from './exchange-rate.js';
+import { readEffectiveFinanceTransactions } from './ozon-finance-accrual.js';
 
 /**
  * 为指定订单计算成本快照
@@ -73,8 +74,8 @@ export async function computeOrderCostSnapshot(orderId: string): Promise<void> {
   const shippingDomesticCny = orderCount > 0 ? Math.round((totalBillFee / orderCount) * 100) / 100 : 0;
 
   // 从 OzonFinanceTransaction 拉取该订单的佣金/物流/广告/罚款
-  const txns = await prisma.ozonFinanceTransaction.findMany({
-    where: { shopId: order.shopId, orderId: order.platformOrderId },
+  const txns = await readEffectiveFinanceTransactions(prisma, {
+    shopId: order.shopId, orderId: order.platformOrderId, postingNumber: order.postingNumber,
   });
 
   let commissionCny = 0;
@@ -86,7 +87,7 @@ export async function computeOrderCostSnapshot(orderId: string): Promise<void> {
   let otherFeeCny = 0;
 
   for (const tx of txns) {
-    const amt = Math.abs(Number(tx.amountCny));
+    const amt = tx.costAmountCny ?? Math.abs(Number(tx.amountCny));
     switch (tx.category) {
       case 'commission': commissionCny += amt; break;
       case 'shipping_last': shippingLastMileCny += amt; break;

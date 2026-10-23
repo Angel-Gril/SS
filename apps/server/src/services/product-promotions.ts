@@ -19,11 +19,13 @@ export interface PromotionProduct {
   actionPrice: string | null;
   maxActionPrice: string | null;
   stock: number | null;
+  currency?: string | null;
 }
 
 export interface PromotionProductsResult {
   products: PromotionProduct[];
   total: number;
+  lastId?: string;
 }
 
 export interface LocalPromotionProduct {
@@ -99,6 +101,16 @@ function firstImage(value: unknown): string | null {
   return nullableString(value[0]);
 }
 
+function promotionMoney(value: unknown): string | null {
+  if (value && typeof value === 'object') {
+    const money = objectRecord(value);
+    if (typeof money.amount !== 'string' || !/^\d+(?:\.\d+)?$/.test(money.amount)
+      || typeof money.currency !== 'string' || !/^[A-Z]{3}$/.test(money.currency)) throw new Error('OZON 活动价格格式无效');
+    return money.amount;
+  }
+  return nullableString(value);
+}
+
 export function normalizePromotionProducts(
   response: unknown,
   localByProductId: Map<string, LocalPromotionProduct> = new Map(),
@@ -112,9 +124,10 @@ export function normalizePromotionProducts(
       title: nullableString(item.name ?? item.title) || local?.title || String(productId),
       offerId: nullableString(item.offer_id ?? item.offerId) || local?.offerId || null,
       image: nullableString(item.image ?? item.primary_image ?? item.primaryImage) || firstImage(local?.images) || null,
-      price: nullableString(item.price),
-      actionPrice: nullableString(item.action_price ?? item.actionPrice),
-      maxActionPrice: nullableString(item.max_action_price ?? item.maxActionPrice),
+      price: promotionMoney(item.price),
+      actionPrice: promotionMoney(item.action_price ?? item.actionPrice),
+      maxActionPrice: promotionMoney(item.max_action_price ?? item.maxActionPrice),
+      ...(item.price?.currency ? { currency: item.price.currency } : {}),
       stock: item.stock == null ? null : numberOrZero(item.stock),
     };
   }).filter((item) => item.productId > 0);
@@ -122,7 +135,7 @@ export function normalizePromotionProducts(
   const root = objectRecord(response);
   const result = objectRecord(root.result);
   const total = numberOrZero(root.total ?? result.total) || products.length;
-  return { products, total };
+  return { products, total, ...(typeof root.last_id === 'string' ? { lastId: root.last_id } : {}) };
 }
 
 function itemErrorMessage(item: Record<string, any>): string | null {
@@ -132,9 +145,16 @@ function itemErrorMessage(item: Record<string, any>): string | null {
 }
 
 export function summarizePromotionDeactivateResult(response: unknown, requestedProductIds: number[]): PromotionDeactivateSummary {
+  const explicitIds = objectRecord(response).product_ids;
+  if (Array.isArray(explicitIds)) {
+    const accepted = new Set(explicitIds.map(String));
+    const failures = requestedProductIds.filter(id => !accepted.has(String(id)))
+      .map(productId => ({ productId, message: 'OZON 未确认该商品已移出活动' }));
+    return { successCount: requestedProductIds.length - failures.length, failureCount: failures.length, failures };
+  }
   const rows = arrayFromResponse(response, ['products', 'items']);
   if (!rows.length) {
-    return { successCount: requestedProductIds.length, failureCount: 0, failures: [] };
+    return { successCount: 0, failureCount: requestedProductIds.length, failures: requestedProductIds.map(productId => ({ productId, message: 'OZON 未返回移出活动结果' })) };
   }
 
   let successCount = 0;

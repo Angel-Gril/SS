@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from './ozon-client.js';
 import { describeSubstatus, resolveOzonTrackingEventTime } from '../lib/ozon-substatus.js';
-import { getRate } from './exchange-rate.js';
+import { iterateOzonPostingPages, calculateOzonOrderTotalRub } from './ozon-order-sync-contract.js';
 
 export interface DirectSyncResult {
   created: number;
@@ -55,26 +55,6 @@ async function fetchOfferImages(
   return imageMap;
 }
 
-async function calculateTotalAmountRub(
-  products: Array<{ price: string; quantity: number; currency_code?: string }>,
-  orderDate: Date,
-): Promise<number> {
-  let total = 0;
-  for (const p of products) {
-    const price = parseFloat(p.price);
-    const currencyCode = (p.currency_code || 'RUB').toUpperCase();
-    if (currencyCode === 'RUB') {
-      total += price * p.quantity;
-    } else {
-      const { rate: rateToCny } = await getRate(currencyCode, orderDate);
-      const priceInCny = price * rateToCny;
-      const { rate: rubToCny } = await getRate('RUB', orderDate);
-      const priceInRub = priceInCny / rubToCny;
-      total += priceInRub * p.quantity;
-    }
-  }
-  return Math.round(total * 100) / 100;
-}
 
 function pickShippingInfo(posting: any): any {
   if (!posting.customer?.address && !posting.delivery_method) return undefined;
@@ -118,26 +98,15 @@ export async function syncOrdersDirect(
   const requestedSince = since || new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
   const finalTo = new Date().toISOString();
   const timeChunks = buildTimeChunks(requestedSince, finalTo);
-  const limit = 50;
   let created = 0;
   let updated = 0;
 
   try {
     for (const chunk of timeChunks) {
-      let offset = 0;
-      while (true) {
-        const result = await client.getPostingsList({
-          dir: 'DESC',
-          filter: { since: chunk.since, to: chunk.to },
-          limit,
-          offset,
-          with: { analytics_data: false, financial_data: false, addressee: true },
-        });
-        if (!result.postings.length) break;
+      for await (const postings of iterateOzonPostingPages(client, chunk.since, chunk.to)) {
+        const imageMap = await fetchOfferImages(client, postings);
 
-        const imageMap = await fetchOfferImages(client, result.postings);
-
-        for (const posting of result.postings) {
+        for (const posting of postings) {
           const itemsWithImages = posting.products.map((p) => ({
             ...p,
             image: imageMap.get(p.offer_id) || null,
@@ -149,7 +118,7 @@ export async function syncOrdersDirect(
 
           const intlTracking = posting.tracking_number || null;
           const orderDate = posting.in_process_at ? new Date(posting.in_process_at) : new Date();
-          const totalAmount = await calculateTotalAmountRub(posting.products, orderDate);
+          const totalAmount = await calculateOzonOrderTotalRub(posting.products, orderDate);
           const shippingInfo = pickShippingInfo(posting);
 
           const upserted = await prisma.order.upsert({
@@ -196,8 +165,6 @@ export async function syncOrdersDirect(
           else created++;
         }
 
-        offset += limit;
-        if (!result.has_next) break;
       }
     }
 

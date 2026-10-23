@@ -1,0 +1,221 @@
+# Ozon Seller API 兼容性审计（2026-10-23）
+
+本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权本地接口迁移与修复。已实施源码和测试，但未提交、部署或发起真实 Ozon 业务请求。Premium 模块不在范围内。本文件记录接口兼容性与本地实现取证，不替代既有业务、权限、发布或部署 owner。
+
+## 2026-10-23 本地迁移实施范围
+
+用户在本轮审计后明确授权全部相关接口更新、迁移与修复，并要求集中验证。结果是以本轮官方合同恢复现有订单、图片、促销、聊天、面单、退货、财务及配送配置功能；不是重做产品或切换数据库。本阶段不含生产业务调用、Ozon写入、Git提交、部署或公开发布。
+
+实施为D2/T2：共用外部合同由 `services/ozon-client.ts` 与领域适配服务负责，队列/direct/route/Web只消费归一化结果；身份、店铺归属、备货状态、收费和发布owner保持服务端。root独占共用client与订单/图片/促销/聊天接线，财务与面单/退货分别单writer并行。验收合同为官方请求/响应、分页完整性、金额/币种、异步任务完成、部分失败、历史财务不双计及原权限回归；URL下载增加受限HTTPS/公共地址/大小/超时/重定向检查，不传店铺密钥。
+
+最小RED先验证缺失的合同，再完成全部实现后集中跑受影响测试、类型检查和必要Web构建；不重复付费套图或无关全量门禁。停止边界为官方字段未知、金额来源冲突或需要真实生产/不可逆数据操作。本轮实测范围、未验证项与完成结果在本节续写，不把本地fixture当真实店铺验收。
+
+## 来源与证据边界
+
+- 官方文档入口：[Ozon Seller API](https://docs.ozon.ru/api/seller/)。用户授权后，在其 Chrome 的独立官方文档标签页正常打开；只读公开文档规格，不读取 Cookie、令牌、卖家业务数据或其他标签页。
+- 实际规格：[swagger.json?1792730890539](https://docs.ozon.ru/api/seller/swagger.json?1792730890539)，同源公开 GET **HTTP 200**。浏览器 Resource Timing 记录首次请求 `2026-10-23T04:48:10.540Z`，另一次 `04:49:09.270Z`；解压后原正文均 `4,253,969` bytes。对应北京时间 `2026-10-23 12:48–12:49`。
+- 主 Agent 在 `2026-10-23T04:53:36.484Z` 记录解析规格：`JSON.stringify(spec)` UTF-8 为 `3,079,726` bytes，SHA-256 `0e7d75b1b4a4ac9ad95186dc8027a10c5f324064ccef2f6a4bcb29824ce8b130`。此摘要针对重新序列化的 JSON，不能冒充原 HTTP 字节摘要。
+- 规格 `openapi=3.0.0`，`info.title=Документация Ozon Seller API`，`info.version=2.1`，共 `482` 个 paths。`2.1` 是规格自报版本，不是发布日期。
+- 官方更新日志在同一规格的 `tags[name="News"].description`，页面入口为[更新日志](https://docs.ozon.ru/api/seller/#tag/News)；正文最新日期 `2026-10-22`。下文公告日期、停用日期与字段定义均直接从本轮官方规格读取。
+- 当前网络的普通匿名 HTTP 客户端请求 `.ru/.com` 文档及 swagger、`dev.ozon.ru/news/` 返回 403；这代表该访问路径未取到正文，不能解释为 API 停用。浏览器取证已补齐正式规格。未执行反爬绕过。
+- 匿名检索期间发现第三方逐日镜像 `vispar-tech/ozon-seller-api-schema`（commit `c68f56a4f53779142440becb732bb8116e20bb69`，`2026-10-23T03:00:49Z`）与本地 `build/ozon-policy-research-20261020.md` 的旧研究记录；它们仅用于定位来源。下文结论已回到本轮官方规格核对，不以镜像或旧记录作为当前合同 owner。
+
+本轮属于 T0 文档取证。文档中的“公告停用日”是官方宣告的日期；已有线上截图仅证明 `/v3/posting/fbs/list` 返回 **400 `obsolete method cannot be used`**。其他接口未凭店铺密钥验证实际停服或服务结果。“当前规格未标记弃用”也不证明相应店铺权限、数据或真实业务链已验收。
+
+## 已核实的版本与停用时间
+
+| 接口 | 2026-10-23 官方状态与时间 | 官方替代及证据 |
+| --- | --- | --- |
+| `/v3/posting/fbs/list` | `deprecated=true`；当前正文写 **2026-08-31** 停用。`2026-07-10` 更新日志同样明确该日期 | [`/v4/posting/fbs/list`](https://docs.ozon.ru/api/seller/#operation/PostingFbsList)，`PostingFbsList`；旧 operation `PostingAPI_GetFbsPostingListV3` |
+| `/v3/posting/fbs/unfulfilled/list` | 同为 `deprecated=true`，公告 **2026-08-31** 停用 | [`/v4/posting/fbs/unfulfilled/list`](https://docs.ozon.ru/api/seller/#operation/PostingFbsUnfulfilledList)，`PostingFbsUnfulfilledList` |
+| `/v1/product/pictures/import` | `deprecated=true`，公告 **2026-10-01** 停用；迁移公告为 `2026-09-03` | [`/v2/product/pictures/import`](https://docs.ozon.ru/api/seller/#operation/ProductImportPicturesV2)，`ProductImportPicturesV2` |
+| `/v1/actions/products` | `deprecated=true`，公告 **2026-10-13** 停用；迁移公告为 `2026-09-22` | [`/v2/actions/products`](https://docs.ozon.ru/api/seller/#operation/ActionsProducts)，`ActionsProducts` |
+| `/v1/actions/products/deactivate` | `deprecated=true`，公告 **2026-10-13** 停用；迁移公告为 `2026-09-22` | [`/v2/actions/products/deactivate`](https://docs.ozon.ru/api/seller/#operation/ActionsProductsDeactivate)，`ActionsProductsDeactivate` |
+| `/v3/finance/transaction/list` | 当前 operation **没有 `deprecated=true`**，但正文和 `2026-07-14` 日志均明确 **2026-09-08** 停用 | [`/v1/finance/accrual/postings`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualPostings)、[`/v1/finance/accrual/types`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualTypes)、[`/v1/finance/accrual/by-day`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualByDay)；不能只检查 deprecated 标志 |
+| `/v2/chat/list` | 不在当前 paths；`2026-06-09` 官方日志写“方法已过时，已从文档移除” | [`/v3/chat/list`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatListV3)，`ChatAPI_ChatListV3`；移除公告日不冒充实际停服日 |
+| `/v2/chat/history` | 不在当前 paths；`2026-02-20` 官方日志写“方法已过时，已从文档移除” | [`/v3/chat/history`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatHistoryV3)，`ChatAPI_ChatHistoryV3`；移除公告日不冒充实际停服日 |
+| `/v2/chat/updates/read` | 不在当前 paths；更新日志未检索到该精确路径的迁移公告或停用日期 | 当前已读方法为 [`/v2/chat/read`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatReadV2)，`ChatAPI_ChatReadV2`。这里只确认公开路径/结构，不推断当前账号准入或自动认定为兼容替换 |
+| `/v1/categories/tree` | 不在当前 paths；本轮未找到该精确路径停用日期 | 当前分类树为 [`/v1/description-category/tree`](https://docs.ozon.ru/api/seller/#operation/DescriptionCategoryAPI_GetTree)；须按新分类合同评估，不凭名称进行别名映射 |
+| `/v2/posting/fbs/package-label` | `deprecated=true`，公告 **2026-11-02** 停用；`2026-09-22` 发布迁移公告 | [`/v3/posting/fbs/package-label/create`](https://docs.ozon.ru/api/seller/#operation/PostingFbsPackageLabelCreate) + [`/v2/posting/fbs/package-label/get`](https://docs.ozon.ru/api/seller/#operation/PostingFbsPackageLabelGet)，由同步 PDF 改为任务流程 |
+| `/v1/posting/fbs/package-label/create`、`/v1/posting/fbs/package-label/get` | 均 `deprecated=true`，公告 **2026-11-02** 停用 | 分别转上述 create V3 / get V2；不能保留旧轮询结果结构 |
+
+订单列表时间线存在旧公告，不能只摘最早条目：`2026-04-30` 首次发布 V4 时写过 `2026-06-01` 停用 V3，`2026-07-10` 后续公告与当前 operation 正文改为 `2026-08-31`。财务也有同类历史：`2026-05-06` 原公告写 `2026-07-06`，`2026-07-14` 与当前正文写 `2026-09-08`。chat history 的 `2025-05-13` 旧公告曾写 `2025-07-13` 停用，但后来仍有字段更新及 `2026-02-20` 移除记录；本轮不从历史计划推定精确实际停服日。来源均为本轮[官方更新日志](https://docs.ozon.ru/api/seller/#tag/News)。
+
+## 订单列表 V3 → V4：不能只替换 URL
+
+对照源：[`PostingAPI_GetFbsPostingListV3`](https://docs.ozon.ru/api/seller/#operation/PostingAPI_GetFbsPostingListV3) 与 [`PostingFbsList`](https://docs.ozon.ru/api/seller/#operation/PostingFbsList)；schema 为 `postingv3GetFbsPostingListRequest`、`postingv3GetFbsPostingListRequestFilter`、`v3FbsPosting`、`posting.v4.PostingFbsListRequest`、`posting.v4.PostingFbsListResponse` 及其嵌套组件。
+
+| 合同点 | 旧 V3 | 当前 V4 |
+| --- | --- | --- |
+| 分页输入 | 必填 `offset`，按数量递增 | `cursor` 字符串；首次空值，后续传上一页 cursor |
+| 单页数量 | 文档范围 1–1000 | schema 明确范围 **1–100** |
+| 返回包裹 | `result.postings`、`result.has_next` | 顶层 **`postings`、`has_next`、`cursor`** |
+| 排序 | `dir` | `sort_dir`，enum `ASC` / `DESC` |
+| 状态筛选 | `filter.status` 字符串 | `filter.statuses` 字符串数组 |
+| ID 筛选 | `delivery_method_id`、`provider_id`、`warehouse_id` | **`delivery_method_ids`、`provider_ids`、`warehouse_ids`**；最多各1000，元素为 string/int64 |
+| 新筛选 | 无 `order_numbers` | `filter.order_numbers`，最多100个 |
+| 旧量子筛选 | `filter.is_quantum` | 当前 V4 schema 中无此输入字段 |
+| 转写 | `with.translit` | **顶层 `translit`** |
+| 商品价格 | `products[].price` 字符串 + `currency_code` | **`products[].price={amount:string,currency:string}`**；产品层无旧 `currency_code` |
+| 收件人 | `addressee.name`、`addressee.phone` | 当前 addressee schema 仅 `name`；不得假定 V4 列表继续返回 phone |
+| 财务商品字段 | `commission_amount`、`commission_percent`、相关币种等扁平结构 | `commission={amount:number,currency:string,percent:integer}`；`customer_price` 为 money 对象 |
+| 运费/费率金额 | `tariffication` 部分金额与币种分开 | `current_tariff_charge` / `next_tariff_charge` 改 money 对象，增加 min_charge 对象 |
+| 新包裹字段 | — | `delivery_schema`、`external_order`、`is_click_and_collect`、`scanit`、`volume_weight` |
+
+`filter.since` 与 `filter.to` 在两版均为必填 date-time，UTC 格式；两版方法正文都规定查询区间不得超过 **一年**。V4 仍提供 `filter.last_changed_status_date.{from,to}`，表示状态最后改变的时间段，不能当普通订单创建时间的别名。没有证据说明 V4 强制改成天级日期、莫斯科时间或毫秒时间戳。
+
+V4 的 `shipment_date` 仍是“需完成组装的截止时间/建议交接时间”，超过后可能进入下一费率；`delivering_date` 是交给配送的时间。列表迁移不能用截止时间制造已发货事实。V4 仍返回 `shipment_date_without_delay`、`in_process_at`、`status`、`substatus` 等字段，既有履约 owner 的语义须保留。
+
+分页迁移应以官方 `has_next` 与 cursor 为依据；切换为每页100后，不能保留旧 offset 循环或因只读100条就声称同步完整。金额、币种、电话和嵌套财务字段需在 API 适配 owner 显式归一化，再交由现有同步消费者处理。实际服务端调用、当前数据库落库和 UI 的影响由后续本地调用审计补充；本轮未发送 V4 订单请求。
+
+## 当前仍存在的重点接口及字段风险
+
+| 接口 | 当前官方文档状态 | 已核实结构/近期变化 |
+| --- | --- | --- |
+| [`/v3/posting/fbs/get`](https://docs.ozon.ru/api/seller/#operation/PostingAPI_GetFbsPostingV3) | 存在，未标记 deprecated，当前正文无停用警告 | 继续作为 V4 备货回读方法；不能因为列表升级就猜测 get 也必须 V4 |
+| [`/v4/posting/fbs/ship`](https://docs.ozon.ru/api/seller/#operation/PostingAPI_ShipFbsPostingV4) | 存在，未标记 deprecated | 组装后进入 `awaiting_deliver`；HTTP200不保证成功，官方要求用 V3 get 回读，`ship_failed` 表示组装失败 |
+| [`/v4/product/info/stocks`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_GetProductInfoStocks) | 方法存在且未弃用；字段 `total` 已 deprecated | **2026-11-23** 停用 `total`，改 `total_items`；当前顶层 `items`、`cursor`、`total_items`，cursor分页，每页1–1000 |
+| [`/v3/product/list`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_GetProductList) | 方法存在；字段将停用 | 同日 **2026-11-23** 停用 `result.total`，改 `result.total_items` |
+| [`/v5/product/info/prices`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_GetProductInfoPrices) | 方法存在；字段将停用 | 同日 **2026-11-23** 停用 `total`，改 `total_items` |
+| [`/v4/product/info/attributes`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_GetProductAttributesV4) | 存在，未标记 deprecated | 响应为顶层 `result` 数组、`last_id`、`total`；分页仍 `last_id`、每页1–1000。不能把 stocks 的 `total` 公告推广到此方法。`2026-09-25` 增加 `SHOWCASE_SELECT_ACTIVE` visibility |
+| [`/v3/product/import`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_ImportProductsV3) | 存在，未标记 deprecated | `2026-07-10` 删除 `items.images360`，并将 `items.offer_id` 标为必填；`2026-09-10` 将 `items.geo_names` 标记弃用。方法本身未被图片导入 V2 替代 |
+| [`/v1/returns/list`](https://docs.ozon.ru/api/seller/#operation/returnsList) | 存在，未标记 deprecated | 顶层 `returns` / `has_next`；`last_id`分页、最多500。`2026-10-15` 新增 `returns.courier_delivery` |
+| [`/v3/product/info/list`](https://docs.ozon.ru/api/seller/#operation/ProductAPI_GetProductInfoList) | 存在，未标记 deprecated | 当前响应只有顶层 **`items`** 数据数组，不是 `result.items`；同路径调用必须统一响应合同 |
+
+三个 total 字段的迁移公告均发布于 **2026-09-24**，见[官方更新日志](https://docs.ozon.ru/api/seller/#tag/News)。这是未来字段移除，不是这三个方法整体停用。未测试接口不能因路径存在就宣称“全部兼容”。
+
+### 退货：同版本的字段合同不匹配
+
+[`returnsList`](https://docs.ozon.ru/api/seller/#operation/returnsList) 未弃用，但当前官方 schema `GetReturnsListRequestFilter` 没有 `since` / `to`。日期筛选是 `logistic_return_date`、`storage_tariffication_start_date`、`visual_status_change_moment` 三者之一，其范围字段为 `time_from` / `time_to`；官方正文要求同请求只选一种日期筛选。
+
+响应仅定义顶层 `returns` / `has_next`，**没有响应 `last_id`**。请求 `last_id` 表示最后已加载的退货ID，后续分页必须从返回记录的ID推进，不能依赖不存在的响应 cursor。单条记录的运单号为 `posting_number`；状态为 `visual.status` / `visual.change_moment`；退货时间在 `logistic.return_date` 等嵌套字段，库存/保管信息在 `storage`。不存在旧的 `posting.posting_number` 或 `visual_status` 包裹合同。这里能够证实的是当前外部合同与本地字段读取不一致，不能确定何时发生，更不能冒称接口整体已停用。实际落库后果在本地调用审计中补充。
+
+### 近两月与当前调用范围相关的字段公告
+
+以下均直接来自[官方更新日志](https://docs.ozon.ru/api/seller/#tag/News)，追加可选字段或更新说明不代表所有卖家必须立即配置：
+
+| 公告日期 | 变化 |
+| --- | --- |
+| 2026-10-22 | `/v1/product/import/prices` 更新 `prices.price` 说明；此条不是停用公告 |
+| 2026-10-15 | `/v1/returns/list` 新增 `returns.courier_delivery`；`/v1/warehouse/fbs/create` 新增 `courier_return_warehouse_info` |
+| 2026-09-28 | `/v5/product/info/prices` 新增 `items.price.declared_price`；`/v3/product/info/list` 新增 `items.declared_price`；`/v1/product/import/prices` 新增 `prices.declared_price` |
+| 2026-09-25 | 商品 list / attributes 的 visibility 增加 `SHOWCASE_SELECT_ACTIVE` |
+| 2026-09-24 | 三个 total 字段标为弃用并公告11-23切换；旧面单公告10-05起返回新格式 |
+| 2026-09-23 | aggregator create/update 新增退货点 `return_point_id` |
+| 2026-09-22 | V4 posting list 新增 `postings.scanit`，V3 get 新增 `result.scanit`；另发布促销和面单迁移 |
+| 2026-09-14 | import / import-by-sku 更新 `items.old_price` / `items.price` 说明；商品info、价格写入/读取的相关price字段同步更新说明 |
+| 2026-09-11 | `/v1/product/import/prices` 将 `prices.auto_action_enabled` / `prices.manage_elastic_boosting_through_price` 标为弃用，未给本轮可确认的移除日期 |
+| 2026-09-10 | `/v3/product/import` 将 `items.geo_names` 标为弃用 |
+| 2026-09-08 | 图片导入/商品导入更新图片数组说明；不能据此把V1图片方法视为重新启用 |
+
+当前官方 News 没有“2026年10月修改 FBS V4 financial_data/products”的匹配记录；相关结构差异由本轮 V3/V4 schema 对照确认，不附会为近日才发生。
+
+## 图片、聊天、面单、财务的迁移合同
+
+### 图片导入
+
+[`ProductImportPicturesV2`](https://docs.ozon.ru/api/seller/#operation/ProductImportPicturesV2) 请求改为 `items[]`，最多100个商品；每个 item 必填 **`offer_id`**，包含 `primary_image`、`color_image`、`images`。响应是顶层 **`task_id`**，之后用 `/v1/product/import/info` 查询状态。旧单商品请求和旧结果结构不能原样复用。图片 URL、已有图片集合、主图排序和现有发布幂等/审计边界仍需由现有 owner 处理，本轮未测试真实上传。
+
+### 聊天
+
+[`ChatAPI_ChatListV3`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatListV3) 使用 `cursor` 分页，limit 默认30、最多100；响应顶层 `chats`、`cursor`、`has_next`、`total_unread_count`。每个 chats 元素为 `chat` 对象加 `first_unread_message_id`、`last_message_id`、`unread_count`，不是从旧 offset 推导页码。
+
+[`ChatAPI_ChatHistoryV3`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatHistoryV3) 请求保留 `chat_id`、`direction`、`from_message_id`、`limit`，增加/支持 `filter`。默认 `Backward`；`Forward` 时必须给 `from_message_id`。响应是顶层 `messages[]` / `has_next`；limit默认50、最多1000。当前 message 明确定义 `created_at`、`data[]`、`message_id`、`user` 等字段，须对照现有消费者。
+
+[`ChatAPI_ChatReadV2`](https://docs.ozon.ru/api/seller/#operation/ChatAPI_ChatReadV2) 的路径为 `/v2/chat/read`，请求 `chat_id` / `from_message_id`，响应 `unread_count`。本轮只核对接口合同；账号准入、订阅和实际读写能力未验证，不扩展到 Premium 模块。旧 `/v2/chat/updates/read` 的停用原因/日期仍未验证。
+
+### 面单
+
+官方 `2026-09-24` 将新 create/get 从 beta 移入主文档，并公告旧方法自 **2026-10-05** 返回新 FBS 面单；**2026-11-02** 是旧接口计划停用日。新方案不是把同步 PDF 方法改一个版本号：
+
+1. [`PostingFbsPackageLabelCreate`](https://docs.ozon.ru/api/seller/#operation/PostingFbsPackageLabelCreate) 请求 `posting_numbers[]`，1–1000个，返回 `tasks[]`，其中包括 `task_id` / `task_type`（big_label / small_label）。
+2. 对每个任务调用 [`PostingFbsPackageLabelGet`](https://docs.ozon.ru/api/seller/#operation/PostingFbsPackageLabelGet)，请求 `task_id`；响应顶层 `file_url`、`status`、`error`。
+3. `status.code` 包括 pending / in_progress / completed / error；`status` 另含 `postings_count`、`printed_postings_count`、`unprinted_postings`。不能在任务未完成或部分失败时返回打印成功。
+
+官方仍建议组装后45–60秒再请求面单，并对 rFBS/rFBS Express 提示单独核对相应打印流程。真实面单、下载和打印行为本轮未验证。
+
+### 财务
+
+[`FinanceAPI_FinanceTransactionListV3`](https://docs.ozon.ru/api/seller/#operation/FinanceAPI_FinanceTransactionListV3) 的正文停用警告必须被扫描；`deprecated` 布尔值漏标不能覆盖明确停用公告。新 accrual 方法是新的数据模型：
+
+- [`GetFinanceAccrualPostings`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualPostings)：按 `posting_numbers[]` 查询，1–200个，返回 `posting_accruals[]`。
+- [`GetFinanceAccrualTypes`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualTypes)：返回 `accrual_types[]` 字典。
+- [`GetFinanceAccrualByDay`](https://docs.ozon.ru/api/seller/#operation/GetFinanceAccrualByDay)：按 `date`（YYYY-MM-DD，最早2022-01-01）和 `last_id` 查询，返回 `accruals[]` / `last_id`。第一页 `last_id=""`，以后传上一页值；last_id有效期 **15分钟**，同一分页必须保持同一 date，否则官方说明返回400。
+
+旧整月 transaction/page/operation_type 的统计、费用分类、退款与利润核算不能仅替换路径。金额正确性和对账语义需单独关闭；本轮未接入、未对账，也未读取真实财务数据。
+
+## 物流路径与 OGL 边界
+
+本轮核对的现用物流路径均在官方规格中存在，未标记 deprecated，当前方法正文也没有停用警告：
+
+| 范围 | 路径 | 官方 operation |
+| --- | --- | --- |
+| 仓库/配送读取 | `/v2/warehouse/list`、`/v1/warehouse/fbo/list`、`/v2/delivery-method/list`、`/v1/delivery/point/list` | `WarehouseListV2`、`SupplyDraftAPI_DraftGetWarehouseFboList`、`WarehouseAPI_DeliveryMethodListV2`、`DeliveryAPI_DeliveryPointList` |
+| FBS仓库配置 | `/v1/warehouse/fbs/create/drop-off/list`、`/v1/warehouse/fbs/create/return-point/list`、`/v1/warehouse/fbs/create`、`/v1/warehouse/fbs/update`、`/v1/warehouse/operation/status` | `WarehouseAPI_ListDropOffPointsForCreateFBSWarehouse`、`WarehouseFBSCreateReturnPointList`、`WarehouseAPI_CreateWarehouseFBS`、`UpdateWarehouseFBS`、`GetWarehouseFBSOperationStatus` |
+| rFBS配置 | `/v1/warehouse/erfbs/aggregator/create`、`/v1/warehouse/erfbs/non-integrated/create`、`/v1/warehouse/erfbs/update`，及 aggregator/non-integrated 的 `/delivery-method/update` | `WarehouseERFBSAggregatorCreate`、`WarehouseERFBSNonIntegratedCreate`、`WarehouseERFBSUpdate`、`WarehouseERFBSAggregatorDeliveryMethodUpdate`、`WarehouseERFBSNonIntegratedDeliveryMethodUpdate` |
+| 取消 | `/v2/posting/fbs/cancel`、`/v2/posting/fbs/cancel-reason/list` | `PostingAPI_CancelFbsPosting`、`PostingAPI_GetPostingFbsCancelReasonList` |
+
+各 operation 可在[本轮官方规格](https://docs.ozon.ru/api/seller/swagger.json)对应 `paths` / `operationId` 重读。不能把“路径存在”解释为当前卖家已获物流服务、OGL 准入或可使用任意配送商。
+
+与现有物流路径直接相关的官方变更，来源均为[官方更新日志](https://docs.ozon.ru/api/seller/#tag/News)：
+
+| 公告日期 | 变化及影响 |
+| --- | --- |
+| 2026-10-15 | `/v1/warehouse/fbs/create` 新增请求参数 `courier_return_warehouse_info`；是返回链路配置扩展，未公告替换整个仓库端点 |
+| 2026-09-23 | aggregator create 新增 `delivery_method.return_settings.return_point_id`；aggregator delivery-method update 新增 `return_settings.return_point_id` |
+| 2026-06-30 | aggregator create/update 新增快递员电话是否与仓库相同的 `is_courier_phone_same_as_warehouse` 字段 |
+| 2026-06-11 | 常见错误补充 `/v1/delivery/point/list` 的 `token must be issued for seller, not oauth-client`、`method is not allowed: OZON logistic is disabled`；这些是准入/身份错误说明，不能混称 obsolete method |
+| 2026-06-04 | aggregator create/update 的 delivery_costs 新增 `min_weight`、`max_weight`、`min_order_price`、`max_order_price`、`seller_payment`；删除 `max_amount`、`min_amount`、`percent`。若仍提交旧字段，需按实际payload审计 |
+| 2026-05-22 | `/v2/delivery-method/list` 响应新增 `delivery_methods.tpl_dropoff_point` |
+| 2026-03-24 | 旧 `/v1/warehouse/list`、`/v1/delivery-method/list` 公告2026-04-07停用，转V2；本地共用client已采用上述V2路径，不能把旧公告误判为当前V2也停用 |
+| 2026-02-12 | `/v1/warehouse/fbs/update` 的 `address_coordinates` 标为必填 |
+
+当前官方确有 [`/v1/seller/ozon-logistics/info`](https://docs.ozon.ru/api/seller/#operation/SellerAPI_SellerOzonLogisticsInfo)，`SellerAPI_SellerOzonLogisticsInfo`，标题为“连接 Ozon 配送的信息”；响应 `ozon_logistics_enabled` / `available_schemas`（FBO/FBS/UNKNOWN）。更新日志记 `2025-11-11` 新增beta、`2025-12-30` 转入主文档、`2026-04-15` 更新名称与enabled说明。它查询开通状态，**不是运费报价、跨境路线或新的统一 OGL 发布接口**；本轮没有用店铺凭据查询。
+
+对本轮规格 News 进行 `OGL`、`Ozon Global Logistics`、`международ` / `логистик` 及现用物流路径交叉检索，没有得到“现有全部物流端点统一迁移到某个新 OGL endpoint”的证据。**OGL 的精确业务准入、路线、计费、跨境规则和现店可用性仍未验证**，不由其他仓库或配送端点的存在反推。本轮未调用物流业务接口、未修改仓库/配送配置。
+
+## 本地调用与实际影响
+
+审计基线为 `dcfb5482`；开始时工作树干净，服务端当前部署源码为 `d9566394`，本轮没有切换运行版本。对 `apps/server/src/services/ozon-client.ts` 的实际请求字面量去重得到 **51 个官方路径、54 个方法与路径配对**，逐项对照本轮官方 `paths`：
+
+- 7 个路径明确 `deprecated=true`，其中4个已过公告停用日、3个面单路径将在11-02停用。
+- 另1个财务路径虽未标记 `deprecated=true`，正文已公告09-08停用。
+- 4个路径不在当前规格：旧分类树、旧聊天列表、旧聊天历史、旧聊天已读。缺失不单独证明实际停服。
+- 其余39个路径在当前规格存在且未发现方法级停用警告；其中3个有11-23的 total 字段移除公告。此分组不等于39个调用全链路通过，退货等仍有同版本字段错误。
+
+上表额外列出的旧 unfulfilled list 是官方关联公告，不在本地51个路径计数内。本轮排除了 Premium 模块，没有检查或修改其实现。
+
+| 优先级与功能 | 可达的本地调用者 | 当前影响与修复边界 |
+| --- | --- | --- |
+| P0 订单同步 | `workers/order-sync.ts:133`、`services/order-sync-direct.ts:129` → `getPostingsList` | 已迁移 V4 cursor、顶层响应与 money→字符串/币种归一化；V4任务不推进或金额非法会明确失败。截图中的旧V3拒绝仍保留为历史证据 |
+| P1 财务同步 | `workers/finance-sync.ts:38` → accrual day/types | 已迁移按日 `last_id`、类型字典、稳定 `accrual_id`、generation快照；旧账保留且不与新快照双计，未知金额/币种不发布完成标记 |
+| P1 商品图片替换 | `routes/product.ts:1136,1215`、`routes/listing.ts:1236`、`routes/collect.ts:5896` → `importProductPictures` | 已迁移 V2 `offer_id/items/task_id`，所有入口等待 import/info 终态后才更新本地图片；失败/超时不重复POST或假称成功 |
+| P1 面单（11-02前完成） | `routes/order.ts:855,931`、`services/ozon-label.ts` | 已统一 V3 create + V2 get 任务，支持大小面单、部分失败、数量校验、边界轮询和受限HTTPS下载；旧同步接口已移除 |
+| P1 促销商品 | `routes/shop.ts:1057,1101` → V2 | 查询使用 `last_id`，移出活动使用字符串商品ID，保留逐商品错误 |
+| P1 客服聊天 | `routes/chat.ts:21,42,74`；Web `/chat` | 已迁移 V3列表/历史与V2 read，API route将嵌套chat/data归一化给现有页面 |
+| P1 退货同步 | `routes/return.ts:134` → `ozon-returns.ts` | 已使用官方单一日期过滤、最后记录ID推进、visual/logistic/storage嵌套映射；重复/不推进/20页未完成/不安全ID均失败 |
+| P2 商品/库存/价格总数（11-23前完成） | `workers/product-sync.ts:87,106`、价格读取 → client | 兼容 `total_items`，现有items分页保持；total移除不会让读取直接中断 |
+| P2 rFBS配送配置 | `routes/shop.ts:763`、`routes/warehouse-command.ts:99` → `updateAggregatorDeliveryMethod` | 类型已改为官方 `min/max_weight`、`min/max_order_price`、`seller_payment`；真实店铺字段是否满足业务仍未验证 |
+| P3 未接线残留 | 旧 categories 方法已移除；`getProductInfoBySku`保留顶层 `items` | 未在当前非测试源码查到SKU方法调用者；方法合同已校正，不宣称影响采集 |
+
+订单金额现在由共用 V4 适配层先校验 money 对象并归一化，队列与direct共同消费；非法金额/数量不会写入。`/v3/posting/fbs/get`仍是当前读取合同，未把V4列表对象价格无条件推广到V3详情。
+
+现有扩展另使用卖家网页内部的 `/api/site/...`、公开商品页及globalcalculator接口。这些不在Seller OpenAPI的51路径统计内；官方Seller规格不能证明它们未变。本轮没有用卖家Cookie请求内部接口、抓取订单或发起物流报价，因此其运行兼容性和精确OGL价格仍为未验证。
+
+## 为什么既有绿色测试未阻止这次问题
+
+当前 `ozon-client.test.ts` 主要验证传输、仓库与属性字典等已知合同；`product-promotions.test.ts` 的stub覆盖旧响应归一化。源码/脚本搜索没有找到以当前官方News、弃用日期、spec路径缺失和字段差异为输入的自动对照门禁。固定旧fixture通过，只能证明实现与旧假设一致，不能证明官方今日仍接受。
+
+后续适配应优先增加少量可稳定自动化的owner测试：V4两页cursor/不推进拒绝、money对象及非RUB币种、顶层响应、保留订单状态/截止语义；退货从最后记录ID推进和官方visual/logistic映射；图片offer_id/tasks状态；新面单tasks数组与部分失败；财务新ID/日期分页及金额幂等；聊天cursor/消息结构。公开文档监测同时检查 `deprecated` **和正文停用警告、News后续延期、字段级移除**，不把监测脚本结果冒充真实店铺验收。
+
+本轮先完成官方合同审计，随后按用户授权实施本地迁移。当前已完成代码合同、订单cursor/money归一化、图片异步任务、促销V2、聊天V3、退货嵌套字段、面单任务、财务accrual日快照和配送字段 owner；未调用真实店铺。集中定向测试和服务端类型检查结果写在下方，不把本地fixture当真实店铺验收。
+
+## 当前实现与验收边界
+
+本地代码已完成上述迁移，实际影响仍以真实店铺返回、响应解析、分页与落库证据为准，不能把本地fixture或完整离线套件当作线上接口验收。
+
+本地实现已按T2最小RED→GREEN补充合同测试；面单、订单、财务、退货、图片和促销测试共 `59 passed`，服务端 `typecheck PASS`。仍未执行真实 Seller API 请求、生产修复、费用操作、提交、部署或公开发布；真实店铺返回、OGL报价、财务金额对账和图片真实任务结果仍未验证。
+
+最终集中验证（2026-10-23）：服务端完整 Vitest `7431 passed / 395 skipped`（`7826` tests、`521` files；395 为既有环境 skip，不计入通过），服务端 `typecheck PASS`、ESLint 0 error（修复后无新增 warning）、server build PASS，Web `tsc --noEmit PASS`。本地回归没有使用店铺密钥，也没有发送真实 Ozon/Provider 业务请求。
+
+提交前复核进一步关闭空图片任务误判、V2促销成功ID列表与money字段、聊天Markdown数组、退货number金额、未知配送费分类及rFBS根级delivery_method_id接线；订单两入口共用已验证的汇率计算，面单匿名下载绑定公共DNS/HTTPS/字节上限/PDF签名。新增有意义RED均已确认，更新后定向96项通过；初版7431的全量结果保留为历史，不替代最终提交的原生离线验证。用户已明确授权Git提交及COM/CN部署，准备区域签名候选1.0.464；官网461指针保持，本轮不执行Ozon业务写入或付费套图。

@@ -1132,11 +1132,13 @@ export async function productRoutes(app: FastifyInstance) {
     }
 
     const client = new OzonClient({ clientId: product.shop.clientId!, apiKey: decrypt(product.shop.apiKeyEncrypted) });
+    if (!product.offerId) return reply.status(400).send({ code: 0, msg: '商品缺少 offer_id，无法更新图片' });
     const result = await client.importProductPictures({
-      product_id: Number(product.platformProductId),
+      offer_id: product.offerId,
       images: resolvedImages,
       color_image: body.colorImage,
     });
+    await client.waitForImportTask(result.task_id);
 
     // 同步更新本地 images JSON
     await prisma.product.update({
@@ -1209,10 +1211,12 @@ export async function productRoutes(app: FastifyInstance) {
     const client = new OzonClient({ clientId: product.shop.clientId!, apiKey: decrypt(product.shop.apiKeyEncrypted) });
     let ozonResult;
     try {
+      if (!product.offerId) throw new Error('商品缺少 offer_id，无法更新图片');
       ozonResult = await client.importProductPictures({
-        product_id: Number(product.platformProductId),
+        offer_id: product.offerId,
         images: uploadedUrls,
       });
+      await client.waitForImportTask(ozonResult.task_id);
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `OZON 图片替换失败: ${e.message?.slice(0, 300) || '未知错误'}` });
     }

@@ -848,42 +848,12 @@ export async function orderRoutes(app: FastifyInstance) {
     let buffer: Buffer;
     let contentType: string;
 
-    const useAsync = effectiveStatus !== 'awaiting_deliver';
-
-    if (!useAsync) {
-      try {
-        const result = await client.getPackageLabel([order.postingNumber]);
-        buffer = result.buffer;
-        contentType = result.contentType;
-      } catch (e1: any) {
-        try {
-          const r = await fetchLabelAsync(client, order.postingNumber);
-          buffer = r.buffer;
-          contentType = r.contentType;
-        } catch (e2: any) {
-          return reply.send({
-            code: 0,
-            msg: `面单下载失败: ${e2.message || e1.message}。请确认订单已在 OZON 后台完成打包确认。`,
-          });
-        }
-      }
-    } else {
-      try {
-        const r = await fetchLabelAsync(client, order.postingNumber);
-        buffer = r.buffer;
-        contentType = r.contentType;
-      } catch (e: any) {
-        try {
-          const result = await client.getPackageLabel([order.postingNumber]);
-          buffer = result.buffer;
-          contentType = result.contentType;
-        } catch (e2: any) {
-          return reply.send({
-            code: 0,
-            msg: `面单下载失败: ${e.message}（异步接口）/ ${e2.message}（同步接口）。该订单可能已超出 OZON 面单生成窗口期。`,
-          });
-        }
-      }
+    try {
+      const result = await fetchLabelAsync(client, order.postingNumber);
+      buffer = result.buffer;
+      contentType = result.contentType;
+    } catch (error: any) {
+      return reply.send({ code: 0, msg: `面单下载失败: ${error.message}。请确认订单已完成打包确认后稍后重试。` });
     }
 
     try {
@@ -961,7 +931,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
     try {
       const postingNumbers = valid.map((o) => o.postingNumber!);
-      const { buffer, contentType } = await client.getPackageLabel(postingNumbers);
+      const { buffer, contentType } = await fetchLabelAsync(client, postingNumbers);
       try {
         await prisma.warehouseLog.createMany({
           data: valid.map((order) => ({

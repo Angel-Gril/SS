@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-23 Ozon 接口迁移与双区部署准备
+
+官方合同已核实，订单V4、图片V2任务、促销V2、聊天V3、面单V3/V2任务、退货字段与分页、财务accrual及配送字段本地迁移完成。提交前复核补齐异步空结果、促销成功ID/价格、消息数组、number金额及配送ID接线，96项定向通过；用户已授权Git提交及COM/CN部署，准备464候选，最终clean提交的离线/签名/部署证据尚待完成。线上仍463、官网461，本轮无付费套图或Ozon业务写入；准确来源、运行状态与未验证边界仅见[接口迁移owner](ozon-api-compatibility-audit.md)。
+
 ## 2026-10-22 双区安全补丁维护完成
 
 COM/CN应用均运行`d9566394 / 1.0.463`；三服务实际进程为独立Node22.23.4，内置OpenSSL3.5.9、Sharp0.35.5/librsvg2.63.2、Undici8.12.3及系统CA已实读确认。目标备份/日常恢复、完整native offline、签名MV3及双区FULL VPS通过，DB/Redis正常；COM原试点及商品分析、CN dark保持。High由11降至1，braces仍无上游发布修复，未忽略CI告警；官网仍公开461，未CAS、无新Provider/Ozon/费用，Premium未改。准确版本、失败/取消记录、回滚材料与剩余边界仅见[安全运行时维护](security-runtime-maintenance.md)。

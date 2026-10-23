@@ -3,13 +3,14 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { projectOzonChatMessage } from '../services/ozon-chat.js';
 
 export async function chatRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   app.get('/list', async (request, reply) => {
     const { userId } = (request as any).user;
-    const { shopId, offset, limit } = request.query as { shopId: string; offset?: string; limit?: string };
+    const { shopId, cursor, limit } = request.query as { shopId: string; cursor?: string; limit?: string };
     if (!shopId) return reply.status(400).send({ code: 0, msg: '缺少 shopId' });
 
     const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
@@ -18,8 +19,16 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
-    const result = await client.getChatList({ limit: Number(limit) || 30, offset: Number(offset) || 0 });
-    return reply.send({ code: 1, msg: 'ok', data: result });
+    const result: any = await client.getChatList({ limit: Number(limit) || 30, cursor });
+    const chats = (Array.isArray(result.chats) ? result.chats : []).map((row: any) => ({
+      ...(row.chat || row),
+      chat_id: row.chat_id || row.chat?.chat_id,
+      chat_type: row.chat_type || row.chat?.chat_type,
+      first_unread_message_id: row.first_unread_message_id ?? row.chat?.first_unread_message_id,
+      last_message_id: row.last_message_id ?? row.chat?.last_message_id,
+      unread_count: row.unread_count ?? row.chat?.unread_count ?? 0,
+    }));
+    return reply.send({ code: 1, msg: 'ok', data: { ...result, chats } });
   });
 
   app.get('/history/:chatId', async (request, reply) => {
@@ -34,11 +43,12 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
-    const result = await client.getChatHistory(chatId, {
+    const result: any = await client.getChatHistory(chatId, {
       from_message_id: from_message_id ? Number(from_message_id) : undefined,
       limit: Number(limit) || 50,
     });
-    return reply.send({ code: 1, msg: 'ok', data: result });
+    const messages = (Array.isArray(result.messages) ? result.messages : []).map(projectOzonChatMessage);
+    return reply.send({ code: 1, msg: 'ok', data: { ...result, messages } });
   });
 
   app.post('/send', async (request, reply) => {

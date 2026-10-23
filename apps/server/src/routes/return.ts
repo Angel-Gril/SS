@@ -4,6 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { returnSyncInputSchema, syncOzonReturns } from '../services/ozon-returns.js';
 
 const querySchema = z.object({
   shopId: z.string().optional(),
@@ -117,6 +118,8 @@ export async function returnRoutes(app: FastifyInstance) {
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 退货同步' });
     if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '店铺状态异常，请先测试连接' });
+    const parsedInput = returnSyncInputSchema.safeParse(body);
+    if (!parsedInput.success) return reply.status(400).send({ code: 0, msg: parsedInput.error.issues[0]?.message || '参数错误' });
 
     const job = await prisma.syncJob.create({
       data: { shopId: shop.id, type: 'RETURN_PULL', status: 'RUNNING', startedAt: new Date() },
@@ -128,62 +131,15 @@ export async function returnRoutes(app: FastifyInstance) {
     });
 
     try {
-      const since = body.since
-        ? new Date(body.since).toISOString()
-        : new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-
-      let lastId = 0;
-      let total = 0;
-      let pages = 0;
-
-      while (pages < 20) {
-        const res = await client.getReturnsList({
-          filter: { since, to: new Date().toISOString() },
-          last_id: lastId,
-          limit: 100,
+      const total = await syncOzonReturns(client, parsedInput.data.since, async (row) => {
+        await prisma.return.upsert({
+          where: { shopId_platformReturnId: { shopId: shop.id, platformReturnId: row.platformReturnId } },
+          create: { shopId: shop.id, ...row, product: row.product ?? {}, raw: row.raw as any },
+          update: { postingNumber: row.postingNumber, status: row.status, reason: row.reason, product: row.product ?? {},
+            quantity: row.quantity, amount: row.amount, currency: row.currency, returnedToWarehouse: row.returnedToWarehouse,
+            acceptedAt: row.acceptedAt, returnedAt: row.returnedAt, raw: row.raw as any },
         });
-        if (!res.returns || res.returns.length === 0) break;
-
-        for (const item of res.returns) {
-          if (!item.id) continue;
-          const platformReturnId = String(item.id);
-          await prisma.return.upsert({
-            where: { shopId_platformReturnId: { shopId: shop.id, platformReturnId } },
-            create: {
-              shopId: shop.id,
-              platformReturnId,
-              postingNumber: item.posting?.posting_number ?? null,
-              status: item.visual_status?.system_name || 'unknown',
-              reason: item.return_reason_name ?? null,
-              product: item.product as any,
-              quantity: item.product?.quantity ?? 1,
-              amount: item.product?.price?.price ? item.product.price.price : null,
-              currency: item.product?.price?.currency_code || 'RUB',
-              returnedToWarehouse: !!item.moved_to_warehouse,
-              acceptedAt: item.arrived_moment ? new Date(item.arrived_moment) : null,
-              returnedAt: item.return_date ? new Date(item.return_date) : null,
-              raw: item as any,
-            },
-            update: {
-              status: item.visual_status?.system_name || 'unknown',
-              reason: item.return_reason_name ?? null,
-              product: item.product as any,
-              quantity: item.product?.quantity ?? 1,
-              amount: item.product?.price?.price ? item.product.price.price : null,
-              currency: item.product?.price?.currency_code || 'RUB',
-              returnedToWarehouse: !!item.moved_to_warehouse,
-              acceptedAt: item.arrived_moment ? new Date(item.arrived_moment) : null,
-              returnedAt: item.return_date ? new Date(item.return_date) : null,
-              raw: item as any,
-            },
-          });
-          total++;
-        }
-
-        if (!res.has_next) break;
-        lastId = res.last_id;
-        pages++;
-      }
+      });
 
       await prisma.syncJob.update({
         where: { id: job.id },

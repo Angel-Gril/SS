@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { readEffectiveFinanceTransactions } from './ozon-finance-accrual.js';
 
 /**
  * 聚合指定用户/店铺的月度统计，写入 AccountMonthlyStat
@@ -37,9 +38,8 @@ export async function aggregateMonthlyStats(userId: string, yearMonth: string): 
     });
 
     // 从 finance transactions 聚合广告/罚款明细
-    const txns = await prisma.ozonFinanceTransaction.findMany({
-      where: { shopId: shop.id, operationDate: { gte: monthStart, lt: monthEnd } },
-      select: { category: true, amountCny: true },
+    const txns = await readEffectiveFinanceTransactions(prisma, {
+      shopId: shop.id, operationDate: { gte: monthStart, lt: monthEnd },
     });
 
     const metrics = buildMetrics(orders, returns, snapshots, txns);
@@ -135,7 +135,7 @@ function buildMetrics(orders: any[], returns: any[], snapshots: any[], txns: any
 
   // 从 finance transactions 拆广告/罚款明细
   for (const tx of txns) {
-    const amt = Math.abs(Number(tx.amountCny));
+    const amt = tx.costAmountCny ?? Math.abs(Number(tx.amountCny));
     switch (tx.category) {
       case 'ad_click': m.adClickCny += amt; break;
       case 'ad_cpa': m.adCpaCny += amt; break;

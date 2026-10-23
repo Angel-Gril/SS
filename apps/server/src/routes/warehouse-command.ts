@@ -98,6 +98,7 @@ export async function warehouseCommandRoutes(app: FastifyInstance) {
         } else {
           result = await client.updateAggregatorDeliveryMethod({
             warehouse_id: dmPayload.warehouse_id,
+            delivery_method_id: dmPayload.delivery_method_id,
             delivery_method: dmPayload.delivery_method ?? dmPayload,
           });
         }

@@ -4,46 +4,13 @@ import { connection } from '../lib/bullmq-connection.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
-import { OzonClient, OzonFinanceOperation } from '../services/ozon-client.js';
+import { OzonClient } from '../services/ozon-client.js';
 import { convertAmountToCny } from '../services/exchange-rate.js';
+import { financeAccrualDates, syncFinanceAccrualDay } from '../services/ozon-finance-accrual.js';
 
 const QUEUE_NAME = 'finance-sync';
 
 export const financeSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
-
-// operation_type -> category 映射
-const CATEGORY_MAP: Record<string, string> = {
-  MarketplaceMarketingActionCostItem: 'ad_click',
-  MarketplaceServiceItemAdvertisementForOrder: 'ad_cpa',
-  MarketplaceServiceItemReviewsBonus: 'ad_review',
-  MarketplaceServiceItemQuickReview: 'ad_quick',
-  MarketplaceServiceItemPremium: 'ad_premium',
-  MarketplaceServiceItemBrandPromotion: 'ad_brand',
-  OperationMarketplaceSaleCommission: 'commission',
-  MarketplaceServiceItemDelivToCustomer: 'shipping_last',
-  MarketplaceServiceItemDirectFlowTrans: 'shipping_intl',
-  MarketplaceServiceItemReturnFlowTrans: 'shipping_intl',
-  MarketplaceServiceItemDelivToCustomerPost: 'shipping_post',
-  MarketplaceServiceItemFulfillment: 'fee_settle',
-  OperationItemReturn: 'refund_partial',
-  MarketplaceServiceItemReturnPartGoodsCustomer: 'refund_partial',
-  MarketplaceServiceItemDisputeCompensation: 'dispute',
-  MarketplaceServiceItemCancelledIndexPenalty: 'penalty_index',
-  MarketplaceServiceItemPickupFail: 'penalty_pickfail',
-  MarketplaceServiceItemOther: 'service_other',
-};
-
-function classifyOperation(op: OzonFinanceOperation): string {
-  const mapped = CATEGORY_MAP[op.operation_type];
-  if (mapped) return mapped;
-  const name = op.operation_type.toLowerCase();
-  if (name.includes('commission') || name.includes('sale_commission')) return 'commission';
-  if (name.includes('advert') || name.includes('marketing')) return 'ad_click';
-  if (name.includes('delivery') || name.includes('deliv')) return 'shipping_last';
-  if (name.includes('penalty') || name.includes('cancel')) return 'penalty_index';
-  if (name.includes('return') || name.includes('refund')) return 'refund_partial';
-  return 'other';
-}
 
 export async function addFinanceSyncJob(shopId: string, days = 30) {
   const from = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
@@ -71,53 +38,14 @@ async function syncFinanceCore(shopId: string, from: string, to: string) {
     apiKey: decrypt(shop.apiKeyEncrypted),
   });
 
-  let page = 1;
   let totalStored = 0;
-
-  while (true) {
-    const res = await client.getFinanceTransactionList({ from, to, page, page_size: 1000 });
-    const ops = res.result.operations;
-    if (!ops.length) break;
-
-    for (const op of ops) {
-      const category = classifyOperation(op);
-      const opDate = new Date(op.operation_date);
-      const { amountCny, rate } = await convertAmountToCny(op.amount, 'RUB', opDate);
-
-      await prisma.ozonFinanceTransaction.upsert({
-        where: {
-          shopId_operationId: { shopId, operationId: String(op.operation_id) },
-        },
-        create: {
-          shopId,
-          operationId: String(op.operation_id),
-          operationType: op.operation_type,
-          operationTypeName: op.operation_type_name || null,
-          category,
-          postingNumber: op.posting?.posting_number || null,
-          orderId: op.posting?.order_id ? String(op.posting.order_id) : null,
-          amount: op.amount,
-          currency: 'RUB',
-          amountCny,
-          exchangeRate: rate,
-          operationDate: opDate,
-          raw: op as any,
-        },
-        update: {
-          operationType: op.operation_type,
-          operationTypeName: op.operation_type_name || null,
-          category,
-          amount: op.amount,
-          amountCny,
-          exchangeRate: rate,
-        },
-      });
-      totalStored++;
-    }
-
-    if (page >= res.result.page_count) break;
-    page++;
-    await sleep(1500);
+  const dates = financeAccrualDates(from, to);
+  for (const date of dates) {
+    const result = await syncFinanceAccrualDay({
+      db: prisma, client, shopId, date, convert: convertAmountToCny,
+    });
+    totalStored += result.accrualsStored;
+    await sleep(500);
   }
 
   console.log(`[FinanceSync] Shop ${shop.name}: stored ${totalStored} transactions`);

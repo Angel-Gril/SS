@@ -62,6 +62,7 @@ const updateShopSchema = z.object({
 
 const promotionProductsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
+  last_id: z.string().max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
 
@@ -741,14 +742,15 @@ export async function shopRoutes(app: FastifyInstance) {
     if (!wh) return reply.status(404).send({ code: 0, msg: '仓库不存在' });
     if (!wh.platformWarehouseId) return reply.status(400).send({ code: 0, msg: '仓库缺少平台 ID' });
 
-    const body = request.body as { delivery_method: any };
+    const body = request.body as { delivery_method: any; delivery_method_id?: number };
     if (!body?.delivery_method) return reply.status(400).send({ code: 0, msg: '缺少 delivery_method' });
 
     const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
 
     try {
       const isRfbs = wh.isRfbs || wh.type === 'RFBS';
-      const payload = { warehouse_id: Number(wh.platformWarehouseId), delivery_method: body.delivery_method };
+      const payload = { warehouse_id: Number(wh.platformWarehouseId), delivery_method: body.delivery_method,
+        delivery_method_id: body.delivery_method_id ?? body.delivery_method.delivery_method_id };
       await prisma.$transaction(async (tx) => {
         await invalidateWarehouseLogisticsScope(tx, {
           tenantId: userId,
@@ -1055,7 +1057,7 @@ export async function shopRoutes(app: FastifyInstance) {
       const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
       const raw = await client.getPromotionProducts(numericActionId, {
         limit: parsed.data.limit,
-        offset: parsed.data.offset,
+        last_id: parsed.data.last_id,
       });
       const preliminary = normalizePromotionProducts(raw);
       const localProducts = preliminary.products.length
