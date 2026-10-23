@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-24 扩展权限可视化管理本地完成
+
+超级管理员设置新增结构化用户/店铺/设备/平台及托管AI范围管理，复用原batch配置写入/expectedRevision/审计，不自动修改COM试点或CN dark。最小只读选项接口、109项后端相关验证、10项前端新行为及3项原合同、类型/lint及隔离Chrome桌面/窄屏/保存/冲突/未知/无效/初始化流程通过。尚未提交部署；官网/应用仍466，组包已存在但真实仓库准入/实货签未测。唯一实现与权限边界见[访问管理owner](extension-access-administration.md)。
+
 ## 2026-10-24 466双区官网公开发布完成
 
 `a2e70f59 / 1.0.466` 已提交推送、区域签名并完成COM/CN标准部署、备份恢复、FULL VPS、签名ZIP的MV3安装和完整native offline。按用户批准的精确四文件blob复用原465两图/收费/审核/assignment/幂等原件，当前模型/价格及数据库只读核对、正式QA04、双区REL04/官网approval/CAS/四包匿名下载和final verifier均通过；新增Provider/费用/Ozon为0。COM原DOTH+BINI试点、CN dark保持。部署失败及实际停机、新增管理界面仍独立未上线的边界仅见[接口owner](ozon-api-compatibility-audit.md)，受控复用见[验证owner](release-validation.md)。

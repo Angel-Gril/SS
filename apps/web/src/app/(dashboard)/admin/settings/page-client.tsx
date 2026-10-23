@@ -20,6 +20,8 @@ import { toast } from '@/components/ui/use-toast';
 import { deploymentHosts, deploymentOrigin } from '@/lib/deployment-hosts';
 import { AiPromptTemplateEditor } from '@/components/admin/ai-prompt-template-editor';
 import { ExtensionAiAdminControls } from '@/components/admin/extension-ai-admin-controls';
+import { ExtensionAccessAdminControls } from '@/components/admin/extension-access-admin-controls';
+import { ACCESS_EXTRA_FLAGS, TENANT_POLICY_KEY } from '@/components/admin/extension-access-state.mjs';
 import { api } from '@/lib/api';
 import {
   ALIYUN_OSS_REGIONS,
@@ -515,6 +517,9 @@ export default function AdminSettingsPage() {
 
   const grouped: Record<string, SystemConfig[]> = {};
   configs.forEach((c) => {
+    // These configurations have structured controls and their own atomic revision checks.
+    if (c.key === TENANT_POLICY_KEY || c.key.startsWith('feature_source_')
+      || c.key === 'feature_ai_media_workflow_v2' || ACCESS_EXTRA_FLAGS.includes(c.key)) return;
     if (!grouped[c.group]) grouped[c.group] = [];
     grouped[c.group]!.push(c);
   });
@@ -571,6 +576,8 @@ export default function AdminSettingsPage() {
           </Button>
         </div>
       )}
+
+      <ExtensionAccessAdminControls />
 
       {Object.keys(grouped).length === 0 && (
         <Card>

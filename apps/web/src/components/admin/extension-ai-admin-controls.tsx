@@ -30,7 +30,6 @@ interface ByokAdminPolicyDraft {
 }
 
 const BYOK_ADMIN_KEYS = [
-  'feature_extension_hosted_ai',
   'feature_extension_byok_ai',
   'feature_extension_byok_ingest',
   'feature_extension_byok_publish',
@@ -203,7 +202,7 @@ export function ExtensionAiAdminControls({
           <div>
             <h3 className="text-sm font-medium">BYOK 管理控制</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              托管 AI、BYOK 生图、BYOK 结果接收和 BYOK 上架发布分别授权；全部默认关闭。
+              BYOK 生图、BYOK 结果接收和 BYOK 上架发布分别授权；托管 AI 用户与开关在“扩展与托管访问”中管理。
             </p>
           </div>
           <Badge variant="secondary">安全基础设施 · 暗态</Badge>
@@ -212,11 +211,6 @@ export function ExtensionAiAdminControls({
 
       <div className="mt-4 space-y-4 border-t pt-4">
         <div className="grid gap-3 md:grid-cols-2">
-          <AdminToggle
-            config={configs.feature_extension_hosted_ai}
-            value={editing.feature_extension_hosted_ai || 'false'}
-            onChange={(value) => setValue('feature_extension_hosted_ai', value)}
-          />
           <AdminToggle
             config={configs.feature_extension_byok_ai}
             value={editing.feature_extension_byok_ai || 'false'}

@@ -58,6 +58,8 @@ import { redis, redisDisabled } from './lib/redis.js';
 import { providerRoutes } from './routes/provider.js';
 import { ozonLogisticsRoutes, domesticAddressRoutes } from './routes/ozon-logistics.js';
 import { systemConfigRoutes } from './routes/system-config.js';
+import { adminExtensionRolloutRoutes } from './routes/admin-extension-rollout.js';
+import { createExtensionRolloutAdminOptionsService } from './services/extension-rollout-admin-options.js';
 import { watermarkTemplateRoutes } from './routes/watermark-template.js';
 import { imageUploadRoutes } from './routes/image-upload.js';
 import { cdnProxyRoutes } from './routes/cdn-proxy.js';
@@ -3434,6 +3436,10 @@ await app.register(providerRoutes, { prefix: '/api/provider' });
 await app.register(ozonLogisticsRoutes, { prefix: '/api/ozon-logistics' });
 await app.register(domesticAddressRoutes, { prefix: '/api/domestic-addresses' });
 await app.register(systemConfigRoutes, { prefix: '/api/admin/system-config' });
+await app.register(adminExtensionRolloutRoutes, {
+  prefix: '/api/admin/extension-rollout',
+  service: createExtensionRolloutAdminOptionsService(prisma),
+});
 await app.register(watermarkTemplateRoutes, { prefix: '/api/watermark-templates' });
 await app.register(imageUploadRoutes, { prefix: '/api/images' });
 await app.register(cdnProxyRoutes);
