@@ -27,6 +27,7 @@ import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { OzonApiCapabilities } from '@/components/shops/ozon-api-capabilities';
 
 interface Shop {
   id: string;
@@ -409,7 +410,7 @@ function EditShopDialog({ shopId, onClose, onSuccess }: {
 
   return (
     <Dialog open={!!shopId} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>编辑店铺</DialogTitle>
           <DialogDescription>查看和修改店铺的 API 凭证信息</DialogDescription>
@@ -445,6 +446,7 @@ function EditShopDialog({ shopId, onClose, onSuccess }: {
             <div className="text-xs text-muted-foreground">
               状态: {detail.status} | 创建时间: {formatDate(detail.createdAt)}
             </div>
+            {detail.status === 'ACTIVE' && <OzonApiCapabilities key={detail.id} shopId={detail.id} />}
           </div>
         ) : null}
         <DialogFooter>

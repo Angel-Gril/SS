@@ -15,6 +15,7 @@ interface OzonRequestOptions {
   body?: unknown;
   skipRetry?: boolean;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 }
 
 export interface OzonAttributeValue {
@@ -127,6 +128,27 @@ function positiveInt(value: unknown, fallback: number): number {
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
 }
 
+async function readOzonResponseText(response: Response, limit?: number): Promise<string> {
+  if (limit === undefined) return response.text();
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32 * 1024 * 1024) throw new Error('Invalid Ozon JSON response limit');
+  if (Number(response.headers.get('content-length') || 0) > limit) {
+    await response.body?.cancel(); throw new Error('Ozon JSON response exceeds size limit');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Missing Ozon JSON response body');
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > limit) { await reader.cancel(); throw new Error('Ozon JSON response exceeds size limit'); }
+      chunks.push(chunk.value);
+    }
+  } finally { reader.releaseLock(); }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 const PROXY_URL =
   process.env.HTTPS_PROXY || process.env.https_proxy ||
@@ -182,25 +204,26 @@ export class OzonClient {
         if (res.status === 429 && attempt < maxAttempts - 1) {
           const retryAfter = Number(res.headers.get('retry-after')) || 0;
           const wait = retryAfter > 0 ? retryAfter * 1000 : this.baseDelayMs * 2 ** attempt;
-          await res.text();
+          await readOzonResponseText(res, options.maxResponseBytes);
           if (timeout) clearTimeout(timeout);
           await sleep(wait);
           continue;
         }
 
         if (res.status >= 500 && res.status < 600 && attempt < maxAttempts - 1) {
-          await res.text();
+          await readOzonResponseText(res, options.maxResponseBytes);
           if (timeout) clearTimeout(timeout);
           await sleep(this.baseDelayMs * 2 ** attempt);
           continue;
         }
 
         if (!res.ok) {
-          const text = await res.text();
+          const text = await readOzonResponseText(res, options.maxResponseBytes);
           throw new OzonApiError(res.status, text, path);
         }
 
-        return await res.json() as T;
+        if (options.maxResponseBytes === undefined) return await res.json() as T;
+        return JSON.parse(await readOzonResponseText(res, options.maxResponseBytes)) as T;
       } catch (e) {
         if (e instanceof OzonApiError) throw e;
         const normalizedError = new OzonNetworkError(path, e, timeoutMs);
@@ -769,6 +792,7 @@ export class OzonClient {
           posting_number,
           with: { analytics_data: true, financial_data: true, products: true },
         },
+        maxResponseBytes: 4_000_000,
       },
     );
     return res.result;

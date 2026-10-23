@@ -36,10 +36,16 @@ export async function fetchLabelAsync(
   const numbers = [...new Set(postingNumbersSchema.parse(
     Array.isArray(postingNumbers) ? postingNumbers : [postingNumbers],
   ))];
-  const taskType = z.enum(['big_label', 'small_label']).parse(options.taskType ?? 'big_label');
+  const explicitType = options.taskType === undefined ? undefined : z.enum(['big_label', 'small_label']).parse(options.taskType);
   const created = await client.createPackageLabelTasks(numbers);
-  const matching = created.tasks?.filter(task => task.task_type === taskType) ?? [];
-  if (matching.length !== 1) throw new Error(`OZON 未返回唯一的 ${taskType} 面单任务`);
+  if (!Array.isArray(created.tasks)) throw new Error('OZON 面单任务响应格式无效');
+  // Small and ordinary posting labels are independent results. A shop may only
+  // return one format. Container labels use separate APIs, never this choice.
+  const taskType = explicitType ?? (created.tasks.some(task => task.task_type === 'small_label') ? 'small_label' : 'big_label');
+  const matching = created.tasks.filter(task => task.task_type === taskType);
+  const displayType = taskType === 'small_label' ? '小面单' : '普通面单';
+  if (!matching.length) throw new Error(`OZON 未返回${displayType}任务，请核对该订单可用的面单类型`);
+  if (matching.length !== 1) throw new Error(`OZON 返回多个${displayType}任务，当前结果需核对，请勿重复创建`);
   const task = matching[0]!;
   const taskId = String(task.task_id);
   if ((typeof task.task_id === 'number' && !Number.isSafeInteger(task.task_id))

@@ -26,6 +26,7 @@ import { defaultTrackUrl } from '@/lib/tracking';
 import { isOrderAwaitingSellerShipment, isOrderStockPrepared, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 import { OrderFulfillmentProgress } from '@/components/orders/fulfillment-progress';
+import { LabelPreviewDialog } from '@/components/orders/label-preview-dialog';
 
 interface Order {
   id: string;
@@ -1536,108 +1537,6 @@ function OrderDetailDialog({ orderId, onClose }: {
             )}
           </div>
         ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function LabelPreviewDialog({ order, onClose }: {
-  order: Order | null;
-  onClose: () => void;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [filename, setFilename] = useState('label.pdf');
-
-  useEffect(() => {
-    if (!order) { setPdfUrl(null); setError(null); return; }
-    setLoading(true);
-    setError(null);
-    api.get(`/api/orders/${order.id}/label?format=base64`).then((res: any) => {
-      if (res.code === 1 && res.data?.base64) {
-        const binary = atob(res.data.base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const blob = new Blob([bytes], { type: res.data.contentType || 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        setPdfUrl(url);
-        setFilename(res.data.filename || 'label.pdf');
-      } else {
-        setError(res.msg || '获取面单失败');
-      }
-      setLoading(false);
-    }).catch(() => {
-      setError('网络错误');
-      setLoading(false);
-    });
-
-    return () => {
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    };
-  }, [order?.id]);
-
-  function handlePrint() {
-    const iframe = document.getElementById('label-preview-iframe') as HTMLIFrameElement;
-    if (iframe?.contentWindow) {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-    }
-  }
-
-  function handleDownload() {
-    if (!pdfUrl) return;
-    const a = document.createElement('a');
-    a.href = pdfUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-
-  return (
-    <Dialog open={!!order} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-w-4xl h-[90vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span>面单预览 — {order?.postingNumber}</span>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={handleDownload} disabled={!pdfUrl}>
-                <FileDown className="h-4 w-4" /> 下载
-              </Button>
-              <Button size="sm" onClick={handlePrint} disabled={!pdfUrl}>
-                <Printer className="h-4 w-4" /> 打印
-              </Button>
-            </div>
-          </DialogTitle>
-        </DialogHeader>
-        <div className="flex-1 min-h-0 rounded-md border overflow-hidden bg-muted">
-          {loading ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center space-y-3">
-                <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">正在从 OZON 获取面单...</p>
-                <p className="text-xs text-muted-foreground">首次生成可能需要 10-20 秒</p>
-              </div>
-            </div>
-          ) : error ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center space-y-2 max-w-md px-4">
-                <div className="text-destructive font-medium">{error}</div>
-                <p className="text-xs text-muted-foreground">
-                  面单在 Ozon 确认备货后可用。如果订单仍在待打包状态，请先点击“确认备货”。
-                </p>
-              </div>
-            </div>
-          ) : pdfUrl ? (
-            <iframe
-              id="label-preview-iframe"
-              src={pdfUrl}
-              className="w-full h-full border-0"
-              title="面单预览"
-            />
-          ) : null}
-        </div>
       </DialogContent>
     </Dialog>
   );

@@ -36,6 +36,8 @@ import {
 import { ozonAnalyticsRoutes } from './routes/ozon-analytics.js';
 import { ozonSyncRoutes } from './routes/ozon-sync.js';
 import { warehouseRoutes } from './routes/warehouse.js';
+import { ozonCarriageRoutes } from './routes/ozon-carriage.js';
+import { ozonApiCapabilitiesRoutes } from './routes/ozon-api-capabilities.js';
 import { warehouseTemplateRoutes } from './routes/warehouse-template.js';
 import { ozonPickupPointRoutes } from './routes/ozon-pickup-point.js';
 import { warehouseCommandRoutes } from './routes/warehouse-command.js';
@@ -3349,6 +3351,8 @@ if (isLogisticsDistributionEnabled()) {
 await app.register(setupRoutes, { prefix: '/api/setup' });
 await app.register(userRoutes, { prefix: '/api/user' });
 await app.register(shopRoutes, { prefix: '/api/shops' });
+await app.register(ozonApiCapabilitiesRoutes, { prefix: '/api/ozon-api-capabilities' });
+await app.register(ozonCarriageRoutes, { prefix: '/api/ozon-carriage' });
 await app.register(orderRoutes, { prefix: '/api/orders' });
 await app.register(orderAnalyticsRoutes, { prefix: '/api/orders' });
 await app.register(financeRoutes, { prefix: '/api/finance' });

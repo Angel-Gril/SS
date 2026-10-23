@@ -2,6 +2,28 @@
 
 本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权接口迁移、Git提交和双区部署。源码已推送并完成区域签名及COM/CN标准部署；未发起人工真实Ozon业务验收。Premium模块不在范围内。本文件记录接口兼容性与实施取证，不替代既有业务、权限或发布owner。
 
+## 2026-10-23 组包与接口诊断开发（进行中）
+
+用户已授权实现上述功能。当前范围为本地开发与隔离验收，不含真实Ozon组包写入、生产迁移、部署或官网切换；Premium继续排除。沿用Fastify/Prisma/Next及既有账户有效用户归属，不借仓库员工全平台可见规则扩大卖家写权限。
+
+- 组包业务唯一owner为新增`services/ozon-carriage.ts`；`ozon-client.ts`负责固定官方路径传输；新增持久操作记录保存幂等键、请求摘要、异步task、逐项错误和未知结果，route与页面仅消费。普通订单面单独立，不由打印偷偷建箱。
+- 页面放在订单管理的“组包交仓”，复用仓库打印的筛选/操作栏及现有Table、Button、Dialog橙色样式；同页选店铺/仓库→新建箱或托盘→扫码加入订单→确认→货签/交接文件。由实时`available_actions`控制操作；切换上下文丢弃旧响应，进行中的命令从数据库恢复，未知写入禁止自动重发。不以组包确认冒充实际国际发运。
+- 服务端验证店铺ACTIVE/OZON/归属、仓库归属、订单posting/仓库/状态、数量与重复、平台可用动作。新命令按仓库串行，跨请求/进程通过唯一锁约束；网络/5xx/无效成功回执均保留UNKNOWN，已知task只读恢复。文件严格限制base64字节及PDF签名，无外部URL代理。
+- 另两个独立范围：API Key只读到期/功能权限诊断（独立service、route与店铺UI组件）；已调用API的公开规格/News变更检查（独立script与测试，不使用店铺Key）。三者不同时写同一owner，主Agent统一装配/文档/验证。
+
+实施分类D2，T2用于业务/权限/幂等/合同，先RED再GREEN；T3用于隔离浏览器布局与交互。最小验收覆盖建箱/扫码/逐项错误/异步恢复/未知不重发/跨店跨仓拒绝/PDF边界、真实隔离PostgreSQL并发与迁移、Web桌面与窄屏、API Key未知和过期、官方变更脚本的弃用/移除/Beta报告。完成全部代码后集中运行定向回归和类型/lint，不重复付费生图或无关发布门禁。真实店铺准入和实际货签打印另标未验证。
+
+实施单元：主Agent独占组包服务、client、schema/迁移、组包route、Web页面与菜单；诊断单元独占新能力service/route/测试/独立UI组件；监测单元独占新脚本/fixture测试。join点为独立文件完成后主Agent检查diff、装配并运行集中回归，不由子Agent提交或执行生产操作。
+
+### 本地实现与验证结果
+
+- 组包服务、API route、前向迁移、订单管理页面和导航已完成；数据库记录保存 `requestHash`、`credentialHash`、异步 `taskId`、逐项错误以及 `CLOSED_UNKNOWN` 人工核对的操作者/说明/时间。写操作固定 `skipRetry`，2xx/错误响应均有大小上限；凭据轮换不能拿新凭据核对旧任务，迟到 recovery 不能覆盖人工关闭。
+- 组包页面以 Ozon `available_actions` 控制按钮，建箱、扫码/移除、托盘装卸、确认、取消、货签/交接文件预览和打印均在同页；普通订单面单仍走原独立入口。超时/未知状态保留本地请求键；只有服务端明确 `notDispatched` 的业务拒绝才清除浏览器键。
+- API Key 诊断仅读取 `/v1/roles`，严格匹配已核实的 path/operationId，直接展示 `expires_at`、到期分类和缺失方法；组包仓库准入仍显示 `未验证`，不从角色名称或创建时间推断。
+- 最终定向服务端 9 个文件 `111 passed`；公开规格分析工具 `17 passed`；面单历史合同通过；本机隔离 PostgreSQL 迁移、并发/重连/未知锁/人工关闭 `6 passed`；Web production build、Web typecheck 和 server typecheck/lint 通过。隔离 Chrome 24 组通过，覆盖1440/390布局、组包交互、恢复、PDF真实渲染/打印函数、权限诊断和请求键边界，证据见 `C:/Users/550W/AppData/Local/Temp/ss-erp-carriage-ui-RESzF9/summary.json`。
+- 官方当前规格离线检查覆盖 63 个固定调用，组包相关 12 个 path/method **0 条告警**。整体报告仍有其他旧接口的字段弃用、Beta 和一个规格引用缺失，报告状态为 `requires_review`；这不阻塞组包本地实现，也不等于全站或真实店铺兼容已通过。检查原件见 `C:/Users/550W/AppData/Local/Temp/ss-erp-ozon-spec-check-1myfFa`。
+- 本阶段没有真实 Ozon 组包、货签打印机、店铺 API Key、Provider/Ozon 业务写入、费用、提交、推送、签名、部署或官网切换。真实仓库是否开通信任验收货位仍需之后在明确授权下核验。
+
 ## 2026-10-23 双区部署完成
 
 - 运行源码 `099c26633fac05f7163108934509de860fc3828f` 已提交并推送到 `feat/ai-media-prompt-registry`，两区应用候选 `1.0.464`。此处后的文档收尾提交不改变运行候选身份，不重新部署。
@@ -12,6 +34,25 @@
 - 最后公网 `/ready` 两区均绑定099c2663、DB/Redis正常，API/Worker/Web均active，三进程实际Node路径仍为 `/opt/ss-erp-node/v22.23.4/bin/node`。COM保留DOTH+BINI和原设备逐店授权/六操作及qwen-vl-max分析；CN保持direct-origin/RDS/AI dark。未修改生产权限或模型配置。
 - 官网仍是原 `efd4f4ad / 1.0.461`，没有正式新suite/QA04 final、官网approval/CAS或公开下载切换。本轮未主动请求真实Provider/Ozon业务或产生测试费用；服务重启后既有自动同步可能继续运行，不把部署健康检查冒充订单、图片、退货或财务实账验收。
 - 私有原件：`C:/Users/550W/AppData/Local/SS-ERP/private/release-099c2663-orders`（签名/浏览器/备份/部署/FULL/health）及 `release-099c2663-website464`（唯一完整offline）。历史中间检查和7431项结果保留，不重标为最终提交证据；本文件中早先审计表以审计时源码为历史基线。
+
+## 2026-10-23 面单选择与预览布局后续修复（本地，尚未部署）
+
+用户截图报 `OZON 未返回唯一的 big_label 面单任务`，同时关闭按钮与打印按钮重叠。根因在464实现：`fetchLabelAsync` 默认强制唯一big_label，即使平台只给small_label也拒绝；旧弹窗把下载/打印放在DialogTitle右侧，与通用Dialog的绝对定位关闭按钮占用同一区域。截图只能证明默认分支拒绝，未取得该订单原始tasks，不能冒称已读取真实small-only回执。旧测试只将big-label-only当正常默认值，没有覆盖only-small默认打印。
+
+本地修复保留单次create和有界poll：未显式选格式时优先small_label，只提供big_label时使用其普通面单；明确选择某格式时仍严格匹配，多个同类任务不猜合并、不重复create。单张/批量/仓库打印共用此owner；取消“所有失败都请先打包”的route误导文案，展示具体平台错误。`LabelPreviewDialog` 提取为可验证的独立组件，标题预留关闭区域，下载/打印另置一行；长订单号/390px窄屏可换行。切换订单立即清空旧PDF并忽略过期响应，清理精确object URL，打印使用iframe ref而非全局ID。
+
+T2先验证small-only/default preference错误确实RED，再实现GREEN；面单/下载/client/备货受影响验证37项通过，Web类型/lint、服务端lint和原打印历史合同通过。隔离Chrome真实渲染桌面1440×1000及390×844：关闭与打印矩形不重叠、对话框在viewport内、未加载不可下载/打印、旧订单响应忽略、object URL撤销、打印函数调用均通过。只模拟PDF与API边界，未调用真实Ozon、未驱动物理打印机。截图及summary在 `C:/Users/550W/AppData/Local/Temp/ss-erp-label-preview-E88hQK`；早一次截图捕获在入场动画中，保留但不作为最终视觉证据。当前源码未提交/签名/部署，线上仍099c2663/464。
+
+### 官方大小面单、OGL组包、APIkey与Beta结论
+
+2026-10-23再次从正常浏览器同源公开GET读取官方Swagger HTTP200，最新News仍10-22，序列化SHA仍 `0e7d75b1b4a4ac9ad95186dc8027a10c5f324064ccef2f6a4bcb29824ce8b130`，不是凭截图猜新接口：
+
+- [`PostingFbsPackageLabelCreate`](https://docs.ozon.ru/api/seller/#operation/PostingFbsPackageLabelCreate) 将big_label描述为普通标签、small_label为小标签，并未说这是订单金额大小。创建请求只有posting_numbers，返回可用tasks，普通打印不应强依赖big。官方建议组装后45–60秒再请求；rFBS/Express需查对应业务流程。
+- 集包/货位标签是独立业务：[`CarriageContainerCreate`](https://docs.ozon.ru/api/seller/#operation/CarriageContainerCreate) → [`CarriageContainerFill`](https://docs.ozon.ru/api/seller/#operation/CarriageContainerFill) →任务读取/[`CarriageContainerApprove`](https://docs.ozon.ru/api/seller/#operation/CarriageContainerApprove)→[`CarriageContainerLabelGet`](https://docs.ozon.ru/api/seller/#operation/CarriageContainerLabelGet)，另有既有act/get-container-labels。官方2026-05-05新增这组FBS Beta方法，要求warehouse/cargo_type/sort_type和独立container IDs。现项目未实现服务端组包owner；不能把新建container隐藏在“预览单个订单面单”里，也不能把big_label名称直接等同OGL货签。OGL实际适用渠道与仓库准入尚未用店铺接口核验。
+- [`APIkey`](https://docs.ozon.ru/api/seller/zh/#tag/APIkey) 的[`/v1/roles`](https://docs.ozon.ru/api/seller/#operation/AccessAPI_RolesByToken) 返回 `expires_at` 与 `roles[].{name,methods[]}`；Auth正文明确API Key有效期3个月。现有连接检测只读seller/info，缺少到期提醒和逐功能权限诊断，建议接入该只读owner；不需因此切换到OAuth或要求用户发Key到聊天。此项本轮仅识别，尚未接线。
+- [`BetaIntro`](https://docs.ozon.ru/api/seller/zh/#tag/BetaIntro) 明确Beta请求/响应可能变、会在开发者社区提前一周通知、可用性依Key角色。当前 `/v1/finance/accrual/by-day` 与 `/types` 仍标BetaMethod，面单create已归FBS正式分组；不能因Beta页存在就批量迁移全项目。需跟踪已用方法的官方News、字段合同和错误能力，并用真实金额对账补财务验收。官方Process总述仍引用旧V3列表/旧PDF路径，已被具体operation与后续News覆盖，不能倒退到总述旧例子。
+
+本轮范围为修复普通打印和既有预览布局、回答API更新风险；未实现新组包功能、到期提醒或订阅监控，不把这些记为已完成。
 
 ## 2026-10-23 本地迁移实施范围
 

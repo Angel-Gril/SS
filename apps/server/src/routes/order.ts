@@ -853,7 +853,7 @@ export async function orderRoutes(app: FastifyInstance) {
       buffer = result.buffer;
       contentType = result.contentType;
     } catch (error: any) {
-      return reply.send({ code: 0, msg: `面单下载失败: ${error.message}。请确认订单已完成打包确认后稍后重试。` });
+      return reply.send({ code: 0, msg: `面单下载失败: ${error.message}` });
     }
 
     try {

@@ -10,6 +10,7 @@
     "start:worker": "node dist/worker.js",
     "test": "vitest run",
     "test:logistics:postgres": "node scripts/logistics-postgres-integration.mjs",
+    "test:ozon-carriage:postgres": "node scripts/ozon-carriage-postgres-integration.mjs",
     "test:qa04:scope-revocation:postgres": "node scripts/qa04-scope-revocation-postgres.mjs",
     "test:ai-media:postgres": "node scripts/ai-media-postgres-integration.mjs && node scripts/ai-media-postgres-upgrade-integration.mjs",
     "test:ai-media:postgres:upgrade": "node scripts/ai-media-postgres-upgrade-integration.mjs",

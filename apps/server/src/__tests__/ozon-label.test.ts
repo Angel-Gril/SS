@@ -20,12 +20,33 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('current Ozon asynchronous label contract', () => {
-  it('selects the requested big-label task from the official tasks array for a batch', async () => {
+  it('selects an explicitly requested big-label task from the official tasks array for a batch', async () => {
     const client = clientFor();
-    const result = expect(fetchLabelAsync(client as any, ['posting-1', 'posting-2'])).resolves.toEqual(pdf);
+    const result = expect(fetchLabelAsync(client as any, ['posting-1', 'posting-2'], { taskType: 'big_label' })).resolves.toEqual(pdf);
     await Promise.all([result, vi.runAllTimersAsync()]);
     expect(client.createPackageLabelTasks).toHaveBeenCalledWith(['posting-1', 'posting-2']);
     expect(client.createPackageLabelTask).not.toHaveBeenCalled();
+    expect(client.getPackageLabelTask).toHaveBeenCalledWith(22);
+  });
+
+  it('prints the available small label by default when Ozon returns only a small-label task', async () => {
+    const client = clientFor();
+    client.createPackageLabelTasks.mockResolvedValue({ tasks: [{ task_id: 21, task_type: 'small_label' }] });
+    const result = expect(fetchLabelAsync(client as any, ['posting-1', 'posting-2'])).resolves.toEqual(pdf);
+    await Promise.all([result, vi.runAllTimersAsync()]);
+    expect(client.getPackageLabelTask).toHaveBeenCalledWith(21);
+    expect(client.createPackageLabelTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers small labels when both exist and retains support for shops providing only ordinary labels', async () => {
+    const client = clientFor();
+    const first = expect(fetchLabelAsync(client as any, ['posting-1', 'posting-2'])).resolves.toEqual(pdf);
+    await Promise.all([first, vi.runAllTimersAsync()]);
+    expect(client.getPackageLabelTask).toHaveBeenCalledWith(21);
+    client.createPackageLabelTasks.mockResolvedValue({ tasks: [{ task_id: 22, task_type: 'big_label' }] });
+    client.getPackageLabelTask.mockClear();
+    const second = expect(fetchLabelAsync(client as any, ['posting-1', 'posting-2'])).resolves.toEqual(pdf);
+    await Promise.all([second, vi.runAllTimersAsync()]);
     expect(client.getPackageLabelTask).toHaveBeenCalledWith(22);
   });
 
@@ -54,7 +75,7 @@ describe('current Ozon asynchronous label contract', () => {
   it('fails clearly if the requested size is not available', async () => {
     const client = clientFor();
     client.createPackageLabelTasks.mockResolvedValue({ tasks: [{ task_id: 21, task_type: 'small_label' }] });
-    const result = expect(fetchLabelAsync(client as any, 'posting-1')).rejects.toThrow('big_label');
+    const result = expect(fetchLabelAsync(client as any, 'posting-1', { taskType: 'big_label' })).rejects.toThrow('普通面单');
     await Promise.all([result, vi.runAllTimersAsync()]);
     expect(client.fetchUrl).not.toHaveBeenCalled();
   });

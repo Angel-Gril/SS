@@ -552,6 +552,7 @@ model Shop {
 
   products                           Product[]
   orders                             Order[]
+  carriageOperations                 OzonCarriageOperation[]
   warehouses                         Warehouse[]
   syncJobs                           SyncJob[]
   returns                            Return[]
@@ -622,6 +623,7 @@ model Warehouse {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   deliveryMethods             ShopDeliveryMethod[]
+  carriageOperations          OzonCarriageOperation[]
   logisticsRuleChannels       LogisticsRuleChannel[]            @relation("LogisticsChannelWarehouse")
   logisticsRuleAssignments    LogisticsRuleAssignment[]         @relation("LogisticsAssignmentWarehouse")
   warehouseOzonOriginBindings WarehouseOzonOriginBinding[]      @relation("WarehouseOriginBindingWarehouse")
@@ -634,6 +636,36 @@ model Warehouse {
   @@unique([shopId, platformWarehouseId])
   @@index([shopId])
   @@map("warehouses")
+}
+
+// Local dispatch journal; Ozon remains the container/membership/status owner.
+model OzonCarriageOperation {
+  id             String    @id @default(cuid())
+  shopId         String    @map("shop_id")
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId    String    @map("warehouse_id")
+  warehouse      Warehouse @relation(fields: [warehouseId, shopId], references: [id, shopId], onDelete: Restrict)
+  actorUserId    String    @map("actor_user_id")
+  idempotencyKey String    @map("idempotency_key")
+  requestHash    String    @map("request_hash")
+  credentialHash String    @map("credential_hash")
+  command        Json
+  kind           String
+  status         String
+  // Non-null while dispatch/async/unknown. Unique across all processes.
+  activeScope    String?   @unique @map("active_scope")
+  taskId         String?   @map("task_id")
+  result         Json?
+  message        String?
+  resolvedBy     String?   @map("resolved_by")
+  resolutionNote String?   @map("resolution_note")
+  resolvedAt     DateTime? @map("resolved_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([shopId, idempotencyKey])
+  @@index([shopId, warehouseId, createdAt])
+  @@map("ozon_carriage_operations")
 }
 
 model ShopDeliveryMethod {

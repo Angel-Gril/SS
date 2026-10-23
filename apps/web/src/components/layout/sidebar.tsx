@@ -65,6 +65,7 @@ const navigation: NavItem[] = [
       { label: '全部订单', href: '/orders' },
       { label: '物流绑定', href: '/orders/logistics' },
       { label: '打包发货', href: '/orders/ship' },
+      { label: '组包交仓', href: '/orders/carriage' },
       { label: '订单统计', href: '/orders/stats' },
       { label: '退货记录', href: '/orders/returns' },
     ],
