@@ -1,6 +1,17 @@
 # Ozon Seller API 兼容性审计（2026-10-23）
 
-本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权本地接口迁移与修复。已实施源码和测试，但未提交、部署或发起真实 Ozon 业务请求。Premium 模块不在范围内。本文件记录接口兼容性与本地实现取证，不替代既有业务、权限、发布或部署 owner。
+本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权接口迁移、Git提交和双区部署。源码已推送并完成区域签名及COM/CN标准部署；未发起人工真实Ozon业务验收。Premium模块不在范围内。本文件记录接口兼容性与实施取证，不替代既有业务、权限或发布owner。
+
+## 2026-10-23 双区部署完成
+
+- 运行源码 `099c26633fac05f7163108934509de860fc3828f` 已提交并推送到 `feat/ai-media-prompt-registry`，两区应用候选 `1.0.464`。此处后的文档收尾提交不改变运行候选身份，不重新部署。
+- 最终clean提交的原生offline在 `2026-10-23T07:51:43.646Z` PASS，后端 `7445 passed / 395` 既有环境skip，workspace lint/typecheck、Web/API构建、隔离PostgreSQL权限与AI媒体集成/升级回放及Cloud/Local校验通过；不把skip冒充实库实测。签名ZIP隔离Chrome安装、默认工作台/popup/来源拒绝两区通过，专用浏览器均退出。
+- COM/CN签名SHA分别 `440f3f6bd669b6bdbd70e0bbd7b4f0d6f84fc87cdcbda457e86d5a459c85f387` / `e2deb751667b82d06460a597432a28d7545405ab7b718ba8f32fe08e76e8e5d0`。signedAt均取对应VPS实际UTC，没有未来时间或改写旧签名。
+- COM标准部署于 `2026-10-23T08:05:03.520Z` 成功，CN于 `08:28:53.258Z` 成功；两区159条迁移均无待执行项，未新增schema或破坏性迁移。标准冻结源码/备份门禁期间API/Worker确实暂停，CN暂停持续约10分钟，不宣称无停机；原release、unit快照、部署前备份保留用于恢复。
+- 目标部署备份及部署后日常备份恢复分别验证COM144/CN143张public表，临时恢复库已清理，deployment与runtime目录仍分离。FULL VPS canonical两区均PASS、0failure/1既有warning（远端备份未配置）；COM原件SHA `6c3cdc00b7a7900f0c24a48cc86c7e5f9fe6bd6cbf258499dfcd90eeb62e4003`，CN `4ba2106e895c6cb454a1751bc8568afd9d3f209f5cbac9778208e9f505a7892e`。
+- 最后公网 `/ready` 两区均绑定099c2663、DB/Redis正常，API/Worker/Web均active，三进程实际Node路径仍为 `/opt/ss-erp-node/v22.23.4/bin/node`。COM保留DOTH+BINI和原设备逐店授权/六操作及qwen-vl-max分析；CN保持direct-origin/RDS/AI dark。未修改生产权限或模型配置。
+- 官网仍是原 `efd4f4ad / 1.0.461`，没有正式新suite/QA04 final、官网approval/CAS或公开下载切换。本轮未主动请求真实Provider/Ozon业务或产生测试费用；服务重启后既有自动同步可能继续运行，不把部署健康检查冒充订单、图片、退货或财务实账验收。
+- 私有原件：`C:/Users/550W/AppData/Local/SS-ERP/private/release-099c2663-orders`（签名/浏览器/备份/部署/FULL/health）及 `release-099c2663-website464`（唯一完整offline）。历史中间检查和7431项结果保留，不重标为最终提交证据；本文件中早先审计表以审计时源码为历史基线。
 
 ## 2026-10-23 本地迁移实施范围
 
