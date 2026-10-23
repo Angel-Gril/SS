@@ -777,6 +777,68 @@ describe('extensionDownloadRoutes', () => {
     }
   });
 
+  function deviceShopPilot(canary: any, mutate: (map: Record<string, string[]>, policy: any) => void = () => {}) {
+    const policy = canary.checks.find((check: any) => check.id === 'restricted-pilot-policy').evidence;
+    policy.shopIds = ['shop-pilot-01', 'shop-pilot-02'];
+    policy.deviceShopIds = {
+      'device-session-01': ['shop-pilot-01'],
+      'device-session-02': ['shop-pilot-02'],
+    };
+    mutate(policy.deviceShopIds, policy);
+    canary.bindings.rollout.policySha256 = sha256(Buffer.from(canonical(policy)));
+  }
+
+  it('serves exact per-device shop grants without requiring every device to access every shop', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3, mutateDarkCanary: deviceShopPilot });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null })).resolves.toMatchObject({ approvalSha256: published.approvalSha256 });
+    const app = await appFor(value.buildRoot, {
+      publication: { root: published.publicationRoot, keyringPath: published.keyringPath },
+    });
+    try {
+      const latest = await app.inject({ method: 'GET', url: '/latest' });
+      expect(latest.statusCode).toBe(200);
+      for (const target of ['cloud', 'local'] as const) {
+        const download = await app.inject({ method: 'GET', url: routePath(latest.json().data.targets[target].downloadUrl) });
+        expect(download.statusCode).toBe(200);
+        expect(download.rawPayload.equals(target === 'cloud' ? published.release.cloudBytes : published.release.localBytes)).toBe(true);
+      }
+    } finally { await app.close(); }
+  });
+
+  it.each([
+    ['missing device', (map: Record<string, string[]>) => { delete map['device-session-02']; }],
+    ['unknown device', (map: Record<string, string[]>) => { map['unknown-device'] = ['shop-pilot-01']; }],
+    ['outside shop', (map: Record<string, string[]>) => { map['device-session-01'] = ['outside-shop']; }],
+    ['empty grants', (map: Record<string, string[]>) => { map['device-session-01'] = []; }],
+    ['duplicate grants', (map: Record<string, string[]>) => { map['device-session-01'] = ['shop-pilot-01', 'shop-pilot-01']; }],
+    ['malformed map', (_map: Record<string, string[]>, policy: any) => { policy.deviceShopIds = null; }],
+  ] as const)('rejects per-device shop grants with %s even with a valid signature and digest', async (_label, mutate) => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3,
+      mutateDarkCanary: canary => deviceShopPilot(canary, mutate) });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null })).rejects.toThrow(/pilot/u);
+  });
+
+  it('rejects per-device grants changed after the original policy digest was recorded', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const value = await fixture();
+    const published = await publishedFixture({ ...value, canaryVersion: 3, mutateDarkCanary(canary) {
+      deviceShopPilot(canary);
+      const policy = (canary.checks as any[]).find(check => check.id === 'restricted-pilot-policy').evidence;
+      policy.deviceShopIds['device-session-01'] = ['shop-pilot-02'];
+    } });
+    await expect(loadPublishedExtensionRelease({ publicationRoot: published.publicationRoot,
+      keyringPath: published.keyringPath, expectedDistributionOrigin: 'https://api.example.com',
+      expectedRegion: 'COM', trustedOwnerUid: null })).rejects.toThrow(/digest/u);
+  });
+
   it('serves both signed downloads for the exact approved COM six-operation configuration', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const value = await fixture();

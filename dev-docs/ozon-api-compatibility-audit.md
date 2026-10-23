@@ -2,6 +2,24 @@
 
 本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权接口迁移、Git提交和双区部署。源码已推送并完成区域签名及COM/CN标准部署；未发起人工真实Ozon业务验收。Premium模块不在范围内。本文件记录接口兼容性与实施取证，不替代既有业务、权限或发布owner。
 
+## 2026-10-23 465正式验收与CN官网发布，COM兼容缺口已定位
+
+用户明确授权COM/DOTH专用设备一次两图托管套图、最高CNY0.20，不发布Ozon、不读取供应商控制台、不重试未知结果。当前应用候选仍为`c04a19bf8e849939871716baa7e0914aaa5601d2 / 1.0.465`，没有重新部署或更改生产权限；本节后的本地兼容修复尚未提交、签名或部署。
+
+- 同提交clean物化检出的完整native offline于本轮通过：workspace lint/typecheck、后端7506 passed/401既有环境skip、Web/API构建、独立PostgreSQL集成/升级回放及Cloud632/Local628校验通过。隔离签名ZIP的两区MV3安装通过；安装验收使用合成来源，不冒充真实商品。
+- 专用9470在签名Cloud465上合法配对DOTH。使用1688商品928561537986及其绿色XL SKU，从来源页实际操作创建隔离草稿；正式草稿、workbench launch均晚于offline完成，整段没有跳到ERP编辑页。离线期间的准备草稿和计划保留在独立原目录，未执行付费suite，不作为正式时序证据。
+- 本次suite的START/CONTINUE均只发送一次，实际最高费用确认、请求和响应已保留。两图生成成功，供应商原图均1008×1344，ERP成品均900×1200；审核前PENDING UI/数据库、两张实际预览字节、审核原响应、两条store-draft assignment及原请求幂等replay齐全。实库两笔SETTLED/CHARGE各10分，合计CNY0.20，每笔仅一次；jobs/costs/recovery/workflows/suites待处理均0，Ozon publish attempts为0。主图为浅灰背景，场景图为暖色窗影，保留青绿色短袖与黑橙图案；这只代表本样本候选审核，不代表通用创作质量或真实Ozon上架通过。
+- 正式QA04原生PASS，SHA`043a82b84529f63a0dbc5d9e33211005fdd8a68b0062f74eb4ee704493ec3a75`。首次汇总因restored数据库观察早于pilot-after而拒绝；补做后置只读数据库与已关闭目标读回，再生成新的输入清单，原失败、旧观察和实际关闭时间均保留，未改写任何原件或合同。浏览器准备时还定位到当前Chrome向父页面派发点击未抵达OOPIF；改为目标iframe受信任点击并取证，产品代码未因此修改。
+- 双区新REL04 canary均PASS，绑定原区域签名/FULL VPS和本次QA04；COM完整DOTH+BINI策略、原六操作和每设备各自的真实店铺授权保持，CN保持AI dark。canary仅有其受控测试会话写入/撤销，不发Provider/Ozon/ingest写入。
+- CN官网approval、CAS、匿名Cloud/Local下载及最终publication verifier均通过。当前CN公开`c04a19bf / 1.0.465`，approval SHA`825243a0edf7751c9f8f45461ac16fc656b74aa5284779497c7d33f0da669109`；COM仍公开`efd4f4ad / 1.0.461`，未执行COM CAS/probe。不能称为双区官网发布完成。
+- COM website approval明确拒绝`REL-04 restricted pilot policy evidence has an invalid field set`。生产canary/部署策略已支持`deviceShopIds`，但`scripts/extension-website-publication-approval.mjs`及`apps/server/src/services/extension-website-publication.ts`仍只接收旧七字段；后者在错误发布后还会拒绝实际下载，所以没有删掉字段、改写canary摘要、扩大设备店铺权限或手工改线上代码。
+- 本地T2修复仅让两个消费者接收并验证可选map：设备键必须精确对应原session清单，每个非空/无重复店铺列表必须处于原试点名单内，map参与原始policy摘要；旧无map格式、区域/操作/签名/费用合同不变。最小用例先RED再GREEN；新增两组各8项通过，下载整文件56 passed/3既有skip，发布/canary合同73 passed/1平台skip，server typecheck、改动ESLint及diff检查通过。未经改写的本次COM canary已由修复后消费者本地只读验证通过；这不是新网站批准或线上修复。
+- 现有`qa04-suite-source-bridge.mjs`只允许文档/CSS与四个既定QA04证据消费者变化，此次服务端下载消费者不在允许集。本轮付费授权已用完；尚未扩大原件复用白名单或再申请/发送套图。继续COM需要明确批准这四个消费者/测试文件的受控复用及新候选部署，保留原始suite身份并验证生成/金额/审核/绑定代码不变；否则仍按现有门禁停止，不将offline或本地parser成功当正式公开成功。
+- CN下载验证完成后，双区本轮官网验收账号会话已撤销；COM本轮DOTH测试设备已通过正常owner撤销，单独账户会话及两处本地临时token已清理，9470专用浏览器关闭，9222用户浏览器保持。原suite、图片、收费、草稿和全部失败回执保留。后续受控复用必须将原设备执行身份保留为历史事实，不能把新临时设备嫁接到本次原件上。
+- 用户随后明确批准此次消费者兼容修复、精确原件复用、提交签名/双区部署/公开下载；授权不等于完成。source-bridge已仅固定四文件完整原/目标blob，最小正例RED→GREEN，46项完整source-bridge回归通过；具体限制由[验证owner](release-validation.md)维护。可视化权限管理为用户追加的独立功能，保留当前COM试点/CN dark，不混入受控套图复用。
+
+私有原件分三处：`release-c04a19bf-website465`为唯一完整native offline；`release-c04a19bf-fresh465`为先行准备/合法会话记录；`release-c04a19bf-fresh465-r2`为离线完成后的正式来源页、suite、QA04、双区canary及CN公开发布回执。它们位于当前Windows用户`AppData/Local/SS-ERP/private`，不进入Git。真实Ozon组包、货签实打和财务实账仍未验证，Premium未改。
+
 ## 2026-10-23 组包与接口诊断双区部署完成
 
 用户在本地实现后明确授权Git提交及双区部署，随后授权复用阿里云登录态处理CN恢复路径。当前运行源码为 `c04a19bf8e849939871716baa7e0914aaa5601d2 / 1.0.465`，已推送至 `feat/ai-media-prompt-registry`；后续文档收尾提交不改变运行候选身份。

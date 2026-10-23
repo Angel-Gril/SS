@@ -623,6 +623,53 @@ test('signs, probes, and verifies a restricted hosted pilot publication canary',
   assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
 });
 
+function deviceShopPilot(value, mutate = () => {}) {
+  bindRestrictedPilotCandidate(value);
+  const policy = value.darkCanary.checks.find(check => check.id === 'restricted-pilot-policy').evidence;
+  policy.shopIds = ['shop-pilot-01', 'shop-pilot-02'];
+  policy.deviceShopIds = {
+    'device-session-01': ['shop-pilot-01'],
+    'device-session-02': ['shop-pilot-02'],
+  };
+  mutate(policy.deviceShopIds, policy);
+  value.darkCanary.bindings.rollout.policySha256 = sha256(Buffer.from(`${JSON.stringify(policy, null, 2)}\n`));
+  return value.darkCanary;
+}
+
+test('website approval accepts exact per-device shop grants without widening the pilot', () => {
+  const value = signedFixture({ restrictedPilot: true });
+  const summary = deviceShopPilot(value);
+  assert.doesNotThrow(() => validateRel04DarkCanarySummary(summary, {
+    expectedGitCommit: value.gitCommit, expectedApiOrigin: origin, now: approvedAt,
+    expectedCandidate: summary.bindings.release.candidate, expectedReleaseSignedAt: value.signature.signedAt,
+  }));
+});
+
+for (const [label, mutate] of [
+  ['missing device', map => { delete map['device-session-02']; }],
+  ['unknown device', map => { map['unknown-device'] = ['shop-pilot-01']; }],
+  ['outside shop', map => { map['device-session-01'] = ['outside-shop']; }],
+  ['empty grants', map => { map['device-session-01'] = []; }],
+  ['duplicate grants', map => { map['device-session-01'] = ['shop-pilot-01', 'shop-pilot-01']; }],
+  ['malformed map', (_map, policy) => { policy.deviceShopIds = null; }],
+]) test(`website approval rejects per-device shop grants with ${label}`, () => {
+  const value = signedFixture({ restrictedPilot: true });
+  assert.throws(() => validateRel04DarkCanarySummary(deviceShopPilot(value, mutate), {
+    expectedGitCommit: value.gitCommit, expectedApiOrigin: origin, now: approvedAt,
+    expectedCandidate: value.darkCanary.bindings.release.candidate, expectedReleaseSignedAt: value.signature.signedAt,
+  }), /restricted pilot/u);
+});
+
+test('website approval binds per-device grants to the original policy digest', () => {
+  const value = signedFixture({ restrictedPilot: true });
+  const summary = deviceShopPilot(value);
+  summary.checks.find(check => check.id === 'restricted-pilot-policy').evidence.deviceShopIds['device-session-01'] = ['shop-pilot-02'];
+  assert.throws(() => validateRel04DarkCanarySummary(summary, {
+    expectedGitCommit: value.gitCommit, expectedApiOrigin: origin, now: approvedAt,
+    expectedCandidate: summary.bindings.release.candidate, expectedReleaseSignedAt: value.signature.signedAt,
+  }), /digest/u);
+});
+
 test('signs, probes, and verifies the exact approved COM operation configuration with publisher denied', async () => {
   const value = signedFixture({ approvedCom: true });
   const { receipt } = await completePublication(value);

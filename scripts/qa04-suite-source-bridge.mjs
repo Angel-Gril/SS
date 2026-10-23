@@ -12,13 +12,27 @@ const EVIDENCE_CONSUMERS = new Set([
   'scripts/qa04-suite-source-bridge.mjs',
   'scripts/qa04-suite-source-bridge.test.mjs',
 ]);
+// Operator-approved 2026-10-23 correction to read-only website evidence
+// consumers. Pin the complete reviewed before/after blobs, not their paths:
+// subsequent edits to these runtime files still require fresh suite evidence.
+const REVIEWED_WEBSITE_CONSUMERS = new Map([
+  ['apps/server/src/services/extension-website-publication.ts',
+    ['fb74c4dd5694fa97d336afac732fc5d94059b020', '9ab1c55c5053087f32fdebd2837b401b25210504']],
+  ['apps/server/src/__tests__/extensions-download.test.ts',
+    ['1a77ac31facbd1277156464162a08bed4796bea5', 'a36925b9207eea751dec135359e8ba20c5904210']],
+  ['scripts/extension-website-publication-approval.mjs',
+    ['0e1957acd42572aea01771ed1a9c2313c7ec704a', '0f013e283338d0c703c8a26fc04811832cd18298']],
+  ['scripts/extension-release-publication.test.mjs',
+    ['cfae0072fc2c7cd6123edc0510fc363c12ab52a1', '8de237b0cd0944bef2fc1eac663114c386eae4ed']],
+]);
 
 // This is deliberately an allowlist of inert presentation/document changes
 // and four existing, reviewed QA04 evidence consumers (never runtime producers),
 // not an import-graph guess. Every other tracked path remains protected,
 // including build scripts, credentials/config contracts, package manifests,
-// schema, migrations, shared contracts, extension permissions and all runtime JS/TS.
-export function verifySuiteSourceBridge(root, executionCommit, targetCommit) {
+// schema, migrations, shared contracts, extension permissions and runtime JS/TS
+// outside the exact reviewed website transition above.
+export function verifySuiteSourceBridge(root, executionCommit, targetCommit, options = {}) {
   check(isCommit(executionCommit) && isCommit(targetCommit));
   const git = args => {
     const result = spawnSync('git', [...gitCommitTreeSafeDirectoryArgs(root), ...args], {
@@ -40,6 +54,10 @@ export function verifySuiteSourceBridge(root, executionCommit, targetCommit) {
     return result;
   };
   const before = tree(executionCommit), after = tree(targetCommit);
+  const reviewedWebsiteConsumers = options.reviewedWebsiteConsumers || REVIEWED_WEBSITE_CONSUMERS;
+  const websiteTransition = [...reviewedWebsiteConsumers].every(([filename, [from, to]]) =>
+    before.get(filename)?.mode === '100644 blob' && before.get(filename)?.objectId === from
+    && after.get(filename)?.mode === '100644 blob' && after.get(filename)?.objectId === to);
   check(git(['merge-base', executionCommit, targetCommit]).trim() === executionCommit);
   const changes = [], protectedFiles = {};
   for (const filename of [...new Set([...before.keys(), ...after.keys()])].sort()) {
@@ -56,6 +74,9 @@ export function verifySuiteSourceBridge(root, executionCommit, targetCommit) {
     if (DOCUMENT.test(filename) && !filename.split('/').some(part => part.startsWith('.'))) kind = 'DOCUMENTATION';
     else if (EVIDENCE_CONSUMERS.has(filename) && execution?.mode === '100644 blob' && target?.mode === '100644 blob') {
       kind = 'QA04_EVIDENCE_CONSUMER';
+    }
+    else if (websiteTransition && reviewedWebsiteConsumers.has(filename)) {
+      kind = 'REVIEWED_WEBSITE_EVIDENCE_CONSUMER';
     }
     else if (PRESENTATION.test(filename) && execution && target) {
       for (const entry of [execution, target]) {

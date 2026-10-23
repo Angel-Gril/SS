@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 let subject = {};
 try { subject = await import('./qa04-suite-source-bridge.mjs'); }
 catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error; }
 
-function fixture(t) {
+function fixture(t, initialFiles = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-suite-source-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const git = (...args) => {
@@ -30,16 +31,71 @@ function fixture(t) {
   write('dev-docs/README.md', '# Original\n');
   for (const name of ['qa04-final-suite-evidence.mjs', 'qa04-final-acceptance.test.mjs',
     'qa04-suite-source-bridge.mjs', 'qa04-suite-source-bridge.test.mjs']) write('scripts/' + name, 'original verifier\n');
+  for (const [name, bytes] of Object.entries(initialFiles)) write(name, bytes);
   git('add', '--', 'apps', 'packages', 'pnpm-lock.yaml', 'extensions', 'scripts', 'package.json', 'dev-docs');
   git('commit', '-qm', 'execution source');
   const executionCommit = git('rev-parse', 'HEAD');
   const commit = filename => { git('add', '--', filename); git('commit', '-qm', 'target source'); return git('rev-parse', 'HEAD'); };
-  const verify = target => {
+  const verify = (target, options) => {
     assert.equal(typeof subject.verifySuiteSourceBridge, 'function');
-    return subject.verifySuiteSourceBridge(root, executionCommit, target);
+    return subject.verifySuiteSourceBridge(root, executionCommit, target, options);
   };
   return { root, git, write, commit, verify, executionCommit };
 }
+
+const websiteConsumerPaths = [
+  'apps/server/src/services/extension-website-publication.ts',
+  'apps/server/src/__tests__/extensions-download.test.ts',
+  'scripts/extension-website-publication-approval.mjs',
+  'scripts/extension-release-publication.test.mjs',
+];
+function reviewedWebsiteFixture(t) {
+  const repository = fileURLToPath(new URL('../', import.meta.url));
+  const before = Object.fromEntries(websiteConsumerPaths.map(name => [name,
+    execFileSync('git', ['show', 'c04a19bf8e849939871716baa7e0914aaa5601d2:' + name], { cwd: repository })]));
+  const f = fixture(t, before);
+  for (const name of websiteConsumerPaths) f.write(name, readFileSync(path.join(repository, name), 'utf8').replace(/\r\n/gu, '\n'));
+  f.git('add', '--', ...websiteConsumerPaths); f.git('commit', '-qm', 'reviewed website consumer compatibility');
+  const target = f.git('rev-parse', 'HEAD');
+  const tree = path => f.git('ls-tree', '-r', path).split(/\r?\n/gu).filter(Boolean)
+    .map(line => { const match = /^\d+ blob ([a-f0-9]{40})\t(.+)$/u.exec(line); return match ? [match[2], match[1]] : null; })
+    .filter(Boolean);
+  const beforeTree = new Map(tree(f.executionCommit)), afterTree = new Map(tree(target));
+  const reviewedWebsiteConsumers = new Map(websiteConsumerPaths.map(name => [name, [beforeTree.get(name), afterTree.get(name)]]));
+  return { ...f, target, reviewedWebsiteConsumers };
+}
+
+test('suite reuse accepts only the complete reviewed website consumer blob transition', t => {
+  const f = reviewedWebsiteFixture(t), result = f.verify(f.target, { reviewedWebsiteConsumers: f.reviewedWebsiteConsumers });
+  assert.equal(result.requiresFreshTargetUiVerification, false);
+  assert.deepEqual(result.changes.map(change => change.path).sort(), [...websiteConsumerPaths].sort());
+  assert.ok(result.changes.every(change => change.kind === 'REVIEWED_WEBSITE_EVIDENCE_CONSUMER'));
+});
+
+test('reviewed website consumer paths do not exempt later unreviewed code', t => {
+  const f = reviewedWebsiteFixture(t), filename = websiteConsumerPaths[0];
+  f.write(filename, 'unreviewed download or billing behavior\n');
+  assert.throws(() => f.verify(f.commit(filename), { reviewedWebsiteConsumers: f.reviewedWebsiteConsumers }), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
+test('website consumer reuse still rejects an additional Provider runtime change', t => {
+  const f = reviewedWebsiteFixture(t), filename = 'apps/server/src/suite.ts';
+  f.write(filename, 'changed Provider or money owner\n');
+  assert.throws(() => f.verify(f.commit(filename), { reviewedWebsiteConsumers: f.reviewedWebsiteConsumers }), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
+for (const action of ['remove', 'executable', 'partial']) test('reviewed website consumer reuse rejects ' + action + ' transitions', t => {
+  const f = reviewedWebsiteFixture(t), filename = websiteConsumerPaths[0];
+  if (action === 'remove') f.git('rm', '--', filename);
+  else if (action === 'executable') f.git('update-index', '--chmod=+x', filename);
+  else {
+    const repository = fileURLToPath(new URL('../', import.meta.url));
+    f.write(filename, execFileSync('git', ['show', 'c04a19bf:' + filename], { cwd: repository }));
+    f.git('add', '--', filename);
+  }
+  f.git('commit', '-qm', 'invalid publication transition');
+  assert.throws(() => f.verify(f.git('rev-parse', 'HEAD'), { reviewedWebsiteConsumers: f.reviewedWebsiteConsumers }), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
 
 test('suite reuse compares the complete Git tree and records documentation-only changes', t => {
   const f = fixture(t);

@@ -476,13 +476,24 @@ function identifierList(value: unknown, label: string) {
 }
 
 function validateRestrictedPilotPolicy(value: unknown, rollout: unknown, region: WebsitePublicationApproval['region']) {
+  const explicitDeviceShops = value !== null && typeof value === 'object' && Object.hasOwn(value, 'deviceShopIds');
   const policy = exactObject(value, [
     'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
     'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
+    ...(explicitDeviceShops ? ['deviceShopIds'] : []),
   ], 'REL-04 restricted pilot policy evidence');
   const ownerUserIds = identifierList(policy.ownerUserIds, 'REL-04 pilot ownerUserIds');
   const shopIds = identifierList(policy.shopIds, 'REL-04 pilot shopIds');
   const deviceSessionIds = identifierList(policy.deviceSessionIds, 'REL-04 pilot deviceSessionIds');
+  const deviceShopIds = explicitDeviceShops ? Object.fromEntries(Object.entries(
+    exactObject(policy.deviceShopIds, deviceSessionIds, 'REL-04 pilot deviceShopIds'),
+  ).map(([sessionId, shops]) => {
+    const grants = identifierList(shops, `REL-04 pilot deviceShopIds.${sessionId}`);
+    if (grants.some(shopId => !shopIds.includes(shopId))) {
+      fail('REL-04 pilot device shop is outside the explicit shop allowlist');
+    }
+    return [sessionId, grants];
+  })) : null;
   const allowedOperations = policy.allowedOperations;
   // Verify the already approved COM configuration, never grant publish capability.
   const operationContracts = [
@@ -514,6 +525,7 @@ function validateRestrictedPilotPolicy(value: unknown, rollout: unknown, region:
     rolloutRevision: policy.rolloutRevision,
     sourcePolicyRevision: policy.sourcePolicyRevision,
     allowedOperations,
+    ...(explicitDeviceShops ? { deviceShopIds } : {}),
   }, null, 2)}\n`, 'utf8');
   if (binding.policySha256 !== sha256(policyBytes)) {
     fail('REL-04 restricted pilot policy digest is invalid');

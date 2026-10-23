@@ -305,9 +305,11 @@ function validateDarkPolicyEvidence(value) {
 }
 
 function validateRestrictedPilotEvidence(value, rollout, candidateRegion) {
+  const explicitDeviceShops = value && typeof value === 'object' && Object.hasOwn(value, 'deviceShopIds');
   const policy = exactKeys(value, [
     'allowedOperations', 'deviceSessionIds', 'expectation', 'ownerUserIds',
     'rolloutRevision', 'shopIds', 'sourcePolicyRevision',
+    ...(explicitDeviceShops ? ['deviceShopIds'] : []),
   ], 'REL-04 restricted pilot policy evidence');
   let normalized;
   try {
@@ -318,6 +320,7 @@ function validateRestrictedPilotEvidence(value, rollout, candidateRegion) {
       rolloutRevision: policy.rolloutRevision,
       sourcePolicyRevision: policy.sourcePolicyRevision,
       allowedOperations: policy.allowedOperations,
+      ...(explicitDeviceShops ? { deviceShopIds: policy.deviceShopIds } : {}),
     });
   } catch {
     fail('REL-04 restricted pilot policy evidence is invalid');
