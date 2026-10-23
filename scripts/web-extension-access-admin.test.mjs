@@ -116,3 +116,15 @@ test('hosted master and translation have one editor and region labels identify e
   assert.equal(accessRegionLabel('127.0.0.1'), '本机 · 127.0.0.1');
   assert.equal(accessRegionLabel('erp.example'), 'erp.example');
 });
+
+test('legacy AI feature batch never writes keys managed by extension access controls', () => {
+  const page = readFileSync('apps/web/src/app/(dashboard)/admin/settings/page-client.tsx', 'utf8');
+  const match = page.match(/const AI_FEATURE_KEYS = \[([\s\S]*?)\];/);
+  assert.ok(match, 'legacy AI batch keys must be inspectable');
+  const legacyKeys = [...match[1].matchAll(/'([^']+)'/g)].map(entry => entry[1]);
+  assert.deepEqual(legacyKeys.filter(key => ACCESS_EXTRA_FLAGS.includes(key)), [], 'legacy AI save and access editor must have disjoint write sets');
+  assert.doesNotMatch(page, /cfg=\{configs\.feature_image_translate\}/, 'translation flag must only render in the access editor');
+  for (const key of ['ai_image_translation_provider', 'ai_image_translation_base_url', 'ai_image_translation_api_key', 'ai_image_translation_model']) {
+    assert.match(page, new RegExp(key), 'translation provider settings remain available');
+  }
+});

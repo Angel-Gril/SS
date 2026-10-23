@@ -2320,7 +2320,6 @@ const AI_FEATURE_KEYS = [
   'ai_category_translation_enabled',
   'ai_product_generation_enabled',
   'ai_image_generation_enabled',
-  'feature_image_translate',
 ];
 
 const AI_PROMPT_KEYS = [
@@ -2877,11 +2876,6 @@ function AiSettingsPanel({
                 />
                 <ConfigToggle
                   cfg={configs.ai_image_generation_enabled}
-                  editing={editing}
-                  setValue={setValue}
-                />
-                <ConfigToggle
-                  cfg={configs.feature_image_translate}
                   editing={editing}
                   setValue={setValue}
                 />
