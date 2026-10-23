@@ -6,6 +6,8 @@
 
 用户已明确批准每设备店铺证据的官网兼容修复、受控复用本轮465套图原件、提交签名与双区部署/公开发布，不新增Provider请求或费用。此次例外只适用于`extension-website-publication.ts`、`extensions-download.test.ts`、`extension-website-publication-approval.mjs`、`extension-release-publication.test.mjs`的已审查四文件完整Git blob迁移；准确原/目标object ID由source-bridge owner固定，并记录`REVIEWED_WEBSITE_EVIDENCE_CONSUMER`。四文件缺失、部分修复、mode变化或后续任意新内容仍拒绝；相邻Provider/金额/权限代码和其他未知路径不豁免。原suite请求、审核、账本、assignment/replay和原执行commit保留，目标仍需自己的native offline、签名安装、双区部署/VPS、最新只读模型及数据库、正式QA04和各区canary/approval/CAS/下载验证。本次不是按路径永久放宽运行TS，也不授权默认全量AI。用户随后提出的可视化权限管理属于独立功能，不混入本例外。
 
+此精确复用路径已于2026-10-24由`a2e70f59 / 1.0.466`真实正式QA04及双区公开发布关闭；原件、新提交offline/运行验证、失败与停机事实只见[接口owner](ozon-api-compatibility-audit.md)。没有再次付费生图，不将此结果推广至后续管理UI或其他后端变更。
+
 ## 2026-10-17 多店合同受限复用的真实发布验收
 
 用户明确批准后，四个证据消费者/测试修复 `efd4f4ad / 1.0.461` 的19项定向、152项受影响回归通过；新提交自身完整native offline、区域签名/MV3、双区部署及当前只读runtime与完整数据库图通过，原460执行/控制/两笔收费原件未修改。新schema2输入严格引用原schema1控制SHA，正式QA04确实PASS；随后双区canary/批准/CAS及四包匿名下载最终验签通过，无新Provider请求或费用。准确时间、原件SHA、两轮COM网络失败及最终成功、CN现有账号切换既有dark canary模式和清理仅维护在[直接适配owner](donor-workbench/direct-adaptation.md)。这证明本次多店验收消费者变更的受限复用路径，不泛化为任意运行代码可免费复用，不证明尚未实跑的新CSS UI producer。

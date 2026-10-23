@@ -2,6 +2,22 @@
 
 本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权接口迁移、Git提交和双区部署。源码已推送并完成区域签名及COM/CN标准部署；未发起人工真实Ozon业务验收。Premium模块不在范围内。本文件记录接口兼容性与实施取证，不替代既有业务、权限或发布owner。
 
+## 2026-10-24 官网消费者修复466双区公开完成
+
+用户批准精确证据复用及提交/签名/双区部署/公开下载后，源码`a2e70f59d4fcbf28879c69bafd912a3556350f78 / 1.0.466`已提交推送。签名ZIP在隔离Chrome两区安装通过，目标clean提交完整native offline通过（后端7514 passed/401既有环境skip、Web/API build、独立PostgreSQL集成/升级回放、Cloud632/Local628）；不将skip算成真实数据库用例。
+
+本轮无新Provider请求或费用，复用原465一次两图/CNY0.20的原件。完整Git tree核对只发生四个获批的官网消费者/测试blob、两份QA04证据桥接文件和文档变化，模型/价格/计费/审核/assignment运行代码保持。当前read-only Provider配置hash、实际10分/张、两条原任务/收费/审核/草稿数据库图及pending全0通过；原测试设备已撤销，现有活动设备由原2台降至1台，原owner/DOTH+BINI/六操作/策略修订保持。正式QA04 SHA`65b34e41c93214b88c5e564565acd3ed48bfb60c75c087e41c820e9fd5d421ce`，原执行commit和原始回执未改写。
+
+COM/CN标准部署均成功，160迁移无待执行项，API/Worker/Web均正常，公网ready/DB/Redis正常。区域签名SHA：COM`61c5f13afad72d2f7d12a72c9d84faf3fc171bf46c6158b66a1184e3d4adb43d`、CN`cdd3c6a23dad7e5b12189564ba3ac59cd6391855f6e87f5cf796d448b9b93e11`。FULL VPS均PASS、0failure，COM SHA`fec0e94b85c3f6492b7d823e04914633bf7b87c3335d9261f53f54432c31501e`、CN`645ba41960c61da2df616c73b47751fa5ad858c0d6a06c1a327c922961526f45`；远端备份未配置的既有warning保留。
+
+双区新REL04、官网approval、CAS、匿名Cloud/Local下载及最终publication verifier均通过。COM approval SHA`1271613e022ebf86eaaab413800299572d5662986ee6764040e9cc4ce0229929`、CN`e248e433ccc6096d605069ce5323563b959a0c068aaa05a52cbb4ff2a719ff43`。当前两区应用及官网下载均为a2e70f59/466。临时双区发布账号会话已撤销，本轮未配对新业务设备；COM仍原试点、CN仍dark，官网开放下载不等于全用户AI开放。
+
+部署异常与停机事实：候选根最初mode0700导致构建用户不可遍历，校正0755/0644后继续；随后因未先生成目标备份attestation停机拒绝，补完整备份恢复才继续。COM默认恢复方式遇应用账号无CREATEDB，实读确认其为本机127.0.0.1 PostgreSQL，使用原本机postgres恢复模式后145表通过；中途把该错误说成RDS是误判，未新建/提权账号。曾丢失一段本地session输出，实际门禁后由活动设备精确名单不匹配而拒绝；只读核实测试设备已撤销，仅保留原BINI设备后生成新expectation，保留DOTH+BINI的生产策略，未扩大任何设备grants。失败的本轮未激活COM目录曾精确清理重建，不删除current；CN两份失败副本改名保留。
+
+CN另遇Prisma官方windows engine下载网络失败，当时未开始目标迁移，明确恢复旧current的API/Worker健康后重跑原签名候选。CN现有RDS应用账号的维护URL仅在备份子进程内派生到postgres，恢复144表通过且临时库删除；未持久写maintenance配置或改账号。部署期间COM/CN确实发生API/Worker停机，不宣称零停机或服务一直可用。
+
+私有原件：`release-a2e70f59-orders`保存候选/签名安装/备份/部署/FULL VPS，`release-a2e70f59-website466`保存唯一完整offline、当前只读核验、QA04/双区官网公开发布回执。用户追加的可视化权限管理在独立工作树开发，不属于此次四文件blob复用范围，尚未纳入466。实际Ozon组包/货签打印和财务实账仍未验证。
+
 ## 2026-10-23 465正式验收与CN官网发布，COM兼容缺口已定位
 
 用户明确授权COM/DOTH专用设备一次两图托管套图、最高CNY0.20，不发布Ozon、不读取供应商控制台、不重试未知结果。当前应用候选仍为`c04a19bf8e849939871716baa7e0914aaa5601d2 / 1.0.465`，没有重新部署或更改生产权限；本节后的本地兼容修复尚未提交、签名或部署。

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-24 466双区官网公开发布完成
+
+`a2e70f59 / 1.0.466` 已提交推送、区域签名并完成COM/CN标准部署、备份恢复、FULL VPS、签名ZIP的MV3安装和完整native offline。按用户批准的精确四文件blob复用原465两图/收费/审核/assignment/幂等原件，当前模型/价格及数据库只读核对、正式QA04、双区REL04/官网approval/CAS/四包匿名下载和final verifier均通过；新增Provider/费用/Ozon为0。COM原DOTH+BINI试点、CN dark保持。部署失败及实际停机、新增管理界面仍独立未上线的边界仅见[接口owner](ozon-api-compatibility-audit.md)，受控复用见[验证owner](release-validation.md)。
+
 ## 2026-10-23 465正式套图通过，CN官网已公开，COM消费者兼容待发布
 
 `c04a19bf / 1.0.465` 的完整native offline、真实DOTH两图、预览审核、两条store-draft assignment/幂等、正式QA04及双区REL04已通过，ERP实际CNY0.20/Ozon发布0。CN官网approval/CAS、匿名Cloud/Local下载和最终验签完成；COM官网仍461，签名器和下载消费者拒绝已批准的每设备店铺证据`deviceShopIds`。两个消费者已本地修复并通过定向回归，尚未提交/部署；扩展本体及生图/金额/权限不变。用户现已批准精确四文件Git内容的受控原件复用和后续提交/签名/双区部署，不再发付费请求；独立权限管理界面另行实现。唯一证据、失败顺序和当前边界见[接口与组包owner](ozon-api-compatibility-audit.md)，复用限制见[验证owner](release-validation.md)。
