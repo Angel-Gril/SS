@@ -2,9 +2,21 @@
 
 本记录先分析公开官方文档、当前源码和既有故障事实；用户随后明确授权接口迁移、Git提交和双区部署。源码已推送并完成区域签名及COM/CN标准部署；未发起人工真实Ozon业务验收。Premium模块不在范围内。本文件记录接口兼容性与实施取证，不替代既有业务、权限或发布owner。
 
-## 2026-10-23 组包与接口诊断开发（进行中）
+## 2026-10-23 组包与接口诊断双区部署完成
 
-用户已授权实现上述功能。当前范围为本地开发与隔离验收，不含真实Ozon组包写入、生产迁移、部署或官网切换；Premium继续排除。沿用Fastify/Prisma/Next及既有账户有效用户归属，不借仓库员工全平台可见规则扩大卖家写权限。
+用户在本地实现后明确授权Git提交及双区部署，随后授权复用阿里云登录态处理CN恢复路径。当前运行源码为 `c04a19bf8e849939871716baa7e0914aaa5601d2 / 1.0.465`，已推送至 `feat/ai-media-prompt-registry`；后续文档收尾提交不改变运行候选身份。
+
+- COM/CN均通过标准 `scripts/deploy.sh`、目标签名和前向迁移 `20261023100000_add_ozon_carriage_operations`，共160条迁移。部署后实读API/Worker/Web三进程cwd绑定同一目标release，实际Node仍为 `/opt/ss-erp-node/v22.23.4/bin/node`；两区本地及公网 `/ready` HTTP200，DB/Redis正常。新组包/权限诊断接口匿名均401；这只证明访问控制和运行接线，不证明真实Ozon写入。
+- 465签名SHA：COM `4fbaad30f4bcbcca3552f5c86860163a1393caa2e89ff9f61487a09fe376eed5`，CN `31c3361240b33dbb402a0881349f442a4ddc3b58511fac639030aa5eabf8bbe9`。同commit双区域Cloud/Local打包校验通过；未在本轮取得新的完整native offline或正式QA04，不复用464结果冒称465完整回归通过。
+- FULL VPS canonical：COM `2026-10-23T11:18:38.628Z` PASS、SHA `28113e70a0a93c38eb37aec4e5dfe9fc8f7bab118ba2e2d1d1878ddaaf32fc59`；CN `12:40:43.559Z` PASS、SHA `b358bec98adad7a70254c51ad5b9cc8457febf440d4c5606a3e21e7652a20e9d`。均0failure/1既有warning（远端备份未配置）。COM回执在私有 `release-c04a19bf-orders-vps-COM.json`，CN回执及两区health、操作日志在私有 `release-c04a19bf-orders-final`。
+- CN RDS维护结论更正：控制台账号管理显示现有 `ss_erp_app` 为高权限且允许建库，随后从CN实际连接查询得到 `ss_erp_app|t`。此前“CN账号没有CREATEDB”没有CN实库证据，不能沿用COM默认恢复路径的权限拒绝作结论。本轮未创建RDS账号、未重置密码或修改角色权限。只从已有连接在远端内存派生 `/postgres` 维护URL，临时写入root-only备份环境；恢复成功后于 `12:41:09.431Z` 精确移除该项，业务连接和原账号保持。
+- CN部署备份与日常备份目录分别为 `/var/backups/ss-erp`、`/var/backups/ss-erp-runtime`，目标部署前恢复143表、部署后恢复144表，临时库均删除。COM部署后恢复145表，运行备份状态已刷新绑定当前commit。恢复原件/历史attestation按原owner归档，未手写PASS或覆盖旧回执。
+- 失败与停机事实保留：Windows tar解包覆盖候选目录mode为777，先被目录权限门禁拒绝，修正为root-owned0755/0644后继续。COM随后因目标恢复attestation缺失而停止API/Worker；仅生成gzip不能替代恢复证明，补完整恢复后重新部署。未切换的本轮失败release曾被精确清除并重建，旧current和既有业务数据未删除，旧release/备份仍可用于恢复。COM后验又发现独立runtime备份状态仍绑定旧commit，刷新正确目录后才取得PASS。标准迁移与上述失败期间确实存在维护停机，不宣称旧服务一直运行或零停机。
+- COM保持原DOTH+BINI受限pilot及分析，CN保持RDS/direct-origin/AI dark。两区官网读回仍 `efd4f4ad / 1.0.461`，没有website approval/CAS或公开下载切换。没有人工发起真实Provider/Ozon业务、付费测试或实货签打印；重启后的既有自动同步不计作本轮功能验收。
+
+### 实现合同与本地验证（部署前记录）
+
+最初实现范围为本地开发与隔离验收，不含真实Ozon组包写入、生产迁移、部署或官网切换；之后Git和部署授权及结果以上节为准。Premium继续排除。沿用Fastify/Prisma/Next及既有账户有效用户归属，不借仓库员工全平台可见规则扩大卖家写权限。
 
 - 组包业务唯一owner为新增`services/ozon-carriage.ts`；`ozon-client.ts`负责固定官方路径传输；新增持久操作记录保存幂等键、请求摘要、异步task、逐项错误和未知结果，route与页面仅消费。普通订单面单独立，不由打印偷偷建箱。
 - 页面放在订单管理的“组包交仓”，复用仓库打印的筛选/操作栏及现有Table、Button、Dialog橙色样式；同页选店铺/仓库→新建箱或托盘→扫码加入订单→确认→货签/交接文件。由实时`available_actions`控制操作；切换上下文丢弃旧响应，进行中的命令从数据库恢复，未知写入禁止自动重发。不以组包确认冒充实际国际发运。
