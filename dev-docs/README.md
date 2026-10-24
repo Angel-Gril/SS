@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-24 Yandex Market Partner API 只读研究
+
+Yandex Market 已完成店铺接入、`Api-Key` 连接测试、campaign/business 映射、Ozon/ERP 商品草稿预览及受显式确认/幂等/未知态保护的商品目录发布 owner；发布默认由 `YANDEX_MARKET_PUBLISH_ENABLED` 关闭，尚未调用真实 Yandex 店铺，库存/价格/订单同步、物流标签和真实发布验收仍未开放。官方合同、`businessId/campaignId` 和授权边界见 [Yandex Market API 研究](yandex-market-api-research.md)。
+
 ## 2026-10-24 扩展权限可视化管理已双区上线
 
 超级管理员`/admin/settings`新增结构化用户/店铺/设备/平台与托管AI范围管理，复用原batch/expectedRevision/审计。功能与旧翻译重复写入修复已提交推送，两区运行`d6e693a3`（内部签名468），标准部署/备份恢复/FULL VPS及生产HTTP/管理员页只读验收通过，各区24项配置前后完全一致，COM原试点/CN dark保持。109项后端、11项前端新行为+3项原合同、类型/lint、Web/API build及隔离Chrome流程通过，新增Provider/Ozon/费用0。官网仍为已公开验收466，本次后台功能无需重装扩展；组包已存在、真实仓库准入/实货签未测。唯一证据和边界见[访问管理owner](extension-access-administration.md)。

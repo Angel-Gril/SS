@@ -49,6 +49,14 @@ enum SyncJobStatus {
   FAILED
 }
 
+enum YandexPublishState {
+  PREPARED
+  SUBMITTING
+  SUCCEEDED
+  UNKNOWN
+  REJECTED
+}
+
 enum BalanceLogType {
   RECHARGE
   CONSUME
@@ -479,6 +487,8 @@ model User {
   ownedSourceListingPublishIntents         SourceListingPublishIntent[]              @relation("SourceListingPublishIntentOwner")
   sourceListingPublishIntentsAsActor       SourceListingPublishIntent[]              @relation("SourceListingPublishIntentActor")
   ownedOzonPublishAttempts                 OzonPublishAttempt[]                      @relation("OzonPublishAttemptOwner")
+  ownedYandexPublishOperations             YandexOfferPublishOperation[]             @relation("YandexPublishOperationOwner")
+  createdYandexPublishOperations           YandexOfferPublishOperation[]             @relation("YandexPublishOperationActor")
   ozonPublishAttemptsAsActor               OzonPublishAttempt[]                      @relation("OzonPublishAttemptActor")
   resolvedOzonPublishAttempts              OzonPublishAttempt[]                      @relation("OzonPublishAttemptResolver")
   ozonPublishAttemptEventsAsActor          OzonPublishAttemptEvent[]                 @relation("OzonPublishAttemptEventActor")
@@ -553,6 +563,7 @@ model Shop {
   products                           Product[]
   orders                             Order[]
   carriageOperations                 OzonCarriageOperation[]
+  yandexPublishOperations            YandexOfferPublishOperation[]
   warehouses                         Warehouse[]
   syncJobs                           SyncJob[]
   returns                            Return[]
@@ -666,6 +677,31 @@ model OzonCarriageOperation {
   @@unique([shopId, idempotencyKey])
   @@index([shopId, warehouseId, createdAt])
   @@map("ozon_carriage_operations")
+}
+
+model YandexOfferPublishOperation {
+  id             String             @id
+  ownerUserId    String             @map("owner_user_id")
+  owner          User               @relation("YandexPublishOperationOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId    String             @map("actor_user_id")
+  actor          User               @relation("YandexPublishOperationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  shopId         String             @map("shop_id")
+  shop           Shop               @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  sourceShopId   String             @map("source_shop_id")
+  businessId     String             @map("business_id")
+  idempotencyKey String             @map("idempotency_key") @db.VarChar(200)
+  requestHash    String             @map("request_hash") @db.Char(64)
+  requestPayload Json               @map("request_payload_json")
+  response       Json?
+  state          YandexPublishState @default(PREPARED)
+  errorMessage   String?            @map("error_message") @db.VarChar(2000)
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  @@unique([ownerUserId, idempotencyKey], map: "yandex_offer_publish_owner_idempotency_key")
+  @@index([shopId, createdAt], map: "yandex_offer_publish_shop_created_idx")
+  @@index([ownerUserId, createdAt], map: "yandex_offer_publish_owner_created_idx")
+  @@map("yandex_offer_publish_operations")
 }
 
 model ShopDeliveryMethod {
