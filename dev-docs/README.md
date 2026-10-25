@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-25 `cc96a1e3 / 1.0.469` Yandex guarded integration 双区部署
+
+`cc96a1e3ba2de43bff179b9a1593de1d03325002 / 1.0.469` 已推送并完成 COM hosted-pilot、CN direct/dark 双区标准部署。两区均通过目标 commit 绑定的 deployment backup/restore、Yandex offer 迁移、扩展签名包校验、API/Worker/Web 重启及 `/ready`、DB、Redis 只读核验；COM 与 CN 均保持原有 rollout 策略。CN 部署期间修复了临时 pnpm wrapper 递归覆盖真实入口的问题，临时构建缓存和 wrapper 已清理，旧版本与失败目录未删除。`YANDEX_MARKET_PUBLISH_ENABLED` 仍关闭，没有真实 Yandex/Ozon/Provider 业务写入或新增费用。官网公开扩展指针未切换，当前记录仅证明应用部署完成，不代表官网最新版公开发布或 Yandex 真实店铺验收完成。准确合同与 API 边界见 [Yandex Market API 研究](yandex-market-api-research.md)。
+
 ## 2026-10-24 Yandex Market Partner API 只读研究
 
 Yandex Market 已完成店铺接入、`Api-Key` 连接测试、campaign/business 映射、Ozon/ERP 商品草稿预览及受显式确认/幂等/未知态保护的商品目录发布 owner；发布默认由 `YANDEX_MARKET_PUBLISH_ENABLED` 关闭，尚未调用真实 Yandex 店铺，库存/价格/订单同步、物流标签和真实发布验收仍未开放。官方合同、`businessId/campaignId` 和授权边界见 [Yandex Market API 研究](yandex-market-api-research.md)。
