@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-26 `999d7b12 / 1.0.470` 正式 QA04 与官网公开发布完成
+
+正式 QA04 已绑定目标提交 `999d7b12d95c0937735aab20a4ad262d87a6c8be` 并通过。原两图 suite 的 START/CONTINUE、PENDING、预览、双审核原始 HTTP 回执、首次 store-draft assignment、幂等 replay、数据库/队列只读回读均闭合；当前 COM pilot、gpt-image-2-count/CNY0.10 价格和双设备资格只读匹配，免费来源页导航通过，Provider/Ozon/业务写入为 0。
+
+COM/CN 均完成同 commit 标准部署、备份恢复、FULL VPS verifier、REL-04 canary、website approval、CAS、匿名 Cloud/Local distribution probe 和最终 publication verifier。官网公开接口已实读 `1.0.470 / 999d7b12`。COM/CN VPS 各 0 failure、1 warning，唯一 warning 为远端备份未配置。临时 canary 凭据、Redis session、专用 profile 已清理；旧公开 pointer 仅作为 CAS 基线保留。
+
+本阶段为发布收口，不新增 Provider 请求、费用或 Ozon 写入。私有证据根为 `C:/Users/550W/AppData/Local/SS-ERP/private/release-999d7b12-website470`；ignored 的浏览器导航与发布辅助工具不进入 Git。
+
 ## 2026-10-26 受控补充验收合同已获批准，正在实现
 
 用户已明确批准继续，无需再次申请同一授权。本阶段为 D2/T2（消费者合同）与 T3（免费真实浏览器）；

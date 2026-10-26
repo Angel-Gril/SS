@@ -1,5 +1,11 @@
 # SS ERP 内部开发真源
 
+## 2026-10-26 `999d7b12 / 1.0.470` 双区官网公开发布完成
+
+COM/CN 已运行并公开服务 `999d7b12d95c0937735aab20a4ad262d87a6c8be / 1.0.470`。两区部署、runtime 备份恢复、FULL VPS verifier、正式 QA04、REL-04 canary、website approval、CAS、匿名 Cloud/Local distribution probe 和最终 publication verifier 均通过；官网 API 实读为 1.0.470。COM/CN VPS 各 0 failure、1 warning，唯一 warning 为远端备份未配置。临时 canary Redis session、token 和专用浏览器均已清理。本轮 Provider/Ozon 请求及费用为 0。
+
+准确候选、签名、QA04、canary、approval、distribution 回执及免费导航证据只见私有 `release-999d7b12-website470` 目录；产品与验收边界仍由[直接适配 owner](donor-workbench/direct-adaptation.md)维护。
+
 ## 2026-10-26 补充验收模式实现中，当前完整 pilot 已只读通过
 
 用户已批准的 schema6 将历史执行控制界线约束到真实 START 前，历史完整pilot/noNewTabs不倒填；旧schema1–5语义保持。
