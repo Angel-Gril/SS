@@ -179,7 +179,7 @@ export function CarriageWorkbench() {
   }
   return <div className="space-y-5">
     <header className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="text-2xl font-semibold">组包交仓</h1><p className="mt-1 text-sm text-muted-foreground">将已备货订单装箱、确认组包并打印货签。仅适用于 Ozon 已开通信任验收货位的仓库。</p></div>
+      <div><h1 className="text-2xl font-semibold">组包交仓</h1><p className="mt-1 text-sm text-muted-foreground">所有本人 ACTIVE Ozon 店铺均可进入。将已备货订单装箱、确认组包并打印货签；具体操作由 Ozon 当前仓库、订单状态和可用动作实时决定。</p></div>
       <Button variant="outline" onClick={() => refresh()} disabled={loading || busy || !warehouseId}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />刷新</Button>
     </header>
     <div className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 xl:grid-cols-5">

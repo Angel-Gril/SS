@@ -114,7 +114,7 @@ export function OzonApiCapabilities({ shopId }: { shopId: string }) {
               </details>
             )}
             <p className="flex items-start gap-1 text-xs text-muted-foreground">
-              <CircleHelp className="mt-0.5 h-3 w-3 shrink-0" /> 已授权仅表示方法权限存在；密钥须有效，组包仓库准入和 Ozon 物流开通状态仍需单独核验。
+              <CircleHelp className="mt-0.5 h-3 w-3 shrink-0" /> 已授权仅表示方法权限存在；密钥须有效。组包不需要先做指定店铺验收，实际仓库准入、订单状态和可用动作由 Ozon 在每次读取或提交时返回并校验。
             </p>
           </div>
         )}
