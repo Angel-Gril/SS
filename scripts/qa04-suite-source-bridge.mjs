@@ -26,12 +26,24 @@ const REVIEWED_WEBSITE_CONSUMERS = new Map([
     ['cfae0072fc2c7cd6123edc0510fc363c12ab52a1', '8de237b0cd0944bef2fc1eac663114c386eae4ed']],
 ]);
 
+// Approved 2026-10-26: preserve the reviewed read-only CDP capture implementation
+// and fail-closed repairs; original acquisition records remain immutable.
+// All four paths must be absent before and match these complete blobs after.
+// This is not a general exemption for producers or future edits to these tools.
+const REVIEWED_SUITE_CAPTURE_TOOLS = new Map([
+  ['scripts/qa04-suite-live-response-capture.mjs', 'ed55a06fe82f8051014da6ed772b8a7a66e19328'],
+  ['scripts/qa04-suite-live-response-capture.test.mjs', 'f88775177a734539d864445d0fc734f9279b721a'],
+  ['scripts/qa04-suite-transport-capture.mjs', 'bcc92fb9a1f90cc6ea458316c6235c49102a8ac0'],
+  ['scripts/qa04-suite-transport-capture.test.mjs', 'b6e07e1246f3afafe3667b63e59669c0c50a5b22'],
+]);
+
 // This is deliberately an allowlist of inert presentation/document changes
-// and four existing, reviewed QA04 evidence consumers (never runtime producers),
-// not an import-graph guess. Every other tracked path remains protected,
+// and four existing, reviewed QA04 evidence consumers, plus the exact four-blob
+// read-only capture-tool introduction above, not an import-graph guess.
+// Every other tracked path remains protected,
 // including build scripts, credentials/config contracts, package manifests,
 // schema, migrations, shared contracts, extension permissions and runtime JS/TS
-// outside the exact reviewed website transition above.
+// outside the exact reviewed website/capture transitions above.
 export function verifySuiteSourceBridge(root, executionCommit, targetCommit, options = {}) {
   check(isCommit(executionCommit) && isCommit(targetCommit));
   const git = args => {
@@ -58,6 +70,8 @@ export function verifySuiteSourceBridge(root, executionCommit, targetCommit, opt
   const websiteTransition = [...reviewedWebsiteConsumers].every(([filename, [from, to]]) =>
     before.get(filename)?.mode === '100644 blob' && before.get(filename)?.objectId === from
     && after.get(filename)?.mode === '100644 blob' && after.get(filename)?.objectId === to);
+  const captureTransition = [...REVIEWED_SUITE_CAPTURE_TOOLS].every(([filename, to]) =>
+    !before.has(filename) && after.get(filename)?.mode === '100644 blob' && after.get(filename)?.objectId === to);
   check(git(['merge-base', executionCommit, targetCommit]).trim() === executionCommit);
   const changes = [], protectedFiles = {};
   for (const filename of [...new Set([...before.keys(), ...after.keys()])].sort()) {
@@ -77,6 +91,9 @@ export function verifySuiteSourceBridge(root, executionCommit, targetCommit, opt
     }
     else if (websiteTransition && reviewedWebsiteConsumers.has(filename)) {
       kind = 'REVIEWED_WEBSITE_EVIDENCE_CONSUMER';
+    }
+    else if (captureTransition && REVIEWED_SUITE_CAPTURE_TOOLS.has(filename)) {
+      kind = 'REVIEWED_SUITE_CAPTURE_TOOL';
     }
     else if (PRESENTATION.test(filename) && execution && target) {
       for (const entry of [execution, target]) {

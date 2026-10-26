@@ -1,5 +1,5 @@
 import { canonicalTimestamp, exactKeys, imageEvidence, isRecord, isSha256, pngEvidence, requireThat, sha256, sortedJson } from './qa04-final-evidence.mjs';
-import { isRestrictedAiMediaHostedPilotOperations, isApprovedAiMediaHostedPublicationOperations } from './verify-ai-media-pilot-policy.mjs';
+import { isRestrictedAiMediaHostedPilotOperations, isApprovedAiMediaHostedPublicationOperations, verifyAiMediaHostedPilotPolicy } from './verify-ai-media-pilot-policy.mjs';
 import { COUNT_SUITE_PROFILE, verifyCountSuiteRecord, verifiedCountSuiteOutputSize } from './qa04-count-suite-profile.mjs';
 import { verifyCurrentSuiteUiEvidence } from './qa04-suite-target-ui.mjs';
 
@@ -14,6 +14,134 @@ const single = values => { check(Array.isArray(values) && values.length === 1 &&
 const unique = values => check(values.every(text) && new Set(values).size === values.length);
 const success = response => check(response?.status >= 200 && response.status < 300 && response.body?.code === 1);
 
+// schema6 deliberately keeps partial historical observations distinct from
+// current qualification. Never synthesize the three missing historical keys.
+function verifySupplementedControl(read, reader, controller, context) {
+  const { commit, input, binding, start, applied, restored, generated, now, offline, browser } = context;
+  exactKeys(controller, ['schemaVersion', 'kind', 'executionGitCommit', 'before', 'after',
+    'currentSnapshot', 'currentExpectation', 'pendingReadback', 'navigation', 'executionDeviceSessionId'], CODE);
+  check(controller.schemaVersion === 3 && controller.kind === 'SS_ERP_SUPPLEMENTED_PILOT_EXECUTION_CONTROL'
+    && controller.executionGitCommit === commit && text(controller.executionDeviceSessionId));
+  const before = read(controller.before), after = read(controller.after), current = read(controller.currentSnapshot);
+  const expected = read(controller.currentExpectation);
+  for (const value of [before, after, current]) {
+    check(value.kind === 'SS_ERP_QA04_RUNTIME_READ_ONLY' && value.readOnly === true
+      && isRecord(value.snapshot) && Array.isArray(value.snapshot.configRows) && Array.isArray(value.snapshot.deviceSessions));
+  }
+  check(before.gitCommit === commit && after.gitCommit === commit && current.gitCommit === input.targetGitCommit
+    && time(before.observedAt) >= time(offline.completedAt) && time(before.observedAt) <= time(start.at)
+    && time(after.observedAt) >= time(applied.at) && time(after.observedAt) <= time(restored.observedAt)
+    && time(after.observedAt) <= time(browser.completedAt)
+    && time(current.observedAt) >= time(restored.observedAt) && time(current.observedAt) <= time(now)
+    && time(now) - time(current.observedAt) <= 60 * 60 * 1000);
+  check(equal(before.snapshot, after.snapshot) && equal(before.runtime, after.runtime) && equal(before.providerConfig, after.providerConfig));
+  const config = Object.fromEntries(Object.entries(generated.suiteRuntime)
+    .filter(([key]) => !['itemCount', 'estimatedCostCents', 'maximumCostCents'].includes(key)));
+  check(equal(before.providerConfig, config) && equal(current.providerConfig, config)
+    && equal(before.runtime, generated.rows[0].job.operationConfig.providerRuntime)
+    && equal(before.runtime, current.runtime) && Array.isArray(before.snapshot.controls)
+    && equal(before.snapshot.controls, current.snapshot.controls));
+  const controls = before.snapshot.controls;
+  check(controls.length === 2);
+  for (const key of ['ai_daily_budget_cents', 'ai_user_daily_image_generation_limit']) {
+    const row = single(controls.filter(value => value.key === key));
+    check(text(row.id) && positive(row.revision) && typeof row.value === 'string' && /^[0-9]+$/u.test(row.value)
+      && Number.isSafeInteger(Number(row.value)) && Number(row.value) > 0 && time(row.updatedAt) <= time(before.observedAt));
+  }
+  const rows = snapshot => {
+    const map = new Map();
+    for (const row of snapshot.configRows) {
+      check(text(row?.key) && typeof row.value === 'string' && !map.has(row.key)); map.set(row.key, row.value);
+    }
+    return map;
+  };
+  const originalRows = rows(before.snapshot), currentRows = rows(current.snapshot);
+  const missing = ['feature_image_translate', 'ai_image_translation_provider', 'ai_image_translation_model'];
+  check(missing.every(key => !originalRows.has(key) && currentRows.has(key))
+    && currentRows.size === originalRows.size + missing.length);
+  for (const [key, value] of originalRows) check(currentRows.get(key) === value);
+  let qualification;
+  try { qualification = verifyAiMediaHostedPilotPolicy(current.snapshot, expected); } catch { check(false); }
+  check(qualification.ownerUserIds.length === 1 && sha256(qualification.ownerUserIds[0]) === binding.ownerSha256
+    && qualification.shopIds.includes(binding.shopId)
+    && isApprovedAiMediaHostedPublicationOperations(qualification.allowedOperations));
+  const sessions = before.snapshot.deviceSessions;
+  check(sessions.length > 0 && sessions.length <= 50); unique(sessions.map(value => value.id));
+  const scopes = ['capture:write', 'listing:review', 'listing:write', 'media:execute'];
+  for (const session of sessions) {
+    check(session.status === 'ACTIVE' && session.ownerUserId === qualification.ownerUserIds[0]
+      && session.actorUserId === session.ownerUserId && equal(session.scopes, scopes)
+      && Array.isArray(session.shopIds) && session.shopIds.length > 0 && session.shopIds.length <= 50);
+    unique(session.shopIds); check(session.shopIds.every(shop => qualification.shopIds.includes(shop)));
+  }
+  check(sessions.find(session => session.id === controller.executionDeviceSessionId)?.shopIds.includes(binding.shopId));
+  // Current verification may remove expired/revoked sessions, never expand a
+  // historical device's grants or use a new device as execution evidence.
+  for (const session of current.snapshot.deviceSessions) check(equal(session, sessions.find(value => value.id === session.id)));
+  const pending = read(controller.pendingReadback);
+  check(pending.kind === 'REAL_HOSTED_SUITE_PENDING_READBACK' && pending.caseId === 'suite' && pending.phase === 'pending'
+    && pending.gitCommit === commit && pending.readbackRuntimeCommit === commit && pending.readOnly === true
+    && pending.ownerSha256 === binding.ownerSha256 && pending.databaseId === 'production-com-primary'
+    && equal(pending.pending, { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 })
+    && time(pending.observedAt) >= time(applied.at) && time(pending.observedAt) <= time(restored.observedAt));
+  const navigation = read(controller.navigation);
+  exactKeys(navigation, ['schemaVersion', 'kind', 'gitCommit', 'ui', 'sourcePageTargetId', 'workbenchTargetId',
+    'pagesBefore', 'pagesAfter', 'targetsBefore', 'targetsAfter', 'beforeAt', 'afterAt', 'click', 'isolation', 'cleanup',
+    'providerRequests', 'ozonWrites', 'businessMutations'], CODE);
+  const targetOffline = reader.json(input.offline.receipt, CODE);
+  check(time(current.observedAt) >= time(targetOffline.completedAt));
+  const ui = verifyCurrentSuiteUiEvidence(reader, navigation.ui,
+    { targetCommit: input.targetGitCommit, changes: [] }, targetOffline.completedAt, now);
+  const uiRecord = read(navigation.ui);
+  check(navigation.schemaVersion === 1 && navigation.kind === 'SS_ERP_CURRENT_SOURCE_NAVIGATION'
+    && navigation.gitCommit === input.targetGitCommit && navigation.providerRequests === 0
+    && navigation.ozonWrites === 0 && navigation.businessMutations === 0
+    && (commit !== input.targetGitCommit || ui.version === binding.extensionVersion)
+    && /^[0-9A-F]{32}$/u.test(navigation.sourcePageTargetId) && /^[0-9A-F]{32}$/u.test(navigation.workbenchTargetId)
+    && navigation.sourcePageTargetId !== navigation.workbenchTargetId);
+  const pages = values => {
+    check(Array.isArray(values) && values.length > 0 && values.length <= 20); unique(values.map(value => value.id));
+    for (const page of values) {
+      check(/^[0-9A-F]{32}$/u.test(page.id) && typeof page.url === 'string' && page.url.length <= 4096);
+      let url; try { url = new URL(page.url); } catch { check(false); }
+      check(!/^(?:app\.)?ss-erp\.(?:com|cn)\.?$/iu.test(url.hostname));
+    }
+    return [...values].sort((left, right) => left.id.localeCompare(right.id));
+  };
+  check(equal(pages(navigation.pagesBefore), pages(navigation.pagesAfter)));
+  for (const [ref, at, observedPages] of [[navigation.targetsBefore, navigation.beforeAt, navigation.pagesBefore],
+    [navigation.targetsAfter, navigation.afterAt, navigation.pagesAfter]]) {
+    const targets = read(ref);
+    check(targets.at === at && Array.isArray(targets.targetInfos) && targets.targetInfos.length > 0 && targets.targetInfos.length <= 100);
+    unique(targets.targetInfos.map(value => value.targetId));
+    check(equal(pages(targets.targetInfos.filter(value => value.type === 'page').map(value => ({ id: value.targetId, url: value.url }))), pages(observedPages)));
+  }
+  const afterTargets = read(navigation.targetsAfter).targetInfos;
+  const frame = afterTargets.find(value => value.targetId === navigation.workbenchTargetId);
+  check(frame?.type === 'iframe' && frame.parentFrameId === navigation.sourcePageTargetId
+    && /^chrome-extension:\/\/[a-p]{32}\/pages\/precision-workbench\.html$/u.test(frame.url));
+  const page = navigation.pagesBefore.find(value => value.id === navigation.sourcePageTargetId), click = navigation.click;
+  check(page && /^https:\/\/detail\.1688\.com\/offer\/[0-9]+\.html(?:\?|$)/u.test(page.url)
+    && click?.method === 'Input.dispatchMouseEvent' && click.targetId === page.id
+    && click.selector === '#ss-erp-donor-workbench-trigger' && Number.isFinite(click.x) && Number.isFinite(click.y)
+    && click.x >= 0 && click.y >= 0 && click.x < uiRecord.viewport.width && click.y < uiRecord.viewport.height
+    && time(navigation.beforeAt) >= time(targetOffline.completedAt) && time(navigation.beforeAt) >= time(restored.observedAt)
+    && time(navigation.beforeAt) <= time(click.at) && time(click.at) <= time(navigation.afterAt)
+    && time(navigation.afterAt) === time(ui.observedAt));
+  const isolation = navigation.isolation, cleanup = navigation.cleanup;
+  check(isolation?.kind === 'DEDICATED_QA_PROFILE' && isSha256(isolation.profileSha256)
+    && positive(isolation.debuggingPort) && isolation.debuggingPort <= 65535
+    && positive(isolation.protectedDebuggingPort) && isolation.protectedDebuggingPort <= 65535
+    && isolation.debuggingPort !== isolation.protectedDebuggingPort
+    && cleanup?.ownedTargetsClosed === true && cleanup.originalBrowserPreserved === true
+    && time(cleanup.at) >= time(navigation.afterAt) && time(cleanup.at) <= time(now));
+  return { executionControlBoundary: 'BEFORE_START', historicalFullPilotVerified: false, historicalNoNewTabsVerified: false,
+    currentPilotVerified: true, currentCandidateNavigationVerified: true,
+    supplementalEvidence: { beforeSha256: controller.before.sha256, afterSha256: controller.after.sha256,
+      currentSnapshotSha256: controller.currentSnapshot.sha256, currentExpectationSha256: controller.currentExpectation.sha256,
+      navigationSha256: controller.navigation.sha256, ui } };
+}
+
 // Source listing drafts use locale ordering in their database hash owner.
 const sourceDraftJson = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
   : Array.isArray(value) ? `[${value.map(sourceDraftJson).join(',')}]`
@@ -24,7 +152,8 @@ const sourceDraftJson = value => value === null || typeof value !== 'object' ? J
 // conservative Git source bridge and a fresh read of current runtime config;
 // original execution records and their execution/offline identities stay exact.
 export function verifySuiteNormalErp(reader, input, manifest, now, verifySource, verifyExecutionOffline) {
-  const sourcePageWorkflow = manifest.schemaVersion === 5;
+  const supplemented = manifest.schemaVersion === 6;
+  const sourcePageWorkflow = manifest.schemaVersion === 5 || supplemented;
   const countProfile = manifest.schemaVersion === 4 || sourcePageWorkflow;
   const derivedGeneratedPhase = manifest.schemaVersion === 3;
   const explicitExecution = manifest.schemaVersion === 2 || derivedGeneratedPhase || countProfile;
@@ -46,7 +175,19 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   check(/^[a-f0-9]{40}$/u.test(executionCommit));
   if (explicitExecution) exactKeys(executionOfflineRefs, ['receipt', 'log'], CODE);
   pair(manifest.previews); pair(manifest.reviews);
-  const refs = input.normalErp, read = ref => reader.json(ref, CODE, { nativeCompact: true });
+  const refs = input.normalErp, read = ref => {
+    if (!supplemented) return reader.json(ref, CODE, { nativeCompact: true });
+    // These native producers wrote JSON.stringify(..., null, 2) without LF.
+    // Validate the pinned original bytes; do not rewrite historical evidence.
+    let value, normalized;
+    try {
+      normalized = new TextDecoder('utf-8', { fatal: true }).decode(reader.read(ref)).replace(/\r\n/gu, '\n');
+      value = JSON.parse(normalized);
+    } catch (error) { if (error.code?.startsWith('QA04_')) throw error; check(false); }
+    const pretty = JSON.stringify(value, null, 2), compact = JSON.stringify(value);
+    check(isRecord(value) && [pretty, pretty + '\n', compact, compact + '\n'].includes(normalized));
+    return value;
+  };
   const generated = read(refs.generated), restored = read(refs.restored), applied = read(refs.applied);
   const binding = read(manifest.workbench), ui = read(manifest.generatedUi), submitted = read(manifest.submitted);
   if (countProfile) check([binding, ui, generated].every(value => value.gitCommit === executionCommit));
@@ -79,7 +220,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && /^[0-9A-F]{32}$/u.test(binding.workbenchTargetId)
     && (sourcePageWorkflow ? /^[0-9A-F]{32}$/u.test(binding.sourcePageTargetId)
       && binding.sourcePageTargetId !== binding.workbenchTargetId && binding.uiSurface === 'ACTUAL_SOURCE_PRECISION_IFRAME'
-      && binding.noNewTabs === true && binding.erpPageOpened === false && binding.ownedWebTargetId === undefined
+      && (supplemented ? binding.noNewTabs === undefined && binding.erpPageOpened === undefined
+        : binding.noNewTabs === true && binding.erpPageOpened === false) && binding.ownedWebTargetId === undefined
       : /^[0-9A-F]{32}$/u.test(binding.ownedWebTargetId) && binding.workbenchTargetId !== binding.ownedWebTargetId)
     && /^\d+\.\d+\.\d+$/u.test(binding.extensionVersion));
   if (sourcePageWorkflow) {
@@ -88,17 +230,36 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       && entry.extensionVersion === binding.extensionVersion && entry.actualUi === true
       && entry.sourcePageTargetId === binding.sourcePageTargetId && entry.workbenchTargetId === binding.workbenchTargetId
       && ['snapshotId', 'collectId', 'shopId', 'draftId', 'revision', 'draftVersion'].every(key => entry[key] === binding[key])
-      && entry.noNewTabs === true && entry.erpPageOpened === false
+      && (supplemented ? entry.noNewTabs === undefined && entry.erpPageOpened === undefined
+        && entry.pagesBefore === undefined && entry.pagesAfter === undefined
+        : entry.noNewTabs === true && entry.erpPageOpened === false
       && Array.isArray(entry.pagesBefore) && entry.pagesBefore.length > 0 && entry.pagesBefore.length <= 20
       && equal(entry.pagesBefore, entry.pagesAfter)
       && entry.pagesBefore.every(page => /^[0-9A-F]{32}$/u.test(page.id) && typeof page.url === 'string' && page.url.length <= 4096
         && !/^https:\/\/(?:app\.)?ss-erp\.(?:com|cn)(?:\/|$)/u.test(page.url))
       && new Set(entry.pagesBefore.map(page => page.id)).size === entry.pagesBefore.length
-      && time(entry.at) >= time(offline.completedAt) && time(entry.at) <= time(binding.launchedAt));
-    const page = entry.pagesBefore.find(value => value.id === binding.sourcePageTargetId);
-    check(page && /^https:\/\/detail\.1688\.com\/offer\/[0-9]+\.html(?:\?|$)/u.test(page.url));
+      && time(entry.at) >= time(offline.completedAt) && time(entry.at) <= time(binding.launchedAt)));
+    if (supplemented) {
+      const original = read(entry.rawReadback);
+      const launch = read(entry.rawLaunch), captured = read(entry.rawTargets);
+      check(original.observedAt === entry.at && time(entry.at) >= time(binding.launchedAt) && time(entry.at) <= time(start.at)
+        && Array.isArray(original.result?.drafts) && original.result.drafts.some(draft => draft.id === binding.draftId
+          && draft.shopId === binding.shopId && draft.revision === binding.revision && draft.draftVersion === binding.draftVersion));
+      check(launch.observedAt === binding.launchedAt && launch.result?.physical === true
+        && launch.result.selector === '#image-workflow-start-btn' && Number.isFinite(launch.result.x) && Number.isFinite(launch.result.y)
+        && time(captured.observedAt) <= time(binding.launchedAt)
+        && captured.targets?.page?.targetId === binding.sourcePageTargetId && captured.targets.page.type === 'page'
+        && /^https:\/\/detail\.1688\.com\/offer\/[0-9]+\.html(?:\?|$)/u.test(captured.targets.page.url)
+        && captured.targets.frame?.targetId === binding.workbenchTargetId && captured.targets.frame.type === 'iframe'
+        && captured.targets.frame.parentFrameId === binding.sourcePageTargetId
+        && /^chrome-extension:\/\/[a-p]{32}\/pages\/precision-workbench\.html$/u.test(captured.targets.frame.url));
+    } else {
+      const page = entry.pagesBefore.find(value => value.id === binding.sourcePageTargetId);
+      check(page && /^https:\/\/detail\.1688\.com\/offer\/[0-9]+\.html(?:\?|$)/u.test(page.url));
+    }
   }
   const suiteId = ui.suiteId, projection = ui.projection, slots = pair(projection?.suite?.slots), plan = projection.plan;
+  if (supplemented) check(slots.every(slot => slot.reviewStatus === 'PENDING'));
   unique(slots.map(slot => slot.id)); unique(slots.map(slot => slot.slotKey)); unique(slots.map(slot => slot.workflowId));
   check(text(suiteId) && projection.executionMode === 'ERP_HOSTED' && projection.suite.id === suiteId
     && projection.suite.status === 'SUCCEEDED' && projection.suite.itemCount === 2 && ui.mutationPosts === 0
@@ -370,7 +531,11 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     check(observedSlot?.suiteId === suiteId && observedSlot.childWorkflowId === flow.id && observedSlot.attempt === 1
       && observedSlot.status === 'SUCCEEDED' && observedSlot.slotKey === slot.slotKey && observedSlot.ownerSha256 === owner);
   }
-  if (explicitExecution && controller?.kind === 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL') {
+  const supplementalProof = supplemented ? verifySupplementedControl(read, reader, controller,
+    { commit, input, binding, start, applied, restored, generated, now, offline, browser }) : null;
+  if (supplemented) {
+    check(supplementalProof.currentPilotVerified && supplementalProof.currentCandidateNavigationVerified);
+  } else if (explicitExecution && controller?.kind === 'SS_ERP_RESTRICTED_PILOT_EXECUTION_CONTROL') {
     const expectedPending = { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 };
     const targetCleanup = controller.schemaVersion === 2;
     const cleanupCommit = targetCleanup ? input.targetGitCommit : commit;
@@ -494,7 +659,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     provider, model, currency: 'CNY', unitCostMinor: unitCost,
     successfulImages: 2, actualCostMinor: taskCost, chargeCount: 2, applicationCount: 2, originalImagePreserved: true,
     ...(countProfile ? { providerProfile: COUNT_SUITE_PROFILE, verifiedIdempotencyReplay: true } : {}),
-    ...(sourcePageWorkflow ? { sourcePageWorkflowVerified: true } : {}),
+    ...(sourcePageWorkflow ? { sourcePageWorkflowVerified: !supplemented } : {}),
+    ...(supplementalProof ?? {}),
     configurationRestored: true, image: images[0], images, source, sourceBridge, targetUiProductionVerified: false, verifiedSuiteBrowser: true,
     sourceSha256: source.sha256, referenceSha256: reference.sha256,
     ...(derivedGeneratedPhase ? { generatedPhaseEvidence: manifest.databaseEvidenceMode } : {}),

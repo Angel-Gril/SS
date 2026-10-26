@@ -135,6 +135,34 @@ test('an evidence-consumer change never permits a neighboring generation change'
   assert.throws(() => f.verify(f.commit('apps/server/src/suite.ts')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
 });
 
+function reviewedCaptureFixture(t) {
+  const f = fixture(t), repository = fileURLToPath(new URL('../', import.meta.url));
+  const paths = ['scripts/qa04-suite-live-response-capture.mjs', 'scripts/qa04-suite-live-response-capture.test.mjs',
+    'scripts/qa04-suite-transport-capture.mjs', 'scripts/qa04-suite-transport-capture.test.mjs'];
+  for (const filename of paths) f.write(filename, readFileSync(path.join(repository, filename), 'utf8').replace(/\r\n/gu, '\n'));
+  f.git('add', '--', ...paths); f.git('commit', '-qm', 'reviewed read-only transport capture');
+  return { ...f, paths, target: f.git('rev-parse', 'HEAD') };
+}
+
+test('only the complete approved capture-tool blob introduction can accompany original suite reuse', t => {
+  const f = reviewedCaptureFixture(t), result = f.verify(f.target);
+  assert.deepEqual(result.changes.map(change => change.path).sort(), [...f.paths].sort());
+  assert.ok(result.changes.every(change => change.kind === 'REVIEWED_SUITE_CAPTURE_TOOL'));
+  assert.equal(result.requiresFreshTargetUiVerification, false);
+});
+
+for (const action of ['partial', 'changed', 'executable', 'runtime']) test('capture-tool blob introduction refuses ' + action, t => {
+  const f = reviewedCaptureFixture(t), filename = f.paths[0];
+  if (action === 'partial') f.git('rm', '--', filename);
+  else if (action === 'executable') f.git('update-index', '--chmod=+x', filename);
+  else {
+    const name = action === 'runtime' ? 'apps/server/src/suite.ts' : filename;
+    f.write(name, 'unreviewed behavior\n'); f.git('add', '--', name);
+  }
+  f.git('commit', '-qm', 'reject incomplete or unreviewed transition');
+  assert.throws(() => f.verify(f.git('rev-parse', 'HEAD')), error => error.code === 'QA04_ERP_SOURCE_CHANGED');
+});
+
 for (const action of ['add', 'remove', 'executable', 'symlink']) {
   test('evidence consumers cannot be newly added, removed, executable or symlinked: ' + action, t => {
     const f = fixture(t), filename = 'scripts/qa04-final-suite-evidence.mjs';

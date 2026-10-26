@@ -1045,6 +1045,174 @@ test('source-page count suite v5 admits verified full-frame output with exact sa
   assert.equal(proof.sourcePageWorkflowVerified, true);
 });
 
+// Independent current qualification is not a backfill of the execution record.
+// Keep this fixture here: it exercises the public final verifier without
+// changing the historical schema1–5 producers or their meaning.
+function supplementedSourceSuiteFixture(t) {
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png), binding = f.get(f.manifest.workbench);
+  const operations = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT', 'SUITE', 'IMAGE_TRANSLATE', 'OZON_PUBLISH'];
+  const owner = f.get(f.input.normalErp.applied).before.ownerUserId;
+  const session = { id: 'qa-session', ownerUserId: owner, actorUserId: owner, status: 'ACTIVE',
+    scopes: ['capture:write', 'listing:review', 'listing:write', 'media:execute'], shopIds: [binding.shopId] };
+  const expectation = { ownerUserIds: [owner], shopIds: [binding.shopId], deviceSessionIds: [session.id],
+    deviceShopIds: { [session.id]: session.shopIds }, rolloutRevision: 11, sourcePolicyRevision: 'pilot-11', allowedOperations: operations };
+  const flags = ['feature_ai_media_workflow_v2', 'feature_ai_media_suite', 'feature_extension_hosted_ai',
+    'feature_source_listing_workflow', 'feature_source_listing_extension_workbench', 'feature_source_listing_web_media',
+    'feature_ai_media_image_to_image', 'feature_ai_media_full_edit', 'feature_ai_media_inpaint', 'feature_source_ozon_publisher_v2'];
+  const configRows = flags.map(key => ({ key, value: 'true' }));
+  configRows.push({ key: 'ai_media_workflow_v2_rollout_policy', value: JSON.stringify({ revision: 11, tenantIds: [owner], mode: 'allowlist' }) },
+    { key: 'source_workflow_rollout_policy', value: JSON.stringify({ revision: 'pilot-11', features: {
+      SOURCE_LISTING_WORKFLOW: { mode: 'pilot', ownerUserIds: [owner], shopIds: [binding.shopId], listingStage: 'dual_read', platforms: ['OZON'] },
+      SOURCE_LISTING_EXTENSION_WORKBENCH: { mode: 'pilot', ownerUserIds: [owner] },
+      SOURCE_LISTING_WEB_MEDIA: { mode: 'pilot', ownerUserIds: [owner] },
+    } }) });
+  const suiteRuntime = f.get(f.input.normalErp.generated).suiteRuntime;
+  const providerConfig = Object.fromEntries(Object.entries(suiteRuntime).filter(([key]) => !['itemCount', 'estimatedCostCents', 'maximumCostCents'].includes(key)));
+  const before = { kind: 'SS_ERP_QA04_RUNTIME_READ_ONLY', gitCommit: f.targetGitCommit, readOnly: true,
+    observedAt: '2026-09-16T10:26:00.000Z', snapshot: { configRows, controls: [
+      { key: 'ai_daily_budget_cents', value: '1000', id: 'budget-record', revision: 1, updatedAt: '2026-09-16T09:00:00.000Z' },
+      { key: 'ai_user_daily_image_generation_limit', value: '1000', id: 'limit-record', revision: 2, updatedAt: '2026-09-16T09:00:00.000Z' },
+    ], deviceSessions: [session] },
+    runtime: f.get(f.input.normalErp.generated).rows[0].job.operationConfig.providerRuntime, providerConfig };
+  const historicalBefore = f.put('v6-before.json', before);
+  const historicalAfter = f.put('v6-after.json', { ...before, observedAt: '2026-09-16T10:36:00.000Z' });
+  const current = { ...structuredClone(before), observedAt: '2026-09-16T11:51:00.000Z' };
+  current.snapshot.configRows.push({ key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' }, { key: 'ai_image_translation_model', value: 'qwen-mt-image' });
+  const currentSnapshot = f.put('v6-current.json', current), currentExpectation = f.put('v6-expectation.json', expectation);
+  const sourceEntry = f.get(f.manifest.sourceEntry);
+  delete sourceEntry.pagesBefore; delete sourceEntry.pagesAfter; delete sourceEntry.noNewTabs; delete sourceEntry.erpPageOpened;
+  sourceEntry.at = '2026-09-16T10:25:00.010Z';
+  sourceEntry.rawReadback = f.put('v6-source-entry-raw.json', { observedAt: sourceEntry.at, result: { drafts: [{
+    id: binding.draftId, shopId: binding.shopId, revision: binding.revision, draftVersion: binding.draftVersion,
+  }] } });
+  sourceEntry.rawLaunch = f.put('v6-launch-raw.json', { observedAt: binding.launchedAt,
+    result: { selector: '#image-workflow-start-btn', physical: true, x: 120, y: 200 } });
+  sourceEntry.rawTargets = f.put('v6-execution-targets.json', { observedAt: '2026-09-16T10:24:00.000Z', targets: {
+    page: { targetId: sourceEntry.sourcePageTargetId, type: 'page', url: 'https://detail.1688.com/offer/928561537986.html' },
+    frame: { targetId: sourceEntry.workbenchTargetId, type: 'iframe', parentFrameId: sourceEntry.sourcePageTargetId,
+      url: 'chrome-extension://' + 'a'.repeat(32) + '/pages/precision-workbench.html' },
+  } });
+  f.changeMapped('sourceEntry', value => { for (const key of Object.keys(value)) delete value[key]; Object.assign(value, sourceEntry); });
+  f.changeMapped('workbench', value => { delete value.noNewTabs; delete value.erpPageOpened; });
+  const currentUi = f.put('v6-ui.json', { schemaVersion: 1, kind: 'SS_ERP_SUITE_TARGET_UI_READBACK', gitCommit: f.targetGitCommit,
+    version: binding.extensionVersion, observedAt: '2026-09-16T11:52:00.000Z', releaseSignatureSha256: hash('signature'),
+    cloudZipSha256: hash('cloud'), installedTreeSha256: hash('tree'), workerScriptSha256: hash('worker'), runtimeWorkerScriptSha256: hash('worker'),
+    visible: true, sourcePageVisible: true, controlsVisible: true, mutations: 0,
+    viewport: { width: 1200, height: 900 }, css: [], screenshot: f.put('v6-ui.png', png(1200, 900, 26)) });
+  const pages = [{ id: 'D'.repeat(32), url: 'https://detail.1688.com/offer/928561537986.html' }];
+  const targetInfos = [{ targetId: pages[0].id, type: 'page', url: pages[0].url },
+    { targetId: 'E'.repeat(32), type: 'iframe', parentFrameId: pages[0].id, url: 'chrome-extension://' + 'a'.repeat(32) + '/pages/precision-workbench.html' }];
+  const targetsBefore = f.put('v6-targets-before.json', { at: '2026-09-16T11:51:30.000Z', targetInfos });
+  const targetsAfter = f.put('v6-targets-after.json', { at: '2026-09-16T11:52:00.000Z', targetInfos });
+  const navigation = f.put('v6-navigation.json', { schemaVersion: 1, kind: 'SS_ERP_CURRENT_SOURCE_NAVIGATION', gitCommit: f.targetGitCommit,
+    targetsBefore, targetsAfter,
+    ui: currentUi, sourcePageTargetId: pages[0].id, workbenchTargetId: 'E'.repeat(32), pagesBefore: pages, pagesAfter: pages,
+    beforeAt: '2026-09-16T11:51:30.000Z', afterAt: '2026-09-16T11:52:00.000Z',
+    click: { method: 'Input.dispatchMouseEvent', targetId: pages[0].id, x: 80, y: 120, at: '2026-09-16T11:51:40.000Z',
+      selector: '#ss-erp-donor-workbench-trigger' },
+    isolation: { kind: 'DEDICATED_QA_PROFILE', profileSha256: hash('new-profile'), debuggingPort: 9490, protectedDebuggingPort: 9222 },
+    cleanup: { at: '2026-09-16T11:52:10.000Z', ownedTargetsClosed: true, originalBrowserPreserved: true },
+    providerRequests: 0, ozonWrites: 0, businessMutations: 0 });
+  const pendingReadback = f.put('v6-pending.json', { kind: 'REAL_HOSTED_SUITE_PENDING_READBACK', caseId: 'suite', phase: 'pending',
+    gitCommit: f.targetGitCommit, readbackRuntimeCommit: f.targetGitCommit, observedAt: '2026-09-16T10:36:30.000Z',
+    readOnly: true, databaseId: 'production-com-primary', ownerSha256: binding.ownerSha256,
+    pending: { jobs: 0, costs: 0, recovery: 0, workflows: 0, suites: 0 } });
+  f.input.normalErp.controllerStatus = f.put('v6-controller.json', { schemaVersion: 3, kind: 'SS_ERP_SUPPLEMENTED_PILOT_EXECUTION_CONTROL',
+    executionGitCommit: f.targetGitCommit, before: historicalBefore, after: historicalAfter,
+    currentSnapshot, currentExpectation, pendingReadback, navigation, executionDeviceSessionId: session.id });
+  f.change(f.input.normalErp.acceptance, value => { value.schemaVersion = 6; });
+  return { ...f, historicalBefore, historicalAfter, currentSnapshot, currentExpectation, navigation, currentUi, pendingReadback };
+}
+
+test('v6 separates pre-START execution checks from fresh pilot and navigation, without backfilling historical claims', t => {
+  const f = supplementedSourceSuiteFixture(t), originals = [f.historicalBefore, f.historicalAfter, f.manifest.startRequest].map(ref => ({ ...ref }));
+  const proof = f.verify().report.provenance.normalErp;
+  assert.equal(proof.actualCostMinor, 20); assert.equal(proof.verifiedIdempotencyReplay, true);
+  assert.equal(proof.sourcePageWorkflowVerified, false);
+  assert.equal(proof.historicalFullPilotVerified, false); assert.equal(proof.historicalNoNewTabsVerified, false);
+  assert.equal(proof.currentPilotVerified, true); assert.equal(proof.currentCandidateNavigationVerified, true);
+  assert.equal(proof.executionControlBoundary, 'BEFORE_START');
+  for (const ref of originals) assert.equal(hash(readFileSync(ref.path)), ref.sha256);
+});
+
+test('v6 consumes pinned native JSON without a trailing newline without rewriting the original bytes', t => {
+  const f = supplementedSourceSuiteFixture(t);
+  const bytes = Buffer.from(JSON.stringify(f.get(f.historicalBefore), null, 2));
+  Object.assign(f.historicalBefore, f.put('v6-before.json', bytes));
+  f.change(f.input.normalErp.controllerStatus, value => { value.before = f.historicalBefore; });
+  assert.equal(f.verify().report.provenance.normalErp.currentPilotVerified, true);
+  assert.equal(hash(readFileSync(f.historicalBefore.path)), hash(bytes));
+});
+
+for (const [name, key, mutate] of [
+  ['late preflight', 'historicalBefore', value => { value.observedAt = '2026-09-16T10:29:00.001Z'; }],
+  ['configuration change during execution', 'historicalAfter', value => { value.snapshot.configRows[0].value = 'false'; }],
+  ['backfilled historical translation flag', 'historicalBefore', value => { value.snapshot.configRows.push({ key: 'feature_image_translate', value: 'true' }); }],
+  ['incomplete current translation configuration', 'currentSnapshot', value => { value.snapshot.configRows = value.snapshot.configRows.filter(row => row.key !== 'feature_image_translate'); }],
+  ['current budget drift', 'currentSnapshot', value => { value.snapshot.controls.push({ key: 'ai_daily_budget_cents', value: '99999' }); }],
+  ['current provider drift', 'currentSnapshot', value => { value.providerConfig.model = 'unapproved-model'; }],
+  ['new current device', 'currentSnapshot', value => { value.snapshot.deviceSessions[0].id = 'different-device'; }],
+  ['stale current qualification', 'currentSnapshot', value => { value.observedAt = '2026-09-16T10:58:00.000Z'; }],
+  ['future current qualification', 'currentSnapshot', value => { value.observedAt = '2026-09-16T12:01:00.000Z'; }],
+  ['changed allowed operations', 'currentExpectation', value => { value.allowedOperations.push('TEXT_TO_IMAGE'); }],
+  ['wrong owner', 'currentExpectation', value => { value.ownerUserIds = ['different-owner']; }],
+  ['pending work', 'pendingReadback', value => { value.pending.jobs = 1; }],
+  ['ERP navigation', 'navigation', value => { value.pagesAfter[0].url = 'https://app.ss-erp.com/collect/source'; }],
+  ['ERP default port disguise', 'navigation', value => {
+    const page = { id: 'F'.repeat(32), url: 'https://APP.SS-ERP.COM:443/collect/source' };
+    value.pagesBefore.push(page); value.pagesAfter.push(page);
+  }],
+  ['new tab', 'navigation', value => { value.pagesAfter.push({ id: 'F'.repeat(32), url: 'https://example.invalid' }); }],
+  ['synthetic DOM click', 'navigation', value => { value.click.method = 'HTMLElement.click'; }],
+  ['mutating navigation', 'navigation', value => { value.businessMutations = 1; }],
+  ['protected profile reuse', 'navigation', value => { value.isolation.debuggingPort = 9222; }],
+  ['missing browser cleanup', 'navigation', value => { value.cleanup.ownedTargetsClosed = false; }],
+]) test('v6 rejects ' + name, t => {
+  const f = supplementedSourceSuiteFixture(t);
+  f.change(f[key], mutate);
+  if (['navigation', 'pendingReadback', 'currentExpectation', 'currentSnapshot', 'historicalBefore', 'historicalAfter'].includes(key)) {
+    const field = { historicalBefore: 'before', historicalAfter: 'after' }[key] ?? key;
+    f.change(f.input.normalErp.controllerStatus, value => { value[field] = f[key]; });
+  }
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('v6 supplements never replace a missing original review, pending phase or first assignment response', t => {
+  for (const [key, mutate] of [
+    ['reviews', value => { delete value.response; }],
+    ['generatedUi', value => { value.projection.suite.slots[0].reviewStatus = 'APPROVED'; }],
+  ]) {
+    const f = supplementedSourceSuiteFixture(t); f.changeMapped(key, mutate, key === 'reviews' ? 0 : undefined);
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+  }
+  const f = supplementedSourceSuiteFixture(t);
+  f.change(f.input.normalErp.applied, value => { value.response.body.data.replayed = true; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('old v5 still rejects configuration checked after launch, even when before START', t => {
+  const f = sourcePageCountSuiteFlowFixture(fixture(t), png);
+  f.change(f.input.normalErp.controllerStatus, value => { value.before.observedAt = '2026-09-16T10:26:00.000Z'; });
+  assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID');
+});
+
+test('v6 refuses missing budget controls and invented iframe identity even when caller summaries agree', t => {
+  for (const field of ['controls', 'workbenchTargetId']) {
+    const f = supplementedSourceSuiteFixture(t);
+    if (field === 'controls') {
+      for (const key of ['historicalBefore', 'historicalAfter', 'currentSnapshot']) {
+        f.change(f[key], value => { value.snapshot.controls = []; });
+        f.change(f.input.normalErp.controllerStatus, value => { value[{ historicalBefore: 'before', historicalAfter: 'after' }[key] ?? key] = f[key]; });
+      }
+    } else {
+      f.change(f.navigation, value => { value.workbenchTargetId = 'F'.repeat(32); });
+      f.change(f.input.normalErp.controllerStatus, value => { value.navigation = f.navigation; });
+    }
+    assert.throws(() => f.verify(), error => error.code === 'QA04_SUITE_INVALID', field);
+  }
+});
+
 function historicalCountReuseFixture(t, filename = 'dev-docs/README.md') {
   const f = sourcePageCountSuiteFlowFixture(fixture(t), png), executionCommit = f.targetGitCommit;
   const originals = [...Object.values(f.input.normalErp), ...Object.values(f.input.offline),

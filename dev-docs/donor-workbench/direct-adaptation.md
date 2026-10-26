@@ -1,5 +1,149 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-26 受控补充验收合同已获批准，正在实现
+
+用户已明确批准继续，无需再次申请同一授权。本阶段为 D2/T2（消费者合同）与 T3（免费真实浏览器）；
+唯一语义 owner 为 `scripts/qa04-final-suite-evidence.mjs`，正式 QA04 入口消费该 owner。新增 schema6，
+不改变 schema1–5：历史 before 必须早于原 START，保留真实 launch；原选键缺失三项不得倒填为同期观测，
+历史完整 pilot 和历史 noNewTabs 明确不宣称通过，必须独立消费当前完整只读 pilot 与同候选免费导航原件。
+新模式仍必须验证原两图字节、模型/报价/单张CNY0.10、PENDING、预览、双审核、首次assignment与同请求replay、
+数据库/队列及 Git source bridge。先以正式 verifier 边界的正例/拒绝例执行 RED→GREEN，再补真实只读核验。
+新证据只保存在私有目录；不新增 Provider POST、收费套图、Ozon写入、快照/草稿/审核/assignment。
+不扩大六操作/DOTH+BINI准入，不更改业务/schema/价格。当前三处用户修改与未跟踪捕获器保持独立。
+若同源码桥、签名候选或真实免费导航无法证明要求，则停止正式发布，保留原件并报告具体缺口。
+Sliver 路由投影可用；安装包没有机器 Task Decision 校验入口，Host enforcement 仍为 UNVERIFIED，
+不将技能结构检查冒充项目验收。该记录不是正式 QA04，通过结果和公开切换仍待取得。
+
+本阶段消费者/源码桥/捕获器与既有客户端组合回归172项通过（0 skipped），八个脚本ESLint及语法检查通过。
+独立输入复核已结束：补齐两个预算控制记录、完整targets及frame父子绑定、规范化ERP主机拒绝；无末尾LF的
+原生JSON仅新模式按SHA严格读取，不改变旧reader。捕获器另外补上headers前失败/未决请求原件、来源/重定向
+和URL密钥拒绝，新增7项反例真实RED→GREEN；其四文件仅按完整Git blob过渡纳入，不放开未来producer。
+10:22:32.738Z的新完整生产READ ONLY采样通过原pilot verifier，保留正常两设备/DOTH+BINI/六操作，模型、
+单价CNY0.10、预算和限额与历史采样相同，原件在私有 `release-cc96a1e3-supplement-current-1`。
+从原终端原生完成事件恢复了9481的启动/profile身份（实际启动06:59:32.429Z），原事件与SHA保存在私有
+`release-cc96a1e3-browser-identity-recovery`；本阶段没有复制/读取profile凭据。免费导航工具已独立准备，
+尚未用新的签名候选执行；后续目标提交必须有自己的offline/签名与双区运行证据，不能把当前未提交validator
+冒称为cc96原版正式QA04。没有新增Provider/Ozon请求、费用或权限变更。
+
+## 2026-10-26 原始 offline stdout 已恢复；正式 QA04 合同缺口已集中核对
+
+本轮没有重跑套图、Provider/Ozon 请求或新增费用。从本项目原会话的原生 `CommandExecution` 完成事件恢复了
+10月25日 session26763 的完整 stdout，而不是拼接已截断的显示分片或从 PASS JSON 重写日志。事件记录的
+processId=26763、exitCode=0、起止时间与原cc96a1e3 offline receipt一致，原stdout/aggregated_output相同、
+490017字节且无截断；日志SHA为 `5b17adde6a92f68ef879ff047d7b2a8947186ad3c434a334a7acddf76f464105`。
+原事件、字节、命令摘要和来源行号保存在私有 `release-cc96a1e3-offline-terminal-recovery`；原r3 receipt未改。
+同提交原 `verifyOffline` 只读分项预检通过：九项门禁顺序完整、耗时1668.133秒、source/cloud/local分别
+624/632/628项零失败零警告。`offline-precheck.json` 明确不是完整正式QA04；该次offline作为当前target的
+24小时有效期截止于2026-10-26T11:46:25.861Z。两个较早的stream-recovery目录保留为不完整恢复诊断，
+不能替代这份完整原终端日志。
+
+独立只读复核并经主Agent核对源码后，现有suite原件还存在以下发布合同缺口，不能仅恢复日志就宣称通过：
+
+- 实际来源工作台按钮为08:32:41.559Z，唯一before配置快照为08:35:09.389Z；原START请求为08:35:30.333Z。
+  快照确实在START之前，但不满足旧合同的before≤工作台launch；不能重写真实launch时间。
+- 原before/after都未采集 `feature_image_translate`、`ai_image_translation_provider`、`ai_image_translation_model`。
+  本轮另做完整选键的生产READ ONLY补读，当前值为true / dashscope-qwen-mt-image / qwen-mt-image；记录在
+  `release-cc96a1e3-current-pilot-read`，不能倒填成旧运行的同期观测。应用.env中没有部署验收expectation，
+  所以本次current precheck未形成pilot qualification；这不是已确认的权限策略失败，更没有改配置。
+- 现有bundle没有入口前后完整CDP page列表；选定的page/frame/worker和清理后的整数tabId列表不能伪成
+  `pagesBefore/pagesAfter`。profile原启动命令/进程身份可从同期原始记录继续定位，不读取或复制profile凭据。
+- 必须使用08:57:14.587Z的真实restored读回，而不是早于replay/runtime-after的早期副本；已有原件满足此项。
+
+两图字节、count模型/价格、六组mutation原件、审核、两条assignment/replay、pending与queue的业务结论不变。
+若保持原正式合同，以上历史快照/完整页签缺项不能事后补造；也不因此自动重跑收费业务。下一步拟向用户
+一次性确认受控验收语义调整：保留本次完整真实业务原件，将控制界线约束到START之前，历史缺失的完整pilot
+与导航证明不宣称通过，另补当前完整只读pilot与同候选免费来源页导航验收。只有用户明确批准后才可设计/
+修改验收消费者；现有schema、权限、金额、同源码绑定和官网门禁均未放宽。本轮仍未提交、推送、签名、
+部署、canary、website approval/CAS或官网切换。
+
+## 2026-10-26 START 漏捕根因修复，新的真实套图业务原件已闭合
+
+本次确认了此前取证失败的直接原因：`listing-workflow-client.js` 的真实 `MEDIA_EXECUTE` execute envelope
+刻意不含 `operation`（command-grant 才携带）；旧 capture 却要求 `operation === 'MEDIA_EXECUTE'`，因此会忽略
+真实 START/CONTINUE。已按实际 `extension-ai-image-suite-execute-command/v1` 识别，最小回归真实 RED→GREEN。
+同时修正自动绑定事件从 `params.sessionId` 取值、空 session 集合拒绝外部事件、session/requestId 复合身份及
+base64 body 解码。普通 capture 现在必须包含 START/CONTINUE 原始成功响应、两次审核和两次 assignment；
+缺失时写出明确 `complete:false` 的部分原件后失败，不再只凭审核/应用数量结束。两个 capture 测试文件
+12 项、既有 hosted workbench/client 两个测试文件、定向 ESLint、Node 语法与 diff 检查通过。
+
+用户授权后，在独占 9481 / Cloud 1.0.469 的合法新 DOTH QA session 上重新采集 1048072018093，创建新的
+隔离草稿。唯一收费 suite `cmvp04l91007w5ozzthip5yhg` 的 START、CONTINUE、两次 REVIEW_SLOT、首次
+listing-assignment（`replayed:false`）和同 body/幂等键 replay（`replayed:true`）六组原始 HTTP 请求/响应均已
+在同一 browser CDP 连接保存；没有第二条 CDP 客户端，也未用重放替代首次回执。两槽 attempt=1，原图
+1008×1344、成品900×1200；两笔各 CNY0.10 CHARGE，总 CNY0.20，无 Ozon 发布或供应商控制台读取。
+前一诊断草稿仅 START/PLANNED、未 CONTINUE/发包，保留原件，不算本次成功 suite。
+
+审核前已保存两槽 PENDING UI/完整 READ ONLY 数据库及实际 preview 字节、SHA 与截图；两次审核后另存实时
+投影。应用后及 replay 后立即只读核验，两槽 APPROVED、各一次 REVIEW_APPROVED、草稿r1/v1→r2/v2、两条
+store-draft assignment 不增写；五项 pending 全0，队列 REMOVE_ON_COMPLETE/两槽读回通过。来源原字节、
+冻结参考和两张供应商原件均与数据库 SHA 匹配。主图/暖台面场景明显不同、无补白；场景中另一只盒子不作为
+套装数量事实，仅批准隔离草稿候选，不宣称所有商品质量一致。
+
+本轮原件只保存在私有 `release-cc96a1e3-fresh-r6/r9-console-1793003360944`，含 `transport-1..6.json`、
+`generated-pending-ui.*`、两次 preview/审核投影、generated/restored/pending/queue 原生读回和
+`suite-evidence-coverage-audit.json`。覆盖审计明确 `formalReleaseEvidence:false`，不是正式 QA04。
+临时设备已通过现有 owner 撤销并读回 REVOKED，临时 account Redis session 与本机/远端 token 已清理，
+9481 已关闭，用户9222保持可用；业务记录/图片/费用/失败原件和 profile 未删除。
+
+正式 QA04 尚未生成或运行：已找到原 `release-cc96a1e3-fresh-r3/qa04-offline.json`，但本轮在项目及对应
+私有证据目录未定位到配套的原始 offline 日志，不能把 JSON 的 PASS 字段当完整门禁。当前 runtime 前后
+快照及金额/预算/设备未变化已只读核对，但正式 pilot qualification/manifest 仍待按完整合同整理，尤其
+本轮 runtime producer 的选键未包含 `feature_image_translate`，不能冒称已通过完整 pilot verifier。
+下一步先恢复并核验真实 offline 日志、完成原件到正式输入的绑定审计；不补造时间或回执、不直接再次付费。
+本轮没有提交、推送、签名、部署、canary、website approval/CAS 或官网切换；运行候选仍为cc96a1e3/469。
+
+## 2026-10-26 独占 CDP runner 收口：业务链路完成但 r6 仍不能生成正式 QA04
+
+本轮使用独占 9480 Chromium、已配对 DOTH 设备完成新的隔离草稿套图：报价 2 张、最高 CNY0.20；START 已被服务端接受，随后
+CONTINUE、2/2 真实候选、两次物理审核、首次 `listing-assignments` 写入和相同请求幂等 replay 均完成，replay 返回
+`replayed=true`，没有 Ozon 写入。此前 r5 continuation 原件也保留，未重复提交未知请求。
+
+第一版独占捕获器在 Worker 创建/重启时未稳定绑定目标，且曾把其他 CDP 客户端持有的 `target.attached=true` 误当成自己的 session，导致 START 原始回执缺失；本轮确认页面已进入 `CONTINUE`/输出状态，不能将
+后续成功状态反推为 START raw response。正式 QA04 仍未生成，不能执行 canary、website approval/CAS 或官网切换。
+
+验收 owner `scripts/qa04-suite-live-response-capture.mjs` 已修复：启动后启用目标发现，严格拒绝已被其他 CDP 客户端占用的目标，显式等待并绑定独占 `service_worker` 与
+`precision-workbench` iframe；任一目标缺失立即失败并保留 `targetDiagnostics`，而不是静默等待到 mutation 超时。5 项 transport
+回归、Node 语法和 `git diff --check` 通过。下一次需在新隔离草稿上重新取得一次 fresh two-image suite；START 前必须看到 runner
+已绑定 Worker/iframe，且必须保留完整 START/CONTINUE、review、首次 assignment 和 replay 原件。
+
+后续审计又确认一个更具体的失败边界：Chrome `Target.getTargets()` 的 `attached=true` 只表示“存在任意 CDP 客户端”，不能证明是
+当前 runner 的 session。runner 已新增严格的 `assertExclusiveTargetOwnership`：目标若被其他客户端占用立即失败，只有当前 runner
+登记在 `ownedTargets` 中的 session 才会开启 Network 并进入捕获；capture 也只接受这些 session。新增独占占用负例回归后，transport
+回归共 6 项通过。未发起新的 Provider 请求，尚未提交或部署。
+
+## 2026-10-25 `cc96a1e3 / 1.0.469` fresh suite 接续：预览与 assignment 已完成，正式证据仍未闭合
+
+当前部署为 `cc96a1e3ba2de43bff179b9a1593de1d03325002 / 1.0.469`；本地 QA04 offline 原件为
+`C:\Users\550W\AppData\Local\SS-ERP\private\release-cc96a1e3-fresh-r3\qa04-offline.json`。
+同一专用 9468 profile 的真实两图 suite `cmvnxh0yw001o5ozzu4zshcr9` 已完成一次 START/CONTINUE，
+两张 provider 输出均成功、每张 CNY0.10、总计 CNY0.20，输出经规范化为 900×1200 PNG；本次预览、审核与
+assignment 接续没有新增 Provider 请求、没有 Ozon 写入。
+
+此前 preview runner 因旧来源图弹窗仍打开而把父页坐标点击落到来源图，已停止重试并改用实际 iframe target
+做物理点击。两个候选均真实读回 900×1200，证据在私有目录的 `preview-group-visual-2e888ca0b5ef01e788845833-gallery-1.*`
+和 `preview-sku-5977314154567-hero.*`。两槽随后通过真实 UI 审核，草稿由 r1/v1 变为 r2/v2 并新增两条
+source-draft assignment；幂等 assignment replay 返回 `replayed=true`、同一 batch、两条 assignment，
+且没有额外写入。assignment replay 原件为私有 `assignment-replay-*` 文件。
+
+正式 QA04 仍未生成：本轮尚未保存两次审核 mutation 的原始 HTTP 回执，也未完成审核后/应用后的完整生产只读
+数据库 readback；不能用当前 DOM、replay 响应或数据库状态补造 `review.response`、`applied.response`，因此
+`QA04`、双区 canary、website approval、CAS、distribution probe 和官网 pointer 切换均未执行。当前官网仍为
+`a2e70f59 / 1.0.466`。专用浏览器仍保持运行以便在取得合法原始回执后继续；9222 未操作。工作树现有的三处
+用户修改保持不动，本轮没有提交、推送或部署。
+
+针对本次证据断裂，新增了验收 owner `scripts/qa04-suite-transport-capture.mjs` 及其 5 项回归：runner
+现在从浏览器级 CDP 自动接管扩展 Worker/工作台 iframe，在 `Network.loadingFinished` 后读取审核与 assignment
+业务响应，排除 command-grant 中的 token，并区分首次 `replayed=false` 与幂等 `replayed=true`；缺少真实响应
+body 会直接失败。`scripts/qa04-suite-live-response-capture.mjs` 是实际运行入口。该修复只改验收工具，没有
+改扩展业务代码或当前部署；需用新 runner 重新执行一次 fresh suite，随后在审核/assignment 完成后立即做完整
+production read-only database readback，才能继续正式 QA04。
+
+同日 r4 已在旧 9468 profile 完成新草稿、两图 START/CONTINUE、物理预览、两次审核和 assignment，新增实际费用
+CNY0.20，Ozon写入0；但捕获器在共享 agent-browser CDP 上没有收到 Worker Network 事件。结论是共享浏览器的
+第二条 CDP 连接不能作为正式 raw-response owner，下一轮必须使用捕获 runner 独占的专用 Chrome/CDP。期间一次
+只读 refresh 探测触发 `refresh_reuse_detected`，该 profile 的设备 credential 已失效；需重新配对后再启动独立
+Chrome，不能把 r4 的 UI/数据库结果冒充正式 QA04。
+
 ## 2026-10-23 Ozon后端合同迁移部署
 
 双区应用已切换`099c2663 / 1.0.464`，官网安装包保持461；本轮未改扩展前端、未执行官网CAS或新付费套图。订单/图片/促销/聊天/面单/退货/财务与配送适配、最终offline、签名包及双区部署验收的唯一记录见[接口迁移owner](../ozon-api-compatibility-audit.md)，下面463/461原件作为历史保留。

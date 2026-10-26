@@ -2,6 +2,20 @@
 
 本页负责验证范围、重复检查去重、本地执行恢复和套图证据复用；不复制产品权限、金额或发布合同。正式业务原件仍由 QA04 owner 校验，发布绑定仍由 REL04、签名批准、CAS 与匿名下载探针负责。
 
+## 2026-10-26 原始执行与当前补充资格分离
+
+用户已批准仅针对本次完整两图原件新增 schema6。schema1–5不变；schema6要求原配置采样发生在真实START前，
+消费原launch、来源frame/草稿读回、PENDING、六组原HTTP回执、图片、两笔CNY0.10及数据库/队列/幂等原件。
+历史翻译三键缺失保持缺失，不再生成假的历史完整pilot或noNewTabs结论。另取当前完整pilot（含准确逐设备店铺
+范围、模型、预算）、同签名候选免费物理导航、完整targets前后列表、frame parent绑定、截图/Worker/安装树和
+专用浏览器清理证明。报告明确拆开历史未验证与当前验证；不允许补充证据替代原费用/审核/首次assignment。
+原生无末尾换行的JSON只在新模式按原始SHA读入，仍拒绝重复键/额外空白；不重写原件或放宽全局reader。
+
+source bridge仅再允许此次四个独占CDP捕获器及测试从不存在到精确审核Git blob的完整过渡，标记
+`REVIEWED_SUITE_CAPTURE_TOOL`；缺失一个、任意新字节、mode变化及相邻业务代码仍拒绝，不能按路径豁免未来producer。
+目标提交自己的native offline、签名包、双区部署/VPS、当前只读和官网门禁仍必需。当前实现/原件与未完成状态
+只维护在[直接适配记录](donor-workbench/direct-adaptation.md#2026-10-26-受控补充验收合同已获批准正在实现)。
+
 ## 2026-10-23 官网消费者兼容修复的精确原件复用
 
 用户已明确批准每设备店铺证据的官网兼容修复、受控复用本轮465套图原件、提交签名与双区部署/公开发布，不新增Provider请求或费用。此次例外只适用于`extension-website-publication.ts`、`extensions-download.test.ts`、`extension-website-publication-approval.mjs`、`extension-release-publication.test.mjs`的已审查四文件完整Git blob迁移；准确原/目标object ID由source-bridge owner固定，并记录`REVIEWED_WEBSITE_EVIDENCE_CONSUMER`。四文件缺失、部分修复、mode变化或后续任意新内容仍拒绝；相邻Provider/金额/权限代码和其他未知路径不豁免。原suite请求、审核、账本、assignment/replay和原执行commit保留，目标仍需自己的native offline、签名安装、双区部署/VPS、最新只读模型及数据库、正式QA04和各区canary/approval/CAS/下载验证。本次不是按路径永久放宽运行TS，也不授权默认全量AI。用户随后提出的可视化权限管理属于独立功能，不混入本例外。

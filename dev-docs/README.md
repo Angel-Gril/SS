@@ -1,5 +1,20 @@
 # SS ERP 内部开发真源
 
+## 2026-10-26 补充验收模式实现中，当前完整 pilot 已只读通过
+
+用户已批准的 schema6 将历史执行控制界线约束到真实 START 前，历史完整pilot/noNewTabs不倒填；旧schema1–5语义保持。
+143项相关回归通过后，独立复核补强预算记录、实际iframe/完整target列表和规范化ERP域名拒绝。
+当前COM完整只读pilot、模型/单张CNY0.10及预算不变已实核通过（正常两设备、DOTH+BINI、六操作），
+免费同候选导航及最终回归仍在进行；未生成正式QA04或公开切换。唯一实现与证据边界见[直接适配owner](donor-workbench/direct-adaptation.md#2026-10-26-受控补充验收合同已获批准正在实现)。
+
+## 2026-10-26 原始 offline 日志已恢复，正式验收剩余边界已集中核对
+
+同cc96a1e3原终端完整stdout已恢复并通过原offline分项校验，无新增费用；旧运行的pilot采样顺序/完整选键和入口前后页签证明仍不满足现合同，尚未修改验收语义或公开切换。原件、精确时序及待用户确认的无新增生图收口方案仅见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-26-原始-offline-stdout-已恢复正式-qa04-合同缺口已集中核对)。
+
+## 2026-10-26 fresh suite 原始回执取证已修复
+
+真实 START/CONTINUE、双审核、首次 store-draft assignment 和原请求幂等回执及数据库读回已闭合；正式 QA04 的原离线日志和完整 pilot qualification 输入仍待核验，未公开切换。唯一根因、原件及清理边界见[直接适配 owner](donor-workbench/direct-adaptation.md#2026-10-26-start-漏捕根因修复新的真实套图业务原件已闭合)。
+
 ## 2026-10-25 `cc96a1e3 / 1.0.469` Yandex guarded integration 双区部署
 
 `cc96a1e3ba2de43bff179b9a1593de1d03325002 / 1.0.469` 已推送并完成 COM hosted-pilot、CN direct/dark 双区标准部署。两区均通过目标 commit 绑定的 deployment backup/restore、Yandex offer 迁移、扩展签名包校验、API/Worker/Web 重启及 `/ready`、DB、Redis 只读核验；COM 与 CN 均保持原有 rollout 策略。CN 部署期间修复了临时 pnpm wrapper 递归覆盖真实入口的问题，临时构建缓存和 wrapper 已清理，旧版本与失败目录未删除。`YANDEX_MARKET_PUBLISH_ENABLED` 仍关闭，没有真实 Yandex/Ozon/Provider 业务写入或新增费用。官网公开扩展指针未切换，当前记录仅证明应用部署完成，不代表官网最新版公开发布或 Yandex 真实店铺验收完成。准确合同与 API 边界见 [Yandex Market API 研究](yandex-market-api-research.md)。
