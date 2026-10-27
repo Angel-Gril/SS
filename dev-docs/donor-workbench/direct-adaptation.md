@@ -1,5 +1,9 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-27 `ee6b8999 / 1.0.472` 正式 QA04 与官网公开发布完成
+
+同一份真实两图业务原件被正式 QA04 schema6 合法消费：原 START/CONTINUE、审核前 PENDING、两次预览、双审核、首次 assignment、幂等 replay、数据库/队列读回和 CNY0.20 均保留不变。消费者修复了补充模式的时间顺序、历史 UI/导航复用和清理后设备会话收缩边界；当前只读配置实测为 `gpt-image-2-count`、CNY0.10/张，已撤销的执行 session 不被误当作权限增长。COM/CN 已完成同 commit 双区部署，COM hosted pilot/CN dark 策略未扩大；REL-04 canary、website approval、CAS、匿名四包分发探针和最终 publication verifier 全部通过，官网现公开 `1.0.472`。本轮无 Provider/Ozon 写入和新增费用；私有证据根为 `C:/Users/550W/AppData/Local/SS-ERP/private/release-ee6b8999-website`。
+
 ## 2026-10-27 `295bbc6f / 1.0.471` 真实两图、审核与独立草稿应用通过；公开发布未完成
 
 用户已授权自行加载新版、COM/DOTH 隔离设备的一次两图 hosted suite（最高 CNY0.20），不发布 Ozon、不读取供应商控制台、不重试未知付费结果。COM/CN `/ready` 当前均实读 `295bbc6f73c947b0b33329e28099fcfebe0ba93f`；匿名 latest 均仍是 `999d7b12 / 1.0.470`。

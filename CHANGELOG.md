@@ -25,6 +25,17 @@
 - 新增受控的套图补充验收模式：配置检查绑定真实生图 START 前，历史缺失的完整权限与页签证明保持未验证，必须另取当前完整权限和同候选免费导航证据；旧版验收合同不变，不因此重新收费生图或扩大权限。
 - 修复验收捕获器遗漏真实 START、响应头前网络失败和未决请求的问题；未知结果保留原件并拒绝完成，拒绝敏感 URL 与非预期重定向，避免误报验收成功。
 
+## [1.0.472] - 2026-10-27
+
+### Changed
+
+- COM/CN 应用与官网 Cloud/Local 下载公开更新至 `ee6b8999 / 1.0.472`；正式 QA04、双区 REL-04 canary、website approval、CAS、匿名 distribution probe 和最终 publication verifier 均通过。
+- COM 保持现有 hosted pilot 店铺/设备范围，CN 保持 AI、BYOK、Ozon dark；真实两图原件不重跑，Provider/Ozon/新增费用为 0。
+
+### Fixed
+
+- QA04 补充验收正确处理套图后 offline、历史 UI/导航复用及撤销设备会话的只读收缩，禁止权限增长或历史业务证据改写。
+
 ## [1.0.470] - 2026-10-26
 
 ### Fixed
@@ -349,7 +360,8 @@
 - 正确归一化已验证的 Wanx 输出尺寸，避免已生成的图片因尺寸差异被拒绝。
 - 修复 1688 工作台验收对独立扩展 iframe 的识别，避免正确打开的工作台被误判为失败。
 
-[Unreleased]: https://github.com/Angel-Gril/SS/compare/efd4f4ad4fd513db6dcaf72c0c7617271c311d4b...HEAD
+[Unreleased]: https://github.com/Angel-Gril/SS/compare/ee6b8999ea0aa6b1227b22c10433a70b4c485a3d...HEAD
+[1.0.472]: https://github.com/Angel-Gril/SS/compare/999d7b12d95c0937735aab20a4ad262d87a6c8be...ee6b8999ea0aa6b1227b22c10433a70b4c485a3d
 [1.0.461]: https://github.com/Angel-Gril/SS/compare/2e97c9d39ed6eb075830ad6aabe5d386cbdc8761...efd4f4ad4fd513db6dcaf72c0c7617271c311d4b
 [1.0.458]: https://github.com/Angel-Gril/SS/compare/e978c9bd3a30132e2a6a1a33951f44c922403842...2e97c9d39ed6eb075830ad6aabe5d386cbdc8761
 [1.0.456]: https://github.com/Angel-Gril/SS/compare/66c9396c48e3b934a18257fca945363be0c742e6...e978c9bd3a30132e2a6a1a33951f44c922403842

@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-27 `ee6b8999 / 1.0.472` 双区部署与官网公开发布完成
+
+COM/CN 已运行 `ee6b8999ea0aa6b1227b22c10433a70b4c485a3d / 1.0.472`。正式 QA04、REL-04 双区 canary、website approval、CAS、Cloud/Local 匿名 distribution probe 与最终 publication verifier 均通过；COM hosted pilot 保持现有两店/三活动设备范围，CN 保持 AI、BYOK、Ozon dark。COM/CN VPS verifier 均 PASS，各保留 1 条既有远端备份未配置 warning。真实两图 suite 的审核、assignment、幂等回放、数据库读回和 CNY0.20 原件未重跑，Provider/Ozon/新增费用均为 0。准确签名、VPS、canary、approval、distribution 和 post-publication 原件见私有 `release-ee6b8999-website`。
+
 ## 2026-10-27 471真实套图与独立草稿应用通过，官网仍470
 
 COM/CN当前均运行`295bbc6f / 1.0.471`，公开latest均仍`999d7b12 / 1.0.470`。9482合法DOTH设备从真实来源精铺完成新采集/隔离草稿、两图、预览、双审核、首次store-draft assignment和幂等回放；六组原始HTTP、PENDING/最终数据库与队列证据齐全，ERP总CNY0.20/Ozon0。尚缺套图前同提交完整native offline原件，现合同不接受事后补跑；已申请保留真实原件、免费修正验收顺序，不再收费。正式QA04/双区canary/approval/CAS/分发探针未执行；唯一证据与未完成边界见[直接适配owner](donor-workbench/direct-adaptation.md)。
