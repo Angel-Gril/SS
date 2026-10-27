@@ -8,6 +8,7 @@ const DOCUMENT = /^(?:(?:docs|dev-docs)\/(?:[^/]+\/)*[^/]+\.md|(?:README|CHANGEL
 const PRESENTATION = /^(?:extensions\/ss-erp\/(?:pages|content)|apps\/web\/src)\/(?:[^/]+\/)*[^/]+\.css$/u;
 const EVIDENCE_CONSUMERS = new Set([
   'scripts/qa04-final-suite-evidence.mjs',
+  'scripts/qa04-suite-target-ui.mjs',
   'scripts/qa04-final-acceptance.test.mjs',
   'scripts/qa04-suite-source-bridge.mjs',
   'scripts/qa04-suite-source-bridge.test.mjs',
