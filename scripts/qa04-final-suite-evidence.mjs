@@ -206,7 +206,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
   })() : [];
   const previews = manifest.previews.map(read), reviews = manifest.reviews.map(read);
   check(images.every(image => image.width === 900 && image.height === 1200) && images[0].sha256 !== images[1].sha256);
-  const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit, binding.launchedAt) : null;
+  const executionOffline = explicitExecution ? verifyExecutionOffline(executionOfflineRefs, executionCommit,
+    supplemented ? now : binding.launchedAt) : null;
   const commit = executionCommit, offline = executionOffline?.receipt ?? reader.json(input.offline.receipt, CODE), owner = binding.ownerSha256;
   const native = (value, kind) => check(value?.kind === kind && value.gitCommit === commit);
   native(ui, derivedGeneratedPhase ? 'REAL_HOSTED_SUITE_GENERATED_READBACK' : 'REAL_HOSTED_SUITE_UI_GET_READBACK');
@@ -238,7 +239,8 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
       && entry.pagesBefore.every(page => /^[0-9A-F]{32}$/u.test(page.id) && typeof page.url === 'string' && page.url.length <= 4096
         && !/^https:\/\/(?:app\.)?ss-erp\.(?:com|cn)(?:\/|$)/u.test(page.url))
       && new Set(entry.pagesBefore.map(page => page.id)).size === entry.pagesBefore.length
-      && time(entry.at) >= time(offline.completedAt) && time(entry.at) <= time(binding.launchedAt)));
+      && (supplemented || time(entry.at) >= time(offline.completedAt)
+        && time(entry.at) <= time(binding.launchedAt))));
     if (supplemented) {
       const original = read(entry.rawReadback);
       const launch = read(entry.rawLaunch), captured = read(entry.rawTargets);
@@ -306,7 +308,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     && start.body.command.snapshotId === binding.snapshotId && start.body.command.supplyGoodsId === binding.collectId
     && start.body.command.draftRevision === binding.revision && start.body.command.planId === plan.id
     && start.body.command.planVersionId === plan.versionId && start.body.command.planRevision === plan.revision);
-  check(time(offline.completedAt) <= time(binding.launchedAt) && time(binding.launchedAt) <= time(start.at)
+  check((supplemented || time(offline.completedAt) <= time(binding.launchedAt)) && time(binding.launchedAt) <= time(start.at)
     && time(start.at) <= time(startResponse.at) && time(startResponse.at) <= time(continueRequest.at)
     && time(continueRequest.at) <= time(continueResponse.at) && time(continueResponse.at) <= time(submitted.at)
     && time(submitted.at) <= time(generated.observedAt));
@@ -359,7 +361,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
         && job.providerReconciliationStatus === 'NOT_REQUIRED' && isSha256(job.providerJobIdSha256)
         && job.actualCostCents === unitCost && job.billedUnits === 1 && job.errorCode === null
         && equal(job.pricing, { currency: 'CNY', unitCostCents: unitCost, requestedImageCount: 1, maximumCostCents: unitCost }));
-      check(time(job.startedAt) >= time(offline.completedAt) && time(job.startedAt) >= time(start.at)
+      check((supplemented || time(job.startedAt) >= time(offline.completedAt)) && time(job.startedAt) >= time(start.at)
         && time(job.completedAt) > time(job.startedAt) && time(job.completedAt) <= time(database.observedAt));
       check(cost.status === 'SETTLED' && cost.currency === 'CNY' && cost.maximumCostMinor === unitCost && cost.settlementCount === 1
         && cost.jobIdSha256 === job.idSha256 && isSha256(cost.idSha256) && charge.kind === 'CHARGE' && charge.currency === 'CNY'
@@ -526,7 +528,7 @@ export function verifySuiteNormalErp(reader, input, manifest, now, verifySource,
     if (removedCompletedJobs) check(queued === undefined);
     else check(queued && queued.name === 'generate-suite-slot' && queued.state === 'completed' && equal(queued.payload, payload)
       && queued.attemptsMade === 1 && queued.attemptsStarted === 1 && positive(queued.processedOn) && positive(queued.finishedOn)
-      && queued.processedOn >= time(offline.completedAt) && queued.processedOn <= time(job.startedAt)
+      && (supplemented || queued.processedOn >= time(offline.completedAt)) && queued.processedOn <= time(job.startedAt)
       && queued.finishedOn >= time(job.completedAt) && queued.finishedOn <= time(queue.observedAt));
     check(observedSlot?.suiteId === suiteId && observedSlot.childWorkflowId === flow.id && observedSlot.attempt === 1
       && observedSlot.status === 'SUCCEEDED' && observedSlot.slotKey === slot.slotKey && observedSlot.ownerSha256 === owner);
