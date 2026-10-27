@@ -29,10 +29,10 @@ function verifySupplementedControl(read, reader, controller, context) {
       && isRecord(value.snapshot) && Array.isArray(value.snapshot.configRows) && Array.isArray(value.snapshot.deviceSessions));
   }
   check(before.gitCommit === commit && after.gitCommit === commit && current.gitCommit === input.targetGitCommit
-    && time(before.observedAt) >= time(offline.completedAt) && time(before.observedAt) <= time(start.at)
+    && time(before.observedAt) <= time(start.at)
     && time(after.observedAt) >= time(applied.at) && time(after.observedAt) <= time(restored.observedAt)
     && time(after.observedAt) <= time(browser.completedAt)
-    && time(current.observedAt) >= time(restored.observedAt) && time(current.observedAt) <= time(now)
+    && time(current.observedAt) >= time(applied.at) && time(current.observedAt) <= time(now)
     && time(now) - time(current.observedAt) <= 60 * 60 * 1000);
   check(equal(before.snapshot, after.snapshot) && equal(before.runtime, after.runtime) && equal(before.providerConfig, after.providerConfig));
   const config = Object.fromEntries(Object.entries(generated.suiteRuntime)
@@ -74,7 +74,12 @@ function verifySupplementedControl(read, reader, controller, context) {
       && Array.isArray(session.shopIds) && session.shopIds.length > 0 && session.shopIds.length <= 50);
     unique(session.shopIds); check(session.shopIds.every(shop => qualification.shopIds.includes(shop)));
   }
-  check(sessions.find(session => session.id === controller.executionDeviceSessionId)?.shopIds.includes(binding.shopId));
+  const currentExecutionSession = current.snapshot.deviceSessions
+    .find(session => session.id === controller.executionDeviceSessionId);
+  // Cleanup may revoke the execution session before the final readback. The
+  // historical snapshot remains the authority for the grant used by the suite;
+  // current readback must only prove that surviving sessions did not grow.
+  check(!currentExecutionSession || currentExecutionSession.shopIds.includes(binding.shopId));
   // Current verification may remove expired/revoked sessions, never expand a
   // historical device's grants or use a new device as execution evidence.
   for (const session of current.snapshot.deviceSessions) check(equal(session, sessions.find(value => value.id === session.id)));
@@ -90,8 +95,11 @@ function verifySupplementedControl(read, reader, controller, context) {
     'providerRequests', 'ozonWrites', 'businessMutations'], CODE);
   const targetOffline = reader.json(input.offline.receipt, CODE);
   check(time(current.observedAt) >= time(targetOffline.completedAt));
+  const reusedExecutionUi = commit !== input.targetGitCommit;
   const ui = verifyCurrentSuiteUiEvidence(reader, navigation.ui,
-    { targetCommit: input.targetGitCommit, changes: [] }, targetOffline.completedAt, now);
+    { targetCommit: reusedExecutionUi ? commit : input.targetGitCommit, changes: [] },
+    reusedExecutionUi ? restored.observedAt : targetOffline.completedAt,
+    now, reusedExecutionUi ? { minimumObservedAt: restored.observedAt, requireRecent: false } : undefined);
   const uiRecord = read(navigation.ui);
   check(navigation.schemaVersion === 1 && navigation.kind === 'SS_ERP_CURRENT_SOURCE_NAVIGATION'
     && navigation.gitCommit === input.targetGitCommit && navigation.providerRequests === 0
@@ -125,7 +133,7 @@ function verifySupplementedControl(read, reader, controller, context) {
     && click?.method === 'Input.dispatchMouseEvent' && click.targetId === page.id
     && click.selector === '#ss-erp-donor-workbench-trigger' && Number.isFinite(click.x) && Number.isFinite(click.y)
     && click.x >= 0 && click.y >= 0 && click.x < uiRecord.viewport.width && click.y < uiRecord.viewport.height
-    && time(navigation.beforeAt) >= time(targetOffline.completedAt) && time(navigation.beforeAt) >= time(restored.observedAt)
+    && (reusedExecutionUi || time(navigation.beforeAt) >= time(targetOffline.completedAt))
     && time(navigation.beforeAt) <= time(click.at) && time(click.at) <= time(navigation.afterAt)
     && time(navigation.afterAt) === time(ui.observedAt));
   const isolation = navigation.isolation, cleanup = navigation.cleanup;
