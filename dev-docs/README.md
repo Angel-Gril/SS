@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-27 471真实套图与独立草稿应用通过，官网仍470
+
+COM/CN当前均运行`295bbc6f / 1.0.471`，公开latest均仍`999d7b12 / 1.0.470`。9482合法DOTH设备从真实来源精铺完成新采集/隔离草稿、两图、预览、双审核、首次store-draft assignment和幂等回放；六组原始HTTP、PENDING/最终数据库与队列证据齐全，ERP总CNY0.20/Ozon0。尚缺套图前同提交完整native offline原件，现合同不接受事后补跑；已申请保留真实原件、免费修正验收顺序，不再收费。正式QA04/双区canary/approval/CAS/分发探针未执行；唯一证据与未完成边界见[直接适配owner](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-26 `999d7b12 / 1.0.470` 双区官网公开发布完成
 
 COM/CN 已运行并公开服务 `999d7b12d95c0937735aab20a4ad262d87a6c8be / 1.0.470`。两区部署、runtime 备份恢复、FULL VPS verifier、正式 QA04、REL-04 canary、website approval、CAS、匿名 Cloud/Local distribution probe 和最终 publication verifier 均通过；官网 API 实读为 1.0.470。COM/CN VPS 各 0 failure、1 warning，唯一 warning 为远端备份未配置。临时 canary Redis session、token 和专用浏览器均已清理。本轮 Provider/Ozon 请求及费用为 0。

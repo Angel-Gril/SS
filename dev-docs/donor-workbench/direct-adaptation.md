@@ -1,5 +1,17 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-27 `295bbc6f / 1.0.471` 真实两图、审核与独立草稿应用通过；公开发布未完成
+
+用户已授权自行加载新版、COM/DOTH 隔离设备的一次两图 hosted suite（最高 CNY0.20），不发布 Ozon、不读取供应商控制台、不重试未知付费结果。COM/CN `/ready` 当前均实读 `295bbc6f73c947b0b33329e28099fcfebe0ba93f`；匿名 latest 均仍是 `999d7b12 / 1.0.470`。
+
+普通 Chrome 的 unpacked 加载未真正启用，不能算安装通过；独立 Chromium147/9482 已实际运行签名 Cloud471 Worker，并通过既有设置页完成合法 DOTH 配对。新来源页1048072018093从真实精铺入口采集1SKU/9图，snapshot28 `e4a0b580-37ba-4ba0-a79e-88c90e1c5c4c`，正常创建隔离草稿 `draft-6b446e74-53d5-4149-b938-5d16caeda36b`。未复用或改写前轮旧binding/旧计划。
+
+新suite `cmvq8tkp6000j5o3w0ri1l8mi` 真实 START/CONTINUE 各一次；两槽attempt1/SUCCEEDED，原图1008×1344、成品900×1200。审核前完整PENDING界面、实际投影、READ ONLY数据库、预览图片原字节/SHA及截图已保存；随后两次物理审核、首次assignment `replayed:false` 和同body/幂等键replay `true`，六组原始HTTP回执均取得。应用后草稿r1/v1→r2/v2，独立store-draft assignment两条；两次REVIEW_APPROVED、账本各CNY0.10 CHARGE，总CNY0.20，Ozon attempts0，五项pending均0及队列REMOVE_ON_COMPLETE/两槽读回通过。当前完整pilot（四个合法活动session/DOTH+BINI/六操作）、模型gpt-image-2-count、单价和预算前后只读一致；没有修改生产开关或权限。图片呈现棚拍与暖台面两种背景，未见补白；场景中第二只盒子不视为包装数量事实，只批准隔离候选，不宣称所有商品创作质量一致。
+
+本轮操作捕获器排查了动画后坐标不稳定和confirm仅允许top-level处理的问题，付费发送前保存START、下一步才发CONTINUE；取证连接调整未重发任何已接受的付费请求。原件位于私有 `release-295bbc6f-fresh-suite-471/controlled-9482-fresh-1`；`suite-evidence-coverage-audit.json`验证六回执、图片/数据库/金额/幂等闭合，但明确 `formalReleaseEvidence=false`，不冒充正式QA04。
+
+正式发布的已确认缺口是：前阶段471只有签名候选与双区标准部署记录，当前私有证据及仓库未定位到套图前、同提交的完整native offline receipt/log。现QA04合同硬性要求该回执先于launch/START；免费事后补跑仍不能满足该顺序。本轮未伪造或回填时间、未改验收合同，已一次性向用户申请“保留本次完整原件，允许免费同提交offline在suite后、官网发布前完成”的受控修正。其批准和实现尚待完成；正式QA04、双区REL04、website approval/CAS与distribution probe均未执行，官网继续470。不得因此擅自再次收费。当前产品源码未改，尚未形成新的提交、推送、签名或部署。
+
 ## 2026-10-26 `999d7b12 / 1.0.470` 正式 QA04 与官网公开发布完成
 
 正式 QA04 已绑定目标提交 `999d7b12d95c0937735aab20a4ad262d87a6c8be` 并通过。原两图 suite 的 START/CONTINUE、PENDING、预览、双审核原始 HTTP 回执、首次 store-draft assignment、幂等 replay、数据库/队列只读回读均闭合；当前 COM pilot、gpt-image-2-count/CNY0.10 价格和双设备资格只读匹配，免费来源页导航通过，Provider/Ozon/业务写入为 0。
