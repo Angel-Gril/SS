@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { YandexMarketApiError, YandexMarketClient } from '../services/yandex-market-client.js';
 import { prepareYandexDrafts, readYandexBusiness, yandexDraftTarget, yandexUpdateAccepted } from '../services/yandex-market-catalog.js';
 import { yandexPage, yandexLeafCategories } from '../services/yandex-market-contract.js';
+import { yandexOrderCommand } from '../services/yandex-order-contract.js';
 
 const shopIdSchema = z.string().min(1).max(100);
 const draftPreviewSchema = z.object({ sourceShopId: z.string().min(1).max(100), productIds: z.array(z.string().min(1).max(100)).min(1).max(50).refine(ids => new Set(ids).size === ids.length), targets: z.array(yandexDraftTarget).max(50).default([]) }).strict();
@@ -39,6 +40,110 @@ export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
       ? (error.status >= 400 && error.status < 500 ? error.status : 502) : 409;
     return reply.status(status).send({ code: 0, meta: { notDispatched: true }, msg: error instanceof z.ZodError ? 'Yandex 请求参数或返回格式无效' : error instanceof Error ? error.message : 'Yandex 读取失败' });
   };
+
+  const orderInput = (request: FastifyRequest) => ({ ownerUserId: String((request as any).user.userId),
+    orderId: shopIdSchema.parse((request.params as { orderId: string }).orderId) });
+  app.get('/:shopId/orders/:orderId/workbench', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { readYandexOrderContext } = await import('../services/yandex-order-operations.js');
+      const input = { ...context, ...orderInput(request) }; const result = await readYandexOrderContext(input);
+      const { readYandexPendingOrderCommand } = await import('../services/yandex-order-operations.js');
+      return reply.send({ code: 1, data: { order: result.order, actions: result.actions, pendingCommand: await readYandexPendingOrderCommand(input) } });
+    } catch (e) { return failure(reply, e); }
+  });
+  app.post('/:shopId/orders/:orderId/commands', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    const parsed = yandexOrderCommand.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ code: 0, meta: { notDispatched: true }, msg: parsed.error.issues[0]?.message || '订单操作参数无效' });
+    try {
+      const { executeYandexOrderOperation } = await import('../services/yandex-order-operations.js');
+      const result = await executeYandexOrderOperation({ ...context, ...orderInput(request), actorUserId: String((request as any).user.actorUserId || (request as any).user.userId), body: parsed.data });
+      return reply.send({ code: ['SUCCEEDED', 'SUBMITTING'].includes(result.state) ? 1 : 0, data: result,
+        msg: result.state === 'SUCCEEDED' ? 'Yandex 操作完成，请同步最新订单' : result.state === 'REJECTED' ? 'Yandex 拒绝本次操作' : '平台结果处理中或未确认，请核对原请求' });
+    } catch (e) {
+      // Conservatively retain the browser's command if an existing reservation cannot be resolved.
+      return reply.status(409).send({ code: 0, ...((e as { notDispatched?: boolean })?.notDispatched === true ? { meta: { notDispatched: true } } : {}), msg: e instanceof Error ? e.message : '订单操作暂不可用' });
+    }
+  });
+  app.get('/:shopId/orders/:orderId/label', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { readYandexOrderContext } = await import('../services/yandex-order-operations.js');
+      const result = await readYandexOrderContext({ ...context, ...orderInput(request) });
+      if (!result.actions.label) return reply.status(409).send({ code: 0, msg: '此模式或当前订单装箱状态不支持面单，请先完整装箱并刷新' });
+      const format = z.enum(['A4', 'A7', 'A9', 'A9_HORIZONTALLY']).parse((request.query as { format?: string }).format ?? 'A7');
+      const bytes = await context.client.getOrderLabel(context.shop.clientId!, result.nativeOrderId, format);
+      if ((request.query as { encoding?: string }).encoding === 'base64') return reply.header('Cache-Control', 'no-store').send({ code: 1, data: { base64: Buffer.from(bytes).toString('base64'), contentType: 'application/pdf', filename: `yandex-${result.nativeOrderId}-${format}.pdf` } });
+      return reply.type('application/pdf').header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Disposition', `inline; filename="yandex-${result.nativeOrderId}-${format}.pdf"`).send(Buffer.from(bytes));
+    } catch (e) { return failure(reply, e); }
+  });
+  app.get('/:shopId/logistics', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const businessId = await readYandexBusiness(context.shop, context.client);
+      const [warehouses, settings, campaign] = await Promise.all([context.client.getShopWarehouses(businessId, context.shop.clientId!), context.client.getBusinessSettings(businessId), context.client.getCampaign(context.shop.clientId!)]);
+      let services: { id: number; name: string }[] = []; let servicesUnavailable = false;
+      try { services = await context.client.getDeliveryServices(); } catch { servicesUnavailable = true; }
+      return reply.send({ code: 1, data: { warehouses, settings, services, servicesUnavailable, placementType: campaign.placementType, apiAvailability: campaign.apiAvailability } });
+    } catch (e) { return failure(reply, e); }
+  });
+
+  const shipmentInput = (request: FastifyRequest) => ({ ownerUserId: String((request as any).user.userId),
+    shipmentId: shopIdSchema.parse((request.params as { shipmentId: string }).shipmentId) });
+  app.get('/:shopId/shipments', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { readYandexShipments } = await import('../services/yandex-shipment-operations.js');
+      const result = await readYandexShipments({ ...context, ownerUserId: String((request as any).user.userId), range: request.query });
+      return reply.send({ code: 1, data: { shipments: result.shipments, nextPageToken: null } });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.get('/:shopId/shipments/:shipmentId', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const input = { ...context, ...shipmentInput(request) };
+      const { readYandexShipmentContext, readYandexPendingShipmentCommand } = await import('../services/yandex-shipment-operations.js');
+      const detail = (await readYandexShipmentContext(input)).shipment;
+      return reply.send({ code: 1, data: { ...detail, pendingCommand: await readYandexPendingShipmentCommand(input) } });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.post('/:shopId/shipments/:shipmentId/confirm', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { executeYandexShipmentConfirmation } = await import('../services/yandex-shipment-operations.js');
+      const result = await executeYandexShipmentConfirmation({ ...context, ...shipmentInput(request), actorUserId: String((request as any).user.actorUserId || (request as any).user.userId), body: request.body });
+      return reply.send({ code: ['SUCCEEDED', 'SUBMITTING'].includes(result.state) ? 1 : 0, data: result,
+        msg: result.state === 'SUCCEEDED' ? 'Yandex已确认交接，请同步最新订单' : result.state === 'REJECTED' ? 'Yandex拒绝本次交接' : '交接结果处理中或未知，请核对原请求' });
+    } catch (error) {
+      return reply.status(error instanceof z.ZodError ? 400 : 409).send({ code: 0,
+        ...((error instanceof z.ZodError || (error as { notDispatched?: boolean })?.notDispatched === true) ? { meta: { notDispatched: true } } : {}),
+        msg: error instanceof z.ZodError ? '交接请求参数无效' : error instanceof Error ? error.message : '交接暂不可用' });
+    }
+  });
+  app.get('/:shopId/shipments/:shipmentId/document', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { readYandexShipmentDocument } = await import('../services/yandex-shipment-operations.js');
+      const { yandexShipmentDocumentType } = await import('../services/yandex-shipment-contract.js');
+      const type = yandexShipmentDocumentType.parse((request.query as { type?: string }).type ?? 'ACT');
+      const input = shipmentInput(request);
+      const bytes = await readYandexShipmentDocument({ ...context, ...input, documentType: type });
+      const excel = ['DISCREPANCY_ACT', 'TRANSPORTATION_WAYBILL'].includes(type);
+      const contentType = excel ? 'application/vnd.ms-excel' : 'application/pdf';
+      const filename = `yandex-shipment-${input.shipmentId}-${type}.${excel ? 'xlsx' : 'pdf'}`;
+      if ((request.query as { encoding?: string }).encoding === 'base64') return reply.header('Cache-Control', 'no-store').send({ code: 1, data: { base64: Buffer.from(bytes).toString('base64'), contentType, filename } });
+      return reply.type(contentType).header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff').header('Content-Disposition', `${excel ? 'attachment' : 'inline'}; filename="${filename}"`).send(Buffer.from(bytes));
+    } catch (error) { return failure(reply, error); }
+  });
+  app.post('/:shopId/product-price-preview', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { prepareYandexProductPricePreview } = await import('../services/yandex-product-operations.js');
+      return reply.send({ code: 1, data: await prepareYandexProductPricePreview({ shop: context.shop, client: context.client, ownerUserId: String((request as any).user.userId), body: request.body }) });
+    } catch (error) { return failure(reply, error); }
+  });
 
   app.post('/:shopId/sync-products', { config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request, reply) => {
     const context = await ownedYandexShop(request, reply); if (!context) return;

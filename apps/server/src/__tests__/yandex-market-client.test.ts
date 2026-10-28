@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { YandexMarketApiError, YandexMarketClient } from '../services/yandex-market-client.js';
+vi.mock('../services/yandex-api-budget.js', () => ({ acquireYandexApiPermit: vi.fn().mockResolvedValue(undefined), recordYandexApiCooldown: vi.fn().mockResolvedValue(undefined) }));
 
 const campaign = { id: 123, domain: 'market.example', business: { id: 77, name: '测试商家' }, placementType: 'FBS', apiAvailability: 'AVAILABLE' };
 
@@ -9,6 +10,64 @@ function clientFor(body: unknown, status = 200) {
 }
 
 describe('Yandex Market Partner API client', () => {
+  it('reads the current delivery directory envelope and marking validation result', async () => {
+    const c = clientFor({ result: { deliveryService: [{ id: 9, name: 'carrier' }] } });
+    expect(await c.client.getDeliveryServices()).toEqual([{ id: 9, name: 'carrier' }]);
+    const ids = clientFor({ status: 'OK', result: { items: [{ id: 1, cis: [{ value: 'code', status: 'OK' }] }] } });
+    expect(await ids.client.getOrderIdentifiersStatus('123', '456')).toMatchObject({ items: [{ id: 1 }] });
+  });
+  it('rejects a request exceeding the official 512KB body limit before dispatch', async () => {
+    const c = clientFor({ status: 'OK' });
+    await expect(c.client.updateOfferMappings('77', [{ offer: { offerId: 'x', name: 'x', description: 'x'.repeat(524289), marketCategoryId: 10, pictures: [], vendor: 'x', barcodes: [] } }])).rejects.toMatchObject({ dispatched: false });
+    expect(c.fetchImpl).not.toHaveBeenCalled();
+  });
+  it('reads a single current order by official orderIds without creation-date filters', async () => {
+    const c = clientFor({ orders: [] }); await c.client.getOrder('77', '123', '456');
+    const [url, init] = c.fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe('/v1/businesses/77/orders');
+    expect(JSON.parse(String(init.body))).toEqual({ campaignIds: [123], orderIds: [456], fake: false });
+    expect(url.searchParams.has('pageToken')).toBe(false);
+  });
+  it('queries shipment members in bounded exact batches and rejects incomplete pagination', async () => {
+    const c = clientFor({ orders: [] }); expect(await c.client.getOrdersByIds('77', '123', ['456', '457'])).toEqual([]);
+    expect(JSON.parse(c.fetchImpl.mock.calls[0]![1].body)).toEqual({ campaignIds: [123], orderIds: [456, 457], fake: false });
+    await expect(c.client.getOrdersByIds('77', '123', ['456', '456'])).rejects.toThrow();
+    const truncated = clientFor({ orders: [], paging: { nextPageToken: 'more' } }); await expect(truncated.client.getOrder('77', '123', '456')).rejects.toThrow('分页');
+  });
+  it('uses the official first-mile methods, date format, confirmation and fixed PDF path', async () => {
+    const c = clientFor({ status: 'OK', result: { shipments: [] } });
+    expect(await c.client.getShipments('123', { dateFrom: '2026-10-01', dateTo: '2026-10-10' })).toEqual({ shipments: [], nextPageToken: null });
+    expect(c.fetchImpl.mock.calls[0]![0].pathname).toBe('/v2/campaigns/123/first-mile/shipments');
+    expect(c.fetchImpl.mock.calls[0]![1].method).toBe('PUT');
+    expect(JSON.parse(c.fetchImpl.mock.calls[0]![1].body)).toEqual({ dateFrom: '01-10-2026', dateTo: '10-10-2026', cancelledOrders: false });
+    const ack = clientFor({ status: 'OK' }); expect(await ack.client.confirmShipment('123', '88')).toEqual({ status: 'OK' });
+    expect(ack.fetchImpl.mock.calls[0]![0].pathname).toBe('/v2/campaigns/123/first-mile/shipments/88/confirm');
+  });
+  it('validates Excel shipment documents instead of misreading them as PDFs', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(Buffer.from([0x50,0x4b,0x03,0x04,0,0]), { headers: { 'content-type': 'application/vnd.ms-excel' } }));
+    const c = new YandexMarketClient({ apiKey: 'fixture', fetchImpl });
+    expect((await c.getShipmentDocument('123', '88', 'DISCREPANCY_ACT')).byteLength).toBe(6);
+    fetchImpl.mockResolvedValue(new Response('<html>error</html>', { headers: { 'content-type': 'application/vnd.ms-excel' } }));
+    await expect(c.getShipmentDocument('123', '88', 'TRANSPORTATION_WAYBILL')).rejects.toThrow('Excel');
+  });
+  it('uses official status, complete box layout and operation endpoints with no write retries', async () => {
+    const c = clientFor({ operation: { id: 'op-1', type: 'ORDER_STATUS_UPDATE' } });
+    expect(await c.client.updateOrderStatus('123', '456', { status: 'CANCELLED', substatus: 'SHOP_FAILED' })).toEqual({ operation: { id: 'op-1', type: 'ORDER_STATUS_UPDATE' } });
+    expect(c.fetchImpl.mock.calls[0]![1].method).toBe('PUT');
+    const b = clientFor({ status: 'OK', result: { boxes: [{ boxId: 9, items: [{ id: 1, fullCount: 2 }] }] } });
+    await b.client.setOrderBoxes('123', '456', [{ items: [{ id: 1, fullCount: 2 }] }]);
+    expect(JSON.parse(b.fetchImpl.mock.calls[0]![1].body)).toEqual({ boxes: [{ items: [{ id: 1, fullCount: 2 }] }], allowRemove: false });
+    const o = clientFor({ status: 'OK', result: { operations: [{ id: 'op-1', type: 'ORDER_STATUS_UPDATE', status: 'DONE' }] } });
+    expect(await o.client.getOrderOperation('77', 'op-1')).toMatchObject({ status: 'DONE' });
+    expect(String(o.fetchImpl.mock.calls[0]![0])).toContain('/v1/businesses/77/operations');
+  });
+  it('downloads bounded official PDF bytes and rejects HTML masquerading as a label', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('%PDF-1.4\nfixture', { headers: { 'content-type': 'application/pdf' } }));
+    const c = new YandexMarketClient({ apiKey: 'fixture', fetchImpl });
+    expect(Buffer.from(await c.getOrderLabel('123', '456', 'A7')).subarray(0, 5).toString()).toBe('%PDF-');
+    fetchImpl.mockResolvedValue(new Response('<html>error</html>', { headers: { 'content-type': 'application/pdf' } }));
+    await expect(c.getOrderLabel('123', '456', 'A7')).rejects.toThrow('PDF');
+  });
   it('uses the new business order API with exact campaign and real-order filtering', async () => {
     const { client, fetchImpl } = clientFor({ orders: [], paging: { nextPageToken: 'n' } });
     expect(await client.getBusinessOrders('77', '123', { from: '2026-10-01', to: '2026-10-28' }, 'p')).toEqual({ orders: [], nextPageToken: 'n' });

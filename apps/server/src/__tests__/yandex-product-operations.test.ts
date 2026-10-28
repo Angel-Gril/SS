@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { executeYandexProductOperation } from '../services/yandex-product-operations.js';
+import { executeYandexProductOperation, prepareYandexProductPricePreview } from '../services/yandex-product-operations.js';
 import { YandexMarketApiError } from '../services/yandex-market-client.js';
 
 const m = vi.hoisted(() => ({ product: vi.fn(), find: vi.fn(), unresolved: vi.fn(), create: vi.fn(), update: vi.fn(), lock: vi.fn(), tx: vi.fn() }));
@@ -20,7 +20,7 @@ describe('Yandex basic product writes', () => {
   it('updates the exact campaign SKU and records acceptance without pretending local readback is current', async () => {
     const f = fixture(); const r = await executeYandexProductOperation(f);
     expect(r.state).toBe('SUCCEEDED'); expect(f.client.updateProductPrices).toHaveBeenCalledWith('77', '123', 'CAMPAIGN', [{ offerId: '000-A', price: { value: 15.5, currencyId: 'RUR' } }]);
-    expect(m.product).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['p1'] }, shopId: 'shop' } }));
+    expect(m.product).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['p1'] }, shopId: 'shop', shop: { userId: 'owner', platform: 'YANDEX', status: 'ACTIVE' } } }));
     expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ actorUserId: 'actor', sourceShopId: 'shop', state: 'SUBMITTING' }) }));
   });
   it('requires explicit consent when a price is shared by the whole business', async () => {
@@ -61,5 +61,84 @@ describe('Yandex basic product writes', () => {
     const f = fixture(); m.update.mockRejectedValue(new Error('database temporarily unavailable'));
     expect(await executeYandexProductOperation(f)).toMatchObject({ state: 'UNKNOWN', replayed: false });
     expect(f.client.updateProductPrices).toHaveBeenCalledTimes(1);
+  });
+  it.each([['multiply', '1.5', 18], ['discount', '25', 9], ['increase', '10', 13.2], ['add', '-2.25', 9.75]])('previews %s from fresh platform prices and writes the confirmed per-offer target', async (mode, value, expected) => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] });
+    const priceChange = { mode, value };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange } });
+    expect(preview.targets).toEqual([{ productId: 'p1', offerId: '000-A', previousPrice: 12, price: { value: expected, currencyId: 'RUR' } }]);
+    await executeYandexProductOperation({ ...f, body: { action: 'PRICE', productIds: ['p1'], confirm: true, idempotencyKey: 'synthetic-batch-price-key', priceChange, pricePreviewHash: preview.previewHash } });
+    expect(f.client.updateProductPrices).toHaveBeenCalledWith('77', '123', 'CAMPAIGN', [{ offerId: '000-A', price: { value: expected, currencyId: 'RUR' } }]);
+    expect(m.create.mock.calls[0]![0].data.requestPayload.priceTargets).toEqual(preview.targets);
+  });
+  it('rejects a changed platform price rather than silently recalculating after preview', async () => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] });
+    const priceChange = { mode: 'multiply', value: '2' };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange } });
+    f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 13, currencyId: 'RUR' } }] });
+    await expect(executeYandexProductOperation({ ...f, body: { action: 'PRICE', productIds: ['p1'], confirm: true, idempotencyKey: 'synthetic-stale-price-key', priceChange, pricePreviewHash: preview.previewHash } })).rejects.toThrow('预览');
+    expect(m.create).not.toHaveBeenCalled(); expect(f.client.updateProductPrices).not.toHaveBeenCalled();
+  });
+  it('requires a preview and rejects ambiguous mixed legacy/relative price input', async () => {
+    const f = fixture();
+    for (const body of [
+      { ...f.body, price: undefined, priceChange: { mode: 'multiply', value: '2' } },
+      { ...f.body, priceChange: { mode: 'multiply', value: '2' }, pricePreviewHash: 'a'.repeat(64) },
+    ]) await expect(executeYandexProductOperation({ ...f, body })).rejects.toThrow();
+    expect(f.client.updateProductPrices).not.toHaveBeenCalled();
+  });
+  it('validates every target, currency, unknown base, positive result and strike price before reserving', async () => {
+    const f = fixture();
+    for (const [base, change, oldPrice] of [
+      [undefined, { mode: 'multiply', value: '2' }, undefined],
+      [{ value: 12, currencyId: 'USD' }, { mode: 'multiply', value: '2' }, undefined],
+      [{ value: 12, currencyId: 'RUR' }, { mode: 'add', value: '-12' }, undefined],
+      [{ value: 12, currencyId: 'RUR' }, { mode: 'discount', value: '100' }, undefined],
+      [{ value: 12, currencyId: 'RUR' }, { mode: 'multiply', value: '2' }, '20.00'],
+      [{ value: 90000000, currencyId: 'RUR' }, { mode: 'multiply', value: '2' }, undefined],
+    ] as const) {
+      f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: base }] });
+      await expect(prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange: change, ...(oldPrice ? { oldPrice } : {}) } })).rejects.toThrow();
+    }
+    expect(m.create).not.toHaveBeenCalled(); expect(f.client.updateProductPrices).not.toHaveBeenCalled();
+  });
+  it('reconciles a relative command from journal targets, never multiplying the already updated price again', async () => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] });
+    const priceChange = { mode: 'multiply', value: '2' };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange } });
+    f.client.updateProductPrices.mockRejectedValue(new YandexMarketApiError(504, 'timeout'));
+    const body = { action: 'PRICE', productIds: ['p1'], confirm: true, idempotencyKey: 'synthetic-relative-replay', priceChange, pricePreviewHash: preview.previewHash };
+    expect(await executeYandexProductOperation({ ...f, body })).toMatchObject({ state: 'UNKNOWN' });
+    m.find.mockResolvedValue({ ...m.create.mock.calls[0]![0].data, id: 'op1', state: 'SUBMITTING' });
+    f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 24, currencyId: 'RUR' } }] });
+    expect(await executeYandexProductOperation({ ...f, body })).toMatchObject({ state: 'SUCCEEDED', replayed: true, reconciled: true });
+    expect(f.client.updateProductPrices).toHaveBeenCalledTimes(1);
+  });
+  it('never unlocks a relative operation when target reconciliation persistence fails', async () => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] });
+    const priceChange = { mode: 'multiply', value: '2' };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange } });
+    f.client.updateProductPrices.mockRejectedValue(new YandexMarketApiError(504, 'timeout'));
+    const body = { action: 'PRICE', productIds: ['p1'], confirm: true, idempotencyKey: 'synthetic-relative-db-failure', priceChange, pricePreviewHash: preview.previewHash };
+    await executeYandexProductOperation({ ...f, body }); m.find.mockResolvedValue({ ...m.create.mock.calls[0]![0].data, id: 'op1', state: 'UNKNOWN' });
+    f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 24, currencyId: 'RUR' } }] }); m.update.mockRejectedValue(new Error('synthetic persistence failure'));
+    expect(await executeYandexProductOperation({ ...f, body })).toMatchObject({ state: 'UNKNOWN', replayed: true });
+  });
+  it('uses the business default when no campaign override exists, just as the product list does', async () => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', basicPrice: { value: 10, currencyId: 'RUR' } }] });
+    const r = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange: { mode: 'multiply', value: '2' } } });
+    expect(r.targets[0]).toMatchObject({ previousPrice: 10, price: { value: 20 } });
+  });
+  it('rechecks relative snapshot after obtaining the business lock so a finished concurrent writer cannot invalidate consent', async () => {
+    const f = fixture(); f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] });
+    const priceChange = { mode: 'multiply', value: '2' };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: ['p1'], priceChange } });
+    f.client.getCampaignOffers.mockResolvedValueOnce({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }] }).mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 13, currencyId: 'RUR' } }] });
+    await expect(executeYandexProductOperation({ ...f, body: { action: 'PRICE', productIds: ['p1'], confirm: true, idempotencyKey: 'synthetic-lock-price-stale', priceChange, pricePreviewHash: preview.previewHash } })).rejects.toThrow('预览');
+    expect(m.create).not.toHaveBeenCalled(); expect(f.client.updateProductPrices).not.toHaveBeenCalled();
+  });
+  it.each([408, 409, 420, 429])('keeps HTTP %s outcome unresolved instead of permitting a duplicate key', async status => {
+    const f = fixture(); f.client.updateProductPrices.mockRejectedValue(new YandexMarketApiError(status, 'synthetic upstream failure'));
+    expect(await executeYandexProductOperation(f)).toMatchObject({ state: 'UNKNOWN' });
   });
 });

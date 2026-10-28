@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { yandexId, yandexCategoryId, yandexCategory, yandexPage, yandexParameter, type YandexPage, type YandexParameterValue } from './yandex-market-contract.js';
-import { yandexOrder } from './yandex-order-contract.js';
+import { yandexShipmentDateRange, yandexShipmentId, yandexShipmentDocumentType, yandexShipmentResponseSchema, yandexShipmentsResponseSchema, type YandexShipmentDocumentType } from './yandex-shipment-contract.js';
+import { yandexOrder, yandexBoxes, type YandexBoxes } from './yandex-order-contract.js';
 
 export const YANDEX_MARKET_API_BASE_URL = 'https://api.partner.market.yandex.ru';
 
@@ -29,7 +30,7 @@ const campaignResponseSchema = z.object({ campaign: campaignSchema }).passthroug
 export type YandexMarketCampaign = z.infer<typeof campaignSchema>;
 
 export class YandexMarketApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly dispatched = true) {
     super(message);
     this.name = 'YandexMarketApiError';
   }
@@ -57,6 +58,7 @@ export type YandexOfferMappingPayload = {
 /** Thin, server-owned Yandex adapter. It never exposes or logs the Api-Key. */
 export class YandexMarketClient {
   private readonly apiKey: string;
+  private budgetBusinessId?: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -74,7 +76,13 @@ export class YandexMarketClient {
     this.timeoutMs = Math.min(30_000, Math.max(1_000, options.timeoutMs ?? 12_000));
   }
 
-  private async request(path: string, options: { query?: Record<string, string | undefined>; method?: 'GET' | 'POST' | 'PUT'; body?: unknown } = {}): Promise<unknown> {
+  private async request(path: string, options: { query?: Record<string, string | undefined>; method?: 'GET' | 'POST' | 'PUT'; body?: unknown; pdf?: boolean; excel?: boolean } = {}): Promise<unknown> {
+    const bodyText = options.body === undefined ? undefined : JSON.stringify(options.body);
+    if (bodyText && Buffer.byteLength(bodyText, 'utf8') > 512 * 1024) throw new YandexMarketApiError(413, 'Yandex 请求体超过512KB限制，请减少本批数量', false);
+    const { acquireYandexApiPermit, recordYandexApiCooldown } = await import('./yandex-api-budget.js');
+    let release: (() => Promise<unknown>) | undefined;
+    try { release = await acquireYandexApiPermit(this.apiKey, path, this.budgetBusinessId); }
+    catch { throw new YandexMarketApiError(429, 'Yandex API 请求频率或额度服务暂不可用，请稍后核对', false); }
     const url = new URL(path, this.baseUrl);
     for (const [key, value] of Object.entries(options.query ?? {})) if (value) url.searchParams.set(key, value);
     const controller = new AbortController();
@@ -82,11 +90,12 @@ export class YandexMarketClient {
     try {
       const response = await this.fetchImpl(url, {
         method: options.method ?? 'GET',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Api-Key': this.apiKey },
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        headers: { Accept: options.pdf ? 'application/pdf' : options.excel ? 'application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/json', 'Content-Type': 'application/json', 'Api-Key': this.apiKey },
+        ...(bodyText === undefined ? {} : { body: bodyText }),
         signal: controller.signal,
         redirect: 'error', credentials: 'omit',
       });
+      if ([420, 429].includes(response.status)) await recordYandexApiCooldown(this.apiKey, response.headers.get('retry-after'), this.budgetBusinessId).catch(() => undefined);
       const reader = response.body?.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
       if (reader) try {
@@ -98,6 +107,18 @@ export class YandexMarketClient {
         }
       } finally { reader.releaseLock(); }
       const text = Buffer.concat(chunks).toString('utf8');
+      if (options.excel) {
+        const bytes = Buffer.concat(chunks), mime = response.headers.get('content-type')?.toLowerCase();
+        if (!response.ok) throw new YandexMarketApiError(response.status, `Yandex Excel文档请求失败（HTTP ${response.status}）`);
+        if (!mime || !['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].some(m => mime.includes(m)) || bytes.subarray(0, 4).toString('hex') !== '504b0304') throw new YandexMarketApiError(502, 'Yandex未返回有效Excel文档');
+        return bytes;
+      }
+      if (options.pdf) {
+        const bytes = Buffer.concat(chunks);
+        if (!response.ok) throw new YandexMarketApiError(response.status, `Yandex 面单请求失败（HTTP ${response.status}）`);
+        if (!response.headers.get('content-type')?.toLowerCase().includes('application/pdf') || bytes.subarray(0, 5).toString() !== '%PDF-') throw new YandexMarketApiError(502, 'Yandex 未返回有效 PDF 面单');
+        return bytes;
+      }
       let payload: unknown = null;
       if (text) {
         try { payload = JSON.parse(text); } catch { throw new YandexMarketApiError(response.status, 'Yandex Market 返回了无效 JSON'); }
@@ -111,7 +132,7 @@ export class YandexMarketClient {
       if (error instanceof YandexMarketApiError) throw error;
       if ((error as { name?: string })?.name === 'AbortError') throw new YandexMarketApiError(504, 'Yandex Market 请求超时');
       throw new YandexMarketApiError(502, '暂时无法连接 Yandex Market');
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); await release?.().catch(() => undefined); }
   }
 
   async getCampaigns(pageToken?: string): Promise<{ campaigns: YandexMarketCampaign[]; nextPageToken: string | null }> {
@@ -123,6 +144,7 @@ export class YandexMarketClient {
   async getCampaign(campaignId: string): Promise<YandexMarketCampaign> {
     yandexId.parse(campaignId);
     const payload = campaignResponseSchema.parse(await this.request(`/v2/campaigns/${encodeURIComponent(campaignId)}`));
+    this.budgetBusinessId = payload.campaign.business?.id;
     return payload.campaign;
   }
 
@@ -203,6 +225,79 @@ export class YandexMarketClient {
     }));
     if (result.orders.some(order => String(order.campaignId) !== campaignId || order.fake)) throw new YandexMarketApiError(502, 'Yandex 订单不属于当前店铺或包含测试订单');
     return { orders: result.orders, nextPageToken: result.paging?.nextPageToken ?? null };
+  }
+  async getOrder(businessId: string, campaignId: string, orderId: string) {
+    const orders = await this.getOrdersByIds(businessId, campaignId, [orderId]); return orders[0] ?? null;
+  }
+  async getOrdersByIds(businessId: string, campaignId: string, orderIds: string[]) {
+    yandexId.parse(businessId); yandexId.parse(campaignId);
+    z.array(yandexShipmentId).min(1).max(50).refine(ids => new Set(ids).size === ids.length).parse(orderIds);
+    const result = z.object({ orders: z.array(yandexOrder).max(50), paging }).parse(await this.request(`/v1/businesses/${businessId}/orders`, {
+      method: 'POST', body: { campaignIds: [Number(campaignId)], orderIds: orderIds.map(Number), fake: false },
+    }));
+    if (result.paging?.nextPageToken) throw new YandexMarketApiError(502, 'Yandex 精确订单分页未完成，不能确认操作结果');
+    const seen = new Set<string>();
+    for (const order of result.orders) {
+      const id = String(order.orderId);
+      if (!orderIds.includes(id) || seen.has(id) || String(order.campaignId) !== campaignId || order.fake) throw new YandexMarketApiError(502, 'Yandex 订单归属不匹配');
+      seen.add(id);
+    }
+    return result.orders;
+  }
+  async getShipments(campaignId: string, input: { dateFrom: string; dateTo: string; pageToken?: string }) {
+    yandexId.parse(campaignId); const range = yandexShipmentDateRange.parse({ dateFrom: input.dateFrom, dateTo: input.dateTo });
+    if (input.pageToken) z.string().min(1).max(1000).parse(input.pageToken);
+    const nativeDate = (value: string) => value.split('-').reverse().join('-');
+    return yandexShipmentsResponseSchema.parse(await this.request(`/v2/campaigns/${campaignId}/first-mile/shipments`, { method: 'PUT',
+      query: { limit: '30', pageToken: input.pageToken }, body: { dateFrom: nativeDate(range.dateFrom), dateTo: nativeDate(range.dateTo), cancelledOrders: false } }));
+  }
+  async getShipment(campaignId: string, shipmentId: string) {
+    yandexId.parse(campaignId); yandexShipmentId.parse(shipmentId);
+    return yandexShipmentResponseSchema.parse(await this.request(`/v2/campaigns/${campaignId}/first-mile/shipments/${shipmentId}`, { query: { cancelledOrders: 'false' } }));
+  }
+  async confirmShipment(campaignId: string, shipmentId: string) {
+    yandexId.parse(campaignId); yandexShipmentId.parse(shipmentId);
+    return z.object({ status: z.literal('OK') }).parse(await this.request(`/v2/campaigns/${campaignId}/first-mile/shipments/${shipmentId}/confirm`, { method: 'POST', body: {} }));
+  }
+  async getShipmentDocument(campaignId: string, shipmentId: string, type: YandexShipmentDocumentType): Promise<Uint8Array> {
+    yandexId.parse(campaignId); yandexShipmentId.parse(shipmentId); yandexShipmentDocumentType.parse(type);
+    const path = { ACT: 'act', INBOUND_ACT: 'inbound-act', DISCREPANCY_ACT: 'discrepancy-act', TRANSPORTATION_WAYBILL: 'transportation-waybill' }[type];
+    return this.request(`/v2/campaigns/${campaignId}/first-mile/shipments/${shipmentId}/${path}`, ['DISCREPANCY_ACT', 'TRANSPORTATION_WAYBILL'].includes(type) ? { excel: true } : { pdf: true }) as Promise<Uint8Array>;
+  }
+  async setOrderBoxes(campaignId: string, orderId: string, boxes: YandexBoxes) {
+    yandexId.parse(campaignId); yandexId.parse(orderId); yandexBoxes.parse(boxes);
+    return z.object({ status: z.literal('OK'), result: z.object({ boxes: z.array(z.object({ boxId: yandexCategoryId, items: z.array(z.record(z.unknown())).max(1000) })).max(100) }) }).parse(
+      await this.request(`/v2/campaigns/${campaignId}/orders/${orderId}/boxes`, { method: 'PUT', body: { boxes, allowRemove: false } })).result;
+  }
+  async updateOrderStatus(campaignId: string, orderId: string, order: { status: string; substatus?: string }) {
+    yandexId.parse(campaignId); yandexId.parse(orderId);
+    z.object({ status: z.enum(['PROCESSING', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED']), substatus: z.string().regex(/^[A-Z_]{1,100}$/u).optional() }).strict().parse(order);
+    return z.object({ operation: z.object({ id: z.string().min(1).max(1000), type: z.literal('ORDER_STATUS_UPDATE') }).optional(), order: z.object({ id: yandexCategoryId, status: z.string().max(100), substatus: z.string().max(120).optional() }).optional() }).parse(
+      await this.request(`/v2/campaigns/${campaignId}/orders/${orderId}/status`, { method: 'PUT', body: { order } }));
+  }
+  async getOrderOperation(businessId: string, operationId: string) {
+    yandexId.parse(businessId); z.string().min(1).max(1000).parse(operationId);
+    const r = z.object({ status: z.literal('OK'), result: z.object({ operations: z.array(z.object({ id: z.string().max(1000), type: z.literal('ORDER_STATUS_UPDATE'), status: z.enum(['IN_PROGRESS', 'DONE', 'FAILED']) })).max(100) }) }).parse(
+      await this.request(`/v1/businesses/${businessId}/operations`, { method: 'POST', body: { operationType: 'ORDER_STATUS_UPDATE', operationIds: [operationId] } })).result;
+    const operation = r.operations.find(o => o.id === operationId); if (!operation) throw new YandexMarketApiError(502, 'Yandex 未返回原操作状态'); return operation;
+  }
+  async getOrderLabel(campaignId: string, orderId: string, format: 'A4' | 'A7' | 'A9' | 'A9_HORIZONTALLY' = 'A7'): Promise<Uint8Array> {
+    yandexId.parse(campaignId); yandexId.parse(orderId); z.enum(['A4', 'A7', 'A9', 'A9_HORIZONTALLY']).parse(format);
+    return this.request(`/v2/campaigns/${campaignId}/orders/${orderId}/delivery/labels`, { query: { format }, pdf: true }) as Promise<Uint8Array>;
+  }
+  async getOrderIdentifiersStatus(campaignId: string, orderId: string) {
+    yandexId.parse(campaignId); yandexId.parse(orderId);
+    const mark = z.object({ value: z.string().max(512), status: z.string().max(100) });
+    return z.object({ status: z.literal('OK'), result: z.object({ items: z.array(z.object({ id: yandexCategoryId, cis: z.array(mark).max(1000).nullish(), uin: z.array(mark).max(1000).nullish() })).max(1000) }) }).parse(
+      await this.request(`/v2/campaigns/${campaignId}/orders/${orderId}/identifiers/status`, { method: 'POST', body: {} })).result;
+  }
+  async setOrderTrack(campaignId: string, orderId: string, input: { trackCode: string; deliveryServiceId: number }) {
+    yandexId.parse(campaignId); yandexId.parse(orderId);
+    const body = z.object({ trackCode: z.string().trim().min(1).max(200), deliveryServiceId: yandexCategoryId }).strict().parse(input);
+    return z.object({ status: z.literal('OK') }).parse(await this.request(`/v2/campaigns/${campaignId}/orders/${orderId}/delivery/track`, { method: 'POST', body }));
+  }
+  async getDeliveryServices() {
+    return z.object({ result: z.object({ deliveryService: z.array(z.object({ id: yandexCategoryId, name: z.string().max(500) })).max(10000) }) }).parse(await this.request('/v2/delivery/services')).result.deliveryService;
   }
 
   async getCampaignOffers(campaignId: string, input: YandexPage = {}) {

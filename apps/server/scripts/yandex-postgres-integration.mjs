@@ -38,6 +38,7 @@ try {
   run([
     'exec', 'vitest', 'run', '--no-file-parallelism',
     'src/__tests__/yandex-product-operations.postgres.integration.test.ts',
+    'src/__tests__/yandex-shipment-operations.postgres.integration.test.ts',
     'src/__tests__/yandex-order-sync.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),

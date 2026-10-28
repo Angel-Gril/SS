@@ -26,6 +26,7 @@ import { defaultTrackUrl } from '@/lib/tracking';
 import { isOrderAwaitingSellerShipment, isOrderStockPrepared, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 import { YandexOrderSyncActionDialog } from '@/components/yandex/order-sync-action-dialog';
+import { YandexOrderWorkbench } from '@/components/yandex/order-workbench';
 import { OrderFulfillmentProgress } from '@/components/orders/fulfillment-progress';
 import { LabelPreviewDialog } from '@/components/orders/label-preview-dialog';
 
@@ -265,6 +266,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [yandexSyncDialogOpen, setYandexSyncDialogOpen] = useState(false);
+  const [yandexOrder, setYandexOrder] = useState<{ id: string; shopId: string } | null>(null);
   const [syncSinceDays, setSyncSinceDays] = useState(90);
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
@@ -1166,12 +1168,13 @@ export default function OrdersPage() {
                           >
                             <Send className="h-3.5 w-3.5" />
                           </Button>}
+                          {order.shop.platform === 'YANDEX' ? <Button size="sm" variant="outline" className="h-7 px-2 text-[10px]" onClick={() => setYandexOrder({ id: order.id, shopId: order.shopId })}>处理订单</Button> : <>
                           <Button
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[10px]"
-                            disabled={order.shop.platform === 'YANDEX' || stockReadyBusy.has(order.id) || (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
-                            title={order.shop.platform === 'YANDEX' ? 'Yandex 订单当前只读同步' : isOrderStockPrepared(order) ? 'Ozon 已确认备货' : stockReadyPending.has(order.id) ? '只查询上次备货结果，不重复提交' : '确认备货后进入国内在途'}
+                            disabled={stockReadyBusy.has(order.id) || (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
+                            title={isOrderStockPrepared(order) ? 'Ozon 已确认备货' : stockReadyPending.has(order.id) ? '只查询上次备货结果，不重复提交' : '确认备货后进入国内在途'}
                             onClick={() => void markStockReady(order)}
                           >
                             {stockReadyBusy.has(order.id) ? '确认中…' : (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) ? '已备货' : stockReadyPending.has(order.id) ? '核对备货' : '确认备货'}
@@ -1190,12 +1193,12 @@ export default function OrdersPage() {
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7"
-                            disabled={!canCancel || order.shop.platform === 'YANDEX'}
-                            title={order.shop.platform === 'YANDEX' ? 'Yandex 订单当前只读同步' : canCancel ? '取消订单' : '当前状态不可取消'}
+                            disabled={!canCancel}
+                            title={canCancel ? '取消订单' : '当前状态不可取消'}
                             onClick={() => setCancelOrder(order)}
                           >
                             <Ban className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
+                          </Button></>}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1236,6 +1239,7 @@ export default function OrdersPage() {
         orderId={detailOrderId}
         onClose={() => setDetailOrderId(null)}
       />
+      <YandexOrderWorkbench selection={yandexOrder} onClose={() => setYandexOrder(null)} onUpdated={() => { loadOrders(); loadPipeline(); }} />
       <LabelPreviewDialog
         order={labelOrder}
         onClose={() => setLabelOrder(null)}

@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { prisma } from '../lib/prisma.js';
 import { encrypt } from '../lib/crypto.js';
 import { syncYandexOrders } from '../services/yandex-order-sync.js';
+vi.mock('../services/yandex-api-budget.js', () => ({ acquireYandexApiPermit: vi.fn().mockResolvedValue(undefined), recordYandexApiCooldown: vi.fn().mockResolvedValue(undefined) }));
 
 const enabled = process.env.RUN_YANDEX_POSTGRES_TESTS === '1';
 const suite = enabled ? describe : describe.skip;

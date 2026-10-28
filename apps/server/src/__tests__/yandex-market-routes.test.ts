@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(), update: vi.fn(), decrypt: vi.fn(() => 'synthetic-key'),
   products: vi.fn(), publishFind: vi.fn(), publishCreate: vi.fn(), publishUpdate: vi.fn(), publishMany: vi.fn(),
   campaigns: vi.fn(), campaign: vi.fn(), test: vi.fn(), updateOffers: vi.fn(), settings: vi.fn(), mappings: vi.fn(), cards: vi.fn(), tree: vi.fn(), parameters: vi.fn(),
-  addSync: vi.fn(), addOrder: vi.fn(), syncJob: vi.fn(), businessSettings: vi.fn(), warehouses: vi.fn(), manage: vi.fn(),
+  addSync: vi.fn(), addOrder: vi.fn(), syncJob: vi.fn(), businessSettings: vi.fn(), warehouses: vi.fn(), manage: vi.fn(), pricePreview: vi.fn(), orderContext: vi.fn(), orderPending: vi.fn(), orderCommand: vi.fn(), label: vi.fn(), services: vi.fn(), shipments: vi.fn(), shipment: vi.fn(), shipmentPending: vi.fn(), shipmentConfirm: vi.fn(), shipmentDocument: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({ authenticate: vi.fn(async (request: any, reply: any) => {
@@ -20,11 +20,13 @@ vi.mock('../lib/auth.js', () => ({ authenticate: vi.fn(async (request: any, repl
 vi.mock('../lib/prisma.js', () => ({ prisma: { shop: { findFirst: mocks.findFirst, update: mocks.update }, syncJob: { findFirst: mocks.syncJob }, product: { findMany: mocks.products }, yandexOfferPublishOperation: { findUnique: mocks.publishFind, create: mocks.publishCreate, update: mocks.publishUpdate, findMany: mocks.publishMany } } }));
 vi.mock('../workers/product-sync.js', () => ({ addProductSyncJob: mocks.addSync }));
 vi.mock('../workers/order-sync.js', () => ({ addOrderSyncJob: mocks.addOrder }));
-vi.mock('../services/yandex-product-operations.js', () => ({ executeYandexProductOperation: mocks.manage }));
+vi.mock('../services/yandex-product-operations.js', () => ({ executeYandexProductOperation: mocks.manage, prepareYandexProductPricePreview: mocks.pricePreview }));
+vi.mock('../services/yandex-shipment-operations.js', () => ({ readYandexShipments: mocks.shipments, readYandexShipmentContext: mocks.shipment, readYandexPendingShipmentCommand: mocks.shipmentPending, executeYandexShipmentConfirmation: mocks.shipmentConfirm, readYandexShipmentDocument: mocks.shipmentDocument }));
+vi.mock('../services/yandex-order-operations.js', () => ({ readYandexOrderContext: mocks.orderContext, readYandexPendingOrderCommand: mocks.orderPending, executeYandexOrderOperation: mocks.orderCommand }));
 vi.mock('../lib/crypto.js', () => ({ decrypt: mocks.decrypt }));
 vi.mock('../services/yandex-market-client.js', async (original) => ({
   ...await original<typeof import('../services/yandex-market-client.js')>(),
-  YandexMarketClient: class { getCampaigns = mocks.campaigns; getCampaign = mocks.campaign; test = mocks.test; updateOfferMappings = mocks.updateOffers; getCampaignSettings = mocks.settings; getOfferMappings = mocks.mappings; getOfferCards = mocks.cards; getCategoryTree = mocks.tree; getCategoryParameters = mocks.parameters; getBusinessSettings = mocks.businessSettings; getShopWarehouses = mocks.warehouses; },
+  YandexMarketClient: class { getCampaigns = mocks.campaigns; getCampaign = mocks.campaign; test = mocks.test; updateOfferMappings = mocks.updateOffers; getCampaignSettings = mocks.settings; getOfferMappings = mocks.mappings; getOfferCards = mocks.cards; getCategoryTree = mocks.tree; getCategoryParameters = mocks.parameters; getBusinessSettings = mocks.businessSettings; getShopWarehouses = mocks.warehouses; getOrderLabel = mocks.label; getDeliveryServices = mocks.services; },
 }));
 
 describe('Yandex Market route ownership and read-only connection boundary', () => {
@@ -47,12 +49,30 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.addOrder.mockResolvedValue({ id: 'order-queue-job', syncJobId: 'order-sync-1' });
     mocks.businessSettings.mockResolvedValue({ warehouseModel: 'WAREHOUSE', onlyDefaultPrice: true, currency: 'RUR' });
     mocks.warehouses.mockResolvedValue([{ id: 9, campaignId: 123, name: 'warehouse' }]);
+    mocks.orderPending.mockResolvedValue(null); mocks.shipmentPending.mockResolvedValue(null); mocks.services.mockResolvedValue([]);
   });
   afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(apps.splice(0).map(app => app.close())); });
   async function call(url: string, method: 'GET' | 'POST' = 'GET', payload?: Record<string, unknown>): Promise<any> {
     const app = Fastify(); apps.push(app); await app.register(yandexMarketRoutes, { prefix: '/api/yandex-market' });
     return app.inject({ method, url, ...(method === 'POST' && payload !== undefined ? { payload } : {}) } as any);
   }
+  it('exposes native first-mile read, confirmation and PDF through the authenticated shop owner', async () => {
+    mocks.shipments.mockResolvedValue({ shipments: [{ id: '88', availableActions: [] }] });
+    expect((await call('/api/yandex-market/shop-a/shipments?dateFrom=2026-10-01&dateTo=2026-10-20')).json()).toMatchObject({ code: 1, data: { shipments: [{ id: '88' }] } });
+    mocks.shipmentConfirm.mockResolvedValue({ id: 'op', state: 'SUBMITTING', replayed: false });
+    const r = await call('/api/yandex-market/shop-a/shipments/88/confirm', 'POST', { confirm: true, idempotencyKey: 'synthetic-confirm-key' });
+    expect(r.json()).toMatchObject({ code: 1, data: { state: 'SUBMITTING' } });
+    expect(mocks.shipmentConfirm).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'owner-a', actorUserId: 'owner-a', shipmentId: '88' }));
+    mocks.shipmentDocument.mockResolvedValue(Buffer.from('%PDF-1.4\nfixture'));
+    expect((await call('/api/yandex-market/shop-a/shipments/88/document?type=ACT&encoding=base64')).json()).toMatchObject({ code: 1, data: { contentType: 'application/pdf' } });
+    mocks.findFirst.mockResolvedValue(null);
+    expect((await call('/api/yandex-market/shop-a/shipments/88')).statusCode).toBe(404);
+  });
+  it('previews product price changes without issuing a product write', async () => {
+    mocks.pricePreview.mockResolvedValue({ previewHash: 'a'.repeat(64), targets: [] });
+    const r = await call('/api/yandex-market/shop-a/product-price-preview', 'POST', { productIds: ['p'], priceChange: { mode: 'multiply', value: '1.1' } });
+    expect(r.json()).toMatchObject({ code: 1, data: { targets: [] } }); expect(mocks.manage).not.toHaveBeenCalled();
+  });
 
   it('uses only the effective owner and returns campaigns without credentials', async () => {
     const response = await call('/api/yandex-market/shop-a/campaigns');
@@ -73,6 +93,22 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     const r = await call('/api/yandex-market/shop-a/sync-orders', 'POST', { since: '2026-10-01T00:00:00.000Z' });
     expect(r.statusCode).toBe(200); expect(r.json()).toMatchObject({ code: 1, data: { syncJobId: 'order-sync-1' } });
     expect(mocks.addOrder).toHaveBeenCalledWith('shop-a', '2026-10-01T00:00:00.000Z', { trigger: 'manual' });
+  });
+  it('returns current order actions and streams a checked PDF without leaking credentials', async () => {
+    mocks.orderContext.mockResolvedValue({ businessId: '77', nativeOrderId: '456', order: { orderId: 456 }, actions: { label: true, PACK: true } });
+    const r = await call('/api/yandex-market/shop-a/orders/local-order/workbench');
+    expect(r.json()).toMatchObject({ code: 1, data: { order: { orderId: 456 }, actions: { PACK: true } } }); expect(r.body).not.toContain('synthetic-key');
+    mocks.label.mockResolvedValue(Buffer.from('%PDF-1.4 fixture'));
+    const pdf = await call('/api/yandex-market/shop-a/orders/local-order/label?format=A7');
+    expect(pdf.headers['content-type']).toContain('application/pdf'); expect(pdf.body).toContain('%PDF');
+    expect(mocks.label).toHaveBeenCalledWith('123', '456', 'A7');
+  });
+  it('keeps accepted async order writes pending and rejects non-account callers', async () => {
+    mocks.orderCommand.mockResolvedValue({ id: 'op', state: 'SUBMITTING', replayed: false });
+    const r = await call('/api/yandex-market/shop-a/orders/local-order/commands', 'POST', { action: 'CANCEL', confirm: true, idempotencyKey: 'synthetic-order-key-123', cancelReason: 'SHOP_FAILED' });
+    expect(r.json()).toMatchObject({ code: 1, data: { state: 'SUBMITTING' } });
+    mocks.user = { userId: 'owner-a', tokenUse: 'extension_device' };
+    expect((await call('/api/yandex-market/shop-a/orders/local-order/commands', 'POST', {})).statusCode).toBe(403);
   });
   it('keeps product management behind owned account sessions and reports UNKNOWN without unlocking', async () => {
     mocks.manage.mockResolvedValue({ id: 'op1', state: 'UNKNOWN', replayed: false });

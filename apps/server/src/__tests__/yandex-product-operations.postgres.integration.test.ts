@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../lib/prisma.js';
-import { executeYandexProductOperation } from '../services/yandex-product-operations.js';
+import { executeYandexProductOperation, prepareYandexProductPricePreview } from '../services/yandex-product-operations.js';
 import { projectYandexProduct, syncYandexProducts } from '../services/yandex-product-sync.js';
 import { encrypt } from '../lib/crypto.js';
+vi.mock('../services/yandex-api-budget.js', () => ({ acquireYandexApiPermit: vi.fn().mockResolvedValue(undefined), recordYandexApiCooldown: vi.fn().mockResolvedValue(undefined) }));
 
 const enabled = process.env.RUN_YANDEX_POSTGRES_TESTS === '1';
 const suite = enabled ? describe : describe.skip;
@@ -44,6 +45,21 @@ suite('Yandex product journal on PostgreSQL', () => {
     try { await expect(executeYandexProductOperation(input('second-concurrent', writer))).rejects.toThrow('未确认'); }
     finally { finish({ status: 'OK' }); }
     expect((await first).state).toBe('SUCCEEDED'); expect(writer).toHaveBeenCalledTimes(1);
+  });
+  it('persists per-offer relative price targets and reconciles exactly those after transport failure', async () => {
+    const writer = vi.fn().mockRejectedValue(new Error('synthetic unknown outcome')), f = input('relative-persistent', writer);
+    f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 12, currencyId: 'RUR' } }], nextPageToken: null });
+    const priceChange = { mode: 'multiply', value: '1.5' };
+    const preview = await prepareYandexProductPricePreview({ ...f, body: { productIds: [productId], priceChange } });
+    const command = { ...f, body: { action: 'PRICE', productIds: [productId], confirm: true, idempotencyKey: prefix + 'relative-persistent', priceChange, pricePreviewHash: preview.previewHash } };
+    const initial = await executeYandexProductOperation(command); expect(initial.state).toBe('UNKNOWN');
+    const stored = await prisma.yandexOfferPublishOperation.findUniqueOrThrow({ where: { id: initial.id } });
+    expect(stored.requestPayload).toMatchObject({ kind: 'PRODUCT_MANAGEMENT', priceTargets: [{ productId, offerId: '000-A', previousPrice: 12, price: { value: 18, currencyId: 'RUR' } }] });
+    f.client.getCampaignOffers.mockResolvedValue({ offers: [{ offerId: '000-A', campaignPrice: { value: 18, currencyId: 'RUR' } }], nextPageToken: null });
+    expect(await executeYandexProductOperation(command)).toMatchObject({ id: initial.id, state: 'SUCCEEDED', replayed: true, reconciled: true });
+    expect(writer).toHaveBeenCalledTimes(1);
+    expect((await prisma.yandexOfferPublishOperation.findUniqueOrThrow({ where: { id: initial.id } })).state).toBe('SUCCEEDED');
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).price).toBeNull();
   });
   it('preserves a true unknown response across another request and leaves local price untouched', async () => {
     const writer = vi.fn().mockRejectedValue(new Error('synthetic transport failure'));

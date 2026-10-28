@@ -1,5 +1,21 @@
 # Yandex Market Partner API 接入与验收
 
+## 2026-10-29 运营能力对齐已完成本地接线（待提交）
+
+本轮在不改schema、不调用真实Yandex/Ozon写入、不产生费用的边界内，完成商品、订单与物流同窗运营入口：商品价格预览与批量调价 owner；Yandex订单原生状态/装箱/标记/DBS轨迹/面单；FBS/Express first-mile交接批次读取、人工确认、ACT/INBOUND PDF与差异/运输Excel文档。所有mutation均先实时归属校验、持久ORDER/SHIPMENT journal、同订单/批次锁、首次发送与UNKNOWN核对分离；HTTP 200不直接等同平台完成。FBY保持只读，LaaS仅平台确认/取消，Yandex订单号与Ozon posting/物流ID不互换。
+
+本地验证：Server TypeScript、Web typecheck/build、6个Yandex定向服务/route/client/contract测试85项通过；商品 owner 23项、first-mile owner 11项、隔离PostgreSQL商品8项及UI隔离Chrome runner 29请求通过。真实COM只读及当前已绑定店铺仍未执行履约写入；CN不使用店铺凭据。待补：统一PG runner加入订单/交接 journal 测试后运行，随后再决定提交/部署。
+
+## 2026-10-29 运营能力对齐实施合同
+
+用户要求Yandex在商品、订单、仓库配送与面单中提供和Ozon相近的日常操作。沿用现有Next/Fastify/Prisma/Redis与账号/店铺权限；不换栈、不新增数据库迁移、不替换原Ozon规则。仅本地开发与COM只读验收，本阶段不发真实平台商品/履约写入、物流建单或费用，不调整生产开关。
+
+Owner方向：`yandex-market-client.ts`负责官方API/有界响应；`yandex-order-contract.ts`负责原生订单、装箱/动作准入投影；新增`yandex-order-operations.ts`负责实时店铺/订单归属、显式命令、持久幂等、未知核对和异步operation，不让route/UI决定平台状态；操作复用现有Yandex journal并以`ORDER_MANAGEMENT`标记，无schema变化。现有商品管理owner承接批量定价/内容预览适配，现有订单页与Yandex店铺页为消费者，不另建平行ERP。
+
+可用旅程：订单同步/列表→同窗读取最新订单和平台仓库/配送→按适用履约模式完整装箱→确认备货/交接/DBS配送或取消→结果核对→面单预览/下载。FBS/DBS/FBY/LAAS按官方能力判定，不把Ozon组包等同Yandex箱号；无法可靠执行的动作明确说明原因。未知mutation只核对原请求，禁止更换key重复发送；HTTP200不等于平台状态成功。PDF使用官方固定host、无redirect、字节/超时/格式上限；凭据不进入浏览器/日志/Git。
+
+验收：T2先写client/owner/route失败用例再实现，覆盖跨店/租户、原生字段与动作、装箱数量/商品完整性、operation顺序/未知恢复、API限流/超时、内容/价格校验；使用本机隔离PostgreSQL证明幂等和并发，T3真实React浏览器验证原订单页入口/错误/恢复/面单。COM真实只读仅证明权限与返回，不冒称空店铺真实履约成功。非目标：独立Ozon Delivery/LAAS外部账号新凭据与仓映射、自动收费与物流建单、真实履约写入、打印机实物验收。
+
 
 ## 2026-10-29 订单同步与类目修复已统一双区部署
 
