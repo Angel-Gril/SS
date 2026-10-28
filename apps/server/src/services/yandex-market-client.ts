@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { yandexId, yandexCategoryId, yandexCategory, yandexPage, yandexParameter, type YandexPage, type YandexParameterValue } from './yandex-market-contract.js';
 
 export const YANDEX_MARKET_API_BASE_URL = 'https://api.partner.market.yandex.ru';
 
@@ -43,6 +44,7 @@ export type YandexOfferMappingPayload = {
     pictures: string[];
     vendor: string;
     barcodes: string[];
+    parameterValues?: YandexParameterValue[];
   };
 };
 
@@ -58,7 +60,8 @@ export class YandexMarketClient {
     this.apiKey = options.apiKey.trim();
     this.baseUrl = options.baseUrl ?? YANDEX_MARKET_API_BASE_URL;
     const parsed = new URL(this.baseUrl);
-    if (parsed.protocol !== 'https:' || parsed.hostname !== 'api.partner.market.yandex.ru') {
+    if (parsed.origin !== YANDEX_MARKET_API_BASE_URL || parsed.username || parsed.password
+      || parsed.pathname !== '/' || parsed.search || parsed.hash) {
       throw new Error('Yandex Market API 地址不受信任');
     }
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -76,16 +79,26 @@ export class YandexMarketClient {
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Api-Key': this.apiKey },
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
         signal: controller.signal,
+        redirect: 'error', credentials: 'omit',
       });
-      const text = await response.text();
-      if (text.length > 4_000_000) throw new YandexMarketApiError(response.status, 'Yandex Market 响应超过大小限制');
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = []; let size = 0;
+      if (reader) try {
+        while (true) {
+          const result = await reader.read(); if (result.done) break;
+          size += result.value.byteLength;
+          if (size > 8_000_000) { await reader.cancel(); throw new YandexMarketApiError(502, 'Yandex Market 响应超过大小限制'); }
+          chunks.push(result.value);
+        }
+      } finally { reader.releaseLock(); }
+      const text = Buffer.concat(chunks).toString('utf8');
       let payload: unknown = null;
       if (text) {
         try { payload = JSON.parse(text); } catch { throw new YandexMarketApiError(response.status, 'Yandex Market 返回了无效 JSON'); }
       }
-      if (!response.ok) {
-        const message = z.object({ errors: z.array(z.object({ message: z.string().max(500).optional() }).passthrough()).max(20).optional() }).passthrough().safeParse(payload);
-        throw new YandexMarketApiError(response.status, message.success && message.data.errors?.[0]?.message || `Yandex Market 请求失败（HTTP ${response.status}）`);
+      if (!response.ok || (payload as { status?: string } | null)?.status === 'ERROR') {
+        // Upstream bodies can echo API keys, product data or request input.
+        throw new YandexMarketApiError(response.ok ? 502 : response.status, `Yandex Market 请求失败（HTTP ${response.status}）`);
       }
       return payload;
     } catch (error) {
@@ -96,23 +109,75 @@ export class YandexMarketClient {
   }
 
   async getCampaigns(pageToken?: string): Promise<{ campaigns: YandexMarketCampaign[]; nextPageToken: string | null }> {
+    if (pageToken) z.string().max(1000).parse(pageToken);
     const payload = campaignsResponseSchema.parse(await this.request('/v2/campaigns', { query: { limit: '100', pageToken } }));
     return { campaigns: payload.campaigns, nextPageToken: payload.paging?.nextPageToken || null };
   }
 
   async getCampaign(campaignId: string): Promise<YandexMarketCampaign> {
+    yandexId.parse(campaignId);
     const payload = campaignResponseSchema.parse(await this.request(`/v2/campaigns/${encodeURIComponent(campaignId)}`));
     return payload.campaign;
   }
 
   async test(campaignId: string): Promise<YandexMarketCampaign> {
-    const page = await this.getCampaigns();
-    const campaign = page.campaigns.find(item => item.id === campaignId);
+    yandexId.parse(campaignId);
+    let pageToken: string | undefined;
+    const seen = new Set<string>(); let campaign: YandexMarketCampaign | undefined;
+    for (let pageCount = 0; pageCount < 50; pageCount += 1) {
+      const page = await this.getCampaigns(pageToken);
+      campaign = page.campaigns.find(item => item.id === campaignId);
+      if (campaign || !page.nextPageToken) break;
+      if (seen.has(page.nextPageToken)) throw new YandexMarketApiError(502, 'Yandex 店铺分页没有推进');
+      seen.add(page.nextPageToken); pageToken = page.nextPageToken;
+    }
     if (!campaign) throw new YandexMarketApiError(404, 'Yandex Market 未返回配置的 campaign ID');
     if (campaign.apiAvailability && campaign.apiAvailability !== 'AVAILABLE') {
       throw new YandexMarketApiError(409, `Yandex Market 店铺 API 当前不可用：${campaign.apiAvailability}`);
     }
     return campaign;
+  }
+
+  async getCampaignSettings(campaignId: string) {
+    yandexId.parse(campaignId);
+    return z.object({ settings: z.record(z.unknown()) }).parse(await this.request(`/v2/campaigns/${campaignId}/settings`)).settings;
+  }
+
+  async getCategoryTree() {
+    return z.object({ status: z.literal('OK'), result: yandexCategory }).parse(
+      await this.request('/v2/categories/tree', { method: 'POST', body: { language: 'RU' } })).result;
+  }
+
+  async getCategoryParameters(categoryId: number, businessId: string) {
+    yandexCategoryId.parse(categoryId); yandexId.parse(businessId);
+    const result = z.object({ status: z.literal('OK'), result: z.object({ categoryId: yandexCategoryId, parameters: z.array(yandexParameter).max(2000).nullish() }) }).parse(
+      await this.request(`/v2/category/${categoryId}/parameters`, { method: 'POST', query: { businessId }, body: {} })).result;
+    if (result.categoryId !== categoryId) throw new YandexMarketApiError(502, 'Yandex 返回了不同类目的特性');
+    return { categoryId: result.categoryId, parameters: result.parameters ?? [] };
+  }
+
+  async getOfferMappings(businessId: string, input: YandexPage = {}) {
+    yandexId.parse(businessId); const page = yandexPage.parse(input);
+    const result = z.object({ status: z.literal('OK'), result: z.object({
+      offerMappings: z.array(z.object({ offer: z.object({ offerId: z.string().max(255) }).passthrough().optional(), mapping: z.record(z.unknown()).optional() }).passthrough()).max(100),
+      paging: z.object({ nextPageToken: z.string().max(1000).nullish() }).nullish(),
+    }) }).parse(await this.request(`/v2/businesses/${businessId}/offer-mappings`, {
+      method: 'POST', query: page.offerIds ? { language: 'RU' } : { limit: String(page.limit ?? 50), pageToken: page.pageToken, language: 'RU' },
+      body: page.offerIds ? { offerIds: page.offerIds } : {},
+    })).result;
+    return { offerMappings: result.offerMappings, nextPageToken: result.paging?.nextPageToken ?? null };
+  }
+
+  async getOfferCards(businessId: string, input: YandexPage = {}) {
+    yandexId.parse(businessId); const page = yandexPage.parse(input);
+    const result = z.object({ status: z.literal('OK'), result: z.object({
+      offerCards: z.array(z.object({ offerId: z.string().max(255), cardStatus: z.string().max(100).optional() }).passthrough()).max(100),
+      paging: z.object({ nextPageToken: z.string().max(1000).nullish() }).nullish(),
+    }) }).parse(await this.request(`/v2/businesses/${businessId}/offer-cards`, {
+      method: 'POST', query: page.offerIds ? {} : { limit: String(page.limit ?? 50), pageToken: page.pageToken },
+      body: page.offerIds ? { offerIds: page.offerIds } : {},
+    })).result;
+    return { offerCards: result.offerCards, nextPageToken: result.paging?.nextPageToken ?? null };
   }
 
   async updateOfferMappings(businessId: string, offerMappings: YandexOfferMappingPayload[], language = 'RU'): Promise<unknown> {

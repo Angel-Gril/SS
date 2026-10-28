@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const id = z.string().min(1).max(200);
+export type YandexOfferDraftTarget = { marketCategoryId?: number; name?: string; description?: string; vendor?: string; barcodes?: string[] };
 
 export type YandexOfferDraftInput = {
   id: string;
@@ -41,7 +42,7 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : [];
+  return (Array.isArray(value) ? value : typeof value === 'string' ? [value] : []).map(item => String(item || '').trim()).filter(Boolean);
 }
 function images(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -64,25 +65,28 @@ function attributeValue(attributes: Record<string, unknown>, keys: string[]): st
 }
 
 /** Build a reviewable ERP-owned draft; this function never calls Yandex or Ozon. */
-export function buildYandexOfferDraft(product: YandexOfferDraftInput): YandexOfferDraft {
+export function buildYandexOfferDraft(product: YandexOfferDraftInput, target: YandexOfferDraftTarget = {}): YandexOfferDraft {
   const sourceProductId = id.parse(product.id);
   const attributes = record(product.attributes);
+  const attributeRows = Array.isArray(product.attributes) ? product.attributes.map(record) : [];
+  const nativeValue = (row: Record<string, unknown> | undefined) => Array.isArray(row?.values) ? row.values.map(record).map(value => typeof value.value === 'string' ? value.value : '').filter(Boolean).join('\n') : '';
   const variants = Array.isArray(product.variants) ? product.variants.map(record) : [];
   const variantBarcodes = variants.flatMap(variant => strings(variant.barcodes || variant.barcode));
   const barcodes = Array.from(new Set([
-    ...strings(attributes.barcodes), ...strings(attributes.barcode), ...variantBarcodes,
-    String(product.sku || '').trim(),
+    ...strings(attributes.barcodes), ...strings(attributes.barcode), ...strings(record(product.variants).ozonBarcodes), ...variantBarcodes,
   ].filter(value => /^\d{8,32}$/u.test(value))));
-  const name = String(product.title || '').trim();
-  const description = String(product.description || '').trim();
-  const vendor = attributeValue(attributes, ['vendor', 'brand', 'manufacturer']);
+  const name = String(target.name ?? product.title ?? '').trim();
+  const description = String(target.description ?? (product.description || nativeValue(attributeRows.find(row => row.id === 4191)))).trim();
+  const vendor = target.vendor ?? attributeValue(attributes, ['vendor', 'brand', 'manufacturer'])
+    ?? (nativeValue(attributeRows.find(row => row.id === 85 || ['Бренд', 'Brand', '品牌'].includes(String(row.name)))) || null);
   const pictures = images(product.images);
-  const marketCategoryId = product.categoryId && /^\d+$/u.test(product.categoryId) ? Number(product.categoryId) : null;
+  // Product.categoryId and Product.sku belong to Ozon, not Yandex or GTIN.
+  const marketCategoryId = Number.isSafeInteger(target.marketCategoryId) && target.marketCategoryId! > 0 ? target.marketCategoryId! : null;
   const numericPrice = product.price == null || product.price === '' ? null : Number(product.price);
   const price = numericPrice != null && Number.isFinite(numericPrice) && numericPrice > 0 ? numericPrice.toFixed(2) : null;
   const missingFields = [
     !name && 'name', !description && 'description', !marketCategoryId && 'marketCategoryId',
-    !pictures.length && 'pictures', !vendor && 'vendor', !barcodes.length && 'barcodes',
+    !pictures.length && 'pictures', !vendor && 'vendor', !(target.barcodes ?? barcodes).length && 'barcodes',
   ].filter((value): value is string => Boolean(value));
   const warnings: string[] = [];
   if (name && !/[А-Яа-яЁё]/u.test(name)) warnings.push('name_not_russian');
@@ -97,7 +101,7 @@ export function buildYandexOfferDraft(product: YandexOfferDraftInput): YandexOff
       marketCategoryId,
       vendor,
       pictures,
-      barcodes,
+      barcodes: target.barcodes ?? barcodes,
       price,
       currency: String(product.currency || 'RUB').trim().toUpperCase(),
       stock: Number.isFinite(Number(product.stock)) ? Math.max(0, Math.floor(Number(product.stock))) : 0,

@@ -16,6 +16,10 @@ import {
 } from '../services/product-sync-metadata.js';
 
 describe('product sync metadata helpers', () => {
+  it('retains actual Ozon barcodes independently from the numeric marketplace SKU', () => {
+    expect(buildProductSyncMeta({ barcodes: ['4601234567890', '4601234567890'], sku: 123456789 }).ozonBarcodes).toEqual(['4601234567890']);
+    expect(buildProductSyncMeta({ sku: 123456789 }).ozonBarcodes).toEqual([]);
+  });
   it('translates Ozon status fields and keeps warehouse stock details for product list display', () => {
     const meta = buildProductSyncMeta({
       statuses: {

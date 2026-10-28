@@ -2,13 +2,15 @@ import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { yandexMarketRoutes } from '../routes/yandex-market.js';
 import { YandexMarketApiError } from '../services/yandex-market-client.js';
+import { createHash } from 'node:crypto';
+import { prepareYandexDrafts } from '../services/yandex-market-catalog.js';
 
 const mocks = vi.hoisted(() => ({
   user: { userId: 'owner-a', tokenUse: 'account_session' } as Record<string, unknown> | null,
   shop: { id: 'shop-a', userId: 'owner-a', platform: 'YANDEX', status: 'ACTIVE', clientId: '123', apiKeyEncrypted: 'encrypted-key', config: null } as Record<string, unknown>,
   findFirst: vi.fn(), update: vi.fn(), decrypt: vi.fn(() => 'synthetic-key'),
   products: vi.fn(), publishFind: vi.fn(), publishCreate: vi.fn(), publishUpdate: vi.fn(), publishMany: vi.fn(),
-  campaigns: vi.fn(), campaign: vi.fn(), test: vi.fn(), updateOffers: vi.fn(),
+  campaigns: vi.fn(), campaign: vi.fn(), test: vi.fn(), updateOffers: vi.fn(), settings: vi.fn(), mappings: vi.fn(), cards: vi.fn(), tree: vi.fn(), parameters: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({ authenticate: vi.fn(async (request: any, reply: any) => {
@@ -18,7 +20,7 @@ vi.mock('../lib/prisma.js', () => ({ prisma: { shop: { findFirst: mocks.findFirs
 vi.mock('../lib/crypto.js', () => ({ decrypt: mocks.decrypt }));
 vi.mock('../services/yandex-market-client.js', async (original) => ({
   ...await original<typeof import('../services/yandex-market-client.js')>(),
-  YandexMarketClient: class { getCampaigns = mocks.campaigns; getCampaign = mocks.campaign; test = mocks.test; updateOfferMappings = mocks.updateOffers; },
+  YandexMarketClient: class { getCampaigns = mocks.campaigns; getCampaign = mocks.campaign; test = mocks.test; updateOfferMappings = mocks.updateOffers; getCampaignSettings = mocks.settings; getOfferMappings = mocks.mappings; getOfferCards = mocks.cards; getCategoryTree = mocks.tree; getCategoryParameters = mocks.parameters; },
 }));
 
 describe('Yandex Market route ownership and read-only connection boundary', () => {
@@ -32,10 +34,13 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.publishUpdate.mockImplementation(async ({ data }: any) => ({ id: 'publish-operation', state: data.state, response: data.response || null }));
     mocks.publishMany.mockResolvedValue([]);
     mocks.campaigns.mockResolvedValue({ campaigns: [{ id: '123', placementType: 'FBS', apiAvailability: 'AVAILABLE' }], nextPageToken: null });
-    mocks.campaign.mockResolvedValue({ id: '123', placementType: 'FBS', apiAvailability: 'AVAILABLE' });
+    mocks.campaign.mockResolvedValue({ id: '123', business: { id: '77' }, placementType: 'FBS', apiAvailability: 'AVAILABLE' });
+    mocks.settings.mockResolvedValue({}); mocks.mappings.mockResolvedValue({ offerMappings: [], nextPageToken: null }); mocks.cards.mockResolvedValue({ offerCards: [], nextPageToken: null });
+    mocks.tree.mockResolvedValue({ id: 0, name: 'root', children: [{ id: 10, name: 'Товары' }] });
+    mocks.parameters.mockResolvedValue({ categoryId: 10, parameters: [] });
     mocks.test.mockResolvedValue({ id: '123', placementType: 'FBS', apiAvailability: 'AVAILABLE' });
   });
-  afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); });
+  afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(apps.splice(0).map(app => app.close())); });
   async function call(url: string, method: 'GET' | 'POST' = 'GET', payload?: Record<string, unknown>): Promise<any> {
     const app = Fastify(); apps.push(app); await app.register(yandexMarketRoutes, { prefix: '/api/yandex-market' });
     return app.inject({ method, url, ...(method === 'POST' && payload !== undefined ? { payload } : {}) } as any);
@@ -81,15 +86,19 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.products.mockResolvedValue([product]);
     mocks.updateOffers.mockResolvedValue({ status: 'OK', results: [{ offerId: 'ss-ozon-product-1' }] });
     const payload = { sourceShopId: 'ozon-source', productIds: ['product-1'], confirm: true, idempotencyKey: 'yandex-publish-key-001' };
-    const response = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    const targets = [{ sourceProductId: 'product-1', marketCategoryId: 10 }];
+    const preview = await call('/api/yandex-market/shop-a/drafts/preview', 'POST', { sourceShopId: 'ozon-source', productIds: ['product-1'], targets });
+    expect(preview.statusCode).toBe(200);
+    const response = await call('/api/yandex-market/shop-a/offers/publish', 'POST', { ...payload, targets, expectedDraftHash: preview.json().data.draftHash });
     expect(response.statusCode).toBe(200); expect(response.json()).toMatchObject({ code: 1, data: { state: 'SUCCEEDED', replayed: false } });
     expect(mocks.updateOffers).toHaveBeenCalledOnce(); expect(mocks.publishCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ state: 'SUBMITTING', businessId: '77' }) });
     if (previous === undefined) delete process.env.YANDEX_MARKET_PUBLISH_ENABLED; else process.env.YANDEX_MARKET_PUBLISH_ENABLED = previous;
   });
 
   it('keeps real Yandex writes disabled until the deployment owner enables them', async () => {
-    delete process.env.YANDEX_MARKET_PUBLISH_ENABLED;
-    const response = await call('/api/yandex-market/shop-a/offers/publish', 'POST', { sourceShopId: 'ozon-source', productIds: ['product-1'], confirm: true, idempotencyKey: 'yandex-publish-key-002' });
+    const { payload } = await publishFixture();
+    vi.stubEnv('YANDEX_MARKET_PUBLISH_ENABLED', 'false');
+    const response = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
     expect(response.statusCode).toBe(403); expect(mocks.publishCreate).not.toHaveBeenCalled(); expect(mocks.updateOffers).not.toHaveBeenCalled();
   });
 
@@ -97,5 +106,101 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.publishMany.mockResolvedValue([{ id: 'publish-operation', state: 'UNKNOWN', sourceShopId: 'ozon-source', businessId: '77' }]);
     const response = await call('/api/yandex-market/shop-a/offers/publish-operations');
     expect(response.statusCode).toBe(200); expect(response.json()).toMatchObject({ code: 1, data: [{ id: 'publish-operation', state: 'UNKNOWN' }] });
+  });
+
+  it('reads catalogue and card errors only in the verified shop business, and preserves cursor', async () => {
+    mocks.mappings.mockResolvedValue({ offerMappings: [{ offer: { offerId: 'erp-1' } }], nextPageToken: 'next' });
+    const r = await call('/api/yandex-market/shop-a/offers/read', 'POST', { limit: 5, pageToken: 'previous' });
+    expect(r.statusCode).toBe(200); expect(r.json()).toMatchObject({ code: 1, data: { nextPageToken: 'next' } });
+    expect(mocks.mappings).toHaveBeenCalledWith('77', { limit: 5, pageToken: 'previous' });
+    mocks.cards.mockResolvedValue({ offerCards: [{ offerId: 'erp-1', errors: [{ code: 'MISSING_PARAMETER' }] }], nextPageToken: null });
+    expect((await call('/api/yandex-market/shop-a/offer-cards/read', 'POST', { offerIds: ['erp-1'] })).json()).toMatchObject({ code: 1, data: { offerCards: [{ errors: [{ code: 'MISSING_PARAMETER' }] }] } });
+    expect(mocks.updateOffers).not.toHaveBeenCalled(); expect(mocks.publishCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects caller-supplied business scope and cross-user reads before provider calls', async () => {
+    expect((await call('/api/yandex-market/shop-a/offers/read', 'POST', { businessId: 'other' })).statusCode).toBe(400);
+    expect(mocks.mappings).not.toHaveBeenCalled();
+    mocks.findFirst.mockResolvedValue(null);
+    expect((await call('/api/yandex-market/shop-a/offer-cards/read', 'POST', {})).statusCode).toBe(404);
+    expect(mocks.cards).not.toHaveBeenCalled();
+  });
+
+  it('does not trust a stale saved business mapping after changing the campaign', async () => {
+    mocks.shop.config = { yandexMarket: { campaignId: '456', businessId: '99' } };
+    expect((await call('/api/yandex-market/shop-a/offers/read', 'POST', {})).statusCode).toBe(409);
+    expect(mocks.mappings).not.toHaveBeenCalled();
+  });
+
+  async function publishFixture() {
+    vi.stubEnv('YANDEX_MARKET_PUBLISH_ENABLED', 'true');
+    mocks.shop.config = { yandexMarket: { campaignId: '123', businessId: '77' } };
+    mocks.findFirst.mockImplementation(async ({ where }: any) => where.platform === 'OZON' ? { id: 'ozon-source' } : mocks.shop);
+    const product = { id: 'product-1', title: 'Кружка', description: 'Керамическая кружка', categoryId: '876', images: ['https://cdn.example/image.jpg'], attributes: { vendor: 'SS', barcodes: ['4601234567890'] } };
+    mocks.products.mockResolvedValue([product]);
+    const targets = [{ sourceProductId: 'product-1', marketCategoryId: 10 }];
+    const prepared = await prepareYandexDrafts([product], targets, { getCategoryTree: mocks.tree, getCategoryParameters: mocks.parameters }, '77');
+    return { product, payload: { sourceShopId: 'ozon-source', productIds: ['product-1'], targets, confirm: true, idempotencyKey: 'synthetic-key-publish-123', expectedDraftHash: prepared.draftHash } };
+  }
+
+  it('rejects a changed preview and invalid target leaf before reserving or publishing', async () => {
+    const { product, payload } = await publishFixture();
+    mocks.products.mockResolvedValue([{ ...product, description: 'Измененное описание' }]);
+    const r = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(r.statusCode).toBe(409); expect(r.json().meta.notDispatched).toBe(true);
+    expect(mocks.publishCreate).not.toHaveBeenCalled(); expect(mocks.updateOffers).not.toHaveBeenCalled();
+  });
+
+  it('does not report envelope OK as success when Yandex reports per-offer errors', async () => {
+    const { payload } = await publishFixture();
+    mocks.updateOffers.mockResolvedValue({ status: 'OK', results: [{ offerId: 'ss-ozon-product-1', errors: [{ code: 'INVALID_CATEGORY' }] }] });
+    const r = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(r.json()).toMatchObject({ code: 0, data: { state: 'REJECTED', replayed: false } });
+    expect(mocks.publishUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ state: 'REJECTED' }) }));
+  });
+
+  it('preserves UNKNOWN and replays the original command after source content changes without re-sending', async () => {
+    const { payload } = await publishFixture();
+    mocks.updateOffers.mockRejectedValue(new YandexMarketApiError(504, 'timeout'));
+    expect((await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload)).json().data.state).toBe('UNKNOWN');
+    const requestHash = createHash('sha256').update(JSON.stringify({ targetShopId: 'shop-a', ...payload })).digest('hex');
+    mocks.publishFind.mockResolvedValue({ id: 'original-operation', requestHash, state: 'UNKNOWN', response: null });
+    mocks.products.mockResolvedValue([]);
+    const replay = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(replay.json()).toMatchObject({ code: 1, data: { id: 'original-operation', state: 'UNKNOWN', replayed: true } });
+    expect(mocks.updateOffers).toHaveBeenCalledTimes(1);
+    expect((await call('/api/yandex-market/shop-a/offers/publish', 'POST', { ...payload, targets: [] })).statusCode).toBe(409);
+    expect(mocks.updateOffers).toHaveBeenCalledTimes(1);
+  });
+
+  it('will not expose a foreign source product in preview', async () => {
+    const { payload } = await publishFixture(); mocks.products.mockResolvedValue([]);
+    const r = await call('/api/yandex-market/shop-a/drafts/preview', 'POST', { sourceShopId: payload.sourceShopId, productIds: ['foreign'] });
+    expect(r.statusCode).toBe(404); expect(mocks.updateOffers).not.toHaveBeenCalled();
+    expect(mocks.products).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['foreign'] }, shopId: 'ozon-source' } }));
+  });
+
+  it('marks missing source products as not dispatched so the editor can unlock safely', async () => {
+    const { payload } = await publishFixture(); mocks.products.mockResolvedValue([]);
+    const r = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(r.statusCode).toBe(404); expect(r.json()).toMatchObject({ meta: { notDispatched: true } });
+    expect(mocks.publishCreate).not.toHaveBeenCalled(); expect(mocks.updateOffers).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unavailable target unresolved rather than claiming an old request never dispatched', async () => {
+    const { payload } = await publishFixture(); mocks.findFirst.mockResolvedValue(null);
+    const r = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(r.statusCode).toBe(404); expect(r.json().meta).toBeUndefined();
+    expect(mocks.decrypt).not.toHaveBeenCalled(); expect(mocks.updateOffers).not.toHaveBeenCalled();
+  });
+
+  it('still returns the original UNKNOWN operation after the publish switch is disabled', async () => {
+    const { payload } = await publishFixture();
+    const requestHash = createHash('sha256').update(JSON.stringify({ targetShopId: 'shop-a', ...payload })).digest('hex');
+    mocks.publishFind.mockResolvedValue({ id: 'original-operation', requestHash, state: 'UNKNOWN', response: null });
+    vi.stubEnv('YANDEX_MARKET_PUBLISH_ENABLED', 'false');
+    const r = await call('/api/yandex-market/shop-a/offers/publish', 'POST', payload);
+    expect(r.json()).toMatchObject({ code: 1, data: { state: 'UNKNOWN', replayed: true } });
+    expect(r.json().meta).toBeUndefined(); expect(mocks.updateOffers).not.toHaveBeenCalled();
   });
 });

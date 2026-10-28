@@ -9,6 +9,46 @@ function clientFor(body: unknown, status = 200) {
 }
 
 describe('Yandex Market Partner API client', () => {
+  it('accepts a large official category dictionary within the bounded response byte limit', async () => {
+    const values = Array.from({ length: 20001 }, (_, index) => ({ id: index + 1, value: `value-${index}` }));
+    const { client } = clientFor({ status: 'OK', result: { categoryId: 10, parameters: [{ id: 1, type: 'ENUM', required: false, multivalue: false, allowCustomValues: false, values }] } });
+    expect((await client.getCategoryParameters(10, '77')).parameters[0]!.values).toHaveLength(20001);
+  });
+  it('reads nested catalogue pages with limit/pageToken in the query, not the request body', async () => {
+    const { client, fetchImpl } = clientFor({ status: 'OK', result: { offerMappings: [{ offer: { offerId: 'erp-1', name: 'Товар' } }], paging: { nextPageToken: 'page-2' } } });
+    await expect(client.getOfferMappings('77', { limit: 5, pageToken: 'page-1' })).resolves.toMatchObject({ offerMappings: [{ offer: { offerId: 'erp-1' } }], nextPageToken: 'page-2' });
+    const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.searchParams.get('limit')).toBe('5'); expect(url.searchParams.get('pageToken')).toBe('page-1');
+    expect(JSON.parse(String(init.body))).toEqual({});
+    expect(init).toMatchObject({ method: 'POST', credentials: 'omit', redirect: 'error' });
+  });
+
+  it('reads exact offer IDs without combining the pagination parameters prohibited by Yandex', async () => {
+    const { client, fetchImpl } = clientFor({ status: 'OK', result: { offerMappings: [] } });
+    await client.getOfferMappings('77', { offerIds: ['erp-1'] });
+    const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.searchParams.has('limit')).toBe(false); expect(url.searchParams.has('pageToken')).toBe(false);
+    expect(JSON.parse(String(init.body))).toEqual({ offerIds: ['erp-1'] });
+  });
+
+  it('rejects ERROR envelopes and missing result arrays even when HTTP status is 200', async () => {
+    await expect(clientFor({ status: 'ERROR', errors: [{ message: 'synthetic-yandex-key' }] }).client.getOfferMappings('77')).rejects.toThrow('Yandex');
+    await expect(clientFor({ status: 'OK', result: {} }).client.getOfferMappings('77')).rejects.toThrow();
+  });
+
+  it('rejects an unapproved port or embedded credential in the official origin', () => {
+    for (const baseUrl of ['https://api.partner.market.yandex.ru:8443', 'https://user:pass@api.partner.market.yandex.ru', 'https://api.partner.market.yandex.ru/other']) {
+      expect(() => new YandexMarketClient({ apiKey: 'fixture', baseUrl })).toThrow();
+    }
+  });
+
+  it('reads the category contract with its business binding and reads card status separately', async () => {
+    const { client, fetchImpl } = clientFor({ status: 'OK', result: { categoryId: 10, parameters: [] } });
+    await expect(client.getCategoryParameters(10, '77')).resolves.toEqual({ categoryId: 10, parameters: [] });
+    expect(String(fetchImpl.mock.calls[0]![0])).toBe('https://api.partner.market.yandex.ru/v2/category/10/parameters?businessId=77');
+    const cards = clientFor({ status: 'OK', result: { offerCards: [{ offerId: 'erp-1', cardStatus: 'HAS_CARD_CAN_NOT_UPDATE' }] } });
+    await expect(cards.client.getOfferCards('77')).resolves.toMatchObject({ offerCards: [{ offerId: 'erp-1', cardStatus: 'HAS_CARD_CAN_NOT_UPDATE' }], nextPageToken: null });
+  });
   it('uses Api-Key and the v2 campaigns contract for read-only connection checks', async () => {
     const { client, fetchImpl } = clientFor({ campaigns: [campaign], paging: { nextPageToken: 'next' } });
     await expect(client.test('123')).resolves.toMatchObject({ id: '123', placementType: 'FBS', apiAvailability: 'AVAILABLE' });

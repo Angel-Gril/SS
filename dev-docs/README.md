@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-28 Yandex 目录与 Ozon 商品搬运草稿本地接线、COM 只读通过
+
+仅用 COM 已绑定管理员店铺，六类真实 Yandex 读取及 Ozon 样本核查通过；新增目录/卡片错误、目标字段编辑、末级类目与属性联动校验、预览摘要和 UNKNOWN 原请求恢复。69 项定向回归、类型/lint及隔离Chrome流程通过；未提交、推送或部署，线上/官网仍472，无真实平台业务写入或费用。准确 owner、官方合同、证据及价格/库存/物流/真实发布剩余边界仅见 [Yandex 接入与验收](yandex-market-api-research.md)。
+
 ## 2026-10-27 `ee6b8999 / 1.0.472` 双区部署与官网公开发布完成
 
 COM/CN 已运行 `ee6b8999ea0aa6b1227b22c10433a70b4c485a3d / 1.0.472`。正式 QA04、REL-04 双区 canary、website approval、CAS、Cloud/Local 匿名 distribution probe 与最终 publication verifier 均通过；COM hosted pilot 保持现有两店/三活动设备范围，CN 保持 AI、BYOK、Ozon dark。COM/CN VPS verifier 均 PASS，各保留 1 条既有远端备份未配置 warning。真实两图 suite 的审核、assignment、幂等回放、数据库读回和 CNY0.20 原件未重跑，Provider/Ozon/新增费用均为 0。准确签名、VPS、canary、approval、distribution 和 post-publication 原件见私有 `release-ee6b8999-website`。

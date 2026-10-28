@@ -1,10 +1,47 @@
-# Yandex Market Partner API 研究（只读）
+# Yandex Market Partner API 接入与验收
+
+## 2026-10-28 当前实现与 COM 只读验收
+
+本轮目标是沿用 `/shops/yandex` 的店铺生态位，完成“已有 Ozon 商品快照 → 可编辑 Yandex 草稿 → 服务端校验 → 显式目录提交”的接线。真实测试仅使用用户在 **COM** 绑定的管理员账号及店铺，不使用 CN。真实商品、价格、库存和物流写入不在本轮验收授权内；`YANDEX_MARKET_PUBLISH_ENABLED` 保持关闭。源码尚未提交、推送或部署，线上和官网仍为 `ee6b8999 / 1.0.472`。
+
+用户随后已授权将本轮完成且验证的改动提交、推送并部署到 COM；部署结果将由实际远端读回更新，授权本身不代表已上线。不改 CN，不切换官网扩展公开指针。
+
+### 不真正上架时能验证什么
+
+2026-10-28 再次读取官方 [测试订单](https://yandex.ru/dev/market/partner-api/doc/zh/concepts/sandbox.md) 和 [目录提交](https://yandex.ru/dev/market/partner-api/doc/zh/reference/business-offer-mappings/updateOfferMappings.md)，当前 revision `r21843295`：sandbox 的 `fake=true` 用于测试订单，不是商品目录沙箱；`updateOfferMappings` 当前没有 `dry-run` / `validateOnly` 参数。不能用空商品、故意错误商品或未传价格库存的真实目录写入冒充无副作用探测。
+
+零商品写入可验证真实连接和读取权限、来源资料、末级类目/参数字典、ERP 预览与提交前拒绝，以及离线模拟的成功/拒绝/未知结果恢复。现有六类真实读取已通过，不等于 Key 的目录写权限已验证；平台接单、图片抓取、异步审核和销售准入只有实际目录提交与回读才能证明。未传价格库存也仍然属于真实商品目录写入，不能解释为纯只读测试。
+
+### 唯一 owner 与调用方向
+
+- `apps/server/src/services/yandex-market-contract.ts`：官方 ID、分页、类目树、属性字典及属性联动限制合同。
+- `apps/server/src/services/yandex-market-catalog.ts`：校验 campaign/business 真实归属、目标末级类目、参数和预览摘要；不接受调用者指定任意 business。
+- `apps/server/src/services/yandex-market-offer-draft.ts`：ERP/Ozon 来源字段映射；Ozon 类目不当作 Yandex 类目，数字 Ozon SKU 不当作条码。支持来源真实条码、原生描述属性 4191 和品牌属性 85，无来源数据不猜填。
+- `apps/server/src/services/yandex-market-client.ts`：仅访问官方固定 origin，Api-Key 只在服务端使用；拒绝重定向，响应流最多 8 MB，单请求超时最多 30 秒。类目大字典允许最多 100,000 个值，前端搜索每次只展开最多 200 个未选候选。
+- `apps/server/src/routes/yandex-market.ts`：网页账号会话和店铺归属、受开关保护的发布、持久幂等与操作记录。复用已有数据模型，无新增迁移或权限模型。
+- `apps/web/src/components/yandex/`：目录/卡片错误、来源商品分页和最多 50 件选择、俄文标题/描述/品牌/条码编辑、末级类目及必填/选填属性、重新预览与显式提交。权限、状态和字段合格性由服务端判定。
+
+编辑后原预览失效；提交必须带 `expectedDraftHash`，服务端重新读取来源商品和目标合同，内容变化则在发送前拒绝。官方返回 `status=OK` 但逐商品存在 errors 时记为拒绝，不假报成功。未知结果保留原 body 与幂等键；重放先读取已有 journal，再考虑新的发布开关和来源数据，因此关闭开关不会把旧 UNKNOWN 误报为未发送。目标店铺不可访问时仍保留未知态，不声称旧请求未执行。
+
+### 官方与真实只读证据
+
+- 官方文档复核 revision `r21820164`，官方 OpenAPI commit `c0a1323252ec9b44162d9cd2660309f14c57832f`；复核 `getOfferMappings`、`getOfferCardsContentStatus`、`getCategoriesTree`、`getCategoryContentParameters` 和 `updateOfferMappings` 的实际响应、分页与属性约束。
+- COM 已绑定店铺：campaign、settings、business offer-mappings、offer-cards、categories/tree、category parameters 六类接口均真实 HTTP 200。目录/卡片各读 5 条，目录存在下一页；卡片中发现 2 条内容错误。类目树 11,028 节点，样本末级类目 180 个参数；合法大字典超过 20,000 个枚举值，不再错误拒绝该响应。
+- 当前本地源码客户端在 COM VPS 内存执行只读复核通过，未覆盖或部署远端源码；数据库连接设置只读，凭据仅在内存解密，不进入 Git 或普通 artifact。
+- 3 个已有 Ozon 商品预览被缺描述/类目/品牌/条码正确阻断；其中 1 个真实 Ozon info/attributes 回读得到 25 个属性、0 个条码、没有描述属性 4191。该样本缺资料属于平台实际返回，不能用自动填充掩盖。
+- 服务端 7 文件 69 项定向回归通过，覆盖租户、字段映射、类目/属性联动、逐商品错误、预览变化、关闭开关后的 UNKNOWN 回放；本轮新增稳定行为均观察 RED 后实现 GREEN。Server/Web TypeScript、修改范围 ESLint 和 Web production build 通过；构建保留现有 Next.js ESLint plugin 未检测到的配置提示，不影响本次成功结果。
+- 隔离 Chrome 真实 React 流程通过目录/卡片错误、来源选择、类目/属性编辑、草稿预览、发布关闭后解锁、UNKNOWN 原请求核对及 390px 无横向溢出。证据目录：`C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-0tffVa`。这是本地 fixture 接口的 UI 行为证据，不替代生产页面或真实平台写入验收。
+- 本轮 Yandex/Ozon/Provider 写入、生产数据库业务写入、费用均为 0。临时 Key 输入会话及本轮隔离浏览器已关闭。
+
+### 尚未完成
+
+真实 Yandex 商品提交/卡片回读闭环、价格库存同步、Yandex 订单和物流/Ozon 配送对接、ERP 图片稳定公网转存、全类目通用映射及新页面生产验收仍未完成。当前源码仅说明目录读取与草稿准备可用，不能称为商品已真实上架、可销售或 Yandex 全量接入。下一阶段应先用资料完整的商品核对目标草稿和图片稳定性，再在明确授权后执行真实目录提交及卡片状态回读。
 
 ## 研究边界与来源
 
 - 研究日期：2026-10-24（Asia/Shanghai）。
 - 主要来源：Yandex Market Partner API 官方中文文档，revision `r21727032`，入口为 [`index.md`](https://yandex.ru/dev/market/partner-api/doc/zh/index.md?revision=r21727032)。
-- 所有 URL 均为 `yandex.ru/dev/market/partner-api` 官方文档或官方 Yandex Market API 规范仓库；本文件没有调用真实店铺、没有发送 Yandex 请求、没有保存 API Key。
+- 所有 URL 均为 `yandex.ru/dev/market/partner-api` 官方文档或官方 Yandex Market API 规范仓库；2026-10-24 初始研究没有调用真实店铺。后续授权及只读测试结果以上述当前记录为准，本文不保存 API Key。
 - API 生产主机：`https://api.partner.market.yandex.ru`。请求版本必须以官方当前 operation 页面为准，不能把 Ozon endpoint 或 Ozon 的店铺 ID 直接套用到 Yandex。
 
 ## 认证、店铺和权限模型
@@ -24,7 +61,7 @@
 | 仅订单读取 | `inventory-and-order-processing:read-only` |
 | 店铺和仓库设置 | `settings-management` |
 
-正式接入必须由用户在 Yandex 卖家后台生成并粘贴 Key；SS ERP 只应保存加密凭据引用和 scope 快照，不应把 Key 写入日志、前端、Git 或普通测试 fixture。真实店铺写入和 Key 使用需要另行授权；本研究没有获得该授权。
+正式接入必须由用户在 Yandex 卖家后台生成并粘贴 Key；SS ERP 只应保存加密凭据引用和 scope 快照，不应把 Key 写入日志、前端、Git 或普通测试 fixture。2026-10-28 用户已授权使用其 COM 绑定凭据进行只读测试；真实店铺写入仍需要明确授权。
 
 ### `businessId`、`campaignId` 和仓库 ID 不是同一个 ID
 
@@ -137,7 +174,7 @@ Yandex 不提供“用 Ozon API 直接代发 Yandex 商品”的隐式桥接；O
 - 真实图片公网转存、标签 PDF 生成/下载、打印机连接和物流状态写回。
 - 生产通知 URL、定时同步任务、跨店批量发布或将所有 Ozon 店铺自动镜像到 Yandex。
 
-当前已完成第一步源码接线：Yandex 店铺沿用加密 `Shop` 凭据 owner（`clientId` 保存 campaign ID，`apiKeyEncrypted` 保存 Api-Key），新增只读 `YandexMarketClient`、店铺归属路由和 `/shops/yandex` 管理页；连接测试成功后在 `Shop.config.yandexMarket` 保存非敏感的 campaign/business/履约映射快照，并支持 ERP/Ozon 商品草稿预览。另已接入受显式 `confirm=true`、字段完整性、幂等键和持久操作记录保护的 `offer-mappings/update` 发布 owner，但默认受 `YANDEX_MARKET_PUBLISH_ENABLED` 关闭，避免未经授权触发真实店铺写入；未知响应不会自动重发。尚未调用真实 Yandex 店铺，库存/价格/订单/物流写入和真实发布验收仍未完成，不能解释为“Yandex 全量已接入”或“所有店铺可用”。
+2026-10-24 初始接线沿用加密 `Shop` 凭据 owner（`clientId` 保存 campaign ID，`apiKeyEncrypted` 保存 Api-Key）；连接测试在 `Shop.config.yandexMarket` 保存非敏感映射快照，目录发布由 `YANDEX_MARKET_PUBLISH_ENABLED` 关闭。2026-10-28 已继续实现目录读取、草稿编辑/校验并完成真实 COM 只读接口测试，具体结果与尚未部署/写入的边界见本文顶部当前记录。
 
 ## 官方兼容性提醒（截至研究日期）
 

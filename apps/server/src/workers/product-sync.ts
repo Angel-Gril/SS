@@ -119,6 +119,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
         : info.stocks?.stocks?.reduce((sum, s) => sum + s.present, 0) ?? 0;
       const modelId = info.model_info?.model_id ? String(info.model_info.model_id) : null;
       const productAttributes = attributesByProductId.get(String(info.id));
+      const description = info.description || productAttributes?.attributes?.find((attribute: { id: number }) => attribute.id === 4191)?.values?.map((value: { value?: string }) => value.value || '').filter(Boolean).join('\n') || null;
       const images = resolveOzonProductImages(info, productAttributes);
       const weight = resolveOzonPackageWeightG(productAttributes);
       const ozonSku = normalizeOzonSku(info.sku);
@@ -140,7 +141,8 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           sku: ozonSku,
           offerId: info.offer_id,
           title: info.name,
-          description: info.description || '',
+          description: description || '',
+          attributes: productAttributes?.attributes ?? undefined,
           categoryId: syncCategory ? String(syncCategory.descriptionCategoryId) : null,
           price: info.price ? parseFloat(info.price) : null,
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,
@@ -160,7 +162,8 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
         update: {
           sku: ozonSku,
           title: info.name,
-          description: info.description || undefined,
+          description: description ?? undefined,
+          attributes: productAttributes?.attributes ?? undefined,
           categoryId: syncCategory ? String(syncCategory.descriptionCategoryId) : undefined,
           price: info.price ? parseFloat(info.price) : null,
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,

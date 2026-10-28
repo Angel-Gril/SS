@@ -5,11 +5,12 @@ import { authenticate } from '../lib/auth.js';
 import { decrypt } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
 import { YandexMarketApiError, YandexMarketClient } from '../services/yandex-market-client.js';
-import { buildYandexOfferDraft } from '../services/yandex-market-offer-draft.js';
+import { prepareYandexDrafts, readYandexBusiness, yandexDraftTarget, yandexUpdateAccepted } from '../services/yandex-market-catalog.js';
+import { yandexPage, yandexLeafCategories } from '../services/yandex-market-contract.js';
 
 const shopIdSchema = z.string().min(1).max(100);
-const draftPreviewSchema = z.object({ sourceShopId: z.string().min(1).max(100), productIds: z.array(z.string().min(1).max(100)).min(1).max(50) }).strict();
-const publishSchema = draftPreviewSchema.extend({ confirm: z.literal(true), idempotencyKey: z.string().trim().min(16).max(200) }).strict();
+const draftPreviewSchema = z.object({ sourceShopId: z.string().min(1).max(100), productIds: z.array(z.string().min(1).max(100)).min(1).max(50).refine(ids => new Set(ids).size === ids.length), targets: z.array(yandexDraftTarget).max(50).default([]) }).strict();
+const publishSchema = draftPreviewSchema.extend({ confirm: z.literal(true), idempotencyKey: z.string().trim().min(16).max(200), expectedDraftHash: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 
 async function ownedYandexShop(request: FastifyRequest, reply: FastifyReply) {
   const auth = (request as any).user as { tokenUse?: string } | undefined;
@@ -33,6 +34,40 @@ async function ownedYandexShop(request: FastifyRequest, reply: FastifyReply) {
 
 export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
+  const failure = (reply: FastifyReply, error: unknown) => {
+    const status = error instanceof z.ZodError ? 400 : error instanceof YandexMarketApiError
+      ? (error.status >= 400 && error.status < 500 ? error.status : 502) : 409;
+    return reply.status(status).send({ code: 0, meta: { notDispatched: true }, msg: error instanceof z.ZodError ? 'Yandex 请求参数或返回格式无效' : error instanceof Error ? error.message : 'Yandex 读取失败' });
+  };
+
+  app.get('/:shopId/settings', async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try { await readYandexBusiness(context.shop, context.client); return reply.send({ code: 1, data: await context.client.getCampaignSettings(context.shop.clientId!) }); }
+    catch (error) { return failure(reply, error); }
+  });
+  for (const kind of ['offers', 'offer-cards'] as const) app.post(`/:shopId/${kind}/read`, { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    const page = yandexPage.safeParse(request.body ?? {});
+    if (!page.success) return reply.status(400).send({ code: 0, msg: '商品 ID、页码参数无效，不能传入 business ID' });
+    try {
+      const businessId = await readYandexBusiness(context.shop, context.client);
+      const data = kind === 'offers' ? await context.client.getOfferMappings(businessId, page.data) : await context.client.getOfferCards(businessId, page.data);
+      return reply.send({ code: 1, data });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.get('/:shopId/categories', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try { await readYandexBusiness(context.shop, context.client); return reply.send({ code: 1, data: { categories: yandexLeafCategories(await context.client.getCategoryTree()) } }); }
+    catch (error) { return failure(reply, error); }
+  });
+  app.get('/:shopId/categories/:categoryId/parameters', async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const businessId = await readYandexBusiness(context.shop, context.client);
+      const categoryId = z.coerce.number().int().positive().safe().parse((request.params as { categoryId: string }).categoryId);
+      return reply.send({ code: 1, data: await context.client.getCategoryParameters(categoryId, businessId) });
+    } catch (error) { return failure(reply, error); }
+  });
   app.get('/:shopId/campaigns', async (request, reply) => {
     const context = await ownedYandexShop(request, reply); if (!context) return;
     try {
@@ -94,45 +129,57 @@ export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
       id: true, platformProductId: true, sku: true, offerId: true, title: true, description: true, categoryId: true,
       price: true, currency: true, stock: true, images: true, attributes: true, variants: true,
     } });
-    const drafts = products.map(product => buildYandexOfferDraft({ ...product, price: product.price?.toString() ?? null }));
+    if (products.length !== parsed.data.productIds.length) return reply.status(404).send({ code: 0, msg: '部分商品不存在或不属于来源店铺' });
+    let prepared;
+    try { prepared = await prepareYandexDrafts(products.map(product => ({ ...product, price: product.price?.toString() ?? null })), parsed.data.targets, context.client, await readYandexBusiness(context.shop, context.client)); }
+    catch (error) { return failure(reply, error); }
+    const { drafts, draftHash } = prepared;
     return reply.send({ code: 1, msg: '已生成 Yandex 商品草稿预览；尚未写入 Yandex', data: {
       targetShopId: context.shop.id, sourceShopId: source.id, requested: parsed.data.productIds.length, found: products.length,
-      readyCount: drafts.filter(draft => draft.ready).length, blockedCount: drafts.filter(draft => !draft.ready).length, drafts,
+      readyCount: drafts.filter(draft => draft.ready).length, blockedCount: drafts.filter(draft => !draft.ready).length, drafts, draftHash,
     } });
   });
 
   app.post('/:shopId/offers/publish', async (request, reply) => {
     const context = await ownedYandexShop(request, reply); if (!context) return;
-    if (process.env.YANDEX_MARKET_PUBLISH_ENABLED !== 'true') return reply.status(403).send({ code: 0, msg: 'Yandex 商品发布尚未启用，请先完成生产发布授权和配置' });
     const parsed = publishSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ code: 0, msg: '发布必须包含 confirm=true、幂等键和商品列表' });
+    if (!parsed.success) return reply.status(400).send({ code: 0, meta: { notDispatched: true }, msg: '发布必须包含 confirm=true、幂等键和预览摘要' });
     const ownerUserId = String((request as any).user.userId);
-    const source = await prisma.shop.findFirst({ where: { id: parsed.data.sourceShopId, userId: ownerUserId, platform: 'OZON', status: 'ACTIVE' }, select: { id: true } });
-    if (!source) return reply.status(404).send({ code: 0, msg: '来源 Ozon 店铺不存在或不属于当前账号' });
-    const config = context.shop.config && typeof context.shop.config === 'object' && !Array.isArray(context.shop.config) ? context.shop.config as Record<string, unknown> : {};
-    const yandexConfig = config.yandexMarket && typeof config.yandexMarket === 'object' && !Array.isArray(config.yandexMarket) ? config.yandexMarket as Record<string, unknown> : {};
-    const businessId = String(yandexConfig.businessId || '').trim();
-    if (!/^\d+$/u.test(businessId)) return reply.status(409).send({ code: 0, msg: '请先成功测试 Yandex 店铺以取得 business ID' });
-    const products = await prisma.product.findMany({ where: { id: { in: parsed.data.productIds }, shopId: source.id }, select: {
-      id: true, platformProductId: true, sku: true, offerId: true, title: true, description: true, categoryId: true,
-      price: true, currency: true, stock: true, images: true, attributes: true, variants: true,
-    } });
-    const drafts = products.map(product => buildYandexOfferDraft({ ...product, price: product.price?.toString() ?? null }));
-    if (products.length !== parsed.data.productIds.length) return reply.status(404).send({ code: 0, msg: '部分商品不存在或不属于来源店铺' });
-    const blocked = drafts.filter(draft => !draft.ready);
-    if (blocked.length) return reply.status(422).send({ code: 0, msg: '商品草稿仍缺少 Yandex 必填字段，请先完成预览修正', data: { blocked: blocked.map(draft => ({ sourceProductId: draft.sourceProductId, missingFields: draft.missingFields })) } });
-    const offerMappings = drafts.map(draft => ({ offer: {
-      offerId: draft.offer.offerId, name: draft.offer.name, description: draft.offer.description,
-      marketCategoryId: draft.offer.marketCategoryId!, pictures: draft.offer.pictures,
-      vendor: draft.offer.vendor!, barcodes: draft.offer.barcodes,
-    } }));
-    const requestPayload = { businessId, sourceShopId: source.id, targetShopId: context.shop.id, offerMappings };
-    const requestHash = createHash('sha256').update(JSON.stringify(requestPayload)).digest('hex');
+    const requestHash = createHash('sha256').update(JSON.stringify({ targetShopId: context.shop.id, ...parsed.data })).digest('hex');
     const existing = await prisma.yandexOfferPublishOperation.findUnique({ where: { ownerUserId_idempotencyKey: { ownerUserId, idempotencyKey: parsed.data.idempotencyKey } } });
     if (existing) {
       if (existing.requestHash !== requestHash) return reply.status(409).send({ code: 0, msg: '幂等键已用于不同的 Yandex 发布请求' });
       return reply.send({ code: 1, msg: 'replayed', data: { id: existing.id, state: existing.state, response: existing.response, replayed: true } });
     }
+    // A disabled switch blocks new writes, but must not erase an earlier unknown dispatch.
+    if (process.env.YANDEX_MARKET_PUBLISH_ENABLED !== 'true') return reply.status(403).send({ code: 0, meta: { notDispatched: true }, msg: 'Yandex 商品发布尚未启用，请先完成生产发布授权和配置' });
+    const source = await prisma.shop.findFirst({ where: { id: parsed.data.sourceShopId, userId: ownerUserId, platform: 'OZON', status: 'ACTIVE' }, select: { id: true } });
+    if (!source) return reply.status(404).send({ code: 0, meta: { notDispatched: true }, msg: '来源 Ozon 店铺不存在或不属于当前账号' });
+    const config = context.shop.config && typeof context.shop.config === 'object' && !Array.isArray(context.shop.config) ? context.shop.config as Record<string, unknown> : {};
+    const yandexConfig = config.yandexMarket && typeof config.yandexMarket === 'object' && !Array.isArray(config.yandexMarket) ? config.yandexMarket as Record<string, unknown> : {};
+    const businessId = String(yandexConfig.businessId || '').trim();
+    if (!/^\d+$/u.test(businessId)) return reply.status(409).send({ code: 0, meta: { notDispatched: true }, msg: '请先成功测试 Yandex 店铺以取得 business ID' });
+    const products = await prisma.product.findMany({ where: { id: { in: parsed.data.productIds }, shopId: source.id }, select: {
+      id: true, platformProductId: true, sku: true, offerId: true, title: true, description: true, categoryId: true,
+      price: true, currency: true, stock: true, images: true, attributes: true, variants: true,
+    } });
+    if (products.length !== parsed.data.productIds.length) return reply.status(404).send({ code: 0, meta: { notDispatched: true }, msg: '部分商品不存在或不属于来源店铺' });
+    let prepared;
+    try {
+      if (await readYandexBusiness(context.shop, context.client) !== businessId) throw new Error('Yandex 目标店铺已变化');
+      prepared = await prepareYandexDrafts(products.map(product => ({ ...product, price: product.price?.toString() ?? null })), parsed.data.targets, context.client, businessId);
+    } catch (error) { return failure(reply, error); }
+    const { drafts } = prepared;
+    if (prepared.draftHash !== parsed.data.expectedDraftHash) return reply.status(409).send({ code: 0, meta: { notDispatched: true }, msg: '商品或目标字段已变化，请重新预览后提交' });
+    const blocked = drafts.filter(draft => !draft.ready);
+    if (blocked.length) return reply.status(422).send({ code: 0, meta: { notDispatched: true }, msg: '商品草稿仍缺少 Yandex 必填字段，请先完成预览修正', data: { blocked: blocked.map(draft => ({ sourceProductId: draft.sourceProductId, missingFields: draft.missingFields })) } });
+    const offerMappings = drafts.map(draft => ({ offer: {
+      offerId: draft.offer.offerId, name: draft.offer.name, description: draft.offer.description,
+      marketCategoryId: draft.offer.marketCategoryId!, pictures: draft.offer.pictures,
+      vendor: draft.offer.vendor!, barcodes: draft.offer.barcodes,
+      ...(draft.offer.parameterValues.length ? { parameterValues: draft.offer.parameterValues } : {}),
+    } }));
+    const requestPayload = { businessId, sourceShopId: source.id, targetShopId: context.shop.id, offerMappings };
     let operation;
     try {
       operation = await prisma.yandexOfferPublishOperation.create({ data: {
@@ -147,9 +194,8 @@ export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
     }
     try {
       const raw = await context.client.updateOfferMappings(businessId, offerMappings);
-      const response = z.object({ status: z.enum(['OK', 'ERROR']) }).passthrough().parse(raw);
-      const state = response.status === 'OK' ? 'SUCCEEDED' : 'REJECTED';
-      const updated = await prisma.yandexOfferPublishOperation.update({ where: { id: operation.id }, data: { state, response: raw as any, errorMessage: response.status === 'OK' ? null : 'Yandex 返回 ERROR，请查看响应明细' } });
+      const state = yandexUpdateAccepted(raw) ? 'SUCCEEDED' : 'REJECTED';
+      const updated = await prisma.yandexOfferPublishOperation.update({ where: { id: operation.id }, data: { state, response: raw as any, errorMessage: state === 'SUCCEEDED' ? null : 'Yandex 返回商品错误，请查看响应明细' } });
       return reply.send({ code: state === 'SUCCEEDED' ? 1 : 0, msg: state === 'SUCCEEDED' ? 'Yandex 商品目录更新已提交' : 'Yandex 拒绝商品目录更新', data: { id: updated.id, state, response: updated.response, replayed: false } });
     } catch (error) {
       const definite = error instanceof YandexMarketApiError && error.status >= 400 && error.status < 500;

@@ -1,4 +1,5 @@
 export interface ProductSyncMeta {
+  ozonBarcodes?: string[];
   ozonStatus?: {
     status?: string;
     status_failed?: string;
@@ -258,6 +259,8 @@ function getOzonStatusTone(values: unknown[]): OzonStatusTone {
 
 export function buildProductSyncMeta(
   info: {
+    barcodes?: unknown;
+    sku?: unknown;
     statuses?: ProductSyncMeta['ozonStatus'];
     description_category_id?: unknown;
     type_id?: unknown;
@@ -267,6 +270,7 @@ export function buildProductSyncMeta(
   const descriptionCategoryId = positiveInt(info.description_category_id);
   const typeId = positiveInt(info.type_id);
   return {
+    ozonBarcodes: Array.isArray(info.barcodes) ? [...new Set(info.barcodes.filter((code): code is string => typeof code === 'string' && /^\d{8,32}$/u.test(code)))] : [],
     ozonStatus: info.statuses || null,
     ozonStocks: Array.isArray(stocks) ? stocks : [],
     ozonCategory: descriptionCategoryId ? { descriptionCategoryId, typeId: typeId ?? undefined } : null,
