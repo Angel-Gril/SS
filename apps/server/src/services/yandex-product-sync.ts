@@ -2,14 +2,16 @@ import type { YandexMarketClient } from './yandex-market-client.js';
 import { z } from 'zod';
 
 const detail = z.object({ offerId: z.string(), name: z.string().min(1).max(500), description: z.string().max(100000).nullish(),
-  pictures: z.array(z.string().url()).max(100).nullish(), marketCategoryId: z.number().int().positive().nullish(), parameterValues: z.array(z.record(z.unknown())).max(1000).nullish(),
+  pictures: z.array(z.string().url()).max(100).nullish(), marketCategoryId: z.number().int().positive().safe().nullish(), parameterValues: z.array(z.record(z.unknown())).max(1000).nullish(),
 });
+const categoryMapping = z.object({ marketCategoryId: z.number().int().positive().safe().nullish(), marketCategoryName: z.string().trim().max(1000).nullish() }).nullish();
 
 export function projectYandexProduct(row: Record<string, any>) {
   const { variants, ...rest } = row;
   const meta = variants?.yandexMarket;
   const statuses: Record<string, string> = { PUBLISHED: '可销售', CHECKING: '审核中', DISABLED_BY_PARTNER: '已隐藏', REJECTED_BY_MARKET: '平台拒绝', DISABLED_AUTOMATICALLY: '需修正错误', CREATING_CARD: '正在建卡', NO_CARD: '缺少卡片', NO_STOCKS: '无可售库存', ARCHIVED: '已归档', READY_FOR_PUBLICATION: '店铺接入中' };
   return { ...rest, price: row.price?.toString() ?? null, oldPrice: row.oldPrice?.toString() ?? null, commissionRate: null, minPrice: null,
+    categoryLabel: meta?.category?.id && String(meta.category.id) === row.categoryId ? meta.category.name || null : null,
     platformStatusName: statuses[row.status] ?? row.status, platformSyncedAt: meta?.syncedAt ?? null, platformStockKnown: meta?.stockKnown === true };
 }
 
@@ -32,13 +34,17 @@ export async function collectYandexProducts(client: YandexMarketClient, business
     ids.forEach(id => seenIds.add(id));
     if (ids.length) {
       const mappings = await client.getOfferMappings(businessId, { offerIds: ids });
-      const details = mappings.offerMappings.map(value => detail.parse(value.offer));
+      const details = mappings.offerMappings.map(value => ({ ...detail.parse(value.offer), mapping: categoryMapping.parse(value.mapping) }));
       if (details.length !== ids.length || details.some(value => !ids.includes(value.offerId)) || new Set(details.map(d => d.offerId)).size !== ids.length) throw new Error('Yandex 商品详情与店铺列表不匹配');
       const stockPages = settings.warehouseModel === 'CAMPAIGN'
         ? await client.getStocks(businessId, campaignId, 'CAMPAIGN', ids)
         : (await Promise.all(warehouses.map(warehouse => client.getStocks(businessId, campaignId, 'WAREHOUSE', ids, warehouse.id)))).flat();
       for (const offer of listing.offers) {
         const d = details.find(value => value.offerId === offer.offerId)!;
+        const categoryId = d.mapping?.marketCategoryId ?? d.marketCategoryId ?? null;
+        const category = categoryId ? { id: categoryId,
+          name: d.mapping?.marketCategoryId === categoryId ? d.mapping.marketCategoryName || null : null,
+          source: d.mapping?.marketCategoryId ? 'mapping' : 'offer', offeredCategoryId: d.marketCategoryId ?? null } : null;
         const stockRows = stockPages.flatMap(w => w.offers.filter(o => o.offerId === offer.offerId).map(o => ({ warehouseId: w.warehouseId, stocks: o.stocks, updatedAt: o.updatedAt ?? null })));
         const counted = new Map<string, number | undefined>();
         for (const warehouse of stockRows) {
@@ -57,11 +63,11 @@ export async function collectYandexProducts(client: YandexMarketClient, business
         const p = offer.campaignPrice ?? offer.basicPrice;
         const currency = p?.currencyId ?? settings.currency;
         rows.push({ platformProductId: offer.offerId, offerId: offer.offerId, sku: offer.offerId, title: d.name, description: d.description ?? null,
-          categoryId: d.marketCategoryId ? String(d.marketCategoryId) : null, images: d.pictures ?? [], attributes: d.parameterValues ?? [],
+          categoryId: categoryId ? String(categoryId) : null, images: d.pictures ?? [], attributes: d.parameterValues ?? [],
           price: p?.value ?? null, oldPrice: p?.discountBase ?? null, currency: currency === 'RUR' ? 'RUB' : currency,
           stock,
           status: offer.status, visibility: offer.status === 'ARCHIVED' ? 'ARCHIVED' : 'VISIBLE', syncStatus: 'SYNCED',
-          variants: { yandexMarket: { businessId, campaignId, syncedAt: new Date().toISOString(), stockKnown, stocks: stockRows, stockMode: settings.warehouseModel } },
+          variants: { yandexMarket: { businessId, campaignId, syncedAt: new Date().toISOString(), category, stockKnown, stocks: stockRows, stockMode: settings.warehouseModel } },
         });
       }
     }

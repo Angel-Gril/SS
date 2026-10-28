@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { yandexId, yandexCategoryId, yandexCategory, yandexPage, yandexParameter, type YandexPage, type YandexParameterValue } from './yandex-market-contract.js';
+import { yandexOrder } from './yandex-order-contract.js';
 
 export const YANDEX_MARKET_API_BASE_URL = 'https://api.partner.market.yandex.ru';
 
@@ -190,6 +191,18 @@ export class YandexMarketClient {
     return z.object({ status: z.literal('OK'), result: z.object({ settings: z.object({
       warehouseModel: z.enum(['CAMPAIGN', 'WAREHOUSE']), onlyDefaultPrice: z.boolean(), currency: z.string().regex(/^[A-Z]{3}$/u),
     }) }) }).parse(await this.request(`/v2/businesses/${businessId}/settings`, { method: 'POST' })).result.settings;
+  }
+  async getBusinessOrders(businessId: string, campaignId: string, dates: { from: string; to: string }, pageToken?: string) {
+    yandexId.parse(businessId); yandexId.parse(campaignId);
+    const valid = (s: string) => /^\d{4}-\d{2}-\d{2}$/u.test(s) && Number.isFinite(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s;
+    const span = Date.parse(dates.to) - Date.parse(dates.from);
+    if (!valid(dates.from) || !valid(dates.to) || span <= 0 || span > 30 * 86400000) throw new Error('Yandex 订单每次日期范围必须在30天内');
+    if (pageToken) z.string().min(1).max(1000).parse(pageToken);
+    const result = z.object({ orders: z.array(yandexOrder).max(50), paging }).parse(await this.request(`/v1/businesses/${businessId}/orders`, {
+      method: 'POST', query: { limit: '50', pageToken }, body: { campaignIds: [Number(campaignId)], fake: false, dates: { creationDateFrom: dates.from, creationDateTo: dates.to } },
+    }));
+    if (result.orders.some(order => String(order.campaignId) !== campaignId || order.fake)) throw new YandexMarketApiError(502, 'Yandex 订单不属于当前店铺或包含测试订单');
+    return { orders: result.orders, nextPageToken: result.paging?.nextPageToken ?? null };
   }
 
   async getCampaignOffers(campaignId: string, input: YandexPage = {}) {

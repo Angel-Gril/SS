@@ -1,5 +1,27 @@
 # Yandex Market Partner API 接入与验收
 
+## 2026-10-28 Yandex 订单只读同步与类目修复已验证，准备统一发布
+
+用户所说“Yandex 用 Ozon 物流”有条件成立，不能简化成“Yandex orderId 直接调用 Ozon Seller 发货”。Yandex 官方 LaaS/Fulfillment 说明（[外部平台集成](https://r.jina.ai/https://yandex.ru/support/marketplace/ru/tools/laas)）是：卖家在 Ozon 建 FBS 仓、在 Yandex 选择“集成其他平台→Ozon”、提供 Ozon ClientID + Admin Read only/Product/Warehouse/Posting FBS 权限 Token，并将 Ozon FBS 仓映射到 Yandex 仓；Yandex 拉取外部订单后组包并送 Ozon 分拣中心。这是 Yandex LAAS 作为外部平台履约编排，不能拿 Yandex 订单号冒充 Ozon posting。
+
+中国跨境官方说明（[crossborder_cn](https://partner.market.yandex.com/welcome/crossborder_cn)）描述的是 FBS：卖家存储、包装并交到 Yandex 投递点，由 Yandex 配送和清关；未证明所有中国店铺默认启用 OGL 或 Ozon 物流。Ozon 官方 Delivery 独立流程（`/v1/delivery/check` → `/v2/delivery/checkout` → `/v2/order/create`）也不能由当前 Yandex API Key 直接代替。当前 ERP 没有独立的 Ozon-LaaS 凭据/仓库映射 owner，因此本轮只接 Yandex 原生订单读取，不自动创建 Ozon 物流单、组包单或额外费用。
+
+新增 `yandex-order-contract.ts` / `yandex-order-sync.ts`：使用官方 `POST /v1/businesses/{businessId}/orders`，每次最多30天、游标分页、`fake=false`、严格 campaign 归属；保存 Yandex 原生 `status/substatus`、`sourcePlatform`、`delivery.serviceName/deliveryServiceId/deliveryPartnerType`、轨迹、shipment、delivery dates、programType 和 externalOrderId。状态映射到 ERP 仅用于展示：PROCESSING/STARTED→待打包，PROCESSING/READY_TO_SHIP→待发货，DELIVERY/PICKUP→配送中，DELIVERED→已送达，CANCELLED/RETURNED→异常/取消；不复用 Ozon 状态字符串。订单项、付款+cashback、币种和价格不猜填；同步失败不保存部分页，事件写入 source=`yandex`。
+
+订单页同步入口按店铺平台分流：Yandex 显示“同步 Yandex 订单”，只读保存到 ERP；Ozon 继续使用原同步窗口。Yandex 发货、取消、面单、boxes/组包仍禁用，直到独立 Ozon-LaaS 凭据、仓库映射、Yandex 状态写入及标签合同完成。COM 真实只读订单窗口 `2026-09-29..2026-10-29` 返回0单且业务验证通过，未写订单、Yandex、Ozon或Provider；这是空数据的成功读取，不能宣称真实订单履约通过。订单同步代码的本地定向、类型/lint、Web构建已通过，待与mapping类目修复统一提交部署。
+
+## 2026-10-28 类目漏读已确认，本地修复待发布
+
+用户截图显示商品列表全部“未提供类目”。COM只读核查：ERP921条、categoryId非空0条；按ERP当前列表抽查15件，官方 `getOfferMappings` 返回15条，其中 `offer.marketCategoryId` 全部缺省，而 `mapping.marketCategoryId/marketCategoryName` 全部存在，包含“Листовые чаи”“Жилеты для взрослых”“Конструкторы детские”等。原件观察时间 `2026-10-28T15:08:36.864Z`，只在私有 `release-9cae6511-yandex-dual/category-readonly-*`，无数据库或Yandex写入。样本证明本次为ERP漏读，不能将15件外推为921件全部已由平台分类。
+
+官方当前 `getOfferMappings` 文档复核 revision `r21847170`：`offer` 是卖家提交信息，`mapping` 是平台卡片及实际归类，后者可在平台尚未识别时缺省。旧 `collectYandexProducts` 只解析offer并丢弃mapping，导致同步categoryId为空；旧fixture只把类目放在offer内，未覆盖官方实际mapping分支。无需新增类目API。
+
+本地修复由既有 `yandex-product-sync.ts` owner执行：优先保存mapping实际类目ID及名称，同时保留offer原提交ID和来源；仅在mapping确实没有ID时使用offer类目，均缺省则保持未知，不猜填。`projectYandexProduct` 只有元数据类目ID与数据库categoryId匹配才投影categoryLabel，避免错配显示。新增RED→GREEN回归覆盖mapping单独返回、两者不一致、原类目保留及两者均缺；PostgreSQL回归扩充原同步事务读回断言。修复不改变schema、权限、发布开关和订单写入/物流边界；订单只读同步已在本地接线，线上双区仍 `9cae6511`。
+
+本轮验证：类目同步/商品列表/client/worker共4文件31项通过，本机隔离PostgreSQL4项通过（schema已清理），Server TypeScript及修改范围ESLint通过。无真实平台写入/费用，生产数据库仅只读；线上已有商品须在修复部署后重同步才能补回类目。
+
+当前Yandex接入范围已复核实际client/routes/worker：店铺认证、商品目录/类目属性、商品快照、价格/库存、隐藏/恢复、搬运草稿和受开关保护的目录提交已接线；真实改价/库存/隐藏/目录发布未测。Yandex原生订单只读同步、ERP状态/配送字段保存和订单页平台分流已接线并完成本地验证；增量通知、订单履约/取消、装箱、发货/配送状态、面单/货签和物流/组包写入尚未实现。现有Ozon订单和组包模块不代表Yandex可用，官方API研究文档也不等于已实现，不宣称所有Yandex API已接入。
+
 ## 2026-10-28 商品管理已推送、双区部署完成
 
 用户明确将 Yandex 扩展为完整日常商品平台，基础改价/库存等操作不只服务于 Ozon 搬运；同时授权同步部署 CN。真实业务测试仍仅 COM，不在 CN 使用店铺凭据，不发真实改价/库存/隐藏/发布请求。

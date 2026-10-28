@@ -12,6 +12,23 @@ function fixture() {
 }
 
 describe('Yandex campaign product snapshot', () => {
+  it('imports the actual category from the official mapping when the source offer omits it', async () => {
+    const c = fixture();
+    c.getOfferMappings.mockResolvedValue({ offerMappings: [{ offer: { offerId: '000-A', name: 'Товар' }, mapping: { marketCategoryId: 61516298, marketCategoryName: 'Листовые чаи' } }], nextPageToken: null });
+    const rows = await collectYandexProducts(c as any, '77', '123');
+    expect(rows[0]).toMatchObject({ categoryId: '61516298', variants: { yandexMarket: { category: { id: 61516298, name: 'Листовые чаи', source: 'mapping' } } } });
+    expect(projectYandexProduct(rows[0]!)).toMatchObject({ categoryId: '61516298', categoryLabel: 'Листовые чаи' });
+  });
+  it('uses the assigned platform category and keeps the originally supplied category separately', async () => {
+    const c = fixture();
+    c.getOfferMappings.mockResolvedValue({ offerMappings: [{ offer: { offerId: '000-A', name: 'Товар', marketCategoryId: 10 }, mapping: { marketCategoryId: 20, marketCategoryName: 'Чай' } }], nextPageToken: null });
+    expect((await collectYandexProducts(c as any, '77', '123'))[0]).toMatchObject({ categoryId: '20', variants: { yandexMarket: { category: { id: 20, source: 'mapping', offeredCategoryId: 10 } } } });
+    expect(projectYandexProduct({ categoryId: '10', variants: { yandexMarket: { category: { id: 20, name: 'Чай' } } } }).categoryLabel).toBeNull();
+  });
+  it('does not guess a category when neither offer nor mapping has one', async () => {
+    const c = fixture(); c.getOfferMappings.mockResolvedValue({ offerMappings: [{ offer: { offerId: '000-A', name: 'Товар' }, mapping: {} }], nextPageToken: null });
+    expect((await collectYandexProducts(c as any, '77', '123'))[0]).toMatchObject({ categoryId: null });
+  });
   it('projects Yandex state and timestamp without borrowing Ozon price or buyer-cost fields', () => {
     const row = projectYandexProduct({ sku: '000-A', status: 'NO_STOCKS', price: { toString: () => '20' }, stock: 0, variants: { yandexMarket: { stockKnown: false, syncedAt: '2026-10-28T00:00:00Z' } } });
     expect(row).toMatchObject({ sku: '000-A', price: '20', platformStockKnown: false, platformStatusName: '无可售库存', platformSyncedAt: '2026-10-28T00:00:00Z' });

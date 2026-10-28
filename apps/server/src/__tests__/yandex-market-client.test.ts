@@ -9,6 +9,18 @@ function clientFor(body: unknown, status = 200) {
 }
 
 describe('Yandex Market Partner API client', () => {
+  it('uses the new business order API with exact campaign and real-order filtering', async () => {
+    const { client, fetchImpl } = clientFor({ orders: [], paging: { nextPageToken: 'n' } });
+    expect(await client.getBusinessOrders('77', '123', { from: '2026-10-01', to: '2026-10-28' }, 'p')).toEqual({ orders: [], nextPageToken: 'n' });
+    const [url, init] = fetchImpl.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe('/v1/businesses/77/orders'); expect(url.searchParams.get('limit')).toBe('50');
+    expect(JSON.parse(String(init.body))).toEqual({ campaignIds: [123], fake: false, dates: { creationDateFrom: '2026-10-01', creationDateTo: '2026-10-28' } });
+  });
+  it('rejects order windows exceeding 30 days before credential use', async () => {
+    const { client, fetchImpl } = clientFor({ orders: [] });
+    await expect(client.getBusinessOrders('77', '123', { from: '2026-01-01', to: '2026-10-28' })).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
   it('reads shop offers and business settings without changing platform data', async () => {
     const c = clientFor({ status: 'OK', result: { offers: [{ offerId: '000-A', status: 'PUBLISHED', basicPrice: { value: 25, currencyId: 'RUR' } }], paging: { nextPageToken: 'n' } } });
     expect(await c.client.getCampaignOffers('123', { limit: 5 })).toMatchObject({ offers: [{ offerId: '000-A' }], nextPageToken: 'n' });

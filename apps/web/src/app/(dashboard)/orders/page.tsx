@@ -25,6 +25,7 @@ import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
 import { defaultTrackUrl } from '@/lib/tracking';
 import { isOrderAwaitingSellerShipment, isOrderStockPrepared, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
+import { YandexOrderSyncActionDialog } from '@/components/yandex/order-sync-action-dialog';
 import { OrderFulfillmentProgress } from '@/components/orders/fulfillment-progress';
 import { LabelPreviewDialog } from '@/components/orders/label-preview-dialog';
 
@@ -262,6 +263,7 @@ export default function OrdersPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [yandexSyncDialogOpen, setYandexSyncDialogOpen] = useState(false);
   const [syncSinceDays, setSyncSinceDays] = useState(90);
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
@@ -295,6 +297,7 @@ export default function OrdersPage() {
   const [startDate, setStartDate] = useState(defaultOrderStartDate);
   const [endDate, setEndDate] = useState(defaultOrderEndDate);
   const [page, setPage] = useState(0);
+  const selectedShopPlatform = shops.find(shop => shop.id === shopId)?.platform;
   const [shipOrder, setShipOrder] = useState<Order | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
@@ -378,7 +381,8 @@ export default function OrdersPage() {
       return;
     }
     setSyncSinceDays(fullSync ? 365 : 90);
-    setSyncDialogOpen(true);
+    if (selectedShopPlatform === 'YANDEX') setYandexSyncDialogOpen(true);
+    else setSyncDialogOpen(true);
   }
 
   async function markStockReady(order: Order) {
@@ -529,10 +533,10 @@ export default function OrdersPage() {
         <div className="flex gap-2">
           <Button onClick={() => handleSync(false)} disabled={!shops.length}>
             <RefreshCw className="h-4 w-4" />
-            同步订单
+            {selectedShopPlatform === 'YANDEX' ? '同步 Yandex 订单' : '同步订单'}
           </Button>
           <Button variant="outline" onClick={() => handleSync(true)} disabled={!shops.length} title="拉取最近一年所有订单">
-            全量同步
+            {selectedShopPlatform === 'YANDEX' ? 'Yandex 全量同步' : '全量同步'}
           </Button>
           <Button
             variant="outline"
@@ -991,7 +995,7 @@ export default function OrdersPage() {
                       <TableCell className="px-2.5 py-2">
                         <div className="flex flex-col items-start gap-1 whitespace-nowrap">
                           <span className="text-[9px] font-medium uppercase text-muted-foreground">Ozon 状态</span>
-                          <OrderStatusBadge status={order.status} className="h-5 px-1.5 text-[10px]" />
+                          <OrderStatusBadge status={order.status} platform={order.shop.platform} subStatus={order.subStatus} className="h-5 px-1.5 text-[10px]" />
                           <ShipmentCountdownMini order={order} />
                         </div>
                       </TableCell>
@@ -1276,6 +1280,7 @@ export default function OrdersPage() {
           });
         }}
       />
+      {selectedShopPlatform === 'YANDEX' && <YandexOrderSyncActionDialog shopId={shopId} open={yandexSyncDialogOpen} onOpenChange={setYandexSyncDialogOpen} sinceDays={syncSinceDays} onQueued={() => { loadOrders(); loadPipeline(); }} />}
     </div>
   );
 }
@@ -1759,7 +1764,7 @@ function TrackingTimeline({ orderId, postingNumber, trackingNumber }: { orderId:
   );
 }
 
-function OrderStatusBadge({ status, className }: { status: string; className?: string }) {
+function OrderStatusBadge({ status, platform, subStatus, className }: { status: string; platform?: string; subStatus?: string | null; className?: string }) {
   const map: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
     awaiting_packaging: { label: '待打包', variant: 'warning' },
     awaiting_deliver: { label: '待发货', variant: 'warning' },
@@ -1767,7 +1772,8 @@ function OrderStatusBadge({ status, className }: { status: string; className?: s
     delivered: { label: '已送达', variant: 'success' },
     cancelled: { label: '已取消', variant: 'destructive' },
   };
-  const info = map[status] || { label: status, variant: 'secondary' as const };
+  const yandexMap: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = { PROCESSING: { label: '处理中', variant: 'warning' }, DELIVERY: { label: '配送中', variant: 'default' }, PICKUP: { label: '待取货', variant: 'default' }, DELIVERED: { label: '已送达', variant: 'success' }, CANCELLED: { label: '已取消', variant: 'destructive' }, RETURNED: { label: '已退回', variant: 'destructive' }, PARTIALLY_RETURNED: { label: '部分退回', variant: 'destructive' }, PENDING: { label: '待处理', variant: 'warning' } };
+  const info = platform === 'YANDEX' ? (yandexMap[status] || { label: subStatus?.replace(/^yandex:[^:]+:/u, '') || status, variant: 'secondary' as const }) : (map[status] || { label: status, variant: 'secondary' as const });
   return <Badge variant={info.variant} className={cn('whitespace-nowrap', className)}>{info.label}</Badge>;
 }
 

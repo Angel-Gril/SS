@@ -63,6 +63,22 @@ export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ code: 1, data: { businessId, ...settings, warehouses } });
     } catch (error) { return failure(reply, error); }
   });
+  app.post('/:shopId/sync-orders', { config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    const body = z.object({ since: z.string().datetime({ offset: true }).optional() }).strict().safeParse(request.body ?? {});
+    if (!body.success) return reply.status(400).send({ code: 0, meta: { notDispatched: true }, msg: '订单同步时间参数无效' });
+    try {
+      const { addOrderSyncJob } = await import('../workers/order-sync.js');
+      const job = await addOrderSyncJob(context.shop.id, body.data.since, { trigger: 'manual' });
+      return reply.send({ code: 1, msg: 'Yandex 订单同步任务已创建', data: job });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.get('/:shopId/sync-order-jobs/:jobId', async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    const jobId = shopIdSchema.parse((request.params as { jobId: string }).jobId);
+    const job = await prisma.syncJob.findFirst({ where: { id: jobId, shopId: context.shop.id, type: 'ORDER_PULL' }, select: { id: true, status: true, result: true, errorMessage: true } });
+    return job ? reply.send({ code: 1, data: job }) : reply.status(404).send({ code: 0, msg: '订单同步任务不存在' });
+  });
   app.post('/:shopId/product-operations', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const context = await ownedYandexShop(request, reply); if (!context) return;
     try {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import { executeYandexProductOperation } from '../services/yandex-product-operations.js';
-import { syncYandexProducts } from '../services/yandex-product-sync.js';
+import { projectYandexProduct, syncYandexProducts } from '../services/yandex-product-sync.js';
 import { encrypt } from '../lib/crypto.js';
 
 const enabled = process.env.RUN_YANDEX_POSTGRES_TESTS === '1';
@@ -62,7 +62,7 @@ suite('Yandex product journal on PostgreSQL', () => {
       if (p === '/v2/campaigns/123') return new Response(JSON.stringify({ campaign: { id: 123, business: { id: 77 }, apiAvailability: 'AVAILABLE' } }));
       if (p.endsWith('/settings')) result = { settings: { warehouseModel: 'CAMPAIGN', onlyDefaultPrice: false, currency: 'RUR' } };
       else if (p.endsWith('/warehouses')) result = { warehouses: [{ id: 9, name: 'warehouse', campaignId: 123 }] };
-      else if (p.endsWith('/offer-mappings')) result = { offerMappings: [{ offer: { offerId: '000-A', name: 'Товар', description: 'Описание', pictures: ['https://cdn.example/a.jpg'] } }] };
+      else if (p.endsWith('/offer-mappings')) result = { offerMappings: [{ offer: { offerId: '000-A', name: 'Товар', description: 'Описание', pictures: ['https://cdn.example/a.jpg'] }, mapping: { marketCategoryId: 61516298, marketCategoryName: 'Листовые чаи' } }] };
       else if (p.endsWith('/offers/stocks')) { if (failStock) throw Error('synthetic stock read failed'); result = { warehouses: [{ warehouseId: 9, offers: [{ offerId: '000-A', stocks: [{ type: 'AVAILABLE', count: 3 }] }] }] }; }
       else if (p.endsWith('/offers')) result = { offers: [{ offerId: '000-A', status: 'PUBLISHED', basicPrice: { value: 25, currencyId: 'RUR' } }] };
       else throw Error('Unexpected external path');
@@ -71,7 +71,8 @@ suite('Yandex product journal on PostgreSQL', () => {
     try {
       expect(await syncYandexProducts(bound)).toBe(1);
       const saved = await prisma.product.findUnique({ where: { id: productId } });
-      expect(saved).toMatchObject({ sku: '000-A', stock: 3, title: 'Товар', lastOzonSyncAt: null });
+      expect(saved).toMatchObject({ sku: '000-A', stock: 3, title: 'Товар', lastOzonSyncAt: null, categoryId: '61516298' });
+      expect(projectYandexProduct(saved!)).toMatchObject({ categoryLabel: 'Листовые чаи' });
       expect(saved?.price?.toString()).toBe('25');
       failStock = true; await expect(syncYandexProducts(bound)).rejects.toThrow();
       expect((await prisma.product.findUnique({ where: { id: productId } }))?.stock).toBe(3);

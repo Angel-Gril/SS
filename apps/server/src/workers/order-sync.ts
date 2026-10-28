@@ -73,6 +73,11 @@ async function runOrderSyncInline(shopId: string, since: string, syncJobId?: str
 }
 
 async function syncOrdersCore(shopId: string, since: string, shop: any) {
+  if (shop.platform === 'YANDEX') {
+    const { syncYandexOrders } = await import('../services/yandex-order-sync.js');
+    return syncYandexOrders(shop, since);
+  }
+  if (shop.platform !== 'OZON') throw new Error('该平台尚未接入订单同步');
   const isSolo = shop.user.tenantType === 'solo';
   let soloFee = 0;
   if (isSolo) {

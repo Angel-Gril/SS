@@ -1,5 +1,12 @@
 # SS ERP 内部开发真源
 
+## 2026-10-28 Yandex 订单只读同步与类目修复准备统一发布
+
+官方LAAS可条件集成Ozon FBS仓和外部订单，但不是直接把Yandex订单号调用Ozon Seller API；当前新增Yandex原生订单读取/状态物流字段保存及平台分流同步入口，真实COM空窗口读取通过，未发货/取消/面单/组包写入。类目漏读修复和订单同步本地验证尚未推送。详见[Yandex owner](yandex-market-api-research.md)。
+## 2026-10-28 Yandex 类目漏读已确认、本地修复待发布
+
+COM抽查15件官方mapping均有类目，而ERP旧同步只读offer导致921条categoryId为空；已补实际类目/名称及一致性投影回归，尚未提交部署。Yandex原生订单只读已接线，LAAS外部Ozon授权/仓映射、履约写入、面单和物流组包仍未实现，不能将现有Ozon模块视为已接入。唯一证据与功能边界见[Yandex owner](yandex-market-api-research.md)。
+
 ## 2026-10-28 Yandex 日常商品管理已推送、双区部署完成
 
 `9cae6511`已推送并完成COM/CN标准部署，签名候选474；95项回归、4项真实本机PG、类型/lint/Web构建及商品页隔离Chrome通过。COM已将921件Yandex商品与920份价格导入ERP，平台只返回2件明确可售库存、其余未知；改价/库存/隐藏管理接线已上线，未发真实平台写入。双区FULL VPS和三服务读回通过，各0失败/1既有远端备份warning，官网仍472。CN下载网络失败、临时配置恢复/失败生成物清理及准确证据仅见[Yandex owner](yandex-market-api-research.md)。

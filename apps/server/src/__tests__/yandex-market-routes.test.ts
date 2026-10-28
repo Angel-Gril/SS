@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(), update: vi.fn(), decrypt: vi.fn(() => 'synthetic-key'),
   products: vi.fn(), publishFind: vi.fn(), publishCreate: vi.fn(), publishUpdate: vi.fn(), publishMany: vi.fn(),
   campaigns: vi.fn(), campaign: vi.fn(), test: vi.fn(), updateOffers: vi.fn(), settings: vi.fn(), mappings: vi.fn(), cards: vi.fn(), tree: vi.fn(), parameters: vi.fn(),
-  addSync: vi.fn(), syncJob: vi.fn(), businessSettings: vi.fn(), warehouses: vi.fn(), manage: vi.fn(),
+  addSync: vi.fn(), addOrder: vi.fn(), syncJob: vi.fn(), businessSettings: vi.fn(), warehouses: vi.fn(), manage: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({ authenticate: vi.fn(async (request: any, reply: any) => {
@@ -19,6 +19,7 @@ vi.mock('../lib/auth.js', () => ({ authenticate: vi.fn(async (request: any, repl
 }) }));
 vi.mock('../lib/prisma.js', () => ({ prisma: { shop: { findFirst: mocks.findFirst, update: mocks.update }, syncJob: { findFirst: mocks.syncJob }, product: { findMany: mocks.products }, yandexOfferPublishOperation: { findUnique: mocks.publishFind, create: mocks.publishCreate, update: mocks.publishUpdate, findMany: mocks.publishMany } } }));
 vi.mock('../workers/product-sync.js', () => ({ addProductSyncJob: mocks.addSync }));
+vi.mock('../workers/order-sync.js', () => ({ addOrderSyncJob: mocks.addOrder }));
 vi.mock('../services/yandex-product-operations.js', () => ({ executeYandexProductOperation: mocks.manage }));
 vi.mock('../lib/crypto.js', () => ({ decrypt: mocks.decrypt }));
 vi.mock('../services/yandex-market-client.js', async (original) => ({
@@ -43,6 +44,7 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.parameters.mockResolvedValue({ categoryId: 10, parameters: [] });
     mocks.test.mockResolvedValue({ id: '123', placementType: 'FBS', apiAvailability: 'AVAILABLE' });
     mocks.addSync.mockResolvedValue({ id: 'queue-job', syncJobId: 'sync-1' });
+    mocks.addOrder.mockResolvedValue({ id: 'order-queue-job', syncJobId: 'order-sync-1' });
     mocks.businessSettings.mockResolvedValue({ warehouseModel: 'WAREHOUSE', onlyDefaultPrice: true, currency: 'RUR' });
     mocks.warehouses.mockResolvedValue([{ id: 9, campaignId: 123, name: 'warehouse' }]);
   });
@@ -66,6 +68,11 @@ describe('Yandex Market route ownership and read-only connection boundary', () =
     mocks.syncJob.mockResolvedValue({ id: 'sync-1', status: 'SUCCESS', result: { totalSynced: 2 } });
     expect((await call('/api/yandex-market/shop-a/sync-jobs/sync-1')).json().data.status).toBe('SUCCESS');
     expect(mocks.syncJob).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sync-1', shopId: 'shop-a', type: 'PRODUCT_PULL' } }));
+  });
+  it('queues an owned Yandex order sync without using the Ozon sync route', async () => {
+    const r = await call('/api/yandex-market/shop-a/sync-orders', 'POST', { since: '2026-10-01T00:00:00.000Z' });
+    expect(r.statusCode).toBe(200); expect(r.json()).toMatchObject({ code: 1, data: { syncJobId: 'order-sync-1' } });
+    expect(mocks.addOrder).toHaveBeenCalledWith('shop-a', '2026-10-01T00:00:00.000Z', { trigger: 'manual' });
   });
   it('keeps product management behind owned account sessions and reports UNKNOWN without unlocking', async () => {
     mocks.manage.mockResolvedValue({ id: 'op1', state: 'UNKNOWN', replayed: false });
