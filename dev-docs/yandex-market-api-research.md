@@ -1,6 +1,6 @@
 # Yandex Market Partner API 接入与验收
 
-## 2026-10-28 商品管理补齐，准备双区部署
+## 2026-10-28 商品管理已推送、双区部署完成
 
 用户明确将 Yandex 扩展为完整日常商品平台，基础改价/库存等操作不只服务于 Ozon 搬运；同时授权同步部署 CN。真实业务测试仍仅 COM，不在 CN 使用店铺凭据，不发真实改价/库存/隐藏/发布请求。
 
@@ -10,9 +10,15 @@
 
 `YandexProductManager` 在现有商品页按平台展示同步、单件/批量管理、进度、未知核对；移除 Yandex 下错误的 Ozon 同步/佣金/库存推送入口，隐藏/恢复使用官方 hidden-offers 而不是伪装成归档。服务端根据 business `warehouseModel` 和 `onlyDefaultPrice` 选择官方仓库/价格方法，不猜测跨店范围。
 
-本地验证：当前相关回归95项（完成后以最终命令计数核验）；隔离 PostgreSQL 161迁移、4项 journal 幂等/并发/未知与同步事务验证通过并清理 schema；Web build、类型/lint 和真实 React `/products` 隔离Chrome流程通过。UI证据 `C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-qNEVax`，涵盖平台分流、任务进度、共用价确认、UNKNOWN原请求及仓库库存；本地fixture写入不代表真实平台写入。
+本地验证：12文件95项相关回归通过；隔离 PostgreSQL 161迁移、4项 journal 幂等/并发/未知与同步事务验证通过并清理 schema；Web build、类型/lint 和真实 React `/products` 隔离Chrome流程通过。UI证据 `C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-qNEVax`，涵盖平台分流、任务进度、共用价确认、UNKNOWN原请求及仓库库存；本地fixture写入不代表真实平台写入。
 
-COM当前绑定店铺真实只读一次完整读取921件，settings返回 `warehouseModel=CAMPAIGN`、`onlyDefaultPrice=true`，平台确实存在零FIT及AVAILABLE两类库存；后一轮只读遇到上游 `YandexMarketApiError`，未把失败计为通过、未写数据库或重试业务请求。此阶段尚未提交/部署，COM运行454d272c，CN仍原472；最终签名/双区部署和生产数据读回将继续记录在本段。
+COM绑定店铺真实只读一次完整读取921件，settings返回 `warehouseModel=CAMPAIGN`、`onlyDefaultPrice=true`；另一轮只读遇到上游 `YandexMarketApiError`，未把失败计为通过、未写数据库或重试业务请求。最终部署源码 `9cae651128978044971d9f60d77cb2b65f823aad` 已推送 `feat/ai-media-prompt-registry`，区域签名候选 `1.0.474` 均验签通过，COM/CN均完成标准部署、备份恢复、161迁移检查（无待执行迁移）、三服务重启和本地ready。两区标准部署确实有API/Worker停机窗口；COM现有pilot、CN AI/BYOK/Ozon dark和Yandex目录发布关闭策略不变。官网扩展仍472，无website approval/CAS。
+
+部署后 COM已执行一次授权的“平台只读 → ERP商品快照写入”：由0导入921条，920条有价格；数据库实际明细中919件平台没有返回库存行，2件明确返回FIT/AVAILABLE正数。原有“零FIT”来自前一轮接口探测，不能当作本次同步同一份数据。故本次仅2件标记可售库存已知，其他显示未知而非伪造0。成功时间 `2026-10-28T14:34:12.908Z`，唯一原件 `COM-erp-snapshot-import.json`；写入仅ERP商品快照，Yandex/Ozon/Provider业务写入及费用0。
+
+COM部署后真实六类读取和令牌权限信息再次通过，仍具备商品/价格/库存写权限；商品管理的新同步/管理能力已上线，但真实改价、库存写入、隐藏/恢复仍未执行。两区公网ready及 `/products` 均HTTP200，官网latest仍472；COM/CN FULL VPS均0failure/1既有远端备份未配置warning，CN三服务目标cwd最终读回时间 `2026-10-28T14:56:45.166Z`。新页面生产登录浏览器交互未验证，不用HTTP200替代该证据。
+
+CN前两次部署在Prisma引擎下载处失败，尚未切换current；Node只读诊断复现连接官方CDN间歇超时。临时将 `binaries.prisma.sh` 固定到当前官方DNS地址并保持TLS校验后，同提交重新标准部署成功；下载完成即移除该行，`/etc/hosts`恢复前后SHA一致。失败源码与日志保留；仅清理本轮两份失败目录的node_modules（各943M）释放磁盘，未删业务备份或活动release。最终区域签名、完整部署/备份/VPS日志、临时配置清理和ERP读回仅在私有 `C:/Users/550W/AppData/Local/SS-ERP/private/release-9cae6511-yandex-dual`。
 
 ## 2026-10-28 当前实现与 COM 只读验收
 
@@ -59,7 +65,7 @@ COM当前绑定店铺真实只读一次完整读取921件，settings返回 `ware
 
 ### 尚未完成
 
-真实 Yandex 商品提交/卡片回读闭环、价格库存同步、Yandex 订单和物流/Ozon 配送对接、ERP 图片稳定公网转存、全类目通用映射及新页面生产登录浏览器验收仍未完成。已部署代码与本轮证据说明目录读取、授权和草稿准备可用，不能称为商品已真实上架、可销售或 Yandex 全量接入。下一阶段应先用资料完整的商品核对目标草稿和图片稳定性，再在明确授权后执行真实目录提交及卡片状态回读。
+真实 Yandex 商品提交/卡片回读闭环、价格库存写入实测、Yandex 订单和物流/Ozon 配送对接、ERP 图片稳定公网转存、全类目通用映射及新页面生产登录浏览器验收仍未完成。价格库存读取与基础管理代码已由本文顶部后续阶段补齐并双区部署；不能将其解释为商品已真实上架、可销售或 Yandex 全量接入。下一阶段应先用资料完整的商品核对目标草稿和图片稳定性，再在明确授权后执行真实目录提交及卡片状态回读。
 
 ## 研究边界与来源
 
