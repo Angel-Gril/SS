@@ -1,3 +1,9 @@
+## 2026-10-29 Yandex 商品/订单/物流对齐已双区部署
+
+提交 b601f8ef8e44427c53ed798e092e1ada3d90566 已推送并完成 COM/CN 标准部署。COM 使用 1.0.478 Cloud/Local .com origins 签名候选并通过 hosted-pilot contract；CN 使用同版本 .cn origins 独立签名候选并保持 AI/BYOK/Ozon dark。两区均通过目标提交备份恢复认证、161 migrations 无待执行、AI media 数据库 guard、Server/Web 构建、Cloud/Local 629 项扩展校验、三服务重启及 /ready。
+
+本轮本地与隔离 PostgreSQL、Web Chrome 和 Yandex 定向测试均未调用真实 Yandex/Ozon 写入，未产生费用；真实 COM 订单/货件确认、改价库存写入和实物打印仍未验收。失败部署目录已保留在两区 ailed-releases，未删除。
+
 # Yandex Market Partner API 接入与验收
 
 ## 2026-10-29 运营能力对齐已完成本地接线（待提交）

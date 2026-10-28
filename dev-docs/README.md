@@ -1,3 +1,7 @@
+## 2026-10-29 Yandex 运营对齐已部署
+
+b601f8e / 1.0.478 已推送并完成 COM/CN 双区部署；商品价格预览/批量管理、Yandex 原生订单工作台、FBS/Express first-mile 交接、DBS 运单与平台面单/交接文档接线完成。两区备份恢复、数据库/构建/ready 门禁通过，真实 Yandex/Ozon 业务写入仍未执行。准确 owner 见 [Yandex Market API 研究](yandex-market-api-research.md)。
+
 # SS ERP 内部开发真源
 
 ## 2026-10-29 Yandex订单同步与类目修复已双区部署
