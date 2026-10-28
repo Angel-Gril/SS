@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-29 Yandex订单同步与类目修复已双区部署
+
+最终提交`ed36dbff`已推送并完成COM/CN标准部署，内部区域签名476；153项回归、7项本机PG、类型/lint/Web构建及订单页Chrome通过。COM已重新同步921件、921件类目ID/名称齐全，近一年13窗口订单读取0单；只更新ERP快照，无真实平台业务写入或费用。双区FULL VPS及三服务目标cwd读回均通过，各0失败/1既有远端备份warning；官网仍472，Yandex履约写入与LAAS外部Ozon配置仍未完成。准确停机/失败与官方物流结论见[Yandex owner](yandex-market-api-research.md)。
+
 ## 2026-10-29 Yandex订单同步最终验证，双区发布准备
 
 类目修复与原生订单只读已接线；审查补齐旧Yandex发货/取消/备货假成功旁路拒绝、事务归属和旧快照保护。153项相关回归、7项本机PG及真实订单页Chrome通过；COM30天真实读取0单，不能冒称实际履约通过。旧a314的CN部署已停止恢复，双区current仍9cae6511；准确官方物流结论、停机/失败及最终发布边界见[Yandex owner](yandex-market-api-research.md)。

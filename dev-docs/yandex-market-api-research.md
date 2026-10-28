@@ -1,7 +1,7 @@
 # Yandex Market Partner API 接入与验收
 
 
-## 2026-10-29 订单只读验收与最终发布准备
+## 2026-10-29 订单同步与类目修复已统一双区部署
 
 官方研究复核了两个相反方向：Ozon Delivery可为其他销售渠道配送，需要独立配送准入；Yandex LAAS则可在后台绑定Ozon凭据和FBS仓，拉取Ozon来源订单并由Yandex仓处理。`sourcePlatform=OZON`表示来源而非承运商。未找到中国Yandex店默认使用OGL的官方证明。[Yandex LAAS](https://yandex.ru/support/marketplace/ru/tools/laas)、[中国跨境](https://partner.market.yandex.com/welcome/crossborder_cn)、[Ozon Delivery](https://logistics.ozon.ru)与官方OpenAPI为来源；研究技能草稿仅在ignored build，结论由本owner维护。
 
@@ -11,9 +11,12 @@
 
 153项定向回归通过；7项本机隔离PostgreSQL（含订单持久化、重放、时间线、旧状态回退、内部采购/国内运单保留、部分页失败及凭据变化）通过并清理schema。真实React订单页Chrome通过Yandex同步/进度、承运商/原生状态和写操作禁用，未访问Ozon接口；UI证据`C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-IjgrM5`。COM真实订单30天查询返回0单，读取合同/权限通过，不证明非空真实订单履约；无Yandex/Ozon/Provider业务写入或费用。
 
-## 2026-10-28 Yandex 订单只读同步与类目修复已验证，准备统一发布
 
-用户所说“Yandex 用 Ozon 物流”有条件成立，不能简化成“Yandex orderId 直接调用 Ozon Seller 发货”。Yandex 官方 LaaS/Fulfillment 说明（[外部平台集成](https://r.jina.ai/https://yandex.ru/support/marketplace/ru/tools/laas)）是：卖家在 Ozon 建 FBS 仓、在 Yandex 选择“集成其他平台→Ozon”、提供 Ozon ClientID + Admin Read only/Product/Warehouse/Posting FBS 权限 Token，并将 Ozon FBS 仓映射到 Yandex 仓；Yandex 拉取外部订单后组包并送 Ozon 分拣中心。这是 Yandex LAAS 作为外部平台履约编排，不能拿 Yandex 订单号冒充 Ozon posting。
+最终源码`ed36dbffaa6c7190afb8acd221b05e568c42ec41`已提交推送，区域签名候选476已验签，COM标准部署完成且FULL VPS通过（0failure/1既有remote backup warning）。COM从部署源码实际读取近一年13个窗口订单，返回0单、创建/更新均0；随后重同步921件商品，921件全部保存mapping类目ID和名称。观察时间`2026-10-28T17:08:14.137Z`，仅ERP商品/店铺同步快照更新，Yandex/Ozon/Provider业务写入及费用0。CN最终ed36标准部署也已完成，目标备份恢复、161迁移检查、重启后ready及FULL VPS通过，0failure/1既有remote backup warning；三服务cwd绑定目标提交的最终读回时间`2026-10-28T17:19:53.138Z`。私有证据root为`release-ed36dbff-yandex-orders`，旧a314失败/取消原件不覆盖。
+
+## 2026-10-28 Yandex 订单同步实现与物流研究
+
+官方资料能确认多平台物流合作，但没有证明当前中国Yandex店默认使用Ozon/OGL，不能简化成“Yandex orderId 直接调用 Ozon Seller 发货”。Yandex 官方 LaaS/Fulfillment 说明（[外部平台集成](https://r.jina.ai/https://yandex.ru/support/marketplace/ru/tools/laas)）是：卖家在 Ozon 建 FBS 仓、在 Yandex 选择“集成其他平台→Ozon”、提供 Ozon ClientID + Admin Read only/Product/Warehouse/Posting FBS 权限 Token，并将 Ozon FBS 仓映射到 Yandex 仓；Yandex 拉取外部订单后组包并送 Ozon 分拣中心。这是 Yandex LAAS 作为外部平台履约编排，不能拿 Yandex 订单号冒充 Ozon posting。
 
 中国跨境官方说明（[crossborder_cn](https://partner.market.yandex.com/welcome/crossborder_cn)）描述的是 FBS：卖家存储、包装并交到 Yandex 投递点，由 Yandex 配送和清关；未证明所有中国店铺默认启用 OGL 或 Ozon 物流。Ozon 官方 Delivery 独立流程（`/v1/delivery/check` → `/v2/delivery/checkout` → `/v2/order/create`）也不能由当前 Yandex API Key 直接代替。当前 ERP 没有独立的 Ozon-LaaS 凭据/仓库映射 owner，因此本轮只接 Yandex 原生订单读取，不自动创建 Ozon 物流单、组包单或额外费用。
 
