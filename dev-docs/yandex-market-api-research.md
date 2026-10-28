@@ -1,5 +1,19 @@
 # Yandex Market Partner API 接入与验收
 
+## 2026-10-28 商品管理补齐，准备双区部署
+
+用户明确将 Yandex 扩展为完整日常商品平台，基础改价/库存等操作不只服务于 Ozon 搬运；同时授权同步部署 CN。真实业务测试仍仅 COM，不在 CN 使用店铺凭据，不发真实改价/库存/隐藏/发布请求。
+
+截图根因为 `/products` 使用固定的 `OzonSyncActionDialog`，Yandex 只读目录没有接到 ERP `Product`，同步 Worker 也只有 Ozon 分支。新增 `yandex-product-sync.ts` 为 Yandex 快照 owner，复用原 BullMQ 商品队列及 SyncJob；按 campaign 列表精确补业务目录详情，不把同 business 的其他 campaign 商品导入。先完整读取最多 5000 商品/20仓库，再以 Serializable 事务更新 ERP，失败不保存不完整快照；保留 Yandex 原 SKU（含前导零/字母）、售价、状态和独立同步时间，不复用 Ozon 佣金/买手成本字段。库存优先 AVAILABLE，或明确 FIT-FREEZE/零FIT；未知不冒充0，同组仓库不重复计数。同步只写 ERP 商品快照，不写 Yandex。
+
+`yandex-product-operations.ts` 负责单件/最多100件统一价、划线价、按仓可售库存、隐藏及恢复展示；复用现有 `YandexOfferPublishOperation` 表的带 `kind=PRODUCT_MANAGEMENT` 记录，无新增 schema 或迁移。网页账号会话、产品/店铺/实时 campaign 归属、仓库归属、数据类型/数量和资源限制均服务端执行。共用价格与共享仓库组分别显式确认，不能自动扩大单店影响。状态记录“平台接受”，不提前修改本地价格库存冒充平台读回；UNKNOWN 保留原 body/key、按 business 数据库锁阻断重叠新请求，只在原请求只读回读符合时记收敛成功，未知不重发。商品目录发布开关仍关闭，基础管理由账号/店铺/API准入执行，不复用 AI pilot。
+
+`YandexProductManager` 在现有商品页按平台展示同步、单件/批量管理、进度、未知核对；移除 Yandex 下错误的 Ozon 同步/佣金/库存推送入口，隐藏/恢复使用官方 hidden-offers 而不是伪装成归档。服务端根据 business `warehouseModel` 和 `onlyDefaultPrice` 选择官方仓库/价格方法，不猜测跨店范围。
+
+本地验证：当前相关回归95项（完成后以最终命令计数核验）；隔离 PostgreSQL 161迁移、4项 journal 幂等/并发/未知与同步事务验证通过并清理 schema；Web build、类型/lint 和真实 React `/products` 隔离Chrome流程通过。UI证据 `C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-qNEVax`，涵盖平台分流、任务进度、共用价确认、UNKNOWN原请求及仓库库存；本地fixture写入不代表真实平台写入。
+
+COM当前绑定店铺真实只读一次完整读取921件，settings返回 `warehouseModel=CAMPAIGN`、`onlyDefaultPrice=true`，平台确实存在零FIT及AVAILABLE两类库存；后一轮只读遇到上游 `YandexMarketApiError`，未把失败计为通过、未写数据库或重试业务请求。此阶段尚未提交/部署，COM运行454d272c，CN仍原472；最终签名/双区部署和生产数据读回将继续记录在本段。
+
 ## 2026-10-28 当前实现与 COM 只读验收
 
 本轮目标是沿用 `/shops/yandex` 的店铺生态位，完成“已有 Ozon 商品快照 → 可编辑 Yandex 草稿 → 服务端校验 → 显式目录提交”的接线。真实测试仅使用用户在 **COM** 绑定的管理员账号及店铺，不使用 CN。真实商品、价格、库存和物流写入不在本轮验收授权内；`YANDEX_MARKET_PUBLISH_ENABLED` 保持关闭。源码已提交、推送并完成 COM 部署 `454d272c233a2caaacf0f6ca7be981bb5cfc0643`，部署签名候选为 `1.0.473`；官网公开扩展下载保持 `1.0.472`，CN 未访问或部署。

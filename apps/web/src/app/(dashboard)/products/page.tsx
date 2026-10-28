@@ -24,6 +24,7 @@ import { api, apiUrl } from '@/lib/api';
 import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
+import { YandexProductManager } from '@/components/yandex/product-manager';
 
 interface Product {
   id: string;
@@ -65,6 +66,9 @@ interface Product {
   lastOzonSyncAt: string | null;
   createdAt: string;
   updatedAt: string;
+  platformSyncedAt?: string | null;
+  platformStockKnown?: boolean;
+  platformStatusName?: string | null;
 }
 
 interface ProductListResponse {
@@ -346,6 +350,8 @@ function ProductsPageInner() {
 
   const [shops, setShops] = useState<Shop[]>([]);
   const [shopId, setShopId] = useState(initialShopId);
+  const isYandex = shops.find(shop => shop.id === shopId)?.platform === 'YANDEX';
+  const [yandexEditingId, setYandexEditingId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -416,8 +422,13 @@ function ProductsPageInner() {
   }, []);
 
   useEffect(() => {
-    if (shopId) {
+    let cancelled = false;
+    setWarehouses([]); setSelectedWarehouseId(null); setWarehouseStockMode('all'); setSelected(new Set());
+    setEditingPrice(null); setEditingStock(null); setYandexEditingId(null);
+    if (isYandex) { setProfitFilter('all'); setOzonPriceIndexFilter('all'); }
+    if (shopId && !isYandex) {
       api.get<OzonWarehouse[]>(`/api/products/warehouses/${shopId}`).then((res) => {
+        if (cancelled) return;
         if (res.code === 1 && res.data) {
           setWarehouses(res.data);
           setSelectedWarehouseId((current) => {
@@ -428,7 +439,8 @@ function ProductsPageInner() {
         }
       });
     }
-  }, [shopId]);
+    return () => { cancelled = true; };
+  }, [shopId, isYandex]);
 
   useEffect(() => {
     if (!filtersRestored) return;
@@ -697,6 +709,7 @@ function ProductsPageInner() {
             </form>
 
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              {isYandex ? <YandexProductManager key={shopId} shopId={shopId} products={products} selectedIds={Array.from(selected)} editingId={yandexEditingId} onEditingClose={() => setYandexEditingId(null)} onUpdated={loadProducts} /> : <>
               <Button
                 size="sm"
                 variant="default"
@@ -730,6 +743,7 @@ function ProductsPageInner() {
                 <Upload className="h-3.5 w-3.5" />
                 库存推送
               </Button>
+              </>}
               <Button size="sm" variant="ghost" className="h-8 px-2" onClick={loadProducts} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               </Button>
@@ -789,7 +803,7 @@ function ProductsPageInner() {
           {advancedFiltersOpen && (
             <div className="rounded-md border bg-muted/30 p-3 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <select
+                {!isYandex && <select
                   value={profitFilter}
                   onChange={(e) => { setProfitFilter(e.target.value as ProductProfitFilter); setPage(0); setSelected(new Set()); }}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm"
@@ -798,8 +812,8 @@ function ProductsPageInner() {
                   {PROFIT_FILTER_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
-                </select>
-                <select
+                </select>}
+                {!isYandex && <select
                   value={ozonPriceIndexFilter}
                   onChange={(e) => { setOzonPriceIndexFilter(e.target.value as ProductProfitFilter); setPage(0); setSelected(new Set()); }}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm"
@@ -808,7 +822,7 @@ function ProductsPageInner() {
                   {OZON_PRICE_INDEX_FILTER_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
-                </select>
+                </select>}
                 <select
                   value={warehouseStockMode}
                   onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
@@ -904,7 +918,7 @@ function ProductsPageInner() {
             </div>
           )}
 
-          {selectedCount > 0 && (
+          {selectedCount > 0 && !isYandex && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
               <span className="text-sm font-medium">已选 {selectedCount} 件</span>
               <div className="flex flex-wrap items-center gap-2">
@@ -958,7 +972,7 @@ function ProductsPageInner() {
                     />
                   </TableHead>
                   <TableHead className="whitespace-nowrap">商品信息</TableHead>
-                  <TableHead className="whitespace-nowrap">类目 / 佣金</TableHead>
+                  <TableHead className="whitespace-nowrap">{isYandex ? '类目' : '类目 / 佣金'}</TableHead>
                   <TableHead className="whitespace-nowrap">状态</TableHead>
                   <TableHead className="whitespace-nowrap">
                     <div ref={priceFilterMenuRef} className="relative flex items-center justify-center">
@@ -969,7 +983,7 @@ function ProductsPageInner() {
                         className="h-7 gap-1 px-2 text-xs font-medium"
                         aria-label="按 Ozon 价格指数筛选"
                         aria-expanded={priceFilterMenuOpen}
-                        onClick={() => setPriceFilterMenuOpen((open) => !open)}
+                        onClick={() => !isYandex && setPriceFilterMenuOpen((open) => !open)}
                       >
                         价格
                         {ozonPriceIndexFilter !== 'all' && (
@@ -977,7 +991,7 @@ function ProductsPageInner() {
                         )}
                         <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                       </Button>
-                      {priceFilterMenuOpen && (
+                      {priceFilterMenuOpen && !isYandex && (
                         <div className="absolute left-1/2 top-full z-50 mt-2 w-40 -translate-x-1/2 rounded-lg border border-border bg-white p-1 text-slate-900 shadow-xl ring-1 ring-black/5 dark:bg-slate-950 dark:text-slate-100 dark:ring-white/10">
                           {OZON_PRICE_INDEX_FILTER_OPTIONS.map((option) => {
                             const selectedOption = option.value === ozonPriceIndexFilter;
@@ -1004,7 +1018,7 @@ function ProductsPageInner() {
                   </TableHead>
                   <TableHead className="whitespace-nowrap text-right">库存</TableHead>
                   <TableHead className="whitespace-nowrap text-right">重量</TableHead>
-                  <TableHead className="whitespace-nowrap">Ozon / 同步</TableHead>
+                  <TableHead className="whitespace-nowrap">{isYandex ? 'Yandex / 同步' : 'Ozon / 同步'}</TableHead>
                   <TableHead className="whitespace-nowrap">时间</TableHead>
                   <TableHead className="whitespace-nowrap text-right">操作</TableHead>
                 </TableRow>
@@ -1031,8 +1045,8 @@ function ProductsPageInner() {
                   </TableRow>
                 ) : products.map((p) => {
                   const mutable = isProductMutable(p);
-                  const displaySku = getDisplaySku(p);
-                  const ozonProductUrl = getOzonProductUrl(p);
+                  const displaySku = isYandex ? p.sku || p.offerId : getDisplaySku(p);
+                  const ozonProductUrl = isYandex ? null : getOzonProductUrl(p);
                   const priceNumber = toFiniteNumber(p.price);
                   const commissionRate = toFiniteNumber(p.commissionRate);
                   const commissionAmount = priceNumber != null && commissionRate != null
@@ -1105,12 +1119,12 @@ function ProductsPageInner() {
                           </div>
                         )}
                         {!p.categoryId && commissionRate == null && (
-                          <div className="text-muted-foreground">待同步类目/佣金</div>
+                          <div className="text-muted-foreground">{isYandex ? '未提供类目' : '待同步类目/佣金'}</div>
                         )}
                       </div>
                     </TableCell>
                     <TableCell className="px-3 py-2 align-top">
-                      <StatusBadge
+                      {isYandex ? <Badge variant="secondary">{p.platformStatusName || p.status || '待同步'}</Badge> : <StatusBadge
                         status={p.status}
                         visibility={p.visibility}
                         syncStatus={p.syncStatus}
@@ -1118,7 +1132,7 @@ function ProductsPageInner() {
                         ozonStatusDescription={p.ozonStatusDescription}
                         ozonModerateStatus={p.ozonModerateStatus}
                         ozonStatusTone={p.ozonStatusTone}
-                      />
+                      />}
                     </TableCell>
                     <TableCell className="px-3 py-2 align-top">
                       {editingPrice === p.id ? (
@@ -1166,6 +1180,7 @@ function ProductsPageInner() {
                             type="button"
                             className={`min-w-0 flex-1 space-y-1 text-left leading-4 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
                             onClick={() => {
+                              if (isYandex) { setYandexEditingId(p.id); return; }
                               if (!mutable) {
                                 toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
                                 return;
@@ -1184,14 +1199,14 @@ function ProductsPageInner() {
                                 {oldPrice || '未设置'}
                               </span>
                             </div>
-                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                            {!isYandex && <div className="flex items-baseline gap-1 whitespace-nowrap">
                               <span className="text-muted-foreground">最低价:</span>
                               <span className="tabular-nums text-muted-foreground">{minPrice || '未设置'}</span>
-                            </div>
-                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                            </div>}
+                            {!isYandex && <div className="flex items-baseline gap-1 whitespace-nowrap">
                               <span className="text-muted-foreground">促销后:</span>
                               <span className="tabular-nums font-medium text-rose-500">{promoPrice || '-'}</span>
-                            </div>
+                            </div>}
                             {buyerPrice && (
                               <div className="flex items-baseline gap-1 whitespace-nowrap text-[10px] text-amber-600">
                                 <span>买手价格:</span>
@@ -1212,6 +1227,7 @@ function ProductsPageInner() {
                             disabled={!mutable}
                             title="修改价格"
                             onClick={() => {
+                              if (isYandex) { setYandexEditingId(p.id); return; }
                               setEditingPrice(p.id);
                               setPriceForm({ price: p.price || '', oldPrice: p.oldPrice || '', minPrice: p.minPrice || '' });
                             }}
@@ -1243,6 +1259,7 @@ function ProductsPageInner() {
                         <div
                           className={`group inline-flex items-center gap-1 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
                           onClick={() => {
+                            if (isYandex) { setYandexEditingId(p.id); return; }
                             if (!mutable) {
                               toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
                               return;
@@ -1252,7 +1269,7 @@ function ProductsPageInner() {
                           }}
                         >
                           <span className={`tabular-nums font-medium ${(p.warehouseStock ?? p.stock) <= 0 ? 'text-destructive' : ''}`}>
-                            {p.warehouseStock ?? p.stock}
+                            {isYandex && p.platformStockKnown === false ? '—' : p.warehouseStock ?? p.stock}
                           </span>
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
@@ -1267,7 +1284,7 @@ function ProductsPageInner() {
                         PID {p.platformProductId || '-'}
                       </div>
                       <div className="truncate" title={p.offerId || undefined}>Offer {p.offerId || '-'}</div>
-                      <div>同步 {formatDateTime(p.lastOzonSyncAt)}</div>
+                      <div>同步 {formatDateTime(p.platformSyncedAt || p.lastOzonSyncAt)}</div>
                     </TableCell>
                     <TableCell className="whitespace-nowrap px-3 py-2 align-top text-xs text-muted-foreground">
                       <div>创建 {formatDateTime(p.ozonCreatedAt || p.createdAt)}</div>
@@ -1275,7 +1292,7 @@ function ProductsPageInner() {
                     </TableCell>
                     <TableCell className="px-3 py-2 text-right align-top">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setDetailProductId(p.id)}>
+                        <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => isYandex ? setYandexEditingId(p.id) : setDetailProductId(p.id)}>
                           <Pencil className="h-3 w-3" />
                           编辑
                         </Button>
@@ -1290,7 +1307,7 @@ function ProductsPageInner() {
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                         )}
-                        <Button
+                        {!isYandex && <Button
                           type="button"
                           size="sm"
                           variant="outline"
@@ -1301,7 +1318,7 @@ function ProductsPageInner() {
                         >
                           <Archive className="h-3 w-3" />
                           {String(p.visibility || '').toUpperCase() === 'ARCHIVED' ? '恢复' : '归档'}
-                        </Button>
+                        </Button>}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1405,7 +1422,7 @@ function ProductsPageInner() {
       <ProductPreviewDialog
         productId={previewProductId}
         onClose={() => setPreviewProductId(null)}
-        onEdit={(id) => { setPreviewProductId(null); setDetailProductId(id); }}
+        onEdit={(id) => { setPreviewProductId(null); if (isYandex) setYandexEditingId(id); else setDetailProductId(id); }}
       />
       <StockSyncDialog
         open={stockSyncOpen}

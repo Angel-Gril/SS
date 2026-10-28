@@ -1,5 +1,9 @@
 # SS ERP 内部开发真源
 
+## 2026-10-28 Yandex 日常商品管理本地补齐，双区部署准备
+
+按用户确认新增商品/价格/库存导入ERP、单件/批量改价及按仓改库存、隐藏/恢复、共享范围确认和UNKNOWN原请求核对；修复选中Yandex仍出现Ozon同步框。相关回归、4项真实本机PG及隔离Chrome通过，COM只读完整读取921商品；真实平台写入0。用户已授权COM/CN部署，当前尚未切换本轮代码；唯一实现/验证边界见[Yandex owner](yandex-market-api-research.md)。
+
 ## 2026-10-28 Yandex 目录与 Ozon 商品搬运草稿已推送、COM 部署通过
 
 源码 `454d272c` 已提交推送并按标准流程部署 COM，内部签名候选473；备份恢复/迁移检查/VPS及三服务读回通过，VPS 0失败/1既有远端备份warning。69项定向、类型/lint、Web构建与隔离Chrome通过；部署后六类真实 Yandex 读取、Ozon 草稿预览及官方令牌权限读取通过。仅使用COM，CN未访问/部署，官网仍472，真实平台业务写入/费用0。准确 owner、官方无商品dry-run边界和剩余业务仅见 [Yandex 接入与验收](yandex-market-api-research.md)。

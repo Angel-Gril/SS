@@ -35,6 +35,11 @@ export class YandexMarketApiError extends Error {
 }
 
 type ClientOptions = { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number };
+const offerId = z.string().trim().min(1).max(255);
+const price = z.object({ value: z.number().finite().positive().max(100000000), discountBase: z.number().finite().positive().max(100000000).optional(), currencyId: z.string().regex(/^[A-Z]{3}$/u) }).strict();
+const stockOffer = z.object({ offerId, stocks: z.array(z.object({ type: z.string().max(50), count: z.number().int().min(0).max(2000000000) })).max(20), updatedAt: z.string().optional() });
+const paging = z.object({ nextPageToken: z.string().max(1000).nullish() }).nullish();
+export type YandexWarehouseStock = { warehouseId: number; offers: z.infer<typeof stockOffer>[] };
 export type YandexOfferMappingPayload = {
   offer: {
     offerId: string;
@@ -68,7 +73,7 @@ export class YandexMarketClient {
     this.timeoutMs = Math.min(30_000, Math.max(1_000, options.timeoutMs ?? 12_000));
   }
 
-  private async request(path: string, options: { query?: Record<string, string | undefined>; method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<unknown> {
+  private async request(path: string, options: { query?: Record<string, string | undefined>; method?: 'GET' | 'POST' | 'PUT'; body?: unknown } = {}): Promise<unknown> {
     const url = new URL(path, this.baseUrl);
     for (const [key, value] of Object.entries(options.query ?? {})) if (value) url.searchParams.set(key, value);
     const controller = new AbortController();
@@ -178,6 +183,76 @@ export class YandexMarketClient {
       body: page.offerIds ? { offerIds: page.offerIds } : {},
     })).result;
     return { offerCards: result.offerCards, nextPageToken: result.paging?.nextPageToken ?? null };
+  }
+
+  async getBusinessSettings(businessId: string) {
+    yandexId.parse(businessId);
+    return z.object({ status: z.literal('OK'), result: z.object({ settings: z.object({
+      warehouseModel: z.enum(['CAMPAIGN', 'WAREHOUSE']), onlyDefaultPrice: z.boolean(), currency: z.string().regex(/^[A-Z]{3}$/u),
+    }) }) }).parse(await this.request(`/v2/businesses/${businessId}/settings`, { method: 'POST' })).result.settings;
+  }
+
+  async getCampaignOffers(campaignId: string, input: YandexPage = {}) {
+    yandexId.parse(campaignId); const page = yandexPage.parse(input);
+    const p = z.object({ value: z.number().positive(), discountBase: z.number().optional(), currencyId: z.string().optional() }).passthrough();
+    const result = z.object({ status: z.literal('OK'), result: z.object({ offers: z.array(z.object({
+      offerId, status: z.string().max(100), basicPrice: p.nullish(), campaignPrice: p.nullish(),
+    }).passthrough()).max(100), paging }) }).parse(await this.request(`/v2/campaigns/${campaignId}/offers`, {
+      method: 'POST', query: page.offerIds ? {} : { limit: String(page.limit ?? 50), pageToken: page.pageToken }, body: page.offerIds ? { offerIds: page.offerIds } : {},
+    })).result;
+    return { offers: result.offers, nextPageToken: result.paging?.nextPageToken ?? null };
+  }
+
+  async getShopWarehouses(businessId: string, campaignId: string) {
+    yandexId.parse(businessId); yandexId.parse(campaignId);
+    const result: { id: number; name: string; campaignId: number; groupInfo?: { id: number; name: string } | null }[] = [];
+    let pageToken: string | undefined; const seen = new Set<string>();
+    for (let page = 0; page < 20; page++) {
+      const data = z.object({ status: z.literal('OK'), result: z.object({ warehouses: z.array(z.object({
+        id: yandexCategoryId, name: z.string().max(500), campaignId: yandexCategoryId,
+        groupInfo: z.object({ id: yandexCategoryId, name: z.string().max(500) }).nullish(),
+      })).max(100), paging }) }).parse(await this.request(`/v2/businesses/${businessId}/warehouses`, {
+        method: 'POST', query: { limit: '30', pageToken }, body: { campaignIds: [Number(campaignId)] },
+      })).result;
+      if (data.warehouses.some(w => String(w.campaignId) !== campaignId)) throw new YandexMarketApiError(502, 'Yandex 仓库归属不匹配');
+      result.push(...data.warehouses);
+      if (!data.paging?.nextPageToken) return result;
+      if (seen.has(data.paging.nextPageToken)) break;
+      seen.add(data.paging.nextPageToken); pageToken = data.paging.nextPageToken;
+    }
+    throw new YandexMarketApiError(502, 'Yandex 仓库分页未完成');
+  }
+
+  async getStocks(businessId: string, campaignId: string, model: 'CAMPAIGN' | 'WAREHOUSE', offerIds: string[], warehouseId?: number): Promise<YandexWarehouseStock[]> {
+    yandexId.parse(businessId); yandexId.parse(campaignId); z.array(offerId).min(1).max(100).parse(offerIds);
+    if (model === 'WAREHOUSE') {
+      yandexCategoryId.parse(warehouseId);
+      const r = z.object({ status: z.literal('OK'), result: z.object({ partnerWarehouseId: yandexCategoryId, offers: z.array(stockOffer).max(100) }) }).parse(
+        await this.request(`/v3/businesses/${businessId}/offers/stocks`, { method: 'POST', body: { partnerWarehouseId: warehouseId, offerIds } })).result;
+      if (r.partnerWarehouseId !== warehouseId) throw new YandexMarketApiError(502, 'Yandex 库存仓库不匹配');
+      return [{ warehouseId: r.partnerWarehouseId, offers: r.offers }];
+    }
+    return z.object({ status: z.literal('OK'), result: z.object({ warehouses: z.array(z.object({ warehouseId: yandexCategoryId, offers: z.array(stockOffer).max(100) })).max(100) }) }).parse(
+      await this.request(`/v2/campaigns/${campaignId}/offers/stocks`, { method: 'POST', body: { offerIds } })).result.warehouses;
+  }
+
+  async updateProductPrices(businessId: string, campaignId: string, scope: 'BUSINESS' | 'CAMPAIGN', offers: { offerId: string; price: z.infer<typeof price> }[]) {
+    yandexId.parse(businessId); yandexId.parse(campaignId);
+    z.array(z.object({ offerId, price }).strict()).min(1).max(100).parse(offers);
+    return this.request(scope === 'BUSINESS' ? `/v2/businesses/${businessId}/offer-prices/updates` : `/v2/campaigns/${campaignId}/offer-prices/updates`, { method: 'POST', body: { offers } });
+  }
+
+  async updateProductStocks(businessId: string, campaignId: string, model: 'CAMPAIGN' | 'WAREHOUSE', rows: { offerId: string; count: number }[], warehouseId: number) {
+    yandexId.parse(businessId); yandexId.parse(campaignId); yandexCategoryId.parse(warehouseId);
+    z.array(z.object({ offerId, count: z.number().int().min(0).max(2000000000) }).strict()).min(1).max(100).parse(rows);
+    return model === 'WAREHOUSE'
+      ? this.request(`/v3/businesses/${businessId}/offers/stocks/update`, { method: 'POST', body: { skuItems: rows.map(row => ({ sku: row.offerId, partnerWarehouseId: warehouseId, count: row.count })) } })
+      : this.request(`/v2/campaigns/${campaignId}/offers/stocks`, { method: 'PUT', body: { skus: rows.map(row => ({ sku: row.offerId, items: [{ count: row.count }] })) } });
+  }
+
+  async setProductHidden(campaignId: string, offerIds: string[], hidden: boolean) {
+    yandexId.parse(campaignId); z.array(offerId).min(1).max(100).parse(offerIds);
+    return this.request(`/v2/campaigns/${campaignId}/hidden-offers${hidden ? '' : '/delete'}`, { method: 'POST', body: { hiddenOffers: offerIds.map(offerId => ({ offerId })) } });
   }
 
   async updateOfferMappings(businessId: string, offerMappings: YandexOfferMappingPayload[], language = 'RU'): Promise<unknown> {

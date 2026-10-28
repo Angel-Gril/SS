@@ -88,6 +88,18 @@ describe('shop product list route', () => {
     vi.clearAllMocks();
   });
 
+  it('returns Yandex SKU/state and avoids Ozon cost/category enrichment', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'YANDEX', lastSyncAt: null });
+    mocks.productCount.mockResolvedValue(1);
+    mocks.productFindMany.mockResolvedValue([productRow({ sku: '000-A', status: 'NO_STOCKS', variants: { yandexMarket: { stockKnown: false, syncedAt: '2026-10-28T00:00:00Z' } } })]);
+    const app = await buildApp();
+    try {
+      const r = await app.inject({ method: 'GET', url: '/api/shops/shop-1/products' });
+      expect(r.statusCode).toBe(200); expect(r.json().data.rows[0]).toMatchObject({ sku: '000-A', platformStatusName: '无可售库存', platformStockKnown: false });
+      expect(mocks.categoryCatalogFindMany).not.toHaveBeenCalled(); expect(mocks.sourceQuoteFindMany).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
   it('returns status tab counts using the same non-status filters as the product list', async () => {
     const lastSyncAt = new Date('2026-07-03T08:00:00.000Z');
     mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', lastSyncAt });

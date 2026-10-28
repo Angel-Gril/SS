@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { projectYandexProduct } from '../services/yandex-product-sync.js';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -1380,7 +1381,7 @@ export async function shopRoutes(app: FastifyInstance) {
         orderBy: productOrderBy,
         select: productSelect,
       });
-      if (profitFilter !== 'all') {
+      if (profitFilter !== 'all' && shop.platform === 'OZON') {
         buyerCostByProductId = await fetchProductBuyerCosts(
           userId,
           allRows.map((row) => String(row.platformProductId || '').trim()).filter(Boolean),
@@ -1408,7 +1409,7 @@ export async function shopRoutes(app: FastifyInstance) {
       total = statusCounts[statusFilter];
     }
 
-    const categoryPairs = rows.map((row) => {
+    const categoryPairs = (shop.platform === 'OZON' ? rows : []).map((row) => {
       const syncCategory = getProductSyncCategory(row.variants);
       const descriptionCategoryId = positiveInt(row.categoryId) ?? syncCategory?.descriptionCategoryId ?? null;
       const typeId = syncCategory?.typeId ?? null;
@@ -1446,7 +1447,7 @@ export async function shopRoutes(app: FastifyInstance) {
       .map((row) => String(row.platformProductId || '').trim())
       .filter((value) => value);
     const missingBuyerCostIds = platformProductIds.filter((productId) => !buyerCostByProductId.has(productId));
-    if (missingBuyerCostIds.length) {
+    if (missingBuyerCostIds.length && shop.platform === 'OZON') {
       const pageBuyerCosts = await fetchProductBuyerCosts(userId, missingBuyerCostIds);
       for (const [productId, cost] of pageBuyerCosts) {
         buyerCostByProductId.set(productId, cost);
@@ -1459,6 +1460,7 @@ export async function shopRoutes(app: FastifyInstance) {
       data: {
         total,
         rows: rows.map((r) => {
+          if (shop.platform === 'YANDEX') return projectYandexProduct(r);
           const { variants, ...rest } = r;
           const statusDisplay = getOzonStatusDisplay(variants, r.status);
           const ozonPrice = getOzonPriceIndexSnapshot(variants);

@@ -9,6 +9,32 @@ function clientFor(body: unknown, status = 200) {
 }
 
 describe('Yandex Market Partner API client', () => {
+  it('reads shop offers and business settings without changing platform data', async () => {
+    const c = clientFor({ status: 'OK', result: { offers: [{ offerId: '000-A', status: 'PUBLISHED', basicPrice: { value: 25, currencyId: 'RUR' } }], paging: { nextPageToken: 'n' } } });
+    expect(await c.client.getCampaignOffers('123', { limit: 5 })).toMatchObject({ offers: [{ offerId: '000-A' }], nextPageToken: 'n' });
+    expect(String(c.fetchImpl.mock.calls[0]![0])).toContain('/v2/campaigns/123/offers?limit=5');
+    const settings = clientFor({ status: 'OK', result: { settings: { warehouseModel: 'WAREHOUSE', onlyDefaultPrice: true, currency: 'RUR' } } });
+    expect(await settings.client.getBusinessSettings('77')).toMatchObject({ warehouseModel: 'WAREHOUSE', onlyDefaultPrice: true });
+  });
+
+  it('reads exact stocks using the official warehouse model and preserves stock types', async () => {
+    const c = clientFor({ status: 'OK', result: { partnerWarehouseId: 9, offers: [{ offerId: '000-A', stocks: [{ type: 'AVAILABLE', count: 3 }, { type: 'FREEZE', count: 2 }] }] } });
+    const result = await c.client.getStocks('77', '123', 'WAREHOUSE', ['000-A'], 9);
+    expect(result[0]).toMatchObject({ warehouseId: 9, offers: [{ offerId: '000-A', stocks: [{ type: 'AVAILABLE', count: 3 }, { type: 'FREEZE', count: 2 }] }] });
+    expect(String(c.fetchImpl.mock.calls[0]![0])).toBe('https://api.partner.market.yandex.ru/v3/businesses/77/offers/stocks');
+    expect(JSON.parse(c.fetchImpl.mock.calls[0]![1].body)).toEqual({ partnerWarehouseId: 9, offerIds: ['000-A'] });
+  });
+
+  it('uses distinct official price and inventory writers without converting leading-zero SKU IDs', async () => {
+    const c = clientFor({ status: 'OK' });
+    await c.client.updateProductPrices('77', '123', 'CAMPAIGN', [{ offerId: '000-A', price: { value: 12, currencyId: 'RUR' } }]);
+    expect(String(c.fetchImpl.mock.calls[0]![0])).toContain('/v2/campaigns/123/offer-prices/updates');
+    await c.client.updateProductStocks('77', '123', 'WAREHOUSE', [{ offerId: '000-A', count: 7 }], 9);
+    expect(JSON.parse(c.fetchImpl.mock.calls[1]![1].body)).toEqual({ skuItems: [{ sku: '000-A', partnerWarehouseId: 9, count: 7 }] });
+    await c.client.updateProductStocks('77', '123', 'CAMPAIGN', [{ offerId: '000-A', count: 7 }], 9);
+    expect(c.fetchImpl.mock.calls[2]![1].method).toBe('PUT');
+    expect(JSON.parse(c.fetchImpl.mock.calls[2]![1].body)).toEqual({ skus: [{ sku: '000-A', items: [{ count: 7 }] }] });
+  });
   it('accepts a large official category dictionary within the bounded response byte limit', async () => {
     const values = Array.from({ length: 20001 }, (_, index) => ({ id: index + 1, value: `value-${index}` }));
     const { client } = clientFor({ status: 'OK', result: { categoryId: 10, parameters: [{ id: 1, type: 'ENUM', required: false, multivalue: false, allowCustomValues: false, values }] } });

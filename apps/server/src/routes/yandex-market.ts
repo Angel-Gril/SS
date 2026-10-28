@@ -40,6 +40,40 @@ export async function yandexMarketRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(status).send({ code: 0, meta: { notDispatched: true }, msg: error instanceof z.ZodError ? 'Yandex 请求参数或返回格式无效' : error instanceof Error ? error.message : 'Yandex 读取失败' });
   };
 
+  app.post('/:shopId/sync-products', { config: { rateLimit: { max: 3, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      await readYandexBusiness(context.shop, context.client);
+      const { addProductSyncJob } = await import('../workers/product-sync.js');
+      const job = await addProductSyncJob(context.shop.id);
+      return reply.send({ code: 1, msg: 'Yandex 商品、价格和库存读取任务已创建', data: job });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.get('/:shopId/sync-jobs/:jobId', async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    const jobId = shopIdSchema.parse((request.params as { jobId: string }).jobId);
+    const job = await prisma.syncJob.findFirst({ where: { id: jobId, shopId: context.shop.id, type: 'PRODUCT_PULL' }, select: { id: true, status: true, result: true, errorMessage: true } });
+    return job ? reply.send({ code: 1, data: job }) : reply.status(404).send({ code: 0, msg: '同步任务不存在' });
+  });
+  app.get('/:shopId/product-context', async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const businessId = await readYandexBusiness(context.shop, context.client);
+      const [settings, warehouses] = await Promise.all([context.client.getBusinessSettings(businessId), context.client.getShopWarehouses(businessId, context.shop.clientId!)]);
+      return reply.send({ code: 1, data: { businessId, ...settings, warehouses } });
+    } catch (error) { return failure(reply, error); }
+  });
+  app.post('/:shopId/product-operations', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const context = await ownedYandexShop(request, reply); if (!context) return;
+    try {
+      const { executeYandexProductOperation } = await import('../services/yandex-product-operations.js');
+      const result = await executeYandexProductOperation({ shop: context.shop, client: context.client,
+        ownerUserId: String((request as any).user.userId), actorUserId: String((request as any).user.actorUserId || (request as any).user.userId), body: request.body });
+      return reply.send({ code: result?.state === 'SUCCEEDED' ? 1 : 0,
+        msg: result?.state === 'SUCCEEDED' ? 'Yandex 已接受操作，请同步读回最新数据' : result?.state === 'REJECTED' ? 'Yandex 拒绝了操作' : '结果尚未确认，请核对原请求', data: result });
+    } catch (error) { return failure(reply, error); }
+  });
+
   app.get('/:shopId/settings', async (request, reply) => {
     const context = await ownedYandexShop(request, reply); if (!context) return;
     try { await readYandexBusiness(context.shop, context.client); return reply.send({ code: 1, data: await context.client.getCampaignSettings(context.shop.clientId!) }); }

@@ -72,6 +72,11 @@ async function runProductSyncInline(shopId: string, syncJobId?: string) {
 }
 
 async function syncProductsCore(shopId: string, shop: any): Promise<number> {
+  if (shop.platform === 'YANDEX') {
+    const { syncYandexProducts } = await import('../services/yandex-product-sync.js');
+    return syncYandexProducts(shop);
+  }
+  if (shop.platform !== 'OZON') throw new Error('该平台尚未接入商品同步');
   const client = new OzonClient({
     clientId: shop.clientId!,
     apiKey: decrypt(shop.apiKeyEncrypted),
