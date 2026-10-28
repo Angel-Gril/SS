@@ -1,5 +1,6 @@
 import { z } from 'zod';
 const numericId = z.number().int().positive().safe();
+const calendarDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value);
 const money = z.object({ value: z.number().finite().min(0).max(100000000), currencyId: z.string().regex(/^[A-Z]{3}$/u) });
 const prices = z.object({ payment: money.nullish(), cashback: money.nullish(), subsidy: money.nullish(), delivery: z.object({ payment: money.nullish(), subsidy: money.nullish() }).nullish() });
 export const yandexOrder = z.object({
@@ -9,8 +10,8 @@ export const yandexOrder = z.object({
   items: z.array(z.object({ id: numericId, offerId: z.string().min(1).max(255), offerName: z.string().min(1).max(1000), count: z.number().int().positive().max(1000000), prices: prices.nullish() })).min(1).max(1000),
   prices: prices.nullish(),
   delivery: z.object({ type: z.string().max(50), serviceName: z.string().max(500), deliveryServiceId: numericId, deliveryPartnerType: z.string().max(50), warehouseId: z.string().max(255).nullish(),
-    dates: z.object({ fromDate: z.string().max(35), toDate: z.string().max(35).optional(), realDeliveryDate: z.string().max(35).optional() }),
-    shipment: z.object({ id: numericId.nullish(), shipmentDate: z.string().max(35), shipmentTime: z.string().max(35).nullish() }).nullish(),
+    dates: z.object({ fromDate: calendarDate, toDate: calendarDate.optional(), realDeliveryDate: calendarDate.optional() }),
+    shipment: z.object({ id: numericId.nullish(), shipmentDate: calendarDate, shipmentTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/u).nullish() }).nullish(),
     tracks: z.array(z.object({ trackCode: z.string().max(200).optional(), deliveryServiceId: numericId })).max(100).nullish(),
   }),
 });
@@ -31,7 +32,7 @@ export function normalizeYandexOrder(raw: YandexOrder, currency: string) {
   const normalizeCurrency = (value: string) => value === 'RUR' ? 'RUB' : value;
   const sum = (p: z.infer<typeof prices> | null | undefined) => {
     if (!p?.payment) return null;
-    if ([p.payment, p.cashback, p.subsidy].some(v => v && normalizeCurrency(v.currencyId) !== normalizeCurrency(currency))) throw new Error('Yandex 订单币种不一致');
+    if ([p.payment, p.cashback, p.subsidy, p.delivery?.payment, p.delivery?.subsidy].some(v => v && normalizeCurrency(v.currencyId) !== normalizeCurrency(currency))) throw new Error('Yandex 订单币种不一致');
     // payment + cashback is item value; subsidy is seller compensation, not another buyer payment.
     return Math.round((p.payment.value + (p.cashback?.value ?? 0)) * 100) / 100;
   };

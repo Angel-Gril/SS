@@ -1,11 +1,15 @@
 # SS ERP 内部开发真源
 
+## 2026-10-29 Yandex订单同步最终验证，双区发布准备
+
+类目修复与原生订单只读已接线；审查补齐旧Yandex发货/取消/备货假成功旁路拒绝、事务归属和旧快照保护。153项相关回归、7项本机PG及真实订单页Chrome通过；COM30天真实读取0单，不能冒称实际履约通过。旧a314的CN部署已停止恢复，双区current仍9cae6511；准确官方物流结论、停机/失败及最终发布边界见[Yandex owner](yandex-market-api-research.md)。
+
 ## 2026-10-28 Yandex 订单只读同步与类目修复准备统一发布
 
 官方LAAS可条件集成Ozon FBS仓和外部订单，但不是直接把Yandex订单号调用Ozon Seller API；当前新增Yandex原生订单读取/状态物流字段保存及平台分流同步入口，真实COM空窗口读取通过，未发货/取消/面单/组包写入。类目漏读修复和订单同步本地验证尚未推送。详见[Yandex owner](yandex-market-api-research.md)。
 ## 2026-10-28 Yandex 类目漏读已确认、本地修复待发布
 
-COM抽查15件官方mapping均有类目，而ERP旧同步只读offer导致921条categoryId为空；已补实际类目/名称及一致性投影回归，尚未提交部署。Yandex原生订单只读已接线，LAAS外部Ozon授权/仓映射、履约写入、面单和物流组包仍未实现，不能将现有Ozon模块视为已接入。唯一证据与功能边界见[Yandex owner](yandex-market-api-research.md)。
+COM抽查15件官方mapping均有类目，而ERP旧同步只读offer导致921条categoryId为空；已补实际类目/名称及一致性投影回归，尚未提交部署。Yandex原生订单只读、平台分流和旧履约旁路拒绝已接线，LAAS外部Ozon授权/仓映射、履约写入、面单和物流组包仍未实现，不能将现有Ozon模块视为已接入。唯一证据与功能边界见[Yandex owner](yandex-market-api-research.md)。
 
 ## 2026-10-28 Yandex 日常商品管理已推送、双区部署完成
 

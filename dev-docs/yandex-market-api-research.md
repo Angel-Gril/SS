@@ -1,5 +1,16 @@
 # Yandex Market Partner API 接入与验收
 
+
+## 2026-10-29 订单只读验收与最终发布准备
+
+官方研究复核了两个相反方向：Ozon Delivery可为其他销售渠道配送，需要独立配送准入；Yandex LAAS则可在后台绑定Ozon凭据和FBS仓，拉取Ozon来源订单并由Yandex仓处理。`sourcePlatform=OZON`表示来源而非承运商。未找到中国Yandex店默认使用OGL的官方证明。[Yandex LAAS](https://yandex.ru/support/marketplace/ru/tools/laas)、[中国跨境](https://partner.market.yandex.com/welcome/crossborder_cn)、[Ozon Delivery](https://logistics.ozon.ru)与官方OpenAPI为来源；研究技能草稿仅在ignored build，结论由本owner维护。
+
+订单读取、类目修复源码a3149424已推送；CN首次尝试因缺目标备份认证安全停止（current未切换，API/Worker实际短暂停止后已恢复），目标认证补齐后同提交重试又遇到保留release目录拒绝；失败目录已保留。后续在切换前受控终止旧a314部署以补齐审查发现的Yandex旧通用发货/取消/备货旁路。当前两区均仍运行9cae6511，所有服务active，不将a314称为已上线。旧候选475与日志保留，新部署将绑定最终提交并在开始前完成两区备份恢复及COM当前pilot核查。
+
+最终本地边界：Yandex的旧单件/批量发货、取消和备货明确拒绝，页面禁用，不允许仅改ERP后假报平台成功；旧同步直连接口按平台分流。订单保存使用本机已验证的事务与shop级锁，再核对租户/平台/ACTIVE/凭据，拒绝过期快照回退及数据超限；保留原生状态、实际币种、配送服务/合作类型/track/来源，商品金额与配送金额分别留存。Yandex目录发布仍关闭，不增加数据库schema、收费或真实物流写入。
+
+153项定向回归通过；7项本机隔离PostgreSQL（含订单持久化、重放、时间线、旧状态回退、内部采购/国内运单保留、部分页失败及凭据变化）通过并清理schema。真实React订单页Chrome通过Yandex同步/进度、承运商/原生状态和写操作禁用，未访问Ozon接口；UI证据`C:/Users/550W/AppData/Local/Temp/ss-erp-yandex-ui-IjgrM5`。COM真实订单30天查询返回0单，读取合同/权限通过，不证明非空真实订单履约；无Yandex/Ozon/Provider业务写入或费用。
+
 ## 2026-10-28 Yandex 订单只读同步与类目修复已验证，准备统一发布
 
 用户所说“Yandex 用 Ozon 物流”有条件成立，不能简化成“Yandex orderId 直接调用 Ozon Seller 发货”。Yandex 官方 LaaS/Fulfillment 说明（[外部平台集成](https://r.jina.ai/https://yandex.ru/support/marketplace/ru/tools/laas)）是：卖家在 Ozon 建 FBS 仓、在 Yandex 选择“集成其他平台→Ozon”、提供 Ozon ClientID + Admin Read only/Product/Warehouse/Posting FBS 权限 Token，并将 Ozon FBS 仓映射到 Yandex 仓；Yandex 拉取外部订单后组包并送 Ozon 分拣中心。这是 Yandex LAAS 作为外部平台履约编排，不能拿 Yandex 订单号冒充 Ozon posting。
@@ -8,7 +19,7 @@
 
 新增 `yandex-order-contract.ts` / `yandex-order-sync.ts`：使用官方 `POST /v1/businesses/{businessId}/orders`，每次最多30天、游标分页、`fake=false`、严格 campaign 归属；保存 Yandex 原生 `status/substatus`、`sourcePlatform`、`delivery.serviceName/deliveryServiceId/deliveryPartnerType`、轨迹、shipment、delivery dates、programType 和 externalOrderId。状态映射到 ERP 仅用于展示：PROCESSING/STARTED→待打包，PROCESSING/READY_TO_SHIP→待发货，DELIVERY/PICKUP→配送中，DELIVERED→已送达，CANCELLED/RETURNED→异常/取消；不复用 Ozon 状态字符串。订单项、付款+cashback、币种和价格不猜填；同步失败不保存部分页，事件写入 source=`yandex`。
 
-订单页同步入口按店铺平台分流：Yandex 显示“同步 Yandex 订单”，只读保存到 ERP；Ozon 继续使用原同步窗口。Yandex 发货、取消、面单、boxes/组包仍禁用，直到独立 Ozon-LaaS 凭据、仓库映射、Yandex 状态写入及标签合同完成。COM 真实只读订单窗口 `2026-09-29..2026-10-29` 返回0单且业务验证通过，未写订单、Yandex、Ozon或Provider；这是空数据的成功读取，不能宣称真实订单履约通过。订单同步代码的本地定向、类型/lint、Web构建已通过，待与mapping类目修复统一提交部署。
+订单页同步入口按店铺平台分流：Yandex 显示“同步 Yandex 订单”，只读保存到 ERP；Ozon 继续使用原同步窗口。Yandex 发货、取消、备货、面单、boxes/组包仍禁用；后端也拒绝旧通用路由，不会只改ERP状态假报成功，直到独立 Ozon-LaaS 凭据、仓库映射、Yandex 状态写入及标签合同完成。COM 真实只读订单窗口 `2026-09-29..2026-10-29` 返回0单且业务验证通过，未写订单、Yandex、Ozon或Provider；这是空数据的成功读取，不能宣称真实订单履约通过。订单同步代码的本地定向、类型/lint、Web构建已通过，待与mapping类目修复统一提交部署。
 
 ## 2026-10-28 类目漏读已确认，本地修复待发布
 

@@ -66,6 +66,14 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('order fulfillment owner consumers', () => {
+  it('rejects Yandex legacy ship/cancel paths instead of mutating ERP only', async () => {
+    const app = await appFor();
+    mocks.orderFindUnique.mockResolvedValue({ id: 'pending', status: 'awaiting_packaging', shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'YANDEX' } });
+    expect((await app.inject({ method: 'POST', url: '/api/orders/pending/ship', payload: {} })).statusCode).toBe(409);
+    mocks.orderFindUnique.mockResolvedValue({ id: 'pending', status: 'awaiting_packaging', shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'YANDEX' } });
+    expect((await app.inject({ method: 'POST', url: '/api/orders/pending/cancel', payload: { reasonId: 1 } })).statusCode).toBe(409);
+    expect(mocks.orderUpdate).not.toHaveBeenCalled(); await app.close();
+  });
   it('publishes five exhaustive stage counts and normalized children from active owned shops', async () => {
     const app = await appFor();
     const response = await app.inject('/api/orders/pipeline?shopId=shop-1&startDate=2026-10-01&endDate=2026-10-09');

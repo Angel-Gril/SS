@@ -76,6 +76,7 @@ export function createOrderStockReadyService(database: Database, options: Option
       const reserved = await database.$transaction<StockReadyResult | Reservation>(async tx => {
         const order = await loadLocked(tx, input);
         if (!order) return { kind: 'not_found' };
+        if (order.platform === 'YANDEX') return { kind: 'rejected', message: 'Yandex 订单当前只读同步，请在平台处理备货后重新同步' };
         const physical = await physicalFacts(tx, order.id);
         const current = projection({ ...order, ...physical });
         const logs = await tx.warehouseLog.findMany({ where: { orderId: order.id,

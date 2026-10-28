@@ -157,6 +157,7 @@ const PIPELINE_LABELS: Record<string, string> = {
 };
 
 function getOzonProductUrl(item: any): string | null {
+  if (item?.platform === 'YANDEX') return null;
   const rawId = item?.sku ?? item?.product_id ?? item?.productId;
   const id = rawId == null ? '' : String(rawId).trim();
   if (!/^\d+$/.test(id)) return null;
@@ -994,7 +995,7 @@ export default function OrdersPage() {
                       </TableCell>
                       <TableCell className="px-2.5 py-2">
                         <div className="flex flex-col items-start gap-1 whitespace-nowrap">
-                          <span className="text-[9px] font-medium uppercase text-muted-foreground">Ozon 状态</span>
+                          <span className="text-[9px] font-medium uppercase text-muted-foreground">{order.shop.platform === 'YANDEX' ? 'Yandex 状态' : 'Ozon 状态'}</span>
                           <OrderStatusBadge status={order.status} platform={order.shop.platform} subStatus={order.subStatus} className="h-5 px-1.5 text-[10px]" />
                           <ShipmentCountdownMini order={order} />
                         </div>
@@ -1155,7 +1156,7 @@ export default function OrdersPage() {
                       </TableCell>
                       <TableCell className="whitespace-nowrap px-2.5 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {order.shop.platform !== 'OZON' && <Button
+                          {order.shop.platform !== 'OZON' && order.shop.platform !== 'YANDEX' && <Button
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7"
@@ -1169,8 +1170,8 @@ export default function OrdersPage() {
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-[10px]"
-                            disabled={stockReadyBusy.has(order.id) || (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
-                            title={isOrderStockPrepared(order) ? 'Ozon 已确认备货' : stockReadyPending.has(order.id) ? '只查询上次备货结果，不重复提交' : '确认备货后进入国内在途'}
+                            disabled={order.shop.platform === 'YANDEX' || stockReadyBusy.has(order.id) || (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) || order.status === 'cancelled' || order.status === 'delivered' || order.fulfillmentStage === 'warehouse_processing' || order.fulfillmentStage === 'delivering'}
+                            title={order.shop.platform === 'YANDEX' ? 'Yandex 订单当前只读同步' : isOrderStockPrepared(order) ? 'Ozon 已确认备货' : stockReadyPending.has(order.id) ? '只查询上次备货结果，不重复提交' : '确认备货后进入国内在途'}
                             onClick={() => void markStockReady(order)}
                           >
                             {stockReadyBusy.has(order.id) ? '确认中…' : (order.shop.platform === 'OZON' ? isOrderStockPrepared(order) : Boolean(order.stockPreparedAt)) ? '已备货' : stockReadyPending.has(order.id) ? '核对备货' : '确认备货'}
@@ -1189,8 +1190,8 @@ export default function OrdersPage() {
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7"
-                            disabled={!canCancel}
-                            title={canCancel ? '取消订单' : '当前状态不可取消'}
+                            disabled={!canCancel || order.shop.platform === 'YANDEX'}
+                            title={order.shop.platform === 'YANDEX' ? 'Yandex 订单当前只读同步' : canCancel ? '取消订单' : '当前状态不可取消'}
                             onClick={() => setCancelOrder(order)}
                           >
                             <Ban className="h-3.5 w-3.5 text-destructive" />
@@ -1773,7 +1774,8 @@ function OrderStatusBadge({ status, platform, subStatus, className }: { status: 
     cancelled: { label: '已取消', variant: 'destructive' },
   };
   const yandexMap: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = { PROCESSING: { label: '处理中', variant: 'warning' }, DELIVERY: { label: '配送中', variant: 'default' }, PICKUP: { label: '待取货', variant: 'default' }, DELIVERED: { label: '已送达', variant: 'success' }, CANCELLED: { label: '已取消', variant: 'destructive' }, RETURNED: { label: '已退回', variant: 'destructive' }, PARTIALLY_RETURNED: { label: '部分退回', variant: 'destructive' }, PENDING: { label: '待处理', variant: 'warning' } };
-  const info = platform === 'YANDEX' ? (yandexMap[status] || { label: subStatus?.replace(/^yandex:[^:]+:/u, '') || status, variant: 'secondary' as const }) : (map[status] || { label: status, variant: 'secondary' as const });
+  const nativeStatus = subStatus?.startsWith('yandex:') ? subStatus.split(':')[1] : status;
+  const info = platform === 'YANDEX' ? (yandexMap[nativeStatus || status] || map[status] || { label: status, variant: 'secondary' as const }) : (map[status] || { label: status, variant: 'secondary' as const });
   return <Badge variant={info.variant} className={cn('whitespace-nowrap', className)}>{info.label}</Badge>;
 }
 

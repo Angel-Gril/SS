@@ -18,4 +18,9 @@ describe('Yandex native order contract', () => {
     const windows = yandexOrderDateWindows('2026-07-01T12:00:00Z', new Date('2026-10-28T12:00:00Z'));
     expect(windows[0]).toEqual({ from: '2026-07-01', to: '2026-07-31' }); for (let i = 1; i < windows.length; i += 1) expect(windows[i]!.from).toBe(windows[i - 1]!.to);
   });
+  it('rejects mixed delivery currency and invalid calendar dates', () => {
+    const bad = { ...raw, prices: { ...raw.prices, delivery: { payment: { value: 5, currencyId: 'USD' } } } };
+    expect(() => normalizeYandexOrder(yandexOrder.parse(bad), 'RUR')).toThrow('币种');
+    expect(yandexOrder.safeParse({ ...raw, delivery: { ...raw.delivery, shipment: { shipmentDate: '2026-02-30' } } }).success).toBe(false);
+  });
 });

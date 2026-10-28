@@ -684,6 +684,11 @@ export async function orderRoutes(app: FastifyInstance) {
         continue;
       }
 
+      if (shop.platform === 'YANDEX') {
+        results.push({ orderId: order.id, success: false, msg: 'Yandex 订单当前仅支持同步读取；发货需先完成 Yandex/LAAS 履约写入接线' });
+        continue;
+      }
+
       try {
         if (shop.platform === 'OZON') {
           const result = await stockReady.mark({ orderId: order.id, ownerUserId: userId, actorUserId: (request as any).user.actorUserId ?? userId });
@@ -732,6 +737,10 @@ export async function orderRoutes(app: FastifyInstance) {
     if (order.shop.platform === 'OZON') {
       if (body?.packages !== undefined) return reply.status(400).send({ code: 0, msg: 'Ozon 确认备货使用完整订单商品，请通过平台处理拆包后同步订单' });
       return replyStockReady(reply, await stockReady.mark({ orderId: id, ownerUserId: userId, actorUserId: (request as any).user.actorUserId ?? userId }));
+    }
+
+    if (order.shop.platform === 'YANDEX') {
+      return reply.status(409).send({ code: 0, msg: 'Yandex 订单当前仅支持同步读取；发货需先完成 Yandex/LAAS 履约写入接线' });
     }
 
     if (order.status !== 'awaiting_packaging' && order.status !== 'awaiting_deliver') {
@@ -787,6 +796,10 @@ export async function orderRoutes(app: FastifyInstance) {
       } catch (e: any) {
         return reply.send({ code: 0, msg: `OZON 取消失败: ${e.message}` });
       }
+    }
+
+    if (order.shop.platform === 'YANDEX') {
+      return reply.status(409).send({ code: 0, msg: 'Yandex 订单当前仅支持同步读取；取消需先完成 Yandex/LAAS 履约写入接线' });
     }
 
     await prisma.order.update({

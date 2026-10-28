@@ -30,6 +30,11 @@ function fixture() {
 }
 
 describe('Ozon stock readiness owner', () => {
+  it('does not create an internal success marker for a Yandex order', async () => {
+    const f = fixture(); f.order.platform = 'YANDEX';
+    expect(await f.service.mark(f.input)).toMatchObject({ kind: 'rejected' });
+    expect(f.tx.warehouseLog.create).not.toHaveBeenCalled(); expect(f.createClient).not.toHaveBeenCalled();
+  });
   it('assembles once, persists platform readback and replays without another write', async () => {
     const f = fixture();
     f.client.getPostingByNumber.mockResolvedValueOnce({ posting_number: 'posting-1', status: 'awaiting_packaging' });
