@@ -51,7 +51,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const [sessionAttempt, setSessionAttempt] = useState(0);
-  const sessionRequest = useMemo(() => ({ pathname, attempt: sessionAttempt }), [pathname, sessionAttempt]);
+  // Keep the authenticated shell stable while navigating between dashboard
+  // pages. The current pathname is still used by the permission guard below;
+  // it must not invalidate the identity request and blank the whole layout.
+  const sessionRequest = useMemo(() => ({ attempt: sessionAttempt }), [sessionAttempt]);
   const [session, setSession] = useState<{
     request: typeof sessionRequest;
     result: DashboardSessionResult;
