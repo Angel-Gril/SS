@@ -1,6 +1,10 @@
+## 2026-10-29 后台导航闪烁修复已双区部署
+
+`9b8fd4c7 / 1.0.479` 已推送并完成 COM/CN 双区部署。后台布局不再因 pathname 变化重复读取登录会话，左侧二级菜单使用客户端导航时保持现有页面壳，不再出现整页加载闪烁；路由权限校验保持实时。两区备份恢复、数据库/构建/ready 门禁通过。
+
 ## 2026-10-29 Yandex 运营对齐已部署
 
-b601f8e / 1.0.478 已推送并完成 COM/CN 双区部署；商品价格预览/批量管理、Yandex 原生订单工作台、FBS/Express first-mile 交接、DBS 运单与平台面单/交接文档接线完成。两区备份恢复、数据库/构建/ready 门禁通过，真实 Yandex/Ozon 业务写入仍未执行。准确 owner 见 [Yandex Market API 研究](yandex-market-api-research.md)。
+`ab601f8e / 1.0.478` 已推送并完成 COM/CN 双区部署；商品价格预览/批量管理、Yandex 原生订单工作台、FBS/Express first-mile 交接、DBS 运单与平台面单/交接文档接线完成。两区备份恢复、数据库/构建/ready 门禁通过，真实 Yandex/Ozon 业务写入仍未执行。准确 owner 见 [Yandex Market API 研究](yandex-market-api-research.md)。
 
 # SS ERP 内部开发真源
 
