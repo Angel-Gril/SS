@@ -190,6 +190,7 @@ const GROUP_LABELS: Record<string, string> = {
   auth: '短信与人机验证',
   upload: '上传与对象存储',
   listing: '上架任务',
+  sync: '自动同步',
   retention: '数据保留',
   backup: '备份策略',
   maintenance: '维护模式',
@@ -205,6 +206,7 @@ const GROUP_ORDER = [
   'feature',
   'ai',
   'upload',
+  'sync',
   'listing',
   'retention',
   'backup',
@@ -224,6 +226,10 @@ const HIDDEN_CONFIG_KEYS = new Set([
 ]);
 
 const REQUIRED_CONFIG_KEYS = [
+  'sync_auto_orders_enabled',
+  'sync_auto_orders_interval_minutes',
+  'sync_auto_products_enabled',
+  'sync_auto_products_interval_minutes',
   'upload_oss_provider',
   'ai_provider',
   'ai_image_provider',
@@ -590,6 +596,9 @@ export default function AdminSettingsPage() {
 
       {sortedGroups.map((group) => {
         const items = grouped[group]!;
+        if (group === 'sync') {
+          return <AutoSyncSettingsPanel key={group} items={items} editing={editing} setEditing={setEditing} savingKey={savingKey} saveConfigs={saveConfigs} />;
+        }
         if (group === 'ai') {
           return (
             <AiSettingsPanel
@@ -764,6 +773,23 @@ interface AiSettingsPanelProps {
   savingKey: string | null;
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
   aiUsage: AiUsageDiagnostics | null;
+}
+
+function AutoSyncSettingsPanel({ items, editing, setEditing, savingKey, saveConfigs }: ListingSettingsPanelProps) {
+  const keys = ['sync_auto_orders_enabled', 'sync_auto_orders_interval_minutes', 'sync_auto_products_enabled', 'sync_auto_products_interval_minutes'];
+  const saved = Object.fromEntries(items.map(row => [row.key, row.value]));
+  const valid = keys.every(key => editing[key] !== undefined) && keys.filter(key => key.endsWith('_minutes')).every(key => /^\d+$/u.test(editing[key] ?? '') && Number(editing[key]) >= 5 && Number(editing[key]) <= 1440);
+  const dirty = keys.some(key => editing[key] !== saved[key]);
+  return <Card><details className="group"><summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 p-5"><div><h2 className="font-semibold">自动同步</h2><p className="mt-1 text-xs text-muted-foreground">Ozon / Yandex · 平台数据自动读取到 ERP</p></div><div className="flex flex-wrap gap-2"><Badge variant="secondary">订单：{saved.sync_auto_orders_enabled === 'true' ? `每 ${saved.sync_auto_orders_interval_minutes} 分钟` : '已关闭'}</Badge><Badge variant="secondary">商品/价格/库存：{saved.sync_auto_products_enabled === 'true' ? `每 ${saved.sync_auto_products_interval_minutes} 分钟` : '已关闭'}</Badge></div></summary><CardContent className="space-y-5 border-t pt-5">
+    <p className="text-sm text-muted-foreground">适用于当前区域所有正常店铺。服务器后台运行，关闭浏览器后继续同步；这里不会向平台改价、改库存或发货。</p>
+    <fieldset disabled={savingKey !== null} className="grid min-w-0 gap-5 sm:grid-cols-2">{[
+      { title: '订单与物流状态', enabled: keys[0]!, interval: keys[1]! },
+      { title: '商品、价格与库存', enabled: keys[2]!, interval: keys[3]! },
+    ].map(row => <div key={row.enabled} className="min-w-0 space-y-3 rounded-md border p-4"><label className="flex cursor-pointer items-center gap-2 text-sm font-medium"><input type="checkbox" className="accent-primary" checked={editing[row.enabled] === 'true'} onChange={e => setEditing({ ...editing, [row.enabled]: String(e.target.checked) })} />自动同步{row.title}</label><div className="space-y-1.5"><Label htmlFor={row.interval}>同步间隔（分钟）</Label><Input id={row.interval} type="number" min={5} max={1440} step={1} disabled={editing[row.enabled] !== 'true'} value={editing[row.interval] ?? ''} onChange={e => setEditing({ ...editing, [row.interval]: e.target.value })} /></div></div>)}</fieldset>
+    <p className="text-xs text-muted-foreground">默认 5 分钟，可设置 5–1440 分钟。保存后约 1 分钟内读取新设置；同店铺同类型任务会合并，队列繁忙、大店铺分页或平台限流可能延后完成。首次同步沿用最近 90 天订单范围。</p>
+    {!valid && <p role="alert" className="text-sm text-destructive">请为两类同步填写 5–1440 的整数间隔。</p>}
+    <Button disabled={savingKey !== null || !dirty || !valid} onClick={() => saveConfigs(keys, '自动同步设置')}>{savingKey === 'group:自动同步设置' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}保存自动同步设置</Button>
+  </CardContent></details></Card>;
 }
 
 interface UploadSettingsPanelProps {

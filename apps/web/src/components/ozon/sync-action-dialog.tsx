@@ -157,7 +157,7 @@ export function OzonSyncActionDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            选择店铺和数据类型后创建同步任务。Ozon 通知地址用于在 seller 后台配置事件触发同步，定时同步仍可作为兜底。
+            选择店铺和数据类型后立即同步。服务器按系统设置自动同步（默认每5分钟），Ozon 通知可在 seller 后台另行配置为事件触发。
           </DialogDescription>
         </DialogHeader>
 

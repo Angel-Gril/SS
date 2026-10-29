@@ -4,6 +4,7 @@ vi.mock('../lib/redis.js', () => ({ redisDisabled: true }));
 vi.mock('../lib/bullmq-connection.js', () => ({ connection: {} }));
 vi.mock('../lib/prisma.js', () => ({ prisma: { shop: { findUnique: m.shop }, syncJob: { create: m.create, update: m.update } } }));
 vi.mock('../services/yandex-product-sync.js', () => ({ syncYandexProducts: m.yandex }));
+vi.mock('../services/platform-sync-reservation.js', () => ({ reservePlatformSync: vi.fn().mockResolvedValue({ row: { id: 'run1', payload: {} }, dispatch: true }), readSyncPayload: (v: unknown) => v ?? {}, startPlatformSyncRun: vi.fn(async (id: string) => { await m.update({ where: { id }, data: { status: 'RUNNING' } }); return true; }) }));
 vi.mock('../services/ozon-client.js', () => ({ OzonClient: class { constructor() { m.ozon(); } } }));
 import { addProductSyncJob } from '../workers/product-sync.js';
 

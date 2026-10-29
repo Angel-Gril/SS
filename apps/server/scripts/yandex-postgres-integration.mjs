@@ -40,6 +40,7 @@ try {
     'src/__tests__/yandex-product-operations.postgres.integration.test.ts',
     'src/__tests__/yandex-shipment-operations.postgres.integration.test.ts',
     'src/__tests__/yandex-order-sync.postgres.integration.test.ts',
+    'src/__tests__/shop-auto-sync.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),
     RUN_YANDEX_POSTGRES_TESTS: '1',

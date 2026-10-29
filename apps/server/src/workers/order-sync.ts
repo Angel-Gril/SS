@@ -9,6 +9,8 @@ import { createNotification } from '../routes/notification.js';
 import { describeSubstatus, resolveOzonTrackingEventTime } from '../lib/ozon-substatus.js';
 import { iterateOzonPostingPages, calculateOzonOrderTotalRub } from '../services/ozon-order-sync-contract.js';
 
+import { reservePlatformSync, readSyncPayload, startPlatformSyncRun } from '../services/platform-sync-reservation.js';
+
 const QUEUE_NAME = 'order-sync';
 
 export const orderSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
@@ -20,34 +22,33 @@ export interface OrderSyncJobOptions {
   eventType?: string;
   eventKey?: string;
   payload?: Record<string, unknown>;
+  automaticIntervalMs?: number;
 }
 
 export async function addOrderSyncJob(shopId: string, since?: string, options: OrderSyncJobOptions = {}) {
-  const sinceDate = since || new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
-  const syncJobId = options.syncJobId || await createPendingSyncJob(shopId, sinceDate, options);
+  let sinceDate = since || new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+  const reservation = await reservePlatformSync({ shopId, type: 'ORDER_PULL', payload: buildSyncPayload(sinceDate, options), options });
+  const syncJobId = reservation.row.id;
+  if (!reservation.dispatch) return { id: `platform-sync-${syncJobId}`, syncJobId };
+  sinceDate = String(readSyncPayload(reservation.row.payload).since || sinceDate);
   if (redisDisabled) {
     runOrderSyncInline(shopId, sinceDate, syncJobId).catch((e) => {
       console.error(`[OrderSync inline] shop ${shopId} failed:`, e.message);
     });
     return { id: 'inline-' + Date.now(), syncJobId };
   }
-  try {
-    const job = await orderSyncQueue!.add(
-      'sync',
-      { shopId, since: sinceDate, syncJobId },
-      {
-        jobId: options.jobId,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: 50,
-        removeOnFail: 20,
-      },
-    );
-    return { id: job.id, syncJobId };
-  } catch (e: any) {
-    await markSyncJobFailed(syncJobId, e);
-    throw e;
-  }
+  const job = await orderSyncQueue!.add(
+    'sync',
+    { shopId, since: sinceDate, syncJobId },
+    {
+      jobId: `platform-sync-${syncJobId}`,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: 50,
+      removeOnFail: 20,
+    },
+  );
+  return { id: job.id, syncJobId };
 }
 
 async function runOrderSyncInline(shopId: string, since: string, syncJobId?: string) {
@@ -59,7 +60,7 @@ async function runOrderSyncInline(shopId: string, since: string, syncJobId?: str
     throw new Error(`Shop ${shopId} not found or inactive`);
   }
   const runId = syncJobId || await createPendingSyncJob(shopId, since, {});
-  await markSyncJobRunning(runId);
+  if (!await startPlatformSyncRun(runId, shopId, 'ORDER_PULL')) return { skipped: true };
   try {
     const result = await syncOrdersCore(shopId, since, shop);
     await prisma.syncJob.update({
@@ -224,7 +225,7 @@ export function startOrderSyncWorker() {
         throw new Error(`Shop ${shopId} not found or inactive`);
       }
       const runId = syncJobId || await createPendingSyncJob(shopId, since, {});
-      await markSyncJobRunning(runId);
+      if (!await startPlatformSyncRun(runId, shopId, 'ORDER_PULL')) return { skipped: true };
       const result = await syncOrdersCore(shopId, since, shop);
       await prisma.syncJob.update({
         where: { id: runId },
@@ -363,13 +364,6 @@ async function createPendingSyncJob(shopId: string, since: string, options: Orde
     },
   });
   return syncJob.id;
-}
-
-async function markSyncJobRunning(syncJobId: string) {
-  await prisma.syncJob.update({
-    where: { id: syncJobId },
-    data: { status: 'RUNNING', startedAt: new Date(), errorMessage: null },
-  });
 }
 
 async function markSyncJobFailed(syncJobId: string, error: Error & { message?: string }) {

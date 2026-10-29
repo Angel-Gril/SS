@@ -4,6 +4,7 @@ vi.mock('../lib/redis.js', () => ({ redisDisabled: true }));
 vi.mock('../lib/bullmq-connection.js', () => ({ connection: {} }));
 vi.mock('../lib/prisma.js', () => ({ prisma: { shop: { findUnique: m.shop }, syncJob: { create: m.create, update: m.update } } }));
 vi.mock('../services/yandex-order-sync.js', () => ({ syncYandexOrders: m.yandex }));
+vi.mock('../services/platform-sync-reservation.js', () => ({ reservePlatformSync: vi.fn().mockResolvedValue({ row: { id: 'run1', payload: {} }, dispatch: true }), readSyncPayload: (v: unknown) => v ?? {}, startPlatformSyncRun: vi.fn(async (id: string) => { await m.update({ where: { id }, data: { status: 'RUNNING' } }); return true; }) }));
 vi.mock('../services/ozon-client.js', () => ({ OzonClient: class { constructor() { m.ozon(); } } }));
 import { addOrderSyncJob } from '../workers/order-sync.js';
 describe('shared order queue platform dispatch', () => {

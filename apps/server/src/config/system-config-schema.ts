@@ -185,6 +185,12 @@ export const SystemConfigSchema = {
   security_admin_session_ttl_hours: z.number().int().min(1).max(168).default(24),
   security_audit_log_enabled: z.boolean().default(process.env.NODE_ENV === 'production'),
 
+  // Platform -> ERP reads. These controls never push price, stock or fulfillment changes.
+  sync_auto_orders_enabled: z.boolean().default(true),
+  sync_auto_orders_interval_minutes: z.number().int().min(5).max(1440).default(5),
+  sync_auto_products_enabled: z.boolean().default(true),
+  sync_auto_products_interval_minutes: z.number().int().min(5).max(1440).default(5),
+
   // ─── listing / Ozon publish workers ───
   listing_task_refresh_interval_ms: z.number().int().min(5000).max(300000).default(30000),
   listing_task_refresh_batch_size: z
@@ -300,6 +306,10 @@ export interface ConfigMeta {
 }
 
 export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
+  sync_auto_orders_enabled: { label: '自动同步订单', group: 'sync', description: '服务器自动读取所有正常 Ozon/Yandex 店铺的订单和物流状态，默认开启；关闭网页后继续运行。不会发货或取消订单。' },
+  sync_auto_orders_interval_minutes: { label: '订单同步间隔（分钟）', group: 'sync', description: '默认5分钟，允许5至1440分钟；从上次任务结束计时，排队或运行中的任务不会重复创建。' },
+  sync_auto_products_enabled: { label: '自动同步商品、价格和库存', group: 'sync', description: '服务器自动读取所有正常 Ozon/Yandex 店铺的商品、平台价格和可售库存，默认开启。同步方向为平台到ERP，不向平台改价或改库存。' },
+  sync_auto_products_interval_minutes: { label: '商品、价格、库存同步间隔（分钟）', group: 'sync', description: '默认5分钟，允许5至1440分钟；大店铺受分页、平台限流和队列耗时影响，实际完成时间可能延后。' },
   feature_customer_chat: {
     label: '客服聊天功能',
     group: 'feature',

@@ -1,6 +1,7 @@
 type ProductSyncJob = { id?: unknown };
 export interface ProductSyncJobOptions {
   delayMs?: number;
+  automaticIntervalMs?: number;
   jobId?: string;
   syncJobId?: string;
   trigger?: string;

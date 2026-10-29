@@ -3757,6 +3757,8 @@ if (RUN_WORKERS) {
 
     startProductSyncWorker();
     startOrderSyncWorker();
+    const { startShopAutoSyncWorker } = await import('./workers/shop-auto-sync.js');
+    startShopAutoSyncWorker();
     startSoloBillingWorker();
     startScheduledDispatchWorker();
     startExchangeRateSyncWorker();

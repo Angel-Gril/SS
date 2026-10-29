@@ -19,12 +19,18 @@ import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
 import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
 import { upsertSyncedOzonProduct } from '../services/product-sync-upsert.js';
 
+import { reservePlatformSync, readSyncPayload, startPlatformSyncRun } from '../services/platform-sync-reservation.js';
+
 const QUEUE_NAME = 'product-sync';
 
 export const productSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
 export async function addProductSyncJob(shopId: string, options: ProductSyncJobOptions = {}) {
-  const syncJobId = options.syncJobId || await createPendingSyncJob(shopId, options);
+  const reservation = await reservePlatformSync({ shopId, type: 'PRODUCT_PULL', payload: buildSyncPayload(options) ?? {}, options });
+  const syncJobId = reservation.row.id;
+  if (!reservation.dispatch) return { id: `platform-sync-${syncJobId}`, syncJobId };
+  const notBefore = readSyncPayload(reservation.row.payload).syncNotBefore;
+  const delayMs = notBefore ? Math.max(0, Date.parse(String(notBefore)) - Date.now()) : 0;
   if (redisDisabled) {
     // Redis 不在时直接同步执行，避免前端转圈
     const run = () => {
@@ -32,24 +38,19 @@ export async function addProductSyncJob(shopId: string, options: ProductSyncJobO
         console.error(`[ProductSync inline] shop ${shopId} failed:`, e.message);
       });
     };
-    if (options.delayMs && options.delayMs > 0) setTimeout(run, options.delayMs);
+    if (delayMs > 0) setTimeout(run, delayMs);
     else run();
     return { id: 'inline-' + Date.now(), syncJobId };
   }
-  try {
-    const job = await productSyncQueue!.add('sync', { shopId, syncJobId }, {
-      delay: options.delayMs,
-      jobId: options.jobId,
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-      removeOnComplete: 50,
-      removeOnFail: 20,
-    });
-    return { id: job.id, syncJobId };
-  } catch (e: any) {
-    await markSyncJobFailed(syncJobId, e);
-    throw e;
-  }
+  const job = await productSyncQueue!.add('sync', { shopId, syncJobId }, {
+    delay: delayMs,
+    jobId: `platform-sync-${syncJobId}`,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: 50,
+    removeOnFail: 20,
+  });
+  return { id: job.id, syncJobId };
 }
 
 async function runProductSyncInline(shopId: string, syncJobId?: string) {
@@ -58,7 +59,7 @@ async function runProductSyncInline(shopId: string, syncJobId?: string) {
     throw new Error(`Shop ${shopId} not found or inactive`);
   }
   const runId = syncJobId || await createPendingSyncJob(shopId, {});
-  await markSyncJobRunning(runId);
+  if (!await startPlatformSyncRun(runId, shopId, 'PRODUCT_PULL')) return { skipped: true };
   try {
     const totalSynced = await syncProductsCore(shopId, shop);
     await prisma.syncJob.update({
@@ -266,7 +267,7 @@ export function startProductSyncWorker() {
         throw new Error(`Shop ${shopId} not found or inactive`);
       }
       const runId = syncJobId || await createPendingSyncJob(shopId, {});
-      await markSyncJobRunning(runId);
+      if (!await startPlatformSyncRun(runId, shopId, 'PRODUCT_PULL')) return { skipped: true };
       const totalSynced = await syncProductsCore(shopId, shop);
       await prisma.syncJob.update({
         where: { id: runId },
@@ -326,13 +327,6 @@ async function createPendingSyncJob(shopId: string, options: ProductSyncJobOptio
     },
   });
   return syncJob.id;
-}
-
-async function markSyncJobRunning(syncJobId: string) {
-  await prisma.syncJob.update({
-    where: { id: syncJobId },
-    data: { status: 'RUNNING', startedAt: new Date(), errorMessage: null },
-  });
 }
 
 async function markSyncJobFailed(syncJobId: string, error: Error & { message?: string }) {
