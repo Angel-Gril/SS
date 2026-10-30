@@ -19,4 +19,12 @@ T2：新增14项API回归先复现12处失败后修复通过，覆盖导出平�
 
 T3：隔离Chrome运行实际React页面，本地有界模拟API；先复现商品恢复丢失和单店同步遍历多店，再修复并通过。最终12项检查包括搜索收藏、商品恢复/清空、单店同步、五类列表平台过滤、390px布局、客服切店清理与退货统计范围。证据 `C:/Users/550W/AppData/Local/Temp/ss-erp-platform-shop-ui-o8n5BO`，测试profile已关闭，无真实Provider/Ozon/Yandex业务写入或费用。本地模拟不宣称真实平台写接口通过。
 
-旧 `scripts/web-products-ui-polish.test.mjs` 的单行编辑按钮源码断言在未改动的1486da87上同样不匹配，属于既有静态合同漂移，本轮不以它声称通过，也不修改旧断言掩盖问题。新收口源码尚待提交、签名和双区部署。
+旧 `scripts/web-products-ui-polish.test.mjs` 的单行编辑按钮源码断言在未改动的1486da87上同样不匹配，属于既有静态合同漂移，本轮不以它声称通过，也不修改旧断言掩盖问题。
+
+## 收口修复已推送并双区部署
+
+最终源码 `d91ee3db67306c5e9b35943309cd630c16df0d2c` 已推送至 `feat/ai-media-prompt-registry`。GitHub直连连接重置/超时后，使用已有本机7897代理的单次Git参数推送成功，未修改系统代理或Git全局配置。区域独立签名候选1.0.481的COM/CN签名SHA256分别为`50b7d56a6f3c830a4843ed8e1d925c3a3af85aa465bb0fb2627e12d0a3eb3300`、`9fc187e4d835d66d1ed4edd356e167bff27c0d5a64e5e869bf0e73d237070b83`。
+
+COM146/CN145张public表目标备份恢复通过，临时库已清理；原COM两店/三设备pilot及CN dark预检保持。标准部署重新构建、封存源码、检查161 migrations（无待执行项）和套图DB守卫、切换current及三服务，健康检查均首轮HTTP200。API/Worker在标准迁移/守卫阶段有短暂停服，未跳过gate；官网公开扩展仍1.0.472，未执行CAS、approval或分发探针。
+
+最终三服务cwd及ready于COM`2026-10-30T10:44:20.208Z`、CN`10:44:17.436Z`读回目标提交，DB/Redis正常。FULL canonical VPS两区均PASS、0failure/1既有远端备份warning；COM完成`10:41:03Z`，CN完成`10:45:49Z`。真实回执仅在对应VPS `/var/lib/ss-erp-final-release-evidence/d91ee3db67306c5e9b35943309cd630c16df0d2c/`及Windows私有`release-d91ee3db67306c5e9b35943309cd630c16df0d2c-platform-shop`，不进入Git。浏览器证据仅为本机隔离模拟API，不宣称生产登录交互或第三方业务写入已验收。未新增Provider请求、平台业务写入或费用；既有自动同步继续运行。
