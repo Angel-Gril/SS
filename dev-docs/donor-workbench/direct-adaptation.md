@@ -12,6 +12,8 @@
 
 MV3 真实加载检查通过，原件 `ss-erp-donor-mv3-evidence-ZkYeT2`（未提交工作树、合成来源页，不能当签名候选或真实1688站点 canary）；默认入口、透明外壳、两商品页面、popup入口、未授权页面命令拒绝和图片加载通过。安装包已复制到 `C:/Users/550W/Downloads/SS-ERP-1.0.482-dev`，附安装说明；Cloud SHA256 `f6e30ec228c6d841d476758da62145d0957e42f1cef683e152c84ca3c511d593`、Local `89e5280bb96bb8cc3096704fefd8ccb2b41a0d2e851557584aae808121c05b36`。未用广泛 preflight 或离线 fixture 冒称正式 QA04。
 
+源码最终提交 `238b6399218f745d21cbb87d2df462a6dfa09d12` 已推送至 `feat/ai-media-prompt-registry`，工作树干净。完整 preflight 未通过，不记为全绿：修正版本 fixture 后的单独长回归在主 Agent 提交期间遇到 HEAD 变化，被 release verifier 正确拒绝为 `Git commit does not match active commit`，该次不能当作版本回归 PASS。原始失败日志 `build/inline-confirm-package-version-test.log` 保留；后续正式发布需在固定提交下重新完成门禁。此次签名/生产/官网未执行，因此没有将该无效结果升级为发布证据。
+
 ## 2026-10-30 原精铺视觉模型校准与扩展性能收口（本地未发布）
 
 对用户提供的临时阿里云 Key 只做隔离合成图校准，未保存 Key、未写入配置、未触发草稿/Ozon/生产写入。原精铺代码确认图片视觉分析调用 DashScope 原生多模态接口 `qwen3.5-plus`，请求关闭 `enable_thinking`，最多选择3张 SKU 图和5张商品图，输出视觉 JSON；文字提示词另用 `qwen3-max`。当前 ERP 托管配置仍由管理员配置 owner 控制，历史 `qwen-vl-max` 一次实测在同一兼容端点返回404，不据此切换生产配置。
