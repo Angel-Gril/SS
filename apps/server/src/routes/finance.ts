@@ -144,6 +144,7 @@ export async function financeRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const query = request.query as {
       shopId?: string;
+      platform?: string;
       startDate?: string;
       endDate?: string;
       commissionRate?: string;
@@ -151,8 +152,10 @@ export async function financeRoutes(app: FastifyInstance) {
       shippingCost?: string;
     };
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true, name: true, config: true } });
-    const shopIds = query.shopId ? [query.shopId] : userShops.map((s) => s.id);
+    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true, name: true, platform: true, config: true } });
+    const normalizedPlatform = query.platform?.trim().toUpperCase();
+    const scopedShops = userShops.filter((shop) => !normalizedPlatform || shop.platform === normalizedPlatform);
+    const shopIds = query.shopId ? scopedShops.filter((shop) => shop.id === query.shopId).map((shop) => shop.id) : scopedShops.map((shop) => shop.id);
 
     const startDate = query.startDate ? new Date(query.startDate) : new Date(Date.now() - 30 * 24 * 3600 * 1000);
     const endDate = query.endDate ? new Date(query.endDate) : new Date();
@@ -174,7 +177,7 @@ export async function financeRoutes(app: FastifyInstance) {
         currency: true,
         items: true,
         createdAt: true,
-        shop: { select: { name: true } },
+        shop: { select: { name: true, platform: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 500,
@@ -219,6 +222,7 @@ export async function financeRoutes(app: FastifyInstance) {
         id: order.id,
         postingNumber: order.postingNumber,
         shopName: order.shop.name,
+        platform: order.shop.platform,
         revenue: revenueCny.toFixed(2),
         purchaseCost: purchaseCost.toFixed(2),
         commission: commission.toFixed(2),

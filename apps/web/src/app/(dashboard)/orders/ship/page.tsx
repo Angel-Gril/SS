@@ -21,6 +21,7 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount } from '@/lib/utils';
 import { describeSubstatus } from '@/lib/ozon-substatus';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
 
 interface Order {
   id: string;
@@ -80,6 +81,7 @@ export default function ShipOrdersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const [stage, setStage] = useState<PipelineStage>('awaiting_packaging');
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -100,13 +102,14 @@ export default function ShipOrdersPage() {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) setShops(res.data);
     });
-    fetchStats();
   }, []);
 
-  useEffect(() => { fetchOrders(); }, [stage, shopId, search, page]);
+  useEffect(() => { fetchStats(); }, [platform]);
+
+  useEffect(() => { fetchOrders(); }, [stage, platform, shopId, search, page]);
 
   async function fetchStats() {
-    const res = await api.get<OrderStats>('/api/orders/stats');
+    const res = await api.get<OrderStats>(platform ? `/api/orders/stats?platform=${encodeURIComponent(platform)}` : '/api/orders/stats');
     if (res.code === 1 && res.data) setStats(res.data);
   }
 
@@ -118,6 +121,7 @@ export default function ShipOrdersPage() {
       offset: String(page * limit),
       limit: String(limit),
     });
+    if (platform) params.set('platform', platform);
     if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
@@ -128,10 +132,11 @@ export default function ShipOrdersPage() {
   async function handleSync() {
     if (shops.length === 0) return;
     setSyncing(true);
-    for (const shop of shops) {
+    const targetShops = platform ? shops.filter((shop) => shop.platform === platform) : shops;
+    for (const shop of targetShops) {
       await api.post('/api/orders/sync', { shopId: shop.id });
     }
-    toast({ title: '同步任务已提交', description: `${shops.length} 个店铺正在同步订单` });
+    toast({ title: '同步任务已提交', description: `${targetShops.length} 个店铺正在同步订单` });
     setSyncing(false);
     setTimeout(() => { fetchOrders(); fetchStats(); }, 5000);
   }
@@ -303,14 +308,13 @@ export default function ShipOrdersPage() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <select
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-              value={shopId}
-              onChange={(e) => { setShopId(e.target.value); setPage(0); }}
-            >
-              <option value="">全部店铺</option>
-              {shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <PlatformShopFilter
+              shops={shops}
+              platform={platform}
+              shopId={shopId}
+              onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }}
+              onShopChange={(next) => { setShopId(next); setPage(0); }}
+            />
             <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
               <Input placeholder="包裹号/订单号/物流单号" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="w-56" />
               <Button type="submit" size="sm" variant="outline"><Search className="h-4 w-4" /></Button>
@@ -366,7 +370,7 @@ export default function ShipOrdersPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="text-xs">{order.shop.name}</Badge>
+                    <div className="flex flex-col items-start gap-0.5"><Badge variant="outline" className="text-[10px]">{order.shop.platform}</Badge><span className="text-xs">{order.shop.name}</span></div>
                   </TableCell>
                   <TableCell>
                     <div className="max-w-[220px]">

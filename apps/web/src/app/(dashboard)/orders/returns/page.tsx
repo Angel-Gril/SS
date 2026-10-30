@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
 
 interface Shop { id: string; name: string; platform: string; }
 
@@ -46,18 +47,19 @@ export default function OrderReturnsPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [shopId, setShopId] = useState('');
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('OZON');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(0);
   const limit = 20;
 
   useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
-      if (res.code === 1 && res.data) setShops(res.data);
+      if (res.code === 1 && res.data) setShops(res.data.filter((shop) => shop.platform === 'OZON'));
     });
     loadStats();
   }, []);
 
-  useEffect(() => { fetchData(); }, [search, page, shopId, status]);
+  useEffect(() => { fetchData(); }, [search, page, platform, shopId, status]);
 
   async function loadStats() {
     const res = await api.get<ReturnStats>('/api/returns/stats');
@@ -67,6 +69,7 @@ export default function OrderReturnsPage() {
   async function fetchData() {
     setLoading(true);
     const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit) });
+    if (platform) params.set('platform', platform);
     if (search) params.set('search', search);
     if (shopId) params.set('shopId', shopId);
     if (status) params.set('status', status);
@@ -122,16 +125,7 @@ export default function OrderReturnsPage() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <select
-              value={shopId}
-              onChange={(e) => { setShopId(e.target.value); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">全部店铺</option>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>[{s.platform}] {s.name}</option>
-              ))}
-            </select>
+            <PlatformShopFilter shops={shops} platform={platform} shopId={shopId} onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }} onShopChange={(next) => { setShopId(next); setPage(0); }} />
             <select
               value={status}
               onChange={(e) => { setStatus(e.target.value); setPage(0); }}

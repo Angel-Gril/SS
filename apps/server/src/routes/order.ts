@@ -42,6 +42,7 @@ type WarehouseStageLogInput = {
 
 const orderQuerySchema = z.object({
   shopId: z.string().optional(),
+  platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']).optional(),
   status: z.string().optional(),
   subStatus: z.string().trim().min(1).max(120).optional(),
   fulfillmentStage: z.enum(fulfillmentStageKeys).optional(),
@@ -376,7 +377,14 @@ export async function orderRoutes(app: FastifyInstance) {
       where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
-    const shopIds = userShops.map((s) => s.id);
+    let shopIds = userShops.map((s) => s.id);
+    if (query.platform && shopIds.length > 0) {
+      const platformShops = await prisma.shop.findMany({
+        where: { id: { in: shopIds }, platform: query.platform },
+        select: { id: true },
+      });
+      shopIds = platformShops.map((shop) => shop.id);
+    }
 
     if (shopIds.length === 0) {
       return { code: 1, msg: 'ok', data: { total: 0, rows: [] } };

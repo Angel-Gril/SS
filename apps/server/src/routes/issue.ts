@@ -23,9 +23,13 @@ export async function issueRoutes(app: FastifyInstance) {
 
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { shopId?: string; status?: string; type?: string; search?: string; offset?: string; limit?: string };
+    const query = request.query as { platform?: string; shopId?: string; status?: string; type?: string; search?: string; offset?: string; limit?: string };
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const normalizedPlatform = query.platform?.trim().toUpperCase();
+    const platform = ['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES'].includes(normalizedPlatform || '')
+      ? normalizedPlatform as 'OZON' | 'YANDEX' | 'KASPI' | 'WILDBERRIES'
+      : undefined;
+    const userShops = await prisma.shop.findMany({ where: { userId, ...(platform ? { platform } : {}) }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, rows: [] } };
 
@@ -61,7 +65,12 @@ export async function issueRoutes(app: FastifyInstance) {
 
   app.get('/stats', async (request) => {
     const { userId } = (request as any).user;
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const query = request.query as { platform?: string };
+    const normalizedPlatform = query.platform?.trim().toUpperCase();
+    const platform = ['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES'].includes(normalizedPlatform || '')
+      ? normalizedPlatform as 'OZON' | 'YANDEX' | 'KASPI' | 'WILDBERRIES'
+      : undefined;
+    const userShops = await prisma.shop.findMany({ where: { userId, ...(platform ? { platform } : {}) }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, byStatus: {}, byType: {} } };
 

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
 
 interface Shop { id: string; name: string; platform: string; }
 interface Chat { chat_id: string; chat_type: string; created_at: string; unread_count: number; last_message_text?: string; }
@@ -14,6 +15,7 @@ interface Message { message_id: number; created_at: string; is_read: boolean; se
 
 export default function ChatPage() {
   const [shops, setShops] = useState<Shop[]>([]);
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('OZON');
   const [selectedShop, setSelectedShop] = useState('');
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState(false);
@@ -84,16 +86,16 @@ export default function ChatPage() {
               <RefreshCw className={`h-3.5 w-3.5 ${loadingChats ? 'animate-spin' : ''}`} />
             </Button>
           </div>
-          {shops.length > 1 && (
-            <select
-              value={selectedShop}
-              onChange={(e) => setSelectedShop(e.target.value)}
-              className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-            >
-              <option value="">选择店铺</option>
-              {shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          )}
+          <PlatformShopFilter
+            shops={shops}
+            platform={platform}
+            shopId={selectedShop}
+            compact
+            allowAllShops={false}
+            onPlatformChange={(next) => { setPlatform(next); setSelectedShop(''); }}
+            onShopChange={setSelectedShop}
+            className={shops.length > 1 ? '' : 'hidden'}
+          />
         </div>
         <div className="flex-1 overflow-y-auto">
           {loadingChats ? (

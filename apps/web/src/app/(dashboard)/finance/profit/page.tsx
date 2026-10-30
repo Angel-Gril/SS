@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { PlatformShopFilter, type ShopPlatformFilter, shopPlatformLabel } from '@/components/shops/platform-shop-filter';
 
 interface Shop { id: string; name: string; platform: string; }
 
@@ -17,6 +18,7 @@ interface ProfitRow {
   id: string;
   postingNumber: string | null;
   shopName: string;
+  platform?: string;
   revenue: string;
   purchaseCost: string;
   commission: string;
@@ -38,6 +40,7 @@ interface ProfitSummary {
 
 export default function ProfitPage() {
   const [shops, setShops] = useState<Shop[]>([]);
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState('');
   const [rows, setRows] = useState<ProfitRow[]>([]);
   const [summary, setSummary] = useState<ProfitSummary | null>(null);
@@ -67,6 +70,7 @@ export default function ProfitPage() {
       startDate,
       endDate,
     });
+    if (platform) params.set('platform', platform);
     if (shopId) params.set('shopId', shopId);
     const res = await api.get<{ summary: ProfitSummary; rows: ProfitRow[] }>(`/api/finance/profit?${params}`);
     if (res.code === 1 && res.data) {
@@ -76,7 +80,7 @@ export default function ProfitPage() {
     setLoading(false);
   }
 
-  useEffect(() => { calculate(); }, []);
+  useEffect(() => { calculate(); }, [platform, shopId]);
 
   return (
     <div className="space-y-6">
@@ -89,11 +93,16 @@ export default function ProfitPage() {
         <CardContent className="pt-4">
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
             <div className="space-y-1">
-              <Label className="text-xs">店铺</Label>
-              <select value={shopId} onChange={(e) => setShopId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                <option value="">全部店铺</option>
-                {shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <Label className="text-xs">平台 / 店铺</Label>
+              <PlatformShopFilter
+                shops={shops}
+                platform={platform}
+                shopId={shopId}
+                compact
+                onPlatformChange={(next) => { setPlatform(next); if (next && shops.find((shop) => shop.id === shopId)?.platform !== next) setShopId(''); }}
+                onShopChange={setShopId}
+                className="items-stretch"
+              />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">开始日期</Label>
@@ -177,7 +186,7 @@ export default function ProfitPage() {
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">{r.postingNumber || '-'}</TableCell>
-                      <TableCell className="text-sm">{r.shopName}</TableCell>
+                      <TableCell className="text-sm"><div>{r.shopName}</div><div className="text-[10px] text-muted-foreground">{shopPlatformLabel(r.platform)}</div></TableCell>
                       <TableCell className="text-right tabular-nums">{r.revenue}</TableCell>
                       <TableCell className="text-right tabular-nums">{r.purchaseCost}</TableCell>
                       <TableCell className="text-right tabular-nums">{r.commission}</TableCell>

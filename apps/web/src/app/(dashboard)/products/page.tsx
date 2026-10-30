@@ -25,6 +25,7 @@ import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 import { YandexProductManager } from '@/components/yandex/product-manager';
+import { PlatformShopFilter, type ShopPlatformFilter, shopPlatformLabel } from '@/components/shops/platform-shop-filter';
 
 interface Product {
   id: string;
@@ -349,6 +350,7 @@ function ProductsPageInner() {
   const initialShopId = searchParams.get('shopId') || '';
 
   const [shops, setShops] = useState<Shop[]>([]);
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState(initialShopId);
   const isYandex = shops.find(shop => shop.id === shopId)?.platform === 'YANDEX';
   const [yandexEditingId, setYandexEditingId] = useState<string | null>(null);
@@ -414,8 +416,12 @@ function ProductsPageInner() {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) {
         setShops(res.data);
-        if (res.data.length > 0 && (!shopId || !res.data.some((shop) => shop.id === shopId))) {
+        const currentShop = res.data.find((shop) => shop.id === shopId);
+        if (currentShop) {
+          setPlatform(currentShop.platform as ShopPlatformFilter);
+        } else if (res.data.length > 0) {
           setShopId(res.data[0]!.id);
+          setPlatform(res.data[0]!.platform as ShopPlatformFilter);
         }
       }
     });
@@ -644,7 +650,17 @@ function ProductsPageInner() {
     || ozonPriceIndexFilter !== 'all'
     || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
   const selectedShop = shops.find((shop) => shop.id === shopId);
-  const selectedShopLabel = selectedShop ? `[${selectedShop.platform}] ${selectedShop.name}` : '未选择店铺';
+  const selectedShopLabel = selectedShop ? `${shopPlatformLabel(selectedShop.platform)} · ${selectedShop.name}` : '未选择店铺';
+
+  function handlePlatformChange(next: ShopPlatformFilter) {
+    setPlatform(next);
+    const visible = next ? shops.filter((shop) => shop.platform === next) : shops;
+    if (!shopId || (next && selectedShop?.platform !== next)) {
+      setShopId(visible[0]?.id || '');
+    }
+    setPage(0);
+    setSelected(new Set());
+  }
   const priceFilterLabel = getOzonPriceIndexFilterLabel(ozonPriceIndexFilter);
 
   return (
@@ -659,22 +675,21 @@ function ProductsPageInner() {
       <Card>
         <CardContent className="space-y-3 p-3">
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={shopId}
-              onChange={(e) => {
-                setShopId(e.target.value);
+            <PlatformShopFilter
+              shops={shops}
+              platform={platform}
+              shopId={shopId}
+              compact
+              allowAllShops={false}
+              onPlatformChange={handlePlatformChange}
+              onShopChange={(next) => {
+                setShopId(next);
                 setPage(0);
                 setSelected(new Set());
                 setSelectedWarehouseId(null);
                 setWarehouseStockMode('all');
               }}
-              className="h-8 min-w-[190px] rounded-md border border-input bg-background px-2.5 text-xs"
-            >
-              <option value="">全部店铺</option>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>[{s.platform}] {s.name}</option>
-              ))}
-            </select>
+            />
 
             {warehouses.length > 0 && (
               <select

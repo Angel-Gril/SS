@@ -29,6 +29,7 @@ import { YandexOrderSyncActionDialog } from '@/components/yandex/order-sync-acti
 import { YandexOrderWorkbench } from '@/components/yandex/order-workbench';
 import { OrderFulfillmentProgress } from '@/components/orders/fulfillment-progress';
 import { LabelPreviewDialog } from '@/components/orders/label-preview-dialog';
+import { PlatformShopFilter, type ShopPlatformFilter, shopPlatformLabel } from '@/components/shops/platform-shop-filter';
 
 interface Order {
   id: string;
@@ -109,6 +110,7 @@ interface Shop {
 interface SavedOrderFilter {
   id: string;
   name: string;
+  platform?: ShopPlatformFilter;
   status: string;
   shopId: string;
   search: string;
@@ -282,6 +284,7 @@ export default function OrdersPage() {
   const [stockReadyPending, setStockReadyPending] = useState<Set<string>>(new Set());
 
   const [status, setStatus] = useState('');
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -309,6 +312,7 @@ export default function OrdersPage() {
 
   const loadPipeline = useCallback(async () => {
     const params = new URLSearchParams();
+    if (platform) params.set('platform', platform);
     if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
     if (search && searchField !== 'all') params.set('searchField', searchField);
@@ -321,13 +325,13 @@ export default function OrdersPage() {
     if (endDate) params.set('endDate', endDate);
     const res = await api.get<{ stages: PipelineStage[] }>(`/api/orders/pipeline?${params}`);
     if (res.code === 1 && res.data) setPipeline(res.data.stages);
-  }, [shopId, search, searchField, serviceTagId, userColorTagId, purchaseState, shippingMethod, hasTracking, startDate, endDate]);
+  }, [platform, shopId, search, searchField, serviceTagId, userColorTagId, purchaseState, shippingMethod, hasTracking, startDate, endDate]);
 
   useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) setShops(res.data);
     });
-    api.get<OrderStats>('/api/orders/stats').then((res) => {
+    api.get<OrderStats>(platform ? `/api/orders/stats?platform=${encodeURIComponent(platform)}` : '/api/orders/stats').then((res) => {
       if (res.code === 1 && res.data) setStats(res.data);
     });
     loadPipeline();
@@ -341,7 +345,7 @@ export default function OrdersPage() {
       const parsed = JSON.parse(localStorage.getItem(SAVED_ORDER_FILTERS_KEY) || '[]');
       if (Array.isArray(parsed)) setSavedOrderFilters(parsed.slice(0, 20));
     } catch {}
-  }, [loadPipeline]);
+  }, [loadPipeline, platform]);
 
   async function loadOrders() {
     setLoading(true);
@@ -349,6 +353,7 @@ export default function OrdersPage() {
       offset: String(page * limit),
       limit: String(limit),
     });
+    if (platform) params.set('platform', platform);
     if (status) params.set('status', status);
     if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
@@ -376,9 +381,13 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, subStatus, purchaseState, shippingMethod, sort, page, startDate, endDate, pipelineActive, pipelineStatus]);
+  }, [status, platform, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, subStatus, purchaseState, shippingMethod, sort, page, startDate, endDate, pipelineActive, pipelineStatus]);
 
   function handleSync(fullSync = false) {
+    if (platform && !shopId) {
+      toast({ title: '请先选择具体店铺', description: `同步${shopPlatformLabel(platform)}需要明确目标店铺`, variant: 'destructive' });
+      return;
+    }
     if (!shopId && shops.length === 0) {
       toast({ title: '请先添加店铺', variant: 'destructive' });
       return;
@@ -458,6 +467,7 @@ export default function OrdersPage() {
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
+      platform,
       status,
       shopId,
       search,
@@ -485,6 +495,7 @@ export default function OrdersPage() {
   }
 
   function applySavedFilter(filter: SavedOrderFilter) {
+    setPlatform(filter.platform || '');
     setStatus(filter.status || '');
     setShopId(filter.shopId || '');
     setSearch(filter.search || '');
@@ -505,6 +516,7 @@ export default function OrdersPage() {
   }
 
   function resetOrderFilters() {
+    setPlatform('');
     setStatus('');
     setShopId('');
     setSearch('');
@@ -545,6 +557,7 @@ export default function OrdersPage() {
             variant="outline"
             onClick={() => {
               const params = new URLSearchParams();
+              if (platform) params.set('platform', platform);
               if (shopId) params.set('shopId', shopId);
               if (startDate) params.set('startDate', startDate);
               if (endDate) params.set('endDate', endDate);
@@ -652,16 +665,13 @@ export default function OrdersPage() {
       <Card>
         <CardContent className="p-4 space-y-4">
           <div className="flex items-center gap-3 flex-wrap">
-            <select
-              value={shopId}
-              onChange={(e) => { setShopId(e.target.value); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">全部店铺</option>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>[{s.platform}] {s.name}</option>
-              ))}
-            </select>
+            <PlatformShopFilter
+              shops={shops}
+              platform={platform}
+              shopId={shopId}
+              onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }}
+              onShopChange={(next) => { setShopId(next); setPage(0); }}
+            />
 
             <Input
               type="date"

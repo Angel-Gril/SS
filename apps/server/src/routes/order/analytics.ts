@@ -16,11 +16,19 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
 
   app.get('/stats', async (request) => {
     const { userId } = (request as any).user;
+    const query = z.object({ platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']).optional() }).parse(request.query);
     const userShops = await prisma.shop.findMany({
       where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
     });
-    const shopIds = userShops.map((s) => s.id);
+    let shopIds = userShops.map((s) => s.id);
+    if (query.platform && shopIds.length > 0) {
+      const platformShops = await prisma.shop.findMany({
+        where: { id: { in: shopIds }, platform: query.platform },
+        select: { id: true },
+      });
+      shopIds = platformShops.map((shop) => shop.id);
+    }
 
     if (shopIds.length === 0) {
       return {
@@ -121,7 +129,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
 
   app.get('/pipeline', async (request, reply) => {
     const { userId } = (request as any).user;
-    const querySchema = z.object({ shopId: z.string().optional(), status: z.string().optional(), subStatus: z.string().min(1).max(120).optional(), search: z.string().optional(), searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(), purchaseState: z.enum(['linked', 'unlinked']).optional(), shippingMethod: z.string().min(1).max(120).optional(), hasTracking: z.enum(['yes', 'no']).optional(), serviceTagId: z.string().optional(), userColorTagId: z.string().optional(), startDate: queryDateSchema.optional(), endDate: queryDateSchema.optional(), shipmentUrgency: z.enum(['overdue', 'today', 'tomorrow', 'within3d']).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional() }).superRefine((value, context) => {
+    const querySchema = z.object({ platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']).optional(), shopId: z.string().optional(), status: z.string().optional(), subStatus: z.string().min(1).max(120).optional(), search: z.string().optional(), searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(), purchaseState: z.enum(['linked', 'unlinked']).optional(), shippingMethod: z.string().min(1).max(120).optional(), hasTracking: z.enum(['yes', 'no']).optional(), serviceTagId: z.string().optional(), userColorTagId: z.string().optional(), startDate: queryDateSchema.optional(), endDate: queryDateSchema.optional(), shipmentUrgency: z.enum(['overdue', 'today', 'tomorrow', 'within3d']).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional() }).superRefine((value, context) => {
       if (value.startDate && value.endDate && new Date(value.startDate) > new Date(value.endDate)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: '结束日期不能早于开始日期' });
     });
     const parsed = querySchema.safeParse(request.query);
@@ -135,7 +143,11 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     if (rawOffset !== undefined && (!/^\d+$/u.test(String(rawOffset)))) return reply.status(400).send({ code: 0, msg: 'offset 参数无效' });
     const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' } }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
-    const scopedShopIds = query.shopId ? (shopIds.includes(query.shopId) ? [query.shopId] : []) : shopIds;
+    let scopedShopIds = query.shopId ? (shopIds.includes(query.shopId) ? [query.shopId] : []) : shopIds;
+    if (query.platform && scopedShopIds.length > 0) {
+      const platformShops = await prisma.shop.findMany({ where: { id: { in: scopedShopIds }, platform: query.platform }, select: { id: true } });
+      scopedShopIds = platformShops.map((shop) => shop.id);
+    }
     if (scopedShopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, stages: ORDER_FULFILLMENT_PIPELINE.map(stage => ({ ...stage, count: 0, children: stage.children.map(child => ({ ...child, count: 0 })) })) } };
     let where: Record<string, unknown>;
     try { where = await buildOrderListScope(prisma as never, scopedShopIds, query); }

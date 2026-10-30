@@ -10,6 +10,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
+
+interface Shop { id: string; name: string; platform: string; }
 
 interface Order {
   id: string;
@@ -34,13 +37,19 @@ export default function TrackingPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [page, setPage] = useState(0);
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
+  const [shopId, setShopId] = useState('');
   const limit = 20;
 
-  useEffect(() => { fetchData(); }, [search, page]);
+  useEffect(() => { api.get<Shop[]>('/api/shops').then((res) => { if (res.code === 1 && res.data) setShops(res.data); }); }, []);
+  useEffect(() => { fetchData(); }, [search, page, platform, shopId]);
 
   async function fetchData() {
     setLoading(true);
     const params = new URLSearchParams({ status: 'delivering', offset: String(page * limit), limit: String(limit) });
+    if (platform) params.set('platform', platform);
+    if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
     if (res.code === 1 && res.data) { setOrders(res.data.rows); setTotal(res.data.total); }
@@ -63,7 +72,8 @@ export default function TrackingPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <PlatformShopFilter shops={shops} platform={platform} shopId={shopId} compact onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }} onShopChange={(next) => { setShopId(next); setPage(0); }} />
             <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
               <Input placeholder="搜索物流单号/订单号" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="w-64" />
               <Button type="submit" size="sm" variant="outline"><Search className="h-4 w-4" /></Button>
@@ -110,7 +120,7 @@ export default function TrackingPage() {
                     ) : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                   <TableCell>{order.shippingMethod || '-'}</TableCell>
-                  <TableCell><Badge variant="outline">{order.shop.name}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className="mr-1 text-[10px]">{order.shop.platform}</Badge><span className="text-sm">{order.shop.name}</span></TableCell>
                   <TableCell className="text-sm">{order.shipmentDate ? formatDate(order.shipmentDate) : '-'}</TableCell>
                   <TableCell><Badge variant="secondary"><Truck className="mr-1 h-3 w-3" />运输中</Badge></TableCell>
                   <TableCell>

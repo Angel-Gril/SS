@@ -4,7 +4,7 @@ import { isOrderAwaitingSellerShipment, type OrderFulfillmentStageInput } from '
 export type OrderListSearchField = 'all' | 'sku' | 'product';
 export type ShipmentUrgency = 'overdue' | 'today' | 'tomorrow' | 'within3d';
 export type OrderListScopeQuery = {
-  shopId?: string; status?: string; subStatus?: string; search?: string; searchField?: 'all' | 'posting' | 'tracking' | 'sku' | 'product' | 'purchase';
+  shopId?: string; platform?: 'OZON' | 'YANDEX' | 'KASPI' | 'WILDBERRIES'; status?: string; subStatus?: string; search?: string; searchField?: 'all' | 'posting' | 'tracking' | 'sku' | 'product' | 'purchase';
   serviceTagId?: string; userColorTagId?: string; shipmentUrgency?: ShipmentUrgency; hasTracking?: 'yes' | 'no';
   purchaseState?: 'linked' | 'unlinked'; shippingMethod?: string; startDate?: string; endDate?: string;
 };

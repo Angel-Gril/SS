@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
 
 interface Shop { id: string; name: string; platform: string; }
 interface Issue {
@@ -47,6 +48,8 @@ export default function ExpressIssuesPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
+  const [shopId, setShopId] = useState('');
   const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const limit = 20;
@@ -57,11 +60,13 @@ export default function ExpressIssuesPage() {
     });
   }, []);
 
-  useEffect(() => { fetchData(); }, [search, page, statusFilter]);
+  useEffect(() => { fetchData(); }, [search, page, statusFilter, platform, shopId]);
 
   async function fetchData() {
     setLoading(true);
     const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit) });
+    if (platform) params.set('platform', platform);
+    if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
     if (statusFilter) params.set('status', statusFilter);
     const res = await api.get<{ total: number; rows: Issue[] }>(`/api/issues?${params}`);
@@ -103,6 +108,7 @@ export default function ExpressIssuesPage() {
               <option value="resolved">已解决</option>
               <option value="closed">已关闭</option>
             </select>
+            <PlatformShopFilter shops={shops} platform={platform} shopId={shopId} compact onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }} onShopChange={(next) => { setShopId(next); setPage(0); }} />
             <form className="flex gap-2 flex-1 max-w-sm" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
               <Input placeholder="搜索标题 / 单号" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="h-9" />
               <Button type="submit" size="sm" variant="outline"><Search className="h-4 w-4" /></Button>
@@ -139,7 +145,7 @@ export default function ExpressIssuesPage() {
                   <TableRow key={issue.id}>
                     <TableCell className="font-medium text-sm max-w-xs truncate">{issue.title}</TableCell>
                     <TableCell><Badge variant="outline">{TYPE_LABELS[issue.type] || issue.type}</Badge></TableCell>
-                    <TableCell className="text-sm">{issue.shop.name}</TableCell>
+                    <TableCell className="text-sm"><Badge variant="outline" className="mr-1 text-[10px]">{issue.shop.platform}</Badge>{issue.shop.name}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{issue.postingNumber || issue.trackingNumber || '-'}</TableCell>
                     <TableCell><Badge variant={st.variant}>{st.label}</Badge></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDate(issue.createdAt)}</TableCell>

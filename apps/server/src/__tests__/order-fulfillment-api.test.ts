@@ -139,6 +139,21 @@ describe('order fulfillment owner consumers', () => {
     await app.close();
   });
 
+  it('filters order lists and pipeline scopes by platform before reading orders', async () => {
+    mocks.shopFindMany
+      .mockResolvedValueOnce([{ id: 'shop-1' }, { id: 'shop-2' }])
+      .mockResolvedValueOnce([{ id: 'shop-2' }]);
+    const app = await appFor();
+    const response = await app.inject('/api/orders?platform=YANDEX');
+    expect(response.statusCode).toBe(200);
+    expect(mocks.shopFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ['shop-1', 'shop-2'] }, platform: 'YANDEX' },
+      select: { id: true },
+    }));
+    expect(mocks.orderCount).toHaveBeenCalledWith({ where: { shopId: { in: ['shop-2'] } } });
+    await app.close();
+  });
+
   it.each(['startDate=not-a-date', 'startDate=2026-02-30', 'startDate=2026-10-11&endDate=2026-10-09', 'limit=0', 'limit=201', 'offset=-1'])('rejects invalid list and pipeline query before database reads: %s', async query => {
     const app = await appFor();
     for (const path of ['/api/orders', '/api/orders/pipeline']) {

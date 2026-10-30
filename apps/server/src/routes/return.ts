@@ -8,6 +8,7 @@ import { returnSyncInputSchema, syncOzonReturns } from '../services/ozon-returns
 
 const querySchema = z.object({
   shopId: z.string().optional(),
+  platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']).optional(),
   status: z.string().optional(),
   search: z.string().optional(),
   offset: z.coerce.number().int().min(0).default(0),
@@ -38,7 +39,7 @@ export async function returnRoutes(app: FastifyInstance) {
     const query = querySchema.parse(request.query);
 
     const userShops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, ...(query.platform ? { platform: query.platform } : {}) },
       select: { id: true },
     });
     const shopIds = userShops.map((s) => s.id);

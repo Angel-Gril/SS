@@ -16,6 +16,7 @@ import {
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
+import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
 
 interface Order {
   id: string;
@@ -86,6 +87,7 @@ export default function LogisticsPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [shopId, setShopId] = useState('');
+  const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [page, setPage] = useState(0);
   const [domesticDialog, setDomesticDialog] = useState<Order | null>(null);
   const [internationalDialog, setInternationalDialog] = useState<Order | null>(null);
@@ -98,7 +100,7 @@ export default function LogisticsPage() {
     });
   }, []);
 
-  useEffect(() => { loadOrders(); }, [search, shopId, page]);
+  useEffect(() => { loadOrders(); }, [search, platform, shopId, page]);
 
   async function loadOrders() {
     setLoading(true);
@@ -106,6 +108,7 @@ export default function LogisticsPage() {
       offset: String(page * limit),
       limit: String(limit),
     });
+    if (platform) params.set('platform', platform);
     if (shopId) params.set('shopId', shopId);
     if (search) params.set('search', search);
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
@@ -127,16 +130,7 @@ export default function LogisticsPage() {
       <Card>
         <CardContent className="p-4">
           <div className="flex items-center gap-3 flex-wrap">
-            <select
-              value={shopId}
-              onChange={(e) => { setShopId(e.target.value); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">全部店铺</option>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>[{s.platform}] {s.name}</option>
-              ))}
-            </select>
+            <PlatformShopFilter shops={shops} platform={platform} shopId={shopId} onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }} onShopChange={(next) => { setShopId(next); setPage(0); }} />
 
             <form onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }} className="flex items-center gap-2 flex-1 max-w-sm">
               <Input
@@ -189,7 +183,7 @@ export default function LogisticsPage() {
                     </TableCell>
                     <TableCell className="text-sm">
                       <Badge variant="outline">{order.shop.platform}</Badge>
-                      <span className="ml-1">{order.shop.name}</span>
+                      <span className="ml-1"><Badge variant="outline" className="mr-1 text-[10px]">{order.shop.platform}</Badge>{order.shop.name}</span>
                     </TableCell>
                     <TableCell className="max-w-[180px]">
                       {order.items && Array.isArray(order.items) ? (
