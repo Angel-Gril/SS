@@ -28,24 +28,26 @@ function request(overrides = {}) {
   return { binding, skuKey: 'sku-1', sourceMediaKeys: ['media-1'], operationKey: 'analysis-operation-1', profileId: 'profile-1', analysisModel: 'qwen-vl-plus',
     categoryRevision: { catalogRevision: category.catalogRevision, schemaRevision: category.schemaRevision }, ...overrides };
 }
-function fixture({ sessionStorage = storage(), fetchImpl, readiness, context, permission = true, onAssert, timeoutMs = 1000 } = {}) {
+function fixture({ sessionStorage = storage(), fetchImpl, readiness, context, permission = true, onAssert, timeoutMs = 1000,
+  baseUrl = 'https://provider.example/compatible-mode/v1' } = {}) {
   const globals = { Array, ArrayBuffer, Blob, Boolean, Date, Error, JSON, Map, Math, Number, Object, Promise, Set, String, TextEncoder, TextDecoder, Uint8Array, URL,
     AbortController, Response, ReadableStream, btoa, crypto: webcrypto, setTimeout, clearTimeout };
   globals.globalThis = globals;
   for (const name of modules) vm.runInNewContext(readFileSync(`extensions/ss-erp/shared/byok/${name}.js`, 'utf8'), globals, { filename: name });
-  const profile = { id: 'profile-1', name: 'Images and analysis', baseUrl: 'https://provider.example/compatible-mode/v1', model: 'image-model', allowedOperations: ['TEXT_TO_IMAGE'], preferences: { defaultSize: '1024x1024', quality: 'auto', outputFormat: 'png' } };
+  const profile = { id: 'profile-1', name: 'Images and analysis', baseUrl, model: 'image-model', allowedOperations: ['TEXT_TO_IMAGE'], preferences: { defaultSize: '1024x1024', quality: 'auto', outputFormat: 'png' } };
+  const providerOrigin = new URL(baseUrl).origin;
   const calls = [];
   let currentRevision = 'credential-1';
   const profileStore = { async getCredentialSnapshotForBackground() { return { profile, apiKey: key, credentialRevision: currentRevision }; },
     async assertCredentialRevisionForBackground(id, identity, revision) { if (revision !== currentRevision) throw new Error('credential changed'); },
     async commitWithCredentialRevisionForBackground(id, identity, revision, fn) { if (revision !== currentRevision) throw new Error('credential changed'); return fn(); } };
   const options = { sessionStorage, crypto: webcrypto, profileStore, timeoutMs,
-    permissionBroker: { async hasOriginPermission() { return { granted: permission, origin: 'https://provider.example' }; }, async commitWithOriginPermission(origin, fn) { if (!permission) throw new Error('permission changed'); return fn(); } },
+    permissionBroker: { async hasOriginPermission() { return { granted: permission, origin: providerOrigin }; }, async commitWithOriginPermission(origin, fn) { if (!permission) throw new Error('permission changed'); return fn(); } },
     sourceLibrary: { async readForBackground(ctx, mediaKey, purpose) { calls.push(['source', mediaKey, purpose, ctx]); const bytes = new Uint8Array([137,80,78,71,13,10,26,10]); return { blob: new Blob([bytes], {type:'image/png'}), mimeType:'image/png', width:64, height:64, byteLength:8, sha256: Buffer.from(await webcrypto.subtle.digest('SHA-256', bytes)).toString('hex') }; } },
     async getPreparationContext(input) { calls.push(['context', input]); return context || { binding, skuKey: input.skuKey, sourceMediaKeys: input.sourceMediaKeys,
       promptContext: { product: { title:'红色商品', description:'' }, sku: { skuKey:'sku-1', options:[] }, category,
         fields:[{ attributeId:1,name:'Цвет',description:'',valueType:'string',cardinality:'SINGLE',valuePolicy:'DICTIONARY_ONLY',aiSuggestionAllowed:true }], dictionaries: {'1':[{id:5,value:'Красный'}]}, sourceMediaKeys:input.sourceMediaKeys } }; },
-    async getReadiness(input) { calls.push(['readiness', input]); return readiness || { contractVersion:'extension-byok-product-analysis-readiness/v1', context: { ownerUserId:owner.ownerUserId,deviceSessionId:owner.deviceSessionId,shopId:binding.shopId,providerOrigin:'https://provider.example',model:input.model }, policyRevision:1,mode:'pilot',maxConcurrency:1, analysis:{enabled:true,ready:true,reasonCode:'READY'} }; },
+    async getReadiness(input) { calls.push(['readiness', input]); return readiness || { contractVersion:'extension-byok-product-analysis-readiness/v1', context: { ownerUserId:owner.ownerUserId,deviceSessionId:owner.deviceSessionId,shopId:binding.shopId,providerOrigin,model:input.model }, policyRevision:1,mode:'pilot',maxConcurrency:1, analysis:{enabled:true,ready:true,reasonCode:'READY'} }; },
     async assertCurrent(input) { calls.push(['authority',input]); await onAssert?.(input); },
     async persistCandidate(value) { calls.push(['persist',value]);return {...value.analysisInput,report:value.report,replayed:false,receiptId:'server-receipt-1',category}; },
     async readCandidate(input) { calls.push(['read',input]);return null; },
@@ -67,6 +69,17 @@ test('analysis uses an explicit model, exact policy, owned media bytes and retur
   assert.deepEqual(clone(imageAuthority.providerContext),{providerOrigin:'https://provider.example',model:'qwen-vl-plus',policyRevision:1});
   assert.equal(JSON.stringify(imageAuthority).includes(key),false);
   assert.equal(JSON.stringify(result).includes(key),false); assert.equal(JSON.stringify(f.sessionStorage.values).includes(key),false);
+});
+test('official DashScope Qwen 3.5 analysis disables unused thinking in the background request', async () => {
+  const f=fixture({baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1'});
+  await f.client.analyzeProduct(request({analysisModel:'qwen3.5-plus'}),owner);
+  const requests=f.calls.filter(call=>call[0]==='provider');assert.equal(requests.length,1);
+  assert.equal(JSON.parse(requests[0][2].body).enable_thinking,false);
+  assert.equal(JSON.stringify(f.sessionStorage.values).includes(key),false);
+});
+test('unverified third-party Qwen endpoints retain their original request format', async()=>{
+  const f=fixture();await f.client.analyzeProduct(request({analysisModel:'qwen3.5-plus'}),owner);
+  assert.equal(Object.hasOwn(JSON.parse(f.calls.find(call=>call[0]==='provider')[2].body),'enable_thinking'),false);
 });
 test('same operation is coalesced and exact success replays without another Provider POST after Worker restart',async()=>{
   const f=fixture(); const [a,b]=await Promise.all([f.client.analyzeProduct(request(),owner),f.client.analyzeProduct(request(),owner)]);

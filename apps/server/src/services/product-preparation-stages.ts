@@ -35,8 +35,8 @@ export function preparationStagePrompt(stage: ProductPreparationStage): string {
     'Use concise Chinese visual directions, max 60 characters for each of composition/background/lighting/style and 300 total. Each visual array max 10 strings of 100 characters. Summary/SKU arrays max 20 strings of 200 characters. Exactly one row with supplied skuKey. titleRu may be empty until COPY.',
   ] : [
     'Generate Russian copy and allowed visual attribute candidates from supplied source facts and the completed visual checkpoint. No additional image request or curation.',
-    '{"suggestedAttributes":[{"attributeId":1,"value":"","dictionaryValueId":1,"evidence":{"sourceMediaKeys":[],"observation":""},"manualReview":"REQUIRED"}],"copy":{"titleRu":"","descriptionRu":"","tagsRu":[]}}',
-    'Suggest only supplied eligible official attribute IDs and exact official dictionary values. Use only visionSourceMediaKeys as visual evidence, omit unsupported claims, at most 40 candidates. Evidence observation max 200 chars.',
+    '{"suggestedAttributes":[],"copy":{"titleRu":"","descriptionRu":"","tagsRu":[]}}',
+    'Suggest only supplied eligible official attribute IDs and exact official dictionary values. If no eligible official fields are supplied, return suggestedAttributes as an empty array; never copy example IDs. Use only visionSourceMediaKeys as visual evidence, omit unsupported claims, at most 40 candidates. Evidence observation max 200 chars.',
     'Russian title max 500 chars, description max 4096, at most 20 Russian tags of 80 chars. No Chinese in Russian copy.',
   ];
   return [`STAGE:${stage}`, ...instructions, sharedPrompt].join('\n');

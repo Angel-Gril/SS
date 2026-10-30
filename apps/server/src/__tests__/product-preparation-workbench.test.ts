@@ -8,7 +8,7 @@ import { createSourceListingWorkflowService } from '../services/source-listing-w
 import { createProductPreparationWorkbenchService, type ProductPreparationWorkbenchOptions } from '../services/product-preparation-workbench.js';
 import { normalizeProductPreparationReport } from '../services/product-preparation-report.js';
 import type { ProductPreparationFailure } from '../services/product-preparation-stages.js';
-import { preparationVisualMediaKeys } from '../services/product-preparation-stages.js';
+import { preparationVisualMediaKeys, compilePreparationStagePrompt } from '../services/product-preparation-stages.js';
 import type { ProductPreparationOperationStore, ProductPreparationReceipt } from '../services/product-preparation-operation-store.js';
 import { createPrismaProductPreparationOperationStore, PRODUCT_PREPARATION_PROMPT_CONTRACT } from '../services/product-preparation-operation-store.js';
 import { extensionProductPreparationRoutes } from '../routes/extension-product-preparation.js';
@@ -282,6 +282,12 @@ describe('continuous preparation owner', () => {
   });
 });
 describe('staged preparation checkpoints', () => {
+  it('uses an empty attribute example when no official fields may be suggested', () => {
+    const prompt = compilePreparationStagePrompt('COPY', { fields: [], dictionaries: {}, product: { title: 'Red box' } })!;
+    const example = prompt.split('\n').find(line => line.startsWith('{"suggestedAttributes"'))!;
+    expect(JSON.parse(example).suggestedAttributes).toEqual([]);
+    expect(prompt).not.toContain('"attributeId":1');
+  });
   it('chooses up to three current-SKU images before five shared images while preserving curation eligibility', () => {
     const curation: Array<{ sourceMediaKey: string; decision: 'KEEP' | 'OMIT' | 'REVIEW'; reason: string }> = Array.from({ length: 12 }, (_, ordinal) => ({ sourceMediaKey: `media-${ordinal}`, decision: 'KEEP', reason: '清晰' }));
     expect(preparationVisualMediaKeys(curation, ['media-9', 'media-10', 'media-11', 'foreign'])).toEqual([

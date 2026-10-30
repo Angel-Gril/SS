@@ -124,6 +124,10 @@ export function createProductVisionTransport(options: {
     }
     const body = JSON.stringify({
       model: config.model,
+      // Match the tested donor vision request. Qwen 3.5 otherwise spends time
+      // producing reasoning that this candidate-only JSON workflow never uses.
+      ...(endpoint.hostname === 'dashscope.aliyuncs.com' && endpoint.pathname === '/compatible-mode/v1/chat/completions'
+        && /^qwen3\.5(?:-|$)/u.test(config.model) ? { enable_thinking: false } : {}),
       temperature: 0,
       max_tokens: maxOutputTokens,
       response_format: { type: 'json_object' },

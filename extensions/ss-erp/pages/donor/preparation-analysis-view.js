@@ -345,7 +345,7 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
       const modeLabel=make('label','field','执行方式'),modeSelect=make('select');modeSelect.id='precision-preparation-mode';
       for(const [value,label] of [['ERP_HOSTED','ERP 托管'],['BYOK','自带 API']]){const option=make('option','',label);option.value=value;modeSelect.append(option);}modeSelect.value=mode;modeLabel.append(modeSelect);
       const modelLabel=make('label','field','商品分析模型（自带 API）'),model=make('select');model.id='precision-preparation-analysis-model';
-      for(const value of ['qwen-vl-plus','qwen-vl-max']){const option=make('option','',value);option.value=value;model.append(option);}model.value=analysisModel;modelLabel.append(model);
+      for(const value of ['qwen3.5-plus','qwen-vl-plus','qwen-vl-max']){const option=make('option','',value);option.value=value;model.append(option);}model.value=analysisModel;modelLabel.append(model);
       const profileLabel=make('label','field','自带 API 档案'),profile=make('select');profile.id='precision-preparation-analysis-profile';
       try{await runtime?.registerUi?.();profiles=(await runtime.settings.listProfiles()).profiles||[];}catch{profiles=[];}
       for(const value of profiles){const option=make('option','',value.name);option.value=value.id;profile.append(option);}profile.value=profileId||profiles[0]?.id||'';profileLabel.append(profile);

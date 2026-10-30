@@ -50,10 +50,10 @@ test('only an acknowledged original save replay clears its preparation recovery'
   assert.deepEqual(f.restores, [true]);
   assert.deepEqual(f.resumes, ['ATTRIBUTES']);
 });
-test('category save waits for authoritative refresh before resuming preparation', async () => {
+test('category save waits for editor authority readback without recollecting the source', async () => {
   const f = fixture();
   f.context.preparation.state = () => ({ status: 'WAITING_INPUT', shopId: 'shop', stepId: 'category' });
   await f.context.save('CATEGORY', {});
-  assert.deepEqual(f.commands, ['EDITOR_SAVE', 'REFRESH', 'EDITOR_READ']);
+  assert.deepEqual(f.commands, ['EDITOR_SAVE', 'EDITOR_READ']);
   assert.deepEqual(f.resumes, ['CATEGORY']);
 });

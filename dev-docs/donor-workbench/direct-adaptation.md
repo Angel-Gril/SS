@@ -1,5 +1,13 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-30 原精铺视觉模型校准与扩展性能收口（本地未发布）
+
+对用户提供的临时阿里云 Key 只做隔离合成图校准，未保存 Key、未写入配置、未触发草稿/Ozon/生产写入。原精铺代码确认图片视觉分析调用 DashScope 原生多模态接口 `qwen3.5-plus`，请求关闭 `enable_thinking`，最多选择3张 SKU 图和5张商品图，输出视觉 JSON；文字提示词另用 `qwen3-max`。当前 ERP 托管配置仍由管理员配置 owner 控制，历史 `qwen-vl-max` 一次实测在同一兼容端点返回404，不据此切换生产配置。
+
+隔离合成图实测：原精铺原生 `qwen3.5-plus` HTTP200，首段约1.0秒、完成约6.2秒；ERP兼容 transport 未关闭思考时完成约35.4秒，补上 DashScope兼容端点+`qwen3.5-*` 的 `enable_thinking:false` 后约6.3秒，视觉 JSON schema通过、SKU绑定通过。连续 CURATION→VISION→COPY 新校准中前两阶段分别约2.2秒/6.6秒；COPY 首次失败是模型照抄“attributeId:1”示例而当前官方字段为空，已改为无字段时示例为空数组并通过本地51项准备回归；新的COPY checkpoint真实响应通过，新增请求仅用于隔离校准。真实请求总数、脱敏回执和合成图片位于Windows用户私有 `C:/Users/550W/AppData/Local/SS-ERP/private/vision-donor-calibration-*`，不进入Git。
+
+当前实现优化：商品分析 BYOK 模型选择增加 `qwen3.5-plus`；服务端只对已确认的 DashScope兼容端点和Qwen3.5模型注入关闭思考参数，第三方兼容端点保持原请求格式；写入后草稿权威读回不再重复采集来源页，显式用户刷新仍会重新采集；来源 JSON 仅在过程窗口打开时序列化；无可用官方属性时COPY不会伪造属性ID。相关扩展/服务端回归和隔离浏览器证据通过，尚未提交、签名、部署或公开发布。
+
 ## 2026-10-27 `ee6b8999 / 1.0.472` 正式 QA04 与官网公开发布完成
 
 同一份真实两图业务原件被正式 QA04 schema6 合法消费：原 START/CONTINUE、审核前 PENDING、两次预览、双审核、首次 assignment、幂等 replay、数据库/队列读回和 CNY0.20 均保留不变。消费者修复了补充模式的时间顺序、历史 UI/导航复用和清理后设备会话收缩边界；当前只读配置实测为 `gpt-image-2-count`、CNY0.10/张，已撤销的执行 session 不被误当作权限增长。COM/CN 已完成同 commit 双区部署，COM hosted pilot/CN dark 策略未扩大；REL-04 canary、website approval、CAS、匿名四包分发探针和最终 publication verifier 全部通过，官网现公开 `1.0.472`。本轮无 Provider/Ozon 写入和新增费用；私有证据根为 `C:/Users/550W/AppData/Local/SS-ERP/private/release-ee6b8999-website`。

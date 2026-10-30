@@ -62,6 +62,14 @@ test('late read cannot replace current revision or selected SKU projection', asy
   assert.equal(f.context.editor, before);
 });
 
+test('a pre-save projection cannot let a late read overwrite the acknowledged editor revision', async () => {
+  const f = fixture(async () => ({ data: { editor: details(binding) } }));
+  const saved = details({ ...binding, draftRevision: 2, draftVersion: 2 });
+  f.context.editor = saved;
+  await assert.rejects(f.context.loadEditor(), /草稿详情/);
+  assert.equal(f.context.editor, saved);
+});
+
 test('failed read and its final projection renders make exactly one automatic attempt', async () => {
   const f = fixture(async () => { setImmediate(() => f.auto()); throw Object.assign(Error('device denied'), { outcome: 'NOT_SUBMITTED' }); });
   f.auto(); await tick(); await tick();
@@ -149,7 +157,7 @@ test('category save keeps preparation pending until the real editor readback fin
   const f = fixture(async type => {
     if (type === 'EDITOR_SAVE') return { data: { editor: details(saved) } };
     if (type === 'REFRESH') { f.setBinding(saved); return { ok: true }; }
-    if (type === 'EDITOR_READ') return new Promise(resolve => { resolveRead = resolve; });
+    if (type === 'EDITOR_READ') { f.setBinding(saved); return new Promise(resolve => { resolveRead = resolve; }); }
     throw Error('unexpected command');
   });
   let done = false;
@@ -157,6 +165,7 @@ test('category save keeps preparation pending until the real editor readback fin
   await tick();
   assert.equal(f.calls.filter(call => call.type === 'EDITOR_READ').length, 1, 'use the real read function despite saveBusy');
   assert.equal(done, false, 'do not resume on a no-op read');
+  assert.equal(f.calls.some(call => call.type === 'REFRESH'), false, 'confirmed save readback must not recollect the source');
   assert.equal(f.context.saveBusy, true);
   resolveRead({ data: { editor: details(saved) } }); await save;
   assert.equal(f.context.saveBusy, false);
@@ -171,6 +180,7 @@ test('confirmed category readback waits out a superseded read and never applies 
     if (type === 'EDITOR_SAVE') return { data: { editor: details(saved) } };
     if (type === 'REFRESH') { f.setBinding(saved); return { ok: true }; }
     if (type === 'EDITOR_READ' && payload.binding.draftRevision === 1) return new Promise(resolve => { resolveOldRead = resolve; });
+    if (type === 'EDITOR_READ') f.setBinding(saved);
     return { data: { editor: details(saved) } };
   });
   const old = f.context.loadEditor();

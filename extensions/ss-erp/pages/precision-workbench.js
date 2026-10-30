@@ -36,6 +36,7 @@ let editorRenderOwner = '';
 let mediaSignature = '';
 let candidateSignature = '';
 let shopSelectSignature = '';
+let sourceDiagnosticsProjection = null;
 let byokRegistrationContext = '';
 let drafts = [];
 let sourceReady = false;
@@ -737,7 +738,7 @@ preparationAnalysis=createPreparationAnalysisView({root:element('ui-scale-root')
     const response=await command('PREPARATION_APPLY',{...request,listingWorkflowId:request.binding.listingWorkflowId});
     const saved=response.data?.application||response.data;
     if(!saved?.binding||saved.binding.shopId!==request.binding.shopId||saved.binding.listingWorkflowId!==request.binding.listingWorkflowId)throw Object.assign(new Error('AI 属性保存回执不完整，请核对原保存'),{outcome:'UNKNOWN_OUTCOME'});
-    await command('REFRESH');await loadEditor();await attributes.load(true);
+    await loadEditor({confirmedBinding:saved.binding});await attributes.load(true);
     attributeSuggestionReviewed=attributeSuggestionContext();
     status('已按 AI 候选依据保存选中属性，请补齐未确认事实。','ok');
   },
@@ -785,6 +786,8 @@ function acceptEditor(data, savedAction = null) {
   if (!data || data.contractVersion !== 'extension-listing-editor/v1' || !data.binding
     || !['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every((key) => data.binding[key] === current[key])
     || !savedAction && (data.binding.draftRevision !== current.draftRevision || data.binding.draftVersion !== current.draftVersion)
+    || !savedAction && editorIdentity(editor) === editorIdentity(data)
+      && (data.binding.draftRevision < editor.binding.draftRevision || data.binding.draftVersion < editor.binding.draftVersion)
     || !Array.isArray(data.selectedSkuKeys) || data.selectedSkuKeys.length < 1 || data.selectedSkuKeys.length > 100) throw new Error('ERP 草稿详情不完整');
   if (editorIdentity(editor) !== editorIdentity(data)) unsavedListingFields.clear();
   else for (const field of unsavedListingFields) if (fieldSavedByAction(savedAction, field)) unsavedListingFields.delete(field);
@@ -804,10 +807,16 @@ async function loadEditor(options = {}) {
     try { await editorReadTask; } catch {}
   }
   if (saveBusy && !options.confirmedBinding || !listing()) return;
-  const initialBinding = currentEditorBinding();
-  if (options.confirmedBinding && editorBindingKey(options.confirmedBinding) !== editorBindingKey(initialBinding)) {
-    throw new Error('类目已保存，当前草稿版本已更新，请重新读取后继续');
+  const observedBinding = currentEditorBinding();
+  const confirmed = options.confirmedBinding;
+  if (confirmed && (!['snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId'].every(key => confirmed[key] === observedBinding[key])
+    || confirmed.draftRevision < observedBinding.draftRevision || confirmed.draftVersion < observedBinding.draftVersion)) {
+    throw new Error('保存回执与当前草稿版本不一致，请重新读取后继续');
   }
+  // The bridge queues this read behind its post-save authority refresh. Use the
+  // acknowledged revision so a still-rendered pre-save projection cannot force
+  // another source-page collection. The returned editor must match fresh authority.
+  const initialBinding = confirmed ? { ...confirmed } : observedBinding;
   let attemptedKey = editorBindingKey(initialBinding);
   editorLoadKey = attemptedKey;
   editorLoading = true;
@@ -873,8 +882,6 @@ async function saveEditor(action, value, replay = false, beforeDispatch = null) 
     if (action === 'CATEGORY') {
       const confirmedBinding = { ...editor.binding };
       try {
-        const refreshed = await command('REFRESH');
-        if (!refreshed?.ok) throw new Error('类目已保存，但草稿状态尚未刷新');
         await loadEditor({ confirmedBinding });
       } catch (error) {
         readbackWarning = '类目已保存，但官方属性尚未刷新，请点击“重新读取”后继续。';
@@ -1347,6 +1354,11 @@ function renderSelectionCount() {
   const keys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
   mediaSelectionCount.textContent = `整个草稿已勾选 ${keys.size}/5 张${imageMode === 'translate' ? '翻译图片' : '参考图'}`;
 }
+function renderSourceDiagnostics() {
+  if (element('process-modal').hidden || sourceDiagnosticsProjection === projection) return;
+  element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
+  sourceDiagnosticsProjection = projection;
+}
 function render() {
   band.firstChild.textContent = projection.source.title || '正在读取商品';
   band.lastChild.textContent = `${projection.source.platform} · ${projection.skus.length} SKU · ${projection.media.length} 张图`;
@@ -1374,7 +1386,7 @@ function render() {
   renderEditor(); renderMedia();
   sourceVideo.refresh();
   renderPublish();
-  element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
+  renderSourceDiagnostics();
   element('process-source-summary').replaceChildren(make('div', '', `${projection.skus.length} 个 SKU · ${projection.media.length} 张素材`));
   const draft = listing();
   const binding = draft && projection.handoff ? editorBindingKey(currentEditorBinding()) : '';
@@ -1574,7 +1586,7 @@ trusted('category-select-btn', async () => {
   if (!editor) await loadEditor();
   await categoryPicker.open();
 });
-trusted('process-view-btn', () => openModal('process-modal'));
+trusted('process-view-btn', () => { openModal('process-modal'); renderSourceDiagnostics(); });
 trusted('ai-image-process-btn', openImageProcess);
 element('ai-translation-process-btn').textContent = '俄文文案';
 trusted('ai-translation-process-btn', () => copyEditor.open());

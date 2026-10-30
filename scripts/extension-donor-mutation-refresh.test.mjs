@@ -9,7 +9,7 @@ const extensionId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 async function harness({preparation}={}) {
-  const nodes = [], frameMessages = [], runtimeRequests = [], listeners = new Map();
+  const nodes = [], frameMessages = [], runtimeRequests = [], captureRequests = [], listeners = new Map();
   const pendingStatus = [], pendingBilling = [], pendingMutation = [], pendingEditor = [];
   const handoff = { snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture',
     sourceProductId: '845581683597', platform: '1688' };
@@ -72,7 +72,7 @@ async function harness({preparation}={}) {
         } else throw new Error(`unexpected fixture request ${request.type}`);
       },
     } },
-    SS_ERP_DONOR_1688_CAPTURE: { async collect() { if (captureError) throw captureError;
+    SS_ERP_DONOR_1688_CAPTURE: { async collect(request) { captureRequests.push(structuredClone(request)); if (captureError) throw captureError;
       return { productId: handoff.sourceProductId, title: '测试商品',
       captureV2: { skus: [{ key: 'sku-white', name: '白色 / S' }] } }; } },
     addEventListener(type, listener) { listeners.set(type, listener); },
@@ -94,12 +94,13 @@ async function harness({preparation}={}) {
     listingWorkflowId: listing.id, action: 'REVIEW_SLOT', slotKey: 'sku:sku-white:hero',
     decision: 'REJECT', costConfirmed: false,
   });
-  return { frameMessages, runtimeRequests, pendingStatus, pendingBilling, pendingMutation, pendingEditor, handoff,
+  return { frameMessages, runtimeRequests, captureRequests, pendingStatus, pendingBilling, pendingMutation, pendingEditor, handoff,
     statusResponse, billingResponse, command, review,
     delay({ status = false, billing = false, mutation = false, editor = false } = {}) {
       delayStatus = status; delayBilling = billing; delayMutation = mutation; delayEditor = editor;
     },
     updateListing(value) { listing = { ...listing, ...value }; },
+    navigate(url) { environment.location.href = url; environment.location.hostname = new URL(url).hostname; },
     failCapture(error) { captureError = error; },
     results(requestId) { return frameMessages.filter(item => item.type === 'COMMAND_RESULT' && item.requestId === requestId); },
     projection() { return frameMessages.filter(item => item.type === 'PROJECTION').at(-1)?.projection; },
@@ -122,6 +123,48 @@ test('a confirmed slot review is acknowledged before a slow authority refresh', 
 
 const editorBinding = { snapshotId: 'snapshot-fixture', supplyGoodsId: 'goods-fixture', shopId: 'doth',
   listingWorkflowId: 'draft-fixture', draftRevision: 2, draftVersion: 2 };
+
+function editorWriteFields(type = 'EDITOR_SAVE') {
+  return { binding: editorBinding, listingWorkflowId: 'draft-fixture', operationKey: 'precision-editor:test',
+    ...(type === 'EDITOR_SAVE' ? { action: 'CATEGORY', value: { categoryId: 1, typeId: 2, catalogRevision: 'catalog' } }
+      : type === 'EDITOR_COPY_GENERATE' ? { fields: ['title'] }
+        : { action: 'ATTRIBUTES', analysisInput: { binding: editorBinding, operationKey: 'precision-analysis:test',
+          skuKey: 'sku-white', sourceMediaKeys: ['image-1'], categoryRevision: { catalogRevision: 'catalog', schemaRevision: 'a'.repeat(64) } },
+        selectedAttributeIds: [1] }) };
+}
+
+for (const type of ['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY']) {
+  test(`${type} reads fresh draft authority without collecting the source again`, async () => {
+    const h = await harness();
+    h.updateListing({ revision: 3, draftVersion: 3 });
+    h.failCapture(new Error('SOURCE_MUST_NOT_BE_RECOLLECTED_FOR_DRAFT_READBACK'));
+    h.command(type, 'draft-write', editorWriteFields(type));
+    await flush();
+    assert.deepEqual(h.results('draft-write').map(item => item.ok), [true]);
+    assert.equal(h.captureRequests.length, 1, 'only initial source reading runs the collector');
+    assert.equal(h.runtimeRequests.filter(item => item.type === 'spb-self-hosted:get-ozon-shops').length, 2);
+    assert.equal(h.runtimeRequests.filter(item => item.type === 'ss-erp:source-listing-workbench-status').length, 2);
+    assert.equal(h.projection().workbench.status.listing.items[0].draftVersion, 3);
+    assert.equal(h.projection().error, '');
+    assert.equal(h.projection().busy, false);
+  });
+
+  test(`${type} keeps an unknown write unresolved without retrying or reading it back as success`, async () => {
+    const unknown = { ok: false, error: 'MUTATION_UNRESOLVED', outcome: 'UNKNOWN_OUTCOME' };
+    const h = await harness({ preparation: () => unknown });
+    h.delay({ editor: true });
+    h.command(type, 'unknown-write', editorWriteFields(type)); await flush();
+    if (type !== 'PREPARATION_APPLY') {
+      h.pendingEditor.shift().callback(unknown); await flush();
+    }
+    assert.deepEqual(h.results('unknown-write').map(item => [item.ok, item.outcome]), [[false, 'UNKNOWN_OUTCOME']]);
+    assert.equal(h.captureRequests.length, 1);
+    assert.equal(h.runtimeRequests.filter(item => item.type === 'ss-erp:source-listing-workbench-status').length, 1);
+    const writes = h.runtimeRequests.filter(item => item.operationKey === 'precision-editor:test');
+    assert.equal(writes.length, 1, 'the original operation key is dispatched exactly once');
+    assert.deepEqual(writes[0].binding, editorBinding);
+  });
+}
 
 test('independent editor reads do not block one another or lock the whole workbench', async () => {
   const h = await harness(); h.delay({ editor: true });
@@ -185,6 +228,91 @@ test('post-save authority read never reuses a projection requested before the sa
   assert.equal(h.projection().busy, true, 'editor mutation stays locked until its fresh readback finishes');
   h.pendingStatus.shift()(h.statusResponse()); await flush();
   assert.equal(h.projection().workbench.status.listing.items[0].draftVersion, 3);
+  assert.equal(h.projection().busy, false);
+  assert.equal(h.captureRequests.length, 2, 'only initial and explicit source refresh collect; queued draft readback preserves its mode');
+});
+
+test('an explicit source refresh waits for draft readback and then collects again', async () => {
+  const h = await harness(); h.delay({ status: true });
+  h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+  assert.equal(h.captureRequests.length, 1);
+  h.command('REFRESH', 'explicit-source-refresh'); await flush();
+  assert.equal(h.pendingStatus.length, 1);
+  assert.equal(h.results('explicit-source-refresh').length, 0);
+  h.pendingStatus.shift()(h.statusResponse()); await flush();
+  assert.equal(h.captureRequests.length, 2, 'an explicit source refresh must not be satisfied by draft-only state');
+  assert.equal(h.pendingStatus.length, 1);
+  h.pendingStatus.shift()(h.statusResponse()); await flush();
+  assert.deepEqual(h.results('explicit-source-refresh').map(item => item.ok), [true]);
+});
+
+for (const successorUrl of ['https://detail.1688.com/offer/990499606077.html',
+  'https://detail.1688.com/offer/845581683597.html?changed=true', 'https://item.taobao.com/item.htm?id=845581683597']) {
+test(`a committed editor write cannot refresh another source URL: ${successorUrl}`, async () => {
+  const h = await harness(); h.delay({ editor: true });
+  h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+  h.navigate(successorUrl);
+  const requestCount = h.runtimeRequests.length;
+  h.pendingEditor.shift().callback({ ok: true, result: { state: 'ready' } }); await flush();
+  assert.deepEqual(h.results('save').map(item => item.ok), [true]);
+  assert.equal(h.runtimeRequests.length, requestCount, 'a late commit must not request state for a successor source');
+  assert.equal(h.captureRequests.length, 1);
+  assert.equal(h.projection().source.platform, '1688', 'busy state must not relabel old source data after navigation');
+  assert.equal(h.projection().busy, false);
+});
+}
+
+test('a source URL change during draft readback rejects the late status response', async () => {
+  const h = await harness(); h.delay({ status: true });
+  h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+  h.updateListing({ revision: 3, draftVersion: 3 });
+  h.navigate('https://detail.1688.com/offer/990499606077.html');
+  h.pendingStatus.shift()(h.statusResponse()); await flush();
+  assert.equal(h.projection().workbench.status.listing.items[0].draftVersion, 2);
+  assert.deepEqual(h.results('save').map(item => item.ok), [true], 'a failed readback cannot rewrite the committed receipt');
+  assert.match(h.projection().error, /重新读取/u);
+  assert.equal(h.projection().busy, false);
+});
+
+test('an already stale editor write refuses draft readback before any authority request', async () => {
+  const h = await harness(); h.delay({ editor: true });
+  h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+  h.navigate('https://detail.1688.com/offer/990499606077.html');
+  h.pendingEditor.shift().callback({ ok: true, result: { state: 'ready' } }); await flush();
+  assert.deepEqual(h.results('save').map(item => item.ok), [true]);
+  assert.equal(h.runtimeRequests.filter(item => item.type === 'ss-erp:source-listing-workbench-status').length, 1);
+  assert.match(h.projection().error, /重新读取/u);
+  assert.equal(h.projection().busy, false);
+});
+
+for (const drift of ['snapshotId', 'supplyGoodsId', 'sourceProductId', 'platform', 'shopId', 'listingWorkflowId', 'draftRevision', 'draftVersion', 'snapshotCurrent']) {
+  test(`draft readback rejects ${drift} drift without publishing another binding`, async () => {
+    const h = await harness(); h.delay({ status: true });
+    h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+    const response = h.statusResponse();
+    if (['snapshotId', 'supplyGoodsId', 'sourceProductId', 'platform'].includes(drift)) response.handoff[drift] = 'successor';
+    else if (drift === 'snapshotCurrent') response.result.status.snapshot.current = false;
+    else response.result.status.listing.items[0][({ listingWorkflowId: 'id', draftRevision: 'revision' })[drift] || drift] =
+      ['draftRevision', 'draftVersion'].includes(drift) ? 1 : 'successor';
+    h.pendingStatus.shift()(response); await flush();
+    assert.equal(h.projection().handoff.snapshotId, 'snapshot-fixture');
+    assert.equal(h.projection().workbench.status.listing.items[0].draftVersion, 2);
+    assert.deepEqual(h.results('save').map(item => item.ok), [true]);
+    assert.match(h.projection().error, /重新读取/u);
+    assert.equal(h.projection().busy, false);
+  });
+}
+
+test('late editor completion does not replace a source snapshot from an explicit refresh', async () => {
+  const h = await harness(); h.delay({ editor: true });
+  h.command('EDITOR_SAVE', 'save', editorWriteFields()); await flush();
+  h.handoff.snapshotId = 'successor-snapshot';
+  h.command('REFRESH', 'new-source'); await flush();
+  const before = h.runtimeRequests.length;
+  h.pendingEditor.shift().callback({ ok: true, result: { state: 'ready' } }); await flush();
+  assert.deepEqual(h.results('save').map(item => item.ok), [true]);
+  assert.equal(h.runtimeRequests.length, before);
+  assert.equal(h.projection().handoff.snapshotId, 'successor-snapshot');
   assert.equal(h.projection().busy, false);
 });
 

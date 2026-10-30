@@ -193,6 +193,23 @@ describe('product vision transport', () => {
     expect(lookup).toHaveBeenCalledWith('vision.example.com');
   });
 
+  it('disables Qwen 3.5 thinking on the verified DashScope endpoint for bounded product analysis', async () => {
+    const { fetchImpl, analyze } = fixture();
+    await analyze({ config: { ...config, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3.5-plus' }, prompt: 'Describe visible product details.', images });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)).enable_thinking).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { baseUrl: 'https://vision.example.com/v1', model: 'qwen3.5-plus' },
+    { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-vl-max' },
+    { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'another-vision-model' },
+  ])('does not inject model-specific parameters into unrelated configurations: %j', async overrides => {
+    const { fetchImpl, analyze } = fixture();
+    await analyze({ config: { ...config, ...overrides }, prompt: 'Visible product details.', images });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).not.toHaveProperty('enable_thinking');
+  });
+
   it.each(['https://vision.example.com', 'https://vision.example.com/v1', 'https://vision.example.com/v1/chat/completions'])(
     'canonicalizes the chat endpoint without duplicating its suffix: %s', async (baseUrl) => {
       const { fetchImpl, analyze } = fixture();

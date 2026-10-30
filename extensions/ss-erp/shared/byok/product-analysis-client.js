@@ -174,6 +174,8 @@
         contents.push({ type: 'image_url', image_url: { url: 'data:' + image.mimeType + ';base64,' + base64(bytes) } });
       }
       var body = JSON.stringify({ model: input.analysisModel, stream: false, temperature: 0, max_tokens: 4096,
+        ...(origin === 'https://dashscope.aliyuncs.com' && new URL(profile.baseUrl).pathname.replace(/\/+$/, '') === '/compatible-mode/v1'
+          && /^qwen3\.5(?:-|$)/u.test(input.analysisModel) ? { enable_thinking: false } : {}),
         messages: [{ role: 'system', content: PROMPT }, { role: 'user', content: contents }] });
       if (new TextEncoder().encode(body).byteLength > contract.LIMITS.maxRequestBytes) fail('SS_ERP_BYOK_PRODUCT_ANALYSIS_REQUEST_TOO_LARGE');
       var analysisInput = frozenInput(input, readiness), slot = null, dispatched = false;

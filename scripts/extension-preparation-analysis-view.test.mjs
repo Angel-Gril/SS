@@ -124,6 +124,16 @@ async function fixture({ capability, checkpoint, analyze, read, media } = {}) {
     element: id => root.querySelector('#precision-preparation-' + id) };
 }
 
+test('analysis settings offer the donor Qwen 3.5 model while preserving the existing selection',async()=>{
+  const f=await fixture();
+  await f.view.settings(f.root,async()=>{});
+  const model=f.element('analysis-model');
+  assert.ok(model.children.some(option=>option.value==='qwen3.5-plus'));
+  assert.equal(model.value,'qwen-vl-plus');
+  assert.equal(f.calls.includes('PREPARATION_ANALYZE'),false);
+  f.view.dispose();
+});
+
 test('missing draft, SKU, official category and schema show the specific next step before any AI read', async () => {
   for (const [key, message] of [['draft', /草稿/], ['sku', /SKU/], ['category', /确认官方类目/], ['schema', /读取官方字段/]]) {
     const f = await fixture(); f.state.prerequisites[key] = false;

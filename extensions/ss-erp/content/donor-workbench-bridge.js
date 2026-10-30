@@ -12,6 +12,7 @@
   var host = null;
   var extensionOrigin = new URL(chrome.runtime.getURL('/')).origin;
   var currentProduct = null;
+  var currentProductUrl = '';
   var currentProjection = Contract.createProjection({ platform: sourcePlatform() });
   var open = false;
   var frameLoadTimer = 0;
@@ -21,6 +22,7 @@
   var busy = false;
   var idleReaders = [];
   var projectionRead = null;
+  var projectionReadCollectsSource = false;
   var editorReadRequests = new Map();
   var mutationPending = false;
   var busyMessage = '';
@@ -193,7 +195,7 @@
 
   function rebuildProjection(error) {
     currentProjection = Contract.createProjection({
-      platform: sourcePlatform(),
+      platform: currentProjection.source.platform,
       product: currentProduct,
       shops: currentProjection.shops,
       handoff: currentProjection.handoff,
@@ -238,17 +240,40 @@
   function loadProjection(options) {
     if (projectionRead) {
       // A read started before a committed mutation cannot prove its new revision.
-      if (options && options.afterMutation === true) return projectionRead.then(function () {
-        return loadProjection({ force: true });
+      // Explicit source reads must also wait for, then supersede, draft-only reads.
+      if ((options && options.afterMutation === true) || (!options?.draftReadback && !projectionReadCollectsSource)) return projectionRead.then(function () {
+        return loadProjection({ ...options, afterMutation: false });
       });
       return projectionRead;
     }
+    projectionReadCollectsSource = !options?.draftReadback;
     projectionRead = readProjection(options).finally(function () { projectionRead = null; });
     return projectionRead;
   }
 
+  function draftReadbackMatches(context, projection) {
+    return Boolean(context && currentProduct && currentProductUrl === context.sourceUrl && location.href === context.sourceUrl
+      && sourcePlatform() === context.platform && projection.source.platform === context.platform
+      && projection.source.sourceProductId === context.sourceProductId
+      && ['snapshotId', 'supplyGoodsId', 'sourceProductId', 'platform'].every(function (key) { return projection.handoff?.[key] === context[key]; })
+      && projection.workbench.state === 'ready' && projection.workbench.status?.snapshot?.current === true
+      && projection.shops.some(function (shop) { return shop.id === context.shopId; })
+      && projection.workbench.status?.listing?.items?.some(function (draft) {
+        return draft.id === context.listingWorkflowId && draft.shopId === context.shopId
+          && draft.revision >= context.draftRevision && draft.draftVersion >= context.draftVersion;
+      }));
+  }
+
   async function readProjection(options) {
     options = options || {};
+    // Only the exact source/snapshot/draft of an acknowledged editor write can
+    // reuse its already collected product for display. Authority is always read anew.
+    if (options.draftReadback && !draftReadbackMatches(options.draftReadback, currentProjection)) {
+      setBusy(false, '草稿读回的来源快照或店铺版本已变化，请重新读取', '', true);
+      return false;
+    }
+    var sourceUrl = location.href;
+    var platform = sourcePlatform();
     var epoch = ++refreshEpoch;
     if (options.force === true) {
       billingEpoch += 1;
@@ -258,18 +283,21 @@
     }
     setBusy(true, '', busy ? busyMessage : '正在读取商品与草稿状态…', true);
     try {
-      var collected = precisionEnabled && sourcePlatform() === '1688'
+      var collected = options.draftReadback ? { ok: true, data: currentProduct }
+        : precisionEnabled && platform === '1688'
         ? { ok: true, data: await globalThis.SS_ERP_DONOR_1688_CAPTURE.collect({
-          url: location.href, extensionVersion: chrome.runtime.getManifest().version,
+          url: sourceUrl, extensionVersion: chrome.runtime.getManifest().version,
         }) }
         : await sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' });
       if (!collected || !collected.ok || !collected.data) {
         throw new Error(collected && collected.error || '读取当前商品失败');
       }
       if (epoch !== refreshEpoch) return false;
+      if (location.href !== sourceUrl) throw new Error('来源页面已变化，请重新读取');
       currentProduct = collected.data;
+      currentProductUrl = sourceUrl;
       var baseProjection = Contract.createProjection({
-        platform: sourcePlatform(),
+        platform: platform,
         product: currentProduct,
         busy: true,
       });
@@ -277,7 +305,7 @@
       var sameSource = currentProjection.source.sourceProductId === baseProjection.source.sourceProductId
         && currentProjection.source.platform === baseProjection.source.platform;
       currentProjection = Contract.createProjection({
-        platform: sourcePlatform(), product: currentProduct, busy: true,
+        platform: platform, product: currentProduct, busy: true,
         shops: currentProjection.shops,
         handoff: sameSource ? currentProjection.handoff : null,
         workbench: sameSource ? currentProjection.workbench : { state: 'unavailable' },
@@ -292,12 +320,13 @@
         sendRuntimeMessage({
           type: 'ss-erp:source-listing-workbench-status',
           sourceProductId: baseProjection.source.sourceProductId,
-          platform: sourcePlatform(),
+          platform: platform,
         }).catch(function (error) {
           return { ok: false, error: error && error.message ? error.message : String(error) };
         }),
       ]);
       if (epoch !== refreshEpoch) return;
+      if (location.href !== sourceUrl) throw new Error('来源页面已变化，请重新读取');
       var shopResult = results[0];
       var statusResult = results[1];
       var error = '';
@@ -305,8 +334,8 @@
       if (!statusResult || !statusResult.ok) {
         error = error || statusResult && statusResult.error || 'ERP 工作流读取失败';
       }
-      currentProjection = Contract.createProjection({
-        platform: sourcePlatform(),
+      var nextProjection = Contract.createProjection({
+        platform: platform,
         product: currentProduct,
         shops: shopResult && shopResult.ok ? shopResult.data : [],
         handoff: statusResult && statusResult.ok ? statusResult.handoff : null,
@@ -319,6 +348,10 @@
         busyMessage: mutationPending ? busyMessage : '',
         error: error,
       });
+      if (options.draftReadback && !error && !draftReadbackMatches(options.draftReadback, nextProjection)) {
+        throw new Error('草稿读回的来源快照或店铺版本已变化，请重新读取');
+      }
+      currentProjection = nextProjection;
       currentHistory = currentProjection.history;
       publishProjection();
       return true;
@@ -874,6 +907,9 @@
               : command.action === 'CATEGORY' ? '正在保存官方类目…' : '正在保存当前草稿…';
       setBusy(true, '', message);
     }
+    const draftReadback = mutation ? { ...command.binding, draftRevision: listing.revision, draftVersion: listing.draftVersion,
+      sourceUrl: currentProductUrl,
+      sourceProductId: currentProjection.source.sourceProductId, platform: currentProjection.source.platform } : null;
     try {
       const type = command.type === 'EDITOR_SAVE' ? 'save' : command.type === 'EDITOR_CATALOG' ? 'catalog'
         : command.type === 'EDITOR_ATTRIBUTE_SUGGESTIONS' ? 'attribute-suggestions'
@@ -912,7 +948,7 @@
         failureKind: response && response.failureKind || null,
       });
       commandResult(command.requestId, true, '', null, response.result);
-      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true, afterMutation: true });
+      if (['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'PREPARATION_APPLY'].includes(command.type)) await loadProjection({ force: true, afterMutation: true, draftReadback });
     } catch (error) {
       commandResult(command.requestId, false, error.message || String(error), null, undefined, error.outcome, error.code, error);
     } finally {
