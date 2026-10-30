@@ -1,4 +1,6 @@
-export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, getBusy, reloadEditor, saveEditor, readCapability, getGenerationPending, onDirty, onReset, report }) {
+import { createInlineConfirmation } from './inline-confirmation.js';
+
+export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, getBusy, reloadEditor, saveEditor, readCapability, getGenerationPending, onDirty, onReset, report, confirmAction }) {
   const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const binding = () => { try { return getBinding(); } catch { return null; } };
   const token = () => JSON.stringify(binding());
@@ -7,7 +9,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   const dirty = new Set();
   const modal = make('div', 'settings-modal'); modal.id = 'precision-copy-modal'; modal.hidden = true;
   const card = make('div', 'settings-dialog precision-copy-dialog'), head = make('div', 'settings-head'); head.append(make('div', 'settings-title', '俄文标题与描述'));
-  const close = make('button', 'ghost', '关闭'); close.id = 'precision-copy-close'; close.addEventListener('click', () => { modal.hidden = true; }); head.append(close);
+  const close = make('button', 'ghost', '关闭'); close.id = 'precision-copy-close'; close.addEventListener('click', () => { confirmation.cancel(); modal.hidden = true; }); head.append(close);
   const body = make('div', 'settings-body'), source = make('p'), notice = make('p', '', '文案统一用于当前草稿所有 SKU。保存后先预览待审核内容，再明确审核。');
   const titleLabel = make('label', 'field', '俄文标题'), title = make('textarea'); title.id = 'precision-copy-title';
   const descriptionLabel = make('label', 'field', '俄文描述'), description = make('textarea'); description.id = 'precision-copy-description';
@@ -28,6 +30,9 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   const approve = make('button', 'primary', '确认所示文案并审核'); approve.id = 'precision-copy-approve';
   body.append(source, notice, generation, titleLabel, descriptionLabel, save, state, candidates, review, approve);
   card.append(head, body); modal.append(card); root.append(modal);
+  const confirmation = createInlineConfirmation({ container: body, make });
+  const ask = confirmAction || (options => confirmation.request(options));
+  const confirmationToken = () => JSON.stringify([token(), instructions.value, title.value, description.value, [...dirty], generationCapability]);
   const candidate = () => getEditor()?.copy?.pendingCandidates.find((item) => item.id === selected?.id);
   function reviewCurrent() { const value = candidate(); return value && value.sourceCurrent === true && selected.token === token() && selected.contents === JSON.stringify(value); }
   function finalCopy(value) {
@@ -41,6 +46,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     if (context && context !== key) { modal.hidden = true; selected = null; generationCapability = null; dirty.clear(); onReset(); }
     context = key;
     const data = getEditor();
+    confirmation.sync(confirmationToken());
     const value = candidate();
     source.textContent = `采集标题：${getSourceTitle() || '尚未读取'}`;
     if (data?.copy) {
@@ -51,7 +57,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     title.readOnly = description.readOnly = !data?.copy || opening || getBusy();
     save.disabled = !data?.copy || !dirty.size || opening || getBusy();
     approve.disabled = !reviewCurrent() || dirty.size > 0 || opening || getBusy();
-    generate.disabled = generationCapability?.available !== true || !data?.copy || dirty.size > 0 || opening || getBusy();
+    generate.disabled = confirmation.isPending() || generationCapability?.available !== true || !data?.copy || dirty.size > 0 || opening || getBusy();
     instructions.disabled = opening || getBusy();
     recover.hidden = !getGenerationPending?.(); recover.disabled = opening;
     capabilityState.textContent = opening ? '正在读取托管文案能力。'
@@ -80,8 +86,13 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   generate.addEventListener('click', event => {
     if (!event.isTrusted || generate.disabled) return;
     const value = { fields: ['title', 'description'], ...(instructions.value.trim() ? { userInstructions: instructions.value.trim() } : {}) };
-    if (!confirm(`${generationCapability.providerFeeNotice}\n结果保存为待审核文案。确认生成？`)) return;
-    void Promise.resolve().then(() => saveEditor('COPY_GENERATE', value)).catch(report).finally(sync);
+    const frozenToken = confirmationToken();
+    void Promise.resolve().then(async () => {
+      const pending = ask({ message: generationCapability.providerFeeNotice, detail: '结果保存为待审核文案。生成前请核对当前草稿和编辑内容。', token: frozenToken, getToken: confirmationToken });
+      sync();
+      if (!await pending || frozenToken !== confirmationToken()) return;
+      await saveEditor('COPY_GENERATE', value);
+    }).catch(report).finally(sync);
   });
   recover.addEventListener('click', event => {
     if (!event.isTrusted || recover.disabled || !getGenerationPending?.()) return;
@@ -135,6 +146,6 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
       }
       sync();
     },
-    reset() { context = ''; selected = null; generationCapability = null; dirty.clear(); onReset(); modal.hidden = true; },
+    reset() { confirmation.cancel(); context = ''; selected = null; generationCapability = null; dirty.clear(); onReset(); modal.hidden = true; },
   };
 }

@@ -52,9 +52,13 @@ assert.equal(
   5,
   'all release Git reads must trust only the exact validated repository path',
 );
-assert.equal(
-  repositoryManifest.version,
-  '1.0.264',
+assert.match(repositoryManifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u);
+const sourceVersionParts = repositoryManifest.version.split('.').map(Number);
+const migrationFloor = [1, 0, 264];
+const firstDifferentVersionPart = sourceVersionParts.findIndex((part, index) => part !== migrationFloor[index]);
+assert.ok(
+  sourceVersionParts.every(Number.isSafeInteger)
+    && (firstDifferentVersionPart < 0 || sourceVersionParts[firstDifferentVersionPart] > migrationFloor[firstDifferentVersionPart]),
   'the canonical release migration floor must not be lower than the latest verified legacy package',
 );
 assert.deepEqual(
@@ -421,7 +425,9 @@ function renameArchiveEntry(buffer, entry, nextName) {
 fs.cpSync(path.resolve('extensions/ss-erp'), sourceDir, { recursive: true });
 const sourceManifestPath = path.join(sourceDir, 'manifest.json');
 const sourceTemplateManifest = JSON.parse(fs.readFileSync(sourceManifestPath, 'utf8'));
-sourceTemplateManifest.version = repositoryManifest.version;
+// Exercise the fixed migration scenario independently of the product's current
+// development version; package builds must leave this fixture source unchanged.
+sourceTemplateManifest.version = '1.0.264';
 fs.writeFileSync(sourceManifestPath, `${JSON.stringify(sourceTemplateManifest, null, 2)}\n`);
 writeHistoricalRelease(previousBuildRoot, '1.0.22');
 writeHistoricalRelease(previousBuildRoot, '98.0.0');

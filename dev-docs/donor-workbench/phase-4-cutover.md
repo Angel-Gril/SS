@@ -1,5 +1,12 @@
 # Phase 4: Release and Cutover
 
+## 2026-10-31 内联确认维护（本地 2/2）
+
+- [x] 工作台业务确认替换、取消/失效/关闭拒绝边界完成。
+- [x] 费用/连续分析/编辑流程隔离 Chromium 验收完成；不使用原生弹窗确认 mutation。
+
+这些是本地 UI 验收，不代表新的签名、部署、真实来源页 canary 或官网公开发布；当前唯一记录见[直接适配 owner](./direct-adaptation.md)。
+
 - [x] D4.1 Add donor-based package/security verifier regressions.
 - [x] D4.2 Run allowlist browser canary for donor workbench.
 - [x] D4.3 Cut source-page entrypoint with rollback evidence.

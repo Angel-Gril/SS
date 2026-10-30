@@ -50,6 +50,13 @@
 .precision-draft-ready .editor-control, .precision-draft-ready .editor-sku-prefix-control { pointer-events: none; background: #f1f5f9; }
 .precision-local-fields { padding: 8px 16px; color: var(--muted); font-size: 12px; background: #fff; }
 [hidden] { display: none !important; }
+.precision-inline-confirmation { flex: 1 0 100%; width: 100%; min-width: 0; box-sizing: border-box; padding: 12px 14px; border: 1px solid #b2dccb; border-radius: 10px; background: #f0fff9; color: var(--text); }
+.precision-inline-confirmation p { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+.precision-inline-confirmation-message { font-weight: 700; }
+.precision-inline-confirmation-details, .precision-inline-confirmation-state { color: var(--muted); }
+.precision-inline-confirmation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.precision-inline-confirmation-actions button { min-height: 38px; padding: 8px 14px; border-radius: 10px; font: inherit; }
+.footer:has(> .precision-inline-confirmation:not([hidden])) { flex-wrap: wrap; }
 .panel > .content { overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior-y: contain; }
 .content-view.editor-view.is-active { display: flex; flex-direction: column; flex: 0 0 auto; overflow: visible; grid-template-rows: none !important; }
 .content-view.editor-view .product-editor { flex: 0 0 auto; overflow: visible; }

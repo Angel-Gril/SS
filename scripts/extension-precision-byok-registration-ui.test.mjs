@@ -9,9 +9,10 @@ import test from 'node:test';
 // Real Chromium DOM and the actual editor/flow controllers; only the private
 // runtime's registration/settings/media boundary is a local synthetic fixture.
 const editorSource = await readFile('extensions/ss-erp/pages/donor/byok-editor.js', 'utf8');
+const confirmationSource = await readFile('extensions/ss-erp/pages/donor/inline-confirmation.js', 'utf8');
 const flowSource = await readFile('extensions/ss-erp/shared/donor-workbench/precision-byok-flow.js', 'utf8');
 const editFlowSource = await readFile('extensions/ss-erp/shared/donor-workbench/precision-byok-edit-flow.js', 'utf8');
-const editorUrl = 'data:text/javascript;base64,' + Buffer.from(editorSource).toString('base64');
+const editorUrl = 'data:text/javascript;base64,' + Buffer.from(editorSource.replace("'./inline-confirmation.js'", JSON.stringify('data:text/javascript;base64,' + Buffer.from(confirmationSource).toString('base64')))).toString('base64');
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 async function until(check, label) {

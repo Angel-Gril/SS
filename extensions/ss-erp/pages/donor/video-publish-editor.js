@@ -1,3 +1,5 @@
+import { createInlineConfirmation } from './inline-confirmation.js';
+
 const copy = value => JSON.parse(JSON.stringify(value));
 const identity = value => JSON.stringify(value);
 const sameTarget = (a, b) => a && b && ['snapshotId','supplyGoodsId','shopId','listingWorkflowId'].every(key => a[key] === b[key]);
@@ -70,7 +72,7 @@ export function createVideoPublishFlow({ getBinding, getSkuKey, command, onState
 }
 
 export function createVideoPublishEditor({ root, command, getBinding, getSkuKey, getBusy = () => false, onSelectSku,
-  getSourceVideos = () => [], openSourceVideo, onSaved, onMessage = () => {} }) {
+  getSourceVideos = () => [], openSourceVideo, onSaved, onMessage = () => {}, confirmAction }) {
   const doc = root.ownerDocument;
   const make = (tag, cls, text) => { const node = doc.createElement(tag); if (cls) node.className = cls; if (text) node.textContent = text; return node; };
   const modal = make('section', 'settings-modal precision-video-publish-modal'); modal.id = 'precision-video-publish-modal'; modal.hidden = true;
@@ -92,9 +94,12 @@ export function createVideoPublishEditor({ root, command, getBinding, getSkuKey,
   const replay = make('button', 'ghost', '核对上次保存'); replay.id = 'precision-video-replay'; replay.hidden = true;
   const save = make('button', 'primary', '保存视频'); save.id = 'precision-video-save'; foot.append(read, replay, save);
   dialog.append(head, body, foot); modal.append(dialog); root.append(modal);
+  const confirmation = createInlineConfirmation({ container: body, make });
+  const ask = confirmAction || (options => confirmation.request(options));
   let opener = null, displayedBinding = '';
   const flow = createVideoPublishFlow({ getBinding, getSkuKey, command, onSaved,
     onState: state => {
+      confirmation.sync(JSON.stringify([state.binding, getSkuKey(), fields.map(field => field.value.trim())]));
       save.disabled = state.busy || state.unknown || !state.binding || getBusy(); read.disabled = state.busy || state.unknown || getBusy();
       replay.hidden = !state.unknown; replay.disabled = state.busy || getBusy();
       close.disabled = state.busy; fields.forEach(input => { input.disabled = state.busy || state.unknown; });
@@ -112,11 +117,13 @@ export function createVideoPublishEditor({ root, command, getBinding, getSkuKey,
   });
   act(read, () => flow.read()); act(replay, () => flow.replay());
   act(save, async () => {
-    if (doc.defaultView.confirm('确认视频内容并保存到当前 SKU 草稿？本次不会提交 Ozon。')) {
+    const token = () => JSON.stringify([getBinding(), getSkuKey(), fields.map(field => field.value.trim())]);
+    const frozenToken = token();
+    if (await ask({ message: '确认视频内容并保存到当前 SKU 草稿？', detail: '本次不会提交 Ozon；清空地址会移除相应视频。', token: frozenToken, getToken: token, validate: () => frozenToken === token() })) {
       await flow.save({ mainUrl: fields[0].value.trim() || null, richContentUrl: fields[1].value.trim() || null });
     }
   });
-  function hide() { if (flow.state().busy) return; modal.hidden = true; opener?.focus(); }
+  function hide() { if (flow.state().busy) return; confirmation.cancel(); modal.hidden = true; opener?.focus(); }
   act(close, hide);
   act(previewSource, () => { const source = getSourceVideos()[0]; if (source) { hide(); openSourceVideo?.(source); } });
   modal.addEventListener('click', event => { if (event.target === modal) hide(); });

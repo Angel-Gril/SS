@@ -21,6 +21,7 @@ import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
 import { createWatermarkEditor } from './donor/watermark-editor.js';
 import { createVideoPublishEditor } from './donor/video-publish-editor.js';
 import { createPreparationAnalysisView, renderPreparationProcess } from './donor/preparation-analysis-view.js';
+import { createInlineConfirmation } from './donor/inline-confirmation.js';
 
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
@@ -28,6 +29,7 @@ const Prompt = globalThis.SS_ERP_DONOR_PROMPT_ADAPTER;
 let privateRuntime = null;
 try { privateRuntime = createPrecisionPrivateRuntime(); } catch {}
 const element = (id) => document.getElementById(id);
+const workbenchConfirmation = createInlineConfirmation({ container: document.querySelector('.footer') });
 let projection = Contract.createProjection({});
 let selectedShopId = '';
 let selectedSkuKey = '';
@@ -206,6 +208,7 @@ const videoEditor = createVideoPublishEditor({ root: element('ui-scale-root'), c
   openSourceVideo: source => sourceVideo.open(source), onMessage: message => status(message, 'warn'),
   onSaved: async () => { await command('REFRESH'); await loadEditor(); invalidatePublishPreview('视频已变化，请重新预览上传。'); status('视频已保存到当前草稿', 'ok'); } });
 const imageWorkspace = createSkuImageWorkspace({ container: element('image-queue'), root: element('ui-scale-root'),
+  onClose: () => { imageConfirmation.cancel(); byok.cancelConfirmation(); },
   renderVideoCell: (cell, value) => {
     cell.replaceChildren();
     if (value.role === 'MAIN') sourceVideo.renderCell(cell, { skuKey: value.skuKey, label: '来源视频' });
@@ -314,6 +317,7 @@ candidates.before(imageProcess);
 imageWorkspace.foot.append(suiteActions);
 const imagePrimary = make('button', 'primary'); imagePrimary.id = 'precision-image-primary'; imageWorkspace.foot.append(imagePrimary);
 const mediaRefresh = make('button', 'ghost', '读取最新状态'); mediaRefresh.id = 'precision-image-refresh'; imageWorkspace.foot.append(mediaRefresh);
+const imageConfirmation = createInlineConfirmation({ container: imageWorkspace.foot });
 const translationPanel = make('section', 'precision-translation-panel');
 translationPanel.id = 'precision-translation-panel'; translationPanel.hidden = true;
 const translationState = make('p'); translationState.id = 'precision-translation-state'; translationState.setAttribute('role', 'status');
@@ -711,6 +715,9 @@ function currentEditorBinding() {
   return { snapshotId: projection.handoff.snapshotId, supplyGoodsId: projection.handoff.supplyGoodsId,
     shopId: draft.shopId, listingWorkflowId: draft.id, draftRevision: draft.revision, draftVersion: draft.draftVersion };
 }
+function editorConfirmationToken() {
+  return JSON.stringify([currentEditorBinding(), [...unsavedListingFields], editor?.selectedSkuKeys]);
+}
 function applyAnalysisVisual(description) {
   const brief=Prompt.compileVisualCreativeBrief(description);
   visualJson.value=JSON.stringify(description,null,2);promptText.value=brief?.prompt||'';
@@ -966,7 +973,8 @@ trusted('precision-sku-selection', async () => {
   if (expectedBinding !== JSON.stringify(currentEditorBinding())) throw new Error('草稿已变化，请重新选择 SKU');
   const keys = selected.sku_matrix.map(row => row.row_id);
   if (JSON.stringify([...keys].sort()) === JSON.stringify([...previous].sort())) { status('SKU 选择未变化'); return; }
-  if (!confirm(`将草稿调整为 ${keys.length} 个 SKU。价格、属性、文案和图片需重新核对，旧发布确认将失效。继续？`)) return;
+  const token = editorConfirmationToken();
+  if (!await workbenchConfirmation.request({ message: `将草稿调整为 ${keys.length} 个 SKU。`, detail: '价格、属性、文案和图片需重新核对，旧发布确认将失效。', token, getToken: editorConfirmationToken })) return;
   await saveEditor('SKU_SELECTION', { selectedSkuKeys: keys });
   selectedDraftSkuKeys = new Set(editor.selectedSkuKeys);
   byok.invalidate();
@@ -1138,8 +1146,9 @@ function renderEditor() {
         if (unsavedListingFields.size) { status('请先保存当前表格编辑，再复制该 SKU。', 'warn'); return; }
         if (!source) return;
         if (source.isCopiedSku) {
-          if (globalThis.confirm('移除当前复制行？来源 SKU、图片资产和历史记录会保留。'))
-            void saveEditor('SKU_COPY_REMOVE', { rowKey: source.canonicalSkuKey }).catch(report);
+          const token = editorConfirmationToken();
+          void workbenchConfirmation.request({ message: '移除当前复制行？', detail: '来源 SKU、图片资产和历史记录会保留。', token, getToken: editorConfirmationToken })
+            .then(confirmed => confirmed && saveEditor('SKU_COPY_REMOVE', { rowKey: source.canonicalSkuKey })).catch(report);
           return;
         }
         void saveEditor('SKU_DUPLICATE', { sourceSkuKey: source.canonicalSkuKey }).catch(report);
@@ -1360,6 +1369,9 @@ function renderSourceDiagnostics() {
   sourceDiagnosticsProjection = projection;
 }
 function render() {
+  let confirmationToken = '';
+  try { confirmationToken = editorConfirmationToken(); } catch {}
+  workbenchConfirmation.sync(confirmationToken);
   band.firstChild.textContent = projection.source.title || '正在读取商品';
   band.lastChild.textContent = `${projection.source.platform} · ${projection.skus.length} SKU · ${projection.media.length} 张图`;
   const select = element('erp-shop-select');
@@ -1693,7 +1705,9 @@ async function startImageWorkflow() {
   if(next.action==='REVIEW'){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});status('预览并审核当前草稿的图片结果');return;}
   currentQuoteWitness();
   const quote = projection.billing.quote;
-  if (confirm(`生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。确认开始？`)) await suiteCommand('START', true);
+  const getToken = () => JSON.stringify([currentEditorBinding(), selectedSkuKey, imageMode, [...referenceKeys], currentQuoteWitness()]);
+  const token = getToken();
+  if (await imageConfirmation.request({ message: `生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。`, detail: '确认后开始当前冻结计划；结果先审核，再应用到草稿。', token, getToken })) await suiteCommand('START', true);
 }
 trusted('image-workflow-start-btn', startImageWorkflow);
 trusted('precision-image-primary', startImageWorkflow);
@@ -1706,7 +1720,9 @@ async function startTranslation() {
   if (!count) throw new Error('请勾选要翻译的来源图片');
   const price = translationAvailability.price;
   const fee = price ? `每张最高 ${price.currency} ${(price.maximumCostCents / 100).toFixed(2)}，本批最高 ${price.currency} ${(count * price.maximumCostCents / 100).toFixed(2)}。` : '';
-  if (!confirm(`翻译已勾选的 ${count} 张图片中的中文文字为俄文，原图保留。${fee}确认提交 ERP 图片翻译？`)) return;
+  const getToken = () => JSON.stringify([currentEditorBinding(), selectedSkuKey, imageMode, [...translationKeys], translationAvailability.price, translationAvailability.available, translationAvailability.binding]);
+  const token = getToken();
+  if (!await imageConfirmation.request({ message: `翻译已勾选的 ${count} 张图片中的中文文字为俄文，原图保留。`, detail: fee, token, getToken })) return;
   const view = await translation.start({ ...(price ? { priceConfirmation: {
     currency: price.currency, maximumCostCents: price.maximumCostCents, quoteFingerprint: price.quoteFingerprint,
   } } : {}) });

@@ -732,6 +732,7 @@ const requiredUnifiedPublishModules = [
 ];
 
 const requiredDonorWorkbenchFiles = [
+  'pages/donor/inline-confirmation.js',
   'shared/donor-workbench/product-preparation-client.js',
   'shared/donor-workbench/preparation-runtime-handler.js',
   'shared/donor-workbench/preparation-image-client.js',

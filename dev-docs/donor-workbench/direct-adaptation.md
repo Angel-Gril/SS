@@ -1,12 +1,24 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-10-31 工作台确认区与连续流程收口（1.0.482 开发包）
+
+当前工作台的正常采集、商品分析、视觉 JSON、俄文文案、托管套图、图片翻译、BYOK 单图、SKU 复制/删除和视频保存不再调用浏览器原生 `confirm()`。新增 `inline-confirmation.js` 将确认内容放在当前操作区，显示费用、数量、目标和不会自动发布的说明；取消、关闭、重复请求或草稿/SKU/选图/模型/报价变化均安全结束或使旧确认失效，不会发起新的 ERP/Provider/Ozon 写入。服务端权限、计费、审核、assignment、幂等和草稿读回 owner 未改变。
+
+扩展定向回归最终 68 项通过（含确认、商品准备、编辑读回、BYOK、SKU 图片与视频 owner）；新增关闭即取消，立即重开不会复活旧确认，重复运行不另加总。源码 verifier 626 项、Cloud/Local verifier 634/630 项通过。独立 Chromium 真实 DOM 流程通过：inline confirmation（取消、未授权点击、草稿/选图过期、最终单次 START，桌面/390px）、连续准备/三阶段分析、SKU 复制删除、BYOK、付费图片翻译和视频相关路径；这些均为本地隔离 fixture，Provider/Ozon/生产写入为 0。浏览器 runner 现在遇到原生 JavaScript dialog 会拒绝并记录 page error，不能再用自动点“确定”掩盖产品行为。
+
+主 Agent 独立浏览器证据：`ss-erp-precision-ui-evidence-eYYQ4G`（确认）、`llFUjB`（连续准备）、`V65IHT`（SKU）、`ZVvvWZ`（BYOK）和 `jPJuUR`（翻译），均在 Windows Temp，未入 Git。三阶段 `h2NOoH` 原件也已读回核对。独立 `--usability-only` 在“设置按钮打开 basic-modal”的宽泛历史路径断言失败，未将其计为通过；确认/连续流程验收没有该失败。完整 preflight 先通过 QA04 聚合100项及局部验证85项，随后发现源码版本仍被测试固定等于264（进入本轮前源码477已违反）；仅将测试修正为规范版本且不得低于迁移下限，不改变发布签名或覆盖拒绝合同。
+
+本轮交付 Cloud/Local 1.0.482 开发包，包目录为 build/inline-confirmation-482-final，已通过构建、ZIP 与 verifier；非正式签名候选。最终确认浏览器原件为 ss-erp-precision-ui-evidence-a4jTSu（包含立即关闭/重开），最终 BYOK 只读保护重跑也通过。本轮未调用 Provider/Ozon/生产接口，无新增费用；未签名、部署或切换官网公开指针，生产仍以现有运行版本为准。
+
+MV3 真实加载检查通过，原件 `ss-erp-donor-mv3-evidence-ZkYeT2`（未提交工作树、合成来源页，不能当签名候选或真实1688站点 canary）；默认入口、透明外壳、两商品页面、popup入口、未授权页面命令拒绝和图片加载通过。安装包已复制到 `C:/Users/550W/Downloads/SS-ERP-1.0.482-dev`，附安装说明；Cloud SHA256 `f6e30ec228c6d841d476758da62145d0957e42f1cef683e152c84ca3c511d593`、Local `89e5280bb96bb8cc3096704fefd8ccb2b41a0d2e851557584aae808121c05b36`。未用广泛 preflight 或离线 fixture 冒称正式 QA04。
+
 ## 2026-10-30 原精铺视觉模型校准与扩展性能收口（本地未发布）
 
 对用户提供的临时阿里云 Key 只做隔离合成图校准，未保存 Key、未写入配置、未触发草稿/Ozon/生产写入。原精铺代码确认图片视觉分析调用 DashScope 原生多模态接口 `qwen3.5-plus`，请求关闭 `enable_thinking`，最多选择3张 SKU 图和5张商品图，输出视觉 JSON；文字提示词另用 `qwen3-max`。当前 ERP 托管配置仍由管理员配置 owner 控制，历史 `qwen-vl-max` 一次实测在同一兼容端点返回404，不据此切换生产配置。
 
 隔离合成图实测：原精铺原生 `qwen3.5-plus` HTTP200，首段约1.0秒、完成约6.2秒；ERP兼容 transport 未关闭思考时完成约35.4秒，补上 DashScope兼容端点+`qwen3.5-*` 的 `enable_thinking:false` 后约6.3秒，视觉 JSON schema通过、SKU绑定通过。连续 CURATION→VISION→COPY 新校准中前两阶段分别约2.2秒/6.6秒；COPY 首次失败是模型照抄“attributeId:1”示例而当前官方字段为空，已改为无字段时示例为空数组并通过本地51项准备回归；新的COPY checkpoint真实响应通过，新增请求仅用于隔离校准。真实请求总数、脱敏回执和合成图片位于Windows用户私有 `C:/Users/550W/AppData/Local/SS-ERP/private/vision-donor-calibration-*`，不进入Git。
 
-当前实现优化：商品分析 BYOK 模型选择增加 `qwen3.5-plus`；服务端只对已确认的 DashScope兼容端点和Qwen3.5模型注入关闭思考参数，第三方兼容端点保持原请求格式；写入后草稿权威读回不再重复采集来源页，显式用户刷新仍会重新采集；来源 JSON 仅在过程窗口打开时序列化；无可用官方属性时COPY不会伪造属性ID。相关扩展/服务端回归和隔离浏览器证据通过，尚未提交、签名、部署或公开发布。
+当前实现优化：商品分析 BYOK 模型选择增加 `qwen3.5-plus`；服务端只对已确认的 DashScope兼容端点和Qwen3.5模型注入关闭思考参数，第三方兼容端点保持原请求格式；写入后草稿权威读回不再重复采集来源页，显式用户刷新仍会重新采集；来源 JSON 仅在过程窗口打开时序列化；无可用官方属性时COPY不会伪造属性ID。源码已随 `ada9d979` 提交推送，尚未签名、部署或公开发布；此前服务端/扩展回归通过，不把跳过数据库测试当实库验收。
 
 ## 2026-10-27 `ee6b8999 / 1.0.472` 正式 QA04 与官网公开发布完成
 

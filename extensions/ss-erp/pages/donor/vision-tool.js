@@ -1,6 +1,7 @@
 import { compileHostedReferenceSelection } from './hosted-reference-selection.js';
+import { createInlineConfirmation } from './inline-confirmation.js';
 
-export function createVisionTool({ root, command, getBinding, getSkuKey, getMedia, getBusy, applyDescription, onMessage, report }) {
+export function createVisionTool({ root, command, getBinding, getSkuKey, getMedia, getBusy, applyDescription, onMessage, report, confirmAction }) {
   const make = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -11,7 +12,7 @@ export function createVisionTool({ root, command, getBinding, getSkuKey, getMedi
   const dialog = make('div', 'settings-dialog precision-vision-dialog'), head = make('div', 'settings-head');
   head.append(make('div', 'settings-title', '看图分析 · 视觉 JSON'));
   const close = make('button', 'ghost', '关闭'); close.id = 'precision-vision-close'; close.type = 'button';
-  close.addEventListener('click', () => { modal.hidden = true; }); head.append(close);
+  close.addEventListener('click', () => { confirmation.cancel(); modal.hidden = true; }); head.append(close);
   const body = make('div', 'settings-body'), note = make('p', '', '选择当前 SKU 的 1–5 张来源图，生成可编辑的构图、背景、光线和风格建议。');
   const images = make('div', 'precision-vision-images');
   const result = make('textarea'); result.id = 'precision-vision-result'; result.readOnly = true;
@@ -22,14 +23,18 @@ export function createVisionTool({ root, command, getBinding, getSkuKey, getMedi
   for (const button of [start, recover, apply]) button.type = 'button';
   recover.hidden = true; apply.disabled = true; foot.append(start, recover, apply);
   body.append(note, images, result, state); dialog.append(head, body, foot); modal.append(dialog); root.append(modal);
+  const confirmation = createInlineConfirmation({ container: body, make });
+  const ask = confirmAction || (options => confirmation.request(options));
   let token = '', capability = null, operation = null, originalSelection = null, output = null, opening = false, busy = false;
   const binding = () => { try { return getBinding(); } catch { return null; } };
-  const currentToken = () => JSON.stringify([binding(), getSkuKey(), getMedia().map(item => item.key)]);
+  const currentToken = () => JSON.stringify([binding(), getSkuKey(), getMedia().map(item => [item.key, item.url])]);
   const selected = () => [...images.querySelectorAll('input:checked')].map(input => input.value);
+  const confirmationToken = () => JSON.stringify([currentToken(), selected(), capability]);
   const sameOperation = () => operation && JSON.stringify(originalSelection) === JSON.stringify(selected());
   function sync() {
     if (modal.hidden) return;
     if (token !== currentToken()) { output = null; apply.disabled = true; state.textContent = '商品、SKU 或草稿已变化，请关闭后重新打开看图分析。'; }
+    confirmation.sync(confirmationToken());
     const count = selected().length, unavailable = getBusy() || opening || busy;
     start.disabled = token !== currentToken() || unavailable || !capability?.available || count < 1 || count > 5 || Boolean(operation);
     recover.hidden = !operation; recover.disabled = unavailable || !sameOperation();
@@ -40,7 +45,8 @@ export function createVisionTool({ root, command, getBinding, getSkuKey, getMedi
     if (busy) return;
     if (!replay) {
       if (token !== currentToken() || !capability?.available || selected().length < 1 || selected().length > 5) throw new Error('请重新读取当前图片和看图能力');
-      if (!confirm(`${capability.providerFeeNotice}\n分析 ${selected().length} 张图，结果仅用于编辑提示词。确认？`)) return;
+      const frozenToken = confirmationToken();
+      if (!await ask({ message: capability.providerFeeNotice, detail: `分析 ${selected().length} 张图，结果仅用于编辑提示词。`, token: frozenToken, getToken: confirmationToken }) || frozenToken !== confirmationToken()) return;
       const frozenBinding = binding(), sourceKeys = selected();
       busy = true; sync();
       try {

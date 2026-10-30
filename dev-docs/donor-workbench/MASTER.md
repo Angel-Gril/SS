@@ -1,5 +1,12 @@
 # SS ERP Donor Workbench Migration
 
+## 2026-10-31 当前工作台确认区（2/2 本地验收，未公开发布）
+
+- [x] 正常工作台业务改为内联确认，取消、关闭和上下文失效拒绝提交。
+- [x] 隔离 Chromium 连续流程、费用展示与桌面/窄屏验证；原生弹窗被验收 runner 拒绝。
+
+准确状态、证据与发布边界仅维护于[直接适配 owner](./direct-adaptation.md)。
+
 ## 2026-10-09 `66c9396c / 1.0.448` 双区官网公开发布完成
 
 count首图兼容、未交付释放和当前图片过程/历史折叠已随448完成推送、签名、双区部署和公开发布。真实9458采集/草稿/两图suite/审核/assignment/replay、正式QA04、双区canary/approval/CAS/distribution均通过；官网与Cloud/Local下载均448，COM分析开启/CN dark，Ozon0。准确原件和限制仅维护在[直接适配 owner](./direct-adaptation.md)。

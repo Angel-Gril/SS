@@ -77,7 +77,7 @@ export function buildSkuImageRows({ skus, media, history, billing, title = '' })
   });
 }
 
-export function createSkuImageWorkspace({ container, root, onSelect, onChange, onModeChange, renderVideoCell }) {
+export function createSkuImageWorkspace({ container, root, onSelect, onChange, onModeChange, renderVideoCell, onClose = () => {} }) {
   const make = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -142,6 +142,7 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
   }
   function hide() {
     if (modal.hidden) return;
+    onClose();
     modal.hidden = true;
     const target = focusBefore?.isConnected ? focusBefore
       : [...summary.querySelectorAll('[data-image-sku-key]')].find(row => row.dataset.imageSkuKey === focusSkuKey);

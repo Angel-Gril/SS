@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const asModule = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
+const inlineConfirmation = asModule(readFileSync('extensions/ss-erp/pages/donor/inline-confirmation.js', 'utf8'));
 const source = readFileSync('extensions/ss-erp/pages/donor/preparation-analysis-view.js', 'utf8')
   .replace("'./preparation-analysis-session.js'", JSON.stringify(asModule(readFileSync('extensions/ss-erp/pages/donor/preparation-analysis-session.js', 'utf8'))))
-  .replace("'./hosted-reference-selection.js'", JSON.stringify(asModule(readFileSync('extensions/ss-erp/pages/donor/hosted-reference-selection.js', 'utf8'))));
+  .replace("'./hosted-reference-selection.js'", JSON.stringify(asModule(readFileSync('extensions/ss-erp/pages/donor/hosted-reference-selection.js', 'utf8'))))
+  .replace("'./inline-confirmation.js'", JSON.stringify(inlineConfirmation));
 const load = () => import(asModule(source));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -25,7 +27,7 @@ test('source media and snapshot drift produce an actionable message instead of a
 });
 
 test('stale source analysis exposes explicit re-collect action and resets its local session', async () => {
-  const f = await fixture({ capability: stagedCapability, analyze: input => {
+  const f = await fixture({ capability: stagedCapability, analyze: () => {
     throw Object.assign(new Error('来源图片已变化'), { code: 'product_preparation_media_invalid' });
   }});
   await assert.rejects(f.view.run(), /来源图片已变化/);
@@ -91,10 +93,10 @@ function receipt(input) {
   } };
 }
 
-async function fixture({ capability, checkpoint, analyze, read, media } = {}) {
+async function fixture({ capability, checkpoint, analyze, read, media, inline = false } = {}) {
   globalThis.document = { createElement: tag => new Element(tag) };
   let confirmations = 0,stored=null;
-  globalThis.confirm = () => { confirmations++; return true; };
+  globalThis.confirm = () => { throw new Error('native confirmation must not be used'); };
   const root = new Element('div'), calls = [],requests=[], errors = [],completed=[],notices=[], state = {
     binding: { ...binding }, prerequisites: { draft: true, sku: true, category: true, schema: true }, busy: false,
   };
@@ -118,11 +120,50 @@ async function fixture({ capability, checkpoint, analyze, read, media } = {}) {
     getPrerequisites: () => state.prerequisites,
     getMedia: () => media||[{ key: 'image-1', url: 'https://example.com/image.jpg' }],
     getBusy: () => state.busy, getCopyCandidates: () => [],
-    onCuration() {}, onVisual() {}, onAttributes() {}, saveCopy() {}, approveCopy() {},onCompleted:step=>completed.push(step),onMessage:(message,variant)=>notices.push({message,variant}),report: error => errors.push(error),
+    onCuration() {}, onVisual() {}, onAttributes() {}, saveCopy() {}, approveCopy() {},
+    ...(inline ? {} : {confirmAction: async () => { confirmations++; return true; }}),
+    onCompleted:step=>completed.push(step),onMessage:(message,variant)=>notices.push({message,variant}),report: error => errors.push(error),
   });
   return { view, root, state, calls,requests, errors,completed,notices, confirmations: () => confirmations,stored:()=>stored,
     element: id => root.querySelector('#precision-preparation-' + id) };
 }
+
+const inlineButtons = root => {
+  const walk = node => [node, ...node.children.flatMap(walk)];
+  return Object.fromEntries(walk(root).filter(node => node.dataset.inlineConfirm).map(node => [node.dataset.inlineConfirm, node]));
+};
+
+test('inline analysis confirmation cancels without submitting and deduplicates continuous starts', async () => {
+  const f = await fixture({inline:true});
+  const pending = f.view.run(); await tick(); await tick();
+  const duplicate = f.view.run(); await tick();
+  assert.equal(f.calls.filter(type=>type==='PREPARATION_ANALYZE').length, 0);
+  inlineButtons(f.root).cancel.click();
+  assert.equal((await pending).declined, true);
+  assert.equal((await duplicate).declined, true);
+  assert.equal(f.calls.filter(type=>type==='PREPARATION_ANALYZE').length, 0);
+  f.view.dispose();
+});
+
+test('inline analysis approval for an old draft is invalidated before any model request', async () => {
+  const f = await fixture({inline:true});
+  const pending = f.view.run(); await tick(); await tick();
+  f.state.binding.draftRevision++;
+  f.view.sync();
+  assert.equal((await pending).declined, true);
+  assert.equal(f.calls.filter(type=>type==='PREPARATION_ANALYZE').length, 0);
+  f.view.dispose();
+});
+
+test('closing and immediately reopening analysis cancels the old confirmation without waiting for polling', async () => {
+  const f = await fixture({inline:true});
+  const pending = f.view.run(); await tick(); await tick();
+  f.element('analysis-close').click();
+  await f.view.open();
+  assert.equal((await pending).declined, true);
+  assert.equal(f.calls.filter(type=>type==='PREPARATION_ANALYZE').length, 0);
+  f.view.dispose();
+});
 
 test('analysis settings offer the donor Qwen 3.5 model while preserving the existing selection',async()=>{
   const f=await fixture();

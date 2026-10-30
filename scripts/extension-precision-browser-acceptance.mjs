@@ -16,10 +16,12 @@ const IMAGE_ORIGIN = 'https://images.ss-erp-fixture.invalid';
 const STAGED_ANALYSIS = process.argv.includes('--staged-analysis');
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let acceptanceWaitPump;
 
 async function until(check, label, timeout = 15_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    await acceptanceWaitPump?.();
     const result = await check();
     if (result) return result;
     await pause(60);
@@ -665,7 +667,7 @@ function privateRuntimeFixtureScript(pngBytes) {
 async function run() {
   const artifacts = await mkdtemp(path.join(os.tmpdir(), 'ss-erp-precision-ui-evidence-'));
   const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-precision-ui-profile-')));
-  const summary = { ok: false, artifacts, scope: 'LOCAL_BROWSER_FIXTURE', screenshots: [], pageErrors: [], blockedRequests: [], dialogs: [], providerRequests: 0, ozonRequests: 0, productionMutations: 0 };
+  const summary = { ok: false, artifacts, scope: 'LOCAL_BROWSER_FIXTURE', screenshots: [], pageErrors: [], blockedRequests: [], dialogs: [], inlineConfirmations: [], providerRequests: 0, ozonRequests: 0, productionMutations: 0 };
   let cdp;
   let diagnose;
   const require = createRequire(path.join(ROOT, 'apps/server/package.json'));
@@ -702,7 +704,13 @@ async function run() {
       if (message) summary.pageErrors.push(`${observedSession || 'root'}: ${message}`);
     });
     cdp.on('Page.javascriptDialogOpening', (event, observedSession) => {
-      if (observedSession === sessionId) { summary.dialogs.push(event.message); void send('Page.handleJavaScriptDialog', { accept: true }); }
+      if (observedSession !== sessionId) return;
+      // Native dialogs block the iframe and are forbidden for the workbench flow.
+      // Cancel only to release Chromium; the recorded page error makes the
+      // acceptance fail instead of silently accepting a business mutation.
+      summary.dialogs.push(event.message);
+      summary.pageErrors.push(`native JavaScript dialog: ${event.message}`);
+      void send('Page.handleJavaScriptDialog', { accept: false });
     });
     cdp.on('Fetch.requestPaused', (event, observedSession) => {
       if (observedSession !== sessionId) return;
@@ -751,10 +759,13 @@ async function run() {
     await until(() => workspace('document.querySelectorAll(".precision-source-tile img").length === '+(STAGED_ANALYSIS?40:16)), 'all fixture source images');
     assert.equal(await workspace('document.referrer'), '');
     await until(() => workspace('[...document.querySelectorAll(".precision-source-tile img")].every(image=>image.complete&&image.naturalWidth>0)'), 'decoded preview images');
-    const click = async (selector) => {
+    let inlineMonitorBusy = false;
+    const inlineAutoMode = process.argv.includes('--inline-confirmation-flow') ? 'manual' : 'accept';
+    const inlineState = async () => workspace(`(()=>{const panel=[...document.querySelectorAll('[data-inline-confirmation]')].find(node=>!node.hidden&&node.getClientRects().length>0);if(!panel)return null;const accept=panel.querySelector('[data-inline-confirm="accept"]'),cancel=panel.querySelector('[data-inline-confirm="cancel"]');return {text:panel.textContent||'',acceptDisabled:Boolean(accept?.disabled),cancelDisabled:Boolean(cancel?.disabled)};})()`);
+    const click = async (selector, options = {}) => {
       // Navigate the actual SKU dialog before interacting with its controls.
       // All clicks, including navigation, still use trusted CDP mouse input.
-      const location = await workspace('(()=>{const node=document.querySelector(' + JSON.stringify(selector) + ');return {inside:!!node?.closest("#precision-image-manager"),nested:!!node?.closest(".settings-modal,.preview-modal,#watermark-modal"),open:document.getElementById("precision-image-manager")?.hidden===false,result:!!node?.closest("#precision-image-result-panel"),source:!!node?.closest("#precision-image-source-panel"),creative:!!node?.closest(".precision-creative-options"),detailsOpen:node?.closest(".precision-creative-options")?.open};})()');
+      const location = await workspace('(()=>{const node=[...document.querySelectorAll(' + JSON.stringify(selector) + ')].find(node=>node.getClientRects().length>0)||document.querySelector(' + JSON.stringify(selector) + ');return {inside:!!node?.closest("#precision-image-manager"),nested:!!node?.closest(".settings-modal,.preview-modal,#watermark-modal"),open:document.getElementById("precision-image-manager")?.hidden===false,result:!!node?.closest("#precision-image-result-panel"),source:!!node?.closest("#precision-image-source-panel"),creative:!!node?.closest(".precision-creative-options"),detailsOpen:node?.closest(".precision-creative-options")?.open};})()');
       if (location.open && !location.inside && !location.nested && selector !== '#precision-image-close') await click('#precision-image-close');
       if (location.inside && !location.open) {
         await click('[data-image-sku-key="sku-1"]');
@@ -763,12 +774,35 @@ async function run() {
       if (location.inside && location.result && await workspace('document.getElementById("precision-image-result-panel").hidden')) await click('#precision-image-results');
       if (location.source && await workspace('document.getElementById("precision-image-source-panel").hidden')) await click('#precision-image-sources');
       if (location.creative && !location.detailsOpen && selector !== '.precision-creative-options summary') await click('.precision-creative-options summary');
-      await workspace('document.querySelector(' + JSON.stringify(selector) + ').scrollIntoView({block:"center",inline:"center",behavior:"instant"})');
+      await workspace('([...document.querySelectorAll(' + JSON.stringify(selector) + ')].find(node=>node.getClientRects().length>0)||document.querySelector(' + JSON.stringify(selector) + ')).scrollIntoView({block:"center",inline:"center",behavior:"instant"})');
       await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-      const point = await workspace('(() => {const node=document.querySelector(' + JSON.stringify(selector) + ');if(!node)throw new Error("missing "+' + JSON.stringify(selector) + ');const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()');
+      const point = await workspace('(() => {const node=[...document.querySelectorAll(' + JSON.stringify(selector) + ')].find(node=>node.getClientRects().length>0)||document.querySelector(' + JSON.stringify(selector) + ');if(!node)throw new Error("missing "+' + JSON.stringify(selector) + ');const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};})()');
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+      if (!options.skipInlineMonitor && inlineAutoMode === 'accept') await pause(0);
     };
+    const resolveInline = async ({ decision = 'accept', expected = '', label = 'inline confirmation', timeout = 15_000 } = {}) => {
+      const state = await until(async () => {
+        const value = await inlineState();
+        return value && (!expected || value.text.includes(expected)) ? value : false;
+      }, label, timeout);
+      summary.inlineConfirmations.push({ decision, text: state.text });
+      const selector = `[data-inline-confirmation] [data-inline-confirm="${decision === 'accept' ? 'accept' : 'cancel'}"]`;
+      await click(selector, { skipInlineMonitor: true });
+      if (decision === 'accept') await until(async () => !(await inlineState()), `${label} settled`);
+      else await until(async () => !(await inlineState()), `${label} cancelled`);
+      return state;
+    };
+    if (inlineAutoMode === 'accept') {
+      acceptanceWaitPump = async () => {
+        if (inlineMonitorBusy) return;
+        inlineMonitorBusy = true;
+        try {
+          const state = await inlineState();
+          if (state && !state.acceptDisabled && !state.cancelDisabled) await resolveInline({ label: 'automatic inline confirmation' });
+        } finally { inlineMonitorBusy = false; }
+      };
+    }
     const screenshot = async (name) => {
       await pause(200);
       const file = path.join(artifacts, name + '.png');
@@ -1311,6 +1345,64 @@ async function run() {
       await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
       console.log(JSON.stringify(summary, null, 2));
       return;
+    }
+    if (process.argv.includes('--inline-confirmation-flow')) {
+      const suiteStarts = () => evaluate('window.__precisionCommands.filter(command=>command.type==="EXECUTE_HOSTED_SUITE"&&command.action==="START").length');
+      const translationPosts = () => evaluate('window.__precisionCommands.filter(command=>command.type==="CREATE_TRANSLATION").length');
+      await click('input[name="image-workflow-mode"][value="translate"] + span');
+      await until(() => workspace('document.getElementById("image-workflow-start-btn").disabled===false'), 'translation quote ready');
+      await click('#image-workflow-start-btn');
+      await click('#precision-image-primary');
+      await until(inlineState, 'translation asks inside the current work area');
+      await click('[data-reference-key=image-7] input');
+      await until(async () => (await inlineState())?.acceptDisabled, 'changed selected media invalidates translation confirmation');
+      assert.equal(await translationPosts(), 0, 'a stale selected-image confirmation sends no translation request');
+      await screenshot('inline-translation-selection-changed');
+      await resolveInline({ decision: 'cancel', label: 'close invalidated translation confirmation' });
+      await click('input[name="image-workflow-mode"][value="ai-suite"] + span');
+      await click('#precision-image-primary');
+      await until(() => workspace('document.getElementById("precision-image-primary").textContent.includes("确认费用")'), 'fresh suite quote');
+      await click('#precision-image-primary');
+      const pending = await until(inlineState, 'suite cost confirmation is inline');
+      assert.ok(pending.text.includes('CNY 0.28'), 'exact maximum cost is visible before START');
+      assert.equal(await suiteStarts(), 0, 'opening confirmation does not start the suite');
+      await workspace('(()=>{const panel=[...document.querySelectorAll("[data-inline-confirmation]")].find(node=>!node.hidden&&node.getClientRects().length>0);panel.querySelector("[data-inline-confirm=accept]").click();})()');
+      assert.equal(await suiteStarts(), 0, 'untrusted synthetic approval cannot start the suite');
+      assert.ok(await inlineState(), 'synthetic click leaves the confirmation pending');
+      await screenshot('inline-suite-cost-desktop');
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });
+      await workspace('([...document.querySelectorAll("[data-inline-confirmation]")].find(node=>!node.hidden&&node.getClientRects().length>0)).scrollIntoView({block:"center"})');
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      assert.ok(await workspace('document.documentElement.scrollWidth<=window.innerWidth'), 'inline confirmation does not overflow a narrow workbench');
+      await screenshot('inline-suite-cost-mobile');
+      await resolveInline({ decision: 'cancel', expected: 'CNY 0.28', label: 'cancel suite cost confirmation' });
+      assert.equal(await suiteStarts(), 0, 'cancel sends no START');
+      await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await click('#precision-image-primary');
+      await until(inlineState, 'suite confirmation before close');
+      await workspace('(()=>{document.getElementById("precision-image-close").click();document.querySelector("[data-image-sku-key=sku-1]").click();})()');
+      assert.equal(await inlineState(), null, 'close followed by an immediate same-target reopen cannot resurrect an old confirmation');
+      assert.equal(await suiteStarts(), 0, 'closing a pending confirmation never starts the suite');
+      await click('#precision-image-primary');
+      await until(inlineState, 'second suite confirmation');
+      await evaluate('window.__precisionAdvanceDraft()');
+      await until(async () => (await inlineState())?.acceptDisabled, 'new draft revision invalidates the old suite confirmation');
+      assert.equal(await suiteStarts(), 0, 'draft change sends no START');
+      await screenshot('inline-suite-draft-changed');
+      await resolveInline({ decision: 'cancel', label: 'close invalidated suite confirmation' });
+      await click('#precision-image-refresh');
+      await until(() => workspace('document.getElementById("precision-image-primary").disabled===false'), 'current suite quote readback');
+      await click('#precision-image-primary');
+      await resolveInline({ expected: 'CNY 0.28', label: 'approve current suite quote' });
+      await until(async () => await suiteStarts() === 1, 'fresh explicit approval starts exactly one suite');
+      assert.equal(await translationPosts(), 0);
+      assert.deepEqual(summary.dialogs, []);
+      assert.deepEqual(summary.pageErrors, []); assert.deepEqual(summary.blockedRequests, []);
+      summary.inlineConfirmation = { nativeDialogs: 0, syntheticApprovalRejected: true, cancelledSuiteStarts: 0,
+        staleDraftSuiteStarts: 0, staleSelectedMediaTranslations: 0, closedConfirmationDoesNotRevive: true, approvedSuiteStarts: 1, desktopAndMobile: true };
+      summary.ok = true;
+      await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify(summary, null, 2)); return;
     }
     if (process.argv.includes('--image-process-flow')) {
       await click('#image-workflow-start-btn'); await click('#precision-image-primary');
@@ -2086,11 +2178,14 @@ async function run() {
     if(process.argv.includes('--paid-translation-flow')){
       const submitted=await evaluate('window.__precisionCommands.filter(command=>command.type==="CREATE_TRANSLATION")');
       assert.equal(submitted.length,3); assert.ok(submitted.every(command=>command.priceConfirmation.currency==='CNY'&&command.priceConfirmation.maximumCostCents===14&&command.priceConfirmation.quoteFingerprint==='c'.repeat(64)));
-      assert.ok(summary.dialogs.some(message=>message.includes('CNY 0.42')),'explicit batch maximum fee is presented before submit');
+      assert.ok(summary.inlineConfirmations.some(item=>item.decision==='accept'&&item.text.includes('CNY 0.42')),'explicit batch maximum fee is presented inline before submit');
+      assert.deepEqual(summary.dialogs, [], 'the payment confirmation never opens a native browser dialog');
       summary.translation.paidConfirmation={currency:'CNY',perImageMaximum:14,batchMaximum:42};
     }
     await writeFile(path.join(artifacts, 'summary.json'), JSON.stringify(summary, null, 2));
   } finally {
+    acceptanceWaitPump = undefined;
+    if (summary.dialogs.length) summary.ok = false;
     if (!summary.ok && diagnose) {
       try { await writeFile(path.join(artifacts, 'failure.json'), JSON.stringify({ ...(await diagnose()), wheelBefore: summary.wheelBefore }, null, 2)); console.error('Failure diagnostics: ' + path.join(artifacts, 'failure.json')); } catch {}
     }

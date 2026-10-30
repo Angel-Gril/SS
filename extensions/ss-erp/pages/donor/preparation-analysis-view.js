@@ -1,5 +1,6 @@
 import {createPreparationAnalysisSession} from './preparation-analysis-session.js';
 import {compileHostedReferenceSelection} from './hosted-reference-selection.js';
+import {createInlineConfirmation} from './inline-confirmation.js';
 
 const make = (tag, cls, text) => {const node = document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;};
 const identity = binding => JSON.stringify(['snapshotId','supplyGoodsId','shopId','listingWorkflowId'].map(key=>binding?.[key]));
@@ -43,7 +44,7 @@ export function renderPreparationProcess(target, state) {
 
 export function createPreparationAnalysisView({root, runtime, command, getBinding, getSkuKey, getCategoryRevision, getMedia,
   getAttributeNames=()=>new Map(), getPrerequisites, getBusy, getRecoveryBusy=getBusy, getCopyCandidates, onCuration, onVisual, onAttributes, saveCopy, approveCopy,
-  onSourceChanged=async()=>{}, onCompleted=()=>{}, onMessage=()=>{}, report}) {
+  onSourceChanged=async()=>{}, onCompleted=()=>{}, onMessage=()=>{}, report, confirmAction}) {
   let safeKeys=[],rawKeys=[],mediaToken='',capability=null,opening=false,applying=false,loadedIdentity='',restoreComplete=false;
   let prepareTask=null,analysisTask=null,prepareError='',preparePhase='';
   let stagedEnabled=false,lastCuration='',lastVision='',heartbeat=null,heartbeatStage='',heartbeatStartedAt=0,elapsedSeconds=0;
@@ -51,7 +52,7 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
   const modal=make('div','settings-modal precision-preparation-analysis-shell');modal.id='precision-preparation-analysis-modal';modal.hidden=true;
   const dialog=make('div','settings-dialog precision-preparation-analysis-dialog'),head=make('div','settings-head');
   head.append(make('div','settings-title','采集与 AI · 检查商品准备候选'));
-  const close=make('button','ghost','关闭');close.id='precision-preparation-analysis-close';close.type='button';close.addEventListener('click',()=>{modal.hidden=true;});head.append(close);
+  const close=make('button','ghost','关闭');close.id='precision-preparation-analysis-close';close.type='button';close.addEventListener('click',()=>{confirmation.cancel();modal.hidden=true;});head.append(close);
   const body=make('div','settings-body'),notice=make('p','precision-preparation-notice','一次分析提供筛图、视觉 JSON、属性与俄文候选；检查后分别确认，不会自动上架。');
   const stateText=make('p');stateText.id='precision-preparation-analysis-state';stateText.setAttribute('role','status');
   const stageList=make('div','precision-preparation-analysis-stages');stageList.id='precision-preparation-analysis-stages';
@@ -78,10 +79,13 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
   const sourceReset=make('button','ghost','重新采集并新建草稿');sourceReset.id='precision-preparation-source-reset';sourceReset.type='button';sourceReset.hidden=true;
   start.id='precision-preparation-analysis-start';recover.id='precision-preparation-analysis-recover';curation.id='precision-preparation-curation-confirm';foot.append(start,retry,recover,recoverSave,curation,sourceReset,manual);
   body.append(notice,stateText,stageList,images,summary,visualDetails,attrSection,copySection);dialog.append(head,body,foot);modal.append(dialog);root.append(modal);
+  const confirmation=createInlineConfirmation({container:foot,make});
+  const ask=confirmAction||((options)=>confirmation.request(options));
 
   const safeBinding=()=>{try{return getBinding();}catch{return null;}};
   const currentMediaToken=()=>JSON.stringify(getMedia().map(item=>[item.key,item.url]));
   const preparationToken=()=>JSON.stringify([safeBinding(),getSkuKey(),getCategoryRevision(),currentMediaToken()]);
+  const confirmationToken=()=>JSON.stringify([preparationToken(),selectedImages(),mode,profileId,analysisModel,capability,stagedEnabled]);
   const assertPreparationToken=token=>{if(token!==preparationToken())throw Object.assign(new Error('商品、草稿、SKU、图片或官方字段已变化，请重新读取分析准备。'),{outcome:'NOT_SUBMITTED'});};
   function prerequisites(){
     const supplied=getPrerequisites?.()||{},category=getCategoryRevision();
@@ -132,6 +136,7 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
   async function action(run,recovery=false){if(applying||opening||session.state().busy||(recovery?getRecoveryBusy():getBusy()))return;applying=true;sync();try{return await run();}catch(error){report(error);}finally{applying=false;sync();}}
   function sync() {
     const view=session.state(),working=opening||applying||view.busy||getBusy(),valid=ready(),pendingSave=Boolean(view.application);
+    confirmation.sync(confirmationToken());
     syncHeartbeat(view);
     const staged=stagedEnabled||Boolean(view.stageResults&&Object.keys(view.stageResults).length),current=session.current();
     const curationData=view.receipt?.report||view.stageResults?.CURATION;
@@ -286,10 +291,13 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     if(!restoreComplete)await prepare();
     if(!capability?.available)return {unavailable:true,message:capability?.message||'商品 AI 分析尚未启用，继续手工匹配和编辑。'};
     const token=preparationToken();
-    if(!confirm(`${capability.providerFeeNotice}\n${stagedEnabled?'依次执行图片筛选、商品视觉分析、属性与俄文文案生成；已完成结果会保留。':'一次分析提供筛图、视觉、属性和俄文候选。'}确认执行？`))return {declined:true};
+    modal.hidden=false;
+    const expected=confirmationToken();
+    const confirmed=await ask({message:capability.providerFeeNotice,detail:stagedEnabled?'依次执行图片筛选、商品视觉分析、属性与俄文文案生成；已完成结果会保留。':'一次分析提供筛图、视觉、属性和俄文候选。',token:expected,getToken:confirmationToken});
+    if(!confirmed||expected!==confirmationToken())return {declined:true};
     rawKeys=selectedImages();safeKeys=await compileAnalysisSelection(rawKeys);
     assertPreparationToken(token);
-    modal.hidden=false;
+    if(expected!==confirmationToken())return {declined:true};
     const result=await session.analyze();
     if(result.manuallyContinued)onMessage('自动 AI 流程已停止，当前结果保留，请继续手工编辑。');
     else if(result.receipt)onMessage('商品 AI 分析完成，请检查筛图、属性与俄文候选。','ok');
@@ -336,7 +344,7 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     const candidate=getCopyCandidates()?.find(item=>item.id===copyCandidate?.id);if(!candidate?.sourceCurrent||candidate.titleRu!==title.value||candidate.descriptionRu!==description.value)throw new Error('待审核文案已变化');
     await approveCopy(candidate.id);copyCandidate=null;onCompleted('copy');});});
   return {sync,state:()=>session.state(),current:ready,
-    dispose:stopHeartbeat,
+    dispose(){confirmation.cancel();stopHeartbeat();},
     async open(){modal.hidden=false;await prepare();},
     async run(){const token=preparationToken();await prepare();assertPreparationToken(token);return analyze();},
     async recover(){return action(async()=>{await prepare();return session.recover();});},

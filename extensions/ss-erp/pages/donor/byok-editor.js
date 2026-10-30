@@ -1,6 +1,8 @@
+import { createInlineConfirmation } from './inline-confirmation.js';
+
 const operationLabels = { TEXT_TO_IMAGE: '单图生成', IMAGE_TO_IMAGE: '参考图生成', FULL_EDIT: '全图修图', INPAINT: '圈选重绘' };
 
-export function createByokEditor({ root, container, runtime, getShopId, getBinding, openSession, getBusy = () => false, onBound, onModeChange }) {
+export function createByokEditor({ root, container, runtime, getShopId, getBinding, openSession, getBusy = () => false, onBound, onModeChange, confirmAction }) {
   const make = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
   const settings = runtime?.settings;
   const available = typeof runtime?.registerUi === 'function' && typeof settings?.listProfiles === 'function';
@@ -37,6 +39,8 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   const generationState = make('p', 'precision-byok-generation-state', '连接草稿后可开始单图生成。'); generationState.id = 'precision-byok-generation-state'; generationState.setAttribute('role', 'status');
   preview.append(image, previewMeta, actions);
   generation.append(generationHead, prompt, negative, controls, preview, generationState); container.append(generation);
+  const confirmation = createInlineConfirmation({ container, make });
+  const ask = confirmAction || (options => confirmation.request(options));
   const editFlowPanel = make('section', 'precision-byok-edit-flow'); editFlowPanel.id = 'precision-byok-edit-flow'; editFlowPanel.hidden = true;
   const editHeading = make('div', 'precision-byok-generation-head'); editHeading.append(make('strong', '', '参考图生成'), make('small', '', '来源素材经 ERP 校验后才会进入编辑任务。'));
   const editOperation = make('select'); editOperation.id = 'precision-byok-edit-operation'; editOperation.setAttribute('aria-label', 'BYOK 编辑操作');
@@ -87,6 +91,7 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   const state = make('p'); state.id = 'precision-byok-config-state'; state.setAttribute('role', 'status');
   body.append(setKey, clearKey, prepare, request, state); dialog.append(head, body); modal.append(dialog); root.append(modal);
   const selected = () => profiles.find((profile) => profile.id === selectedId);
+  const confirmationToken = () => JSON.stringify([getBinding?.(), mode, selected(), selectedState?.hasKey, permission?.granted, prompt.value, negative.value, size.value]);
   const flowApi = globalThis.SS_ERP_PRECISION_BYOK_FLOW;
   const editFlowApi = globalThis.SS_ERP_PRECISION_BYOK_EDIT_FLOW;
   function errorText(error) {
@@ -105,6 +110,7 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   }
   function render() {
     const flowView = flow?.state() || flowState;
+    confirmation.sync(confirmationToken());
     const working = busy || initializing || flowConnecting || Boolean(flowView?.busy) || getBusy();
     const settingsLocked = working || Boolean(flowView?.candidate) || Boolean(flowView?.readbackRequired) || Boolean(flowView?.generationUnknown);
     panel.hidden = mode !== 'byok';
@@ -320,9 +326,12 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   generate.addEventListener('click', (event) => {
     if (!event.isTrusted || generate.disabled) return;
     void mediaAct(async () => {
-      const active = await ensureFlow();
-      const confirmed = globalThis.confirm(`使用 ${selected().name} 生成一张 BYOK 候选图？ERP 不收取 AI 托管费用，但 Provider 可能收费。`);
+      const frozenToken = confirmationToken();
+      const confirmed = await ask({ message: `使用 ${selected().name} 生成一张 BYOK 候选图？`, detail: 'ERP 不收取 AI 托管费用，但 Provider 可能收费。结果会先预览、审核，再绑定到草稿。', token: frozenToken,
+        getToken: confirmationToken });
       if (!confirmed) return;
+      const active = await ensureFlow();
+      if (frozenToken !== confirmationToken()) return;
       await active.generate({ profileId: selectedId, prompt: prompt.value.normalize('NFKC').trim(), negativePrompt: negative.value.normalize('NFKC').trim(), size: size.value, chargeConfirmed: true });
       await openCandidatePreview();
     });
@@ -355,6 +364,7 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
   ingest.addEventListener('click', (event) => { if (event.isTrusted && !ingest.disabled) void mediaAct(async () => { flowState = await flow.ingest(); flowPreview = null; await onBound?.(flowState); }); });
   render();
   return {
+    cancelConfirmation: () => confirmation.cancel(),
     panel, configure, reconnect, render, readMediaState, initialize,
     async openSettings() {
       if (!registered && !await initialize()) throw new Error('请重新连接扩展后配置自带 API');
