@@ -55,6 +55,7 @@ interface Shop {
   id: string;
   name: string;
   platform: string;
+  status?: string;
 }
 
 interface CainiaoPackage {
@@ -183,7 +184,7 @@ export default function LogisticsPage() {
                     </TableCell>
                     <TableCell className="text-sm">
                       <Badge variant="outline">{order.shop.platform}</Badge>
-                      <span className="ml-1"><Badge variant="outline" className="mr-1 text-[10px]">{order.shop.platform}</Badge>{order.shop.name}</span>
+                      <span className="ml-1">{order.shop.name}</span>
                     </TableCell>
                     <TableCell className="max-w-[180px]">
                       {order.items && Array.isArray(order.items) ? (

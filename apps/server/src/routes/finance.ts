@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { platformShopScopeSchema, restrictOwnedShopIds } from '../services/platform-shop-scope.js';
 
 const rechargeSchema = z.object({
   amount: z.coerce.number().positive('充值金额必须大于 0').max(100000),
@@ -140,7 +141,7 @@ export async function financeRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get('/profit', async (request) => {
+  app.get('/profit', async (request, reply) => {
     const { userId } = (request as any).user;
     const query = request.query as {
       shopId?: string;
@@ -152,10 +153,10 @@ export async function financeRoutes(app: FastifyInstance) {
       shippingCost?: string;
     };
 
-    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true, name: true, platform: true, config: true } });
-    const normalizedPlatform = query.platform?.trim().toUpperCase();
-    const scopedShops = userShops.filter((shop) => !normalizedPlatform || shop.platform === normalizedPlatform);
-    const shopIds = query.shopId ? scopedShops.filter((shop) => shop.id === query.shopId).map((shop) => shop.id) : scopedShops.map((shop) => shop.id);
+    const scope = platformShopScopeSchema.safeParse(request.query);
+    if (!scope.success) return reply.status(400).send({ code: 0, msg: '平台或店铺参数无效' });
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' }, ...(scope.data.platform ? { platform: scope.data.platform } : {}) }, select: { id: true, name: true, platform: true, config: true } });
+    const shopIds = restrictOwnedShopIds(userShops.map(shop => shop.id), scope.data.shopId);
 
     const startDate = query.startDate ? new Date(query.startDate) : new Date(Date.now() - 30 * 24 * 3600 * 1000);
     const endDate = query.endDate ? new Date(query.endDate) : new Date();

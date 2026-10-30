@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { platformShopScopeSchema } from '../services/platform-shop-scope.js';
 
 function escapeCsv(value: string | null | undefined): string {
   if (value == null) return '';
@@ -17,6 +18,8 @@ export async function exportRoutes(app: FastifyInstance) {
   app.get('/orders', async (request, reply) => {
     const { userId, role } = (request as any).user;
     const query = request.query as { shopId?: string; startDate?: string; endDate?: string };
+    const scope = platformShopScopeSchema.safeParse(request.query);
+    if (!scope.success) return reply.status(400).send({ code: 0, msg: '平台或店铺参数无效' });
     const where: Record<string, unknown> = {};
 
     if (role !== 'ADMIN') {
@@ -33,7 +36,7 @@ export async function exportRoutes(app: FastifyInstance) {
     } else if (query.shopId) {
       where.shopId = query.shopId;
     }
-    where.shop = { status: { not: 'DISABLED' } };
+    where.shop = { status: { not: 'DISABLED' }, ...(scope.data.platform ? { platform: scope.data.platform } : {}) };
 
     if (query.startDate) where.createdAt = { ...(where.createdAt as any || {}), gte: new Date(query.startDate) };
     if (query.endDate) {

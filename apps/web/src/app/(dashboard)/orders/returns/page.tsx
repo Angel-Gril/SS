@@ -56,13 +56,16 @@ export default function OrderReturnsPage() {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) setShops(res.data.filter((shop) => shop.platform === 'OZON'));
     });
-    loadStats();
   }, []);
+  useEffect(() => { loadStats(); }, [platform, shopId]);
 
   useEffect(() => { fetchData(); }, [search, page, platform, shopId, status]);
 
   async function loadStats() {
-    const res = await api.get<ReturnStats>('/api/returns/stats');
+    const params = new URLSearchParams();
+    if (platform) params.set('platform', platform);
+    if (shopId) params.set('shopId', shopId);
+    const res = await api.get<ReturnStats>(`/api/returns/stats?${params}`);
     if (res.code === 1 && res.data) setStats(res.data);
   }
 
@@ -79,9 +82,9 @@ export default function OrderReturnsPage() {
   }
 
   async function handleSync() {
-    const target = shopId || shops.find((s) => s.platform === 'OZON')?.id;
+    const target = shopId;
     if (!target) {
-      toast({ title: '请先添加 OZON 店铺', variant: 'destructive' });
+      toast({ title: '请选择需要同步的 Ozon 店铺', variant: 'destructive' });
       return;
     }
     setSyncing(true);

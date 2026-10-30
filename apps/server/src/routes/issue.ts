@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { platformShopScopeSchema, restrictOwnedShopIds } from '../services/platform-shop-scope.js';
 
 const createSchema = z.object({
   shopId: z.string().min(1),
@@ -21,20 +22,19 @@ const updateSchema = z.object({
 export async function issueRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  app.get('/', async (request) => {
+  app.get('/', async (request, reply) => {
     const { userId } = (request as any).user;
     const query = request.query as { platform?: string; shopId?: string; status?: string; type?: string; search?: string; offset?: string; limit?: string };
 
-    const normalizedPlatform = query.platform?.trim().toUpperCase();
-    const platform = ['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES'].includes(normalizedPlatform || '')
-      ? normalizedPlatform as 'OZON' | 'YANDEX' | 'KASPI' | 'WILDBERRIES'
-      : undefined;
-    const userShops = await prisma.shop.findMany({ where: { userId, ...(platform ? { platform } : {}) }, select: { id: true } });
+    const parsed = platformShopScopeSchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: '平台或店铺参数无效' });
+    const { platform } = parsed.data;
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' }, ...(platform ? { platform } : {}) }, select: { id: true } });
     const shopIds = userShops.map((s) => s.id);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, rows: [] } };
 
     const where: Record<string, unknown> = {
-      shopId: query.shopId && shopIds.includes(query.shopId) ? query.shopId : { in: shopIds },
+      shopId: { in: restrictOwnedShopIds(shopIds, parsed.data.shopId) },
     };
     if (query.status) where.status = query.status;
     if (query.type) where.type = query.type;
@@ -63,15 +63,13 @@ export async function issueRoutes(app: FastifyInstance) {
     return { code: 1, msg: 'ok', data: { total, rows } };
   });
 
-  app.get('/stats', async (request) => {
+  app.get('/stats', async (request, reply) => {
     const { userId } = (request as any).user;
-    const query = request.query as { platform?: string };
-    const normalizedPlatform = query.platform?.trim().toUpperCase();
-    const platform = ['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES'].includes(normalizedPlatform || '')
-      ? normalizedPlatform as 'OZON' | 'YANDEX' | 'KASPI' | 'WILDBERRIES'
-      : undefined;
-    const userShops = await prisma.shop.findMany({ where: { userId, ...(platform ? { platform } : {}) }, select: { id: true } });
-    const shopIds = userShops.map((s) => s.id);
+    const parsed = platformShopScopeSchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: '平台或店铺参数无效' });
+    const scope = parsed.data;
+    const userShops = await prisma.shop.findMany({ where: { userId, status: { not: 'DISABLED' }, ...(scope.platform ? { platform: scope.platform } : {}) }, select: { id: true } });
+    const shopIds = restrictOwnedShopIds(userShops.map((s) => s.id), scope.shopId);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { total: 0, byStatus: {}, byType: {} } };
 
     const total = await prisma.expressIssue.count({ where: { shopId: { in: shopIds } } });

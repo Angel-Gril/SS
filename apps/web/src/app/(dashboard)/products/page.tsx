@@ -84,6 +84,7 @@ interface Shop {
   id: string;
   name: string;
   platform: string;
+  status?: string;
 }
 
 interface OzonWarehouse {
@@ -352,7 +353,12 @@ function ProductsPageInner() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState(initialShopId);
+  const selectedPlatform = shops.find(shop => shop.id === shopId)?.platform;
+  const isOzon = selectedPlatform === 'OZON';
   const isYandex = shops.find(shop => shop.id === shopId)?.platform === 'YANDEX';
+  const productRead = useRef(0);
+  const currentShopScope = useRef(shopId);
+  currentShopScope.current = shopId;
   const [yandexEditingId, setYandexEditingId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
@@ -416,12 +422,16 @@ function ProductsPageInner() {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) {
         setShops(res.data);
-        const currentShop = res.data.find((shop) => shop.id === shopId);
+        const requestedShopId = initialShopId || readStoredProductFilters().shopId || '';
+        const currentShop = res.data.find((shop) => shop.id === requestedShopId);
         if (currentShop) {
+          setShopId(currentShop.id);
           setPlatform(currentShop.platform as ShopPlatformFilter);
-        } else if (res.data.length > 0) {
+        } else if (!requestedShopId && res.data.length > 0) {
           setShopId(res.data[0]!.id);
           setPlatform(res.data[0]!.platform as ShopPlatformFilter);
+        } else {
+          setShopId('');
         }
       }
     });
@@ -431,8 +441,11 @@ function ProductsPageInner() {
     let cancelled = false;
     setWarehouses([]); setSelectedWarehouseId(null); setWarehouseStockMode('all'); setSelected(new Set());
     setEditingPrice(null); setEditingStock(null); setYandexEditingId(null);
+    setProducts([]); setTotal(0); setLastProductSyncAt(null); setStatusCounts(EMPTY_STATUS_COUNTS);
+    setBatchPriceOpen(false); setBatchStockOpen(false); setStockSyncOpen(false);
+    setDetailProductId(null); setPreviewProductId(null); setSyncDialogOpen(false);
     if (isYandex) { setProfitFilter('all'); setOzonPriceIndexFilter('all'); }
-    if (shopId && !isYandex) {
+    if (shopId && isOzon) {
       api.get<OzonWarehouse[]>(`/api/products/warehouses/${shopId}`).then((res) => {
         if (cancelled) return;
         if (res.code === 1 && res.data) {
@@ -446,7 +459,7 @@ function ProductsPageInner() {
       });
     }
     return () => { cancelled = true; };
-  }, [shopId, isYandex]);
+  }, [shopId, isYandex, isOzon]);
 
   useEffect(() => {
     if (!filtersRestored) return;
@@ -479,7 +492,11 @@ function ProductsPageInner() {
   }, [priceFilterMenuOpen]);
 
   const loadProducts = useCallback(async () => {
-    if (!filtersRestored || !shopId) return;
+    const requestId = ++productRead.current;
+    if (!filtersRestored || !shopId || !selectedPlatform) {
+      setProducts([]); setTotal(0); setStatusCounts(EMPTY_STATUS_COUNTS); setLastProductSyncAt(null); setLoading(false);
+      return;
+    }
     setLoading(true);
     const params = new URLSearchParams({
       offset: String(page * pageSize),
@@ -501,6 +518,7 @@ function ProductsPageInner() {
     const res = await api.get<ProductListResponse>(
       `/api/shops/${shopId}/products?${params}`,
     );
+    if (requestId !== productRead.current || currentShopScope.current !== shopId) return;
     if (res.code === 1 && res.data) {
       setProducts(res.data.rows);
       setTotal(res.data.total);
@@ -508,7 +526,7 @@ function ProductsPageInner() {
       setStatusCounts(res.data.statusCounts || EMPTY_STATUS_COUNTS);
     }
     setLoading(false);
-  }, [filtersRestored, shopId, page, pageSize, search, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, ozonPriceIndexFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+  }, [filtersRestored, shopId, selectedPlatform, page, pageSize, search, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, ozonPriceIndexFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -654,10 +672,7 @@ function ProductsPageInner() {
 
   function handlePlatformChange(next: ShopPlatformFilter) {
     setPlatform(next);
-    const visible = next ? shops.filter((shop) => shop.platform === next) : shops;
-    if (!shopId || (next && selectedShop?.platform !== next)) {
-      setShopId(visible[0]?.id || '');
-    }
+    setShopId('');
     setPage(0);
     setSelected(new Set());
   }
@@ -724,7 +739,7 @@ function ProductsPageInner() {
             </form>
 
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
-              {isYandex ? <YandexProductManager key={shopId} shopId={shopId} products={products} selectedIds={Array.from(selected)} editingId={yandexEditingId} onEditingClose={() => setYandexEditingId(null)} onUpdated={loadProducts} /> : <>
+              {isYandex ? <YandexProductManager key={shopId} shopId={shopId} products={products} selectedIds={Array.from(selected)} editingId={yandexEditingId} onEditingClose={() => setYandexEditingId(null)} onUpdated={loadProducts} /> : isOzon ? <>
               <Button
                 size="sm"
                 variant="default"
@@ -742,10 +757,10 @@ function ProductsPageInner() {
                 className="h-8"
                 onClick={handleSyncCommissions}
                 disabled={syncingCommissions}
-                title="从 OZON 同步真实佣金率"
+                title="读取当前账号全部可用 Ozon 店铺的商品佣金率"
               >
                 {syncingCommissions ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <DollarSign className="h-3.5 w-3.5" />}
-                同步佣金
+                同步全部 Ozon 佣金
               </Button>
               <Button
                 size="sm"
@@ -758,7 +773,7 @@ function ProductsPageInner() {
                 <Upload className="h-3.5 w-3.5" />
                 库存推送
               </Button>
-              </>}
+              </> : <span className="text-xs text-muted-foreground">请选择店铺后操作</span>}
               <Button size="sm" variant="ghost" className="h-8 px-2" onClick={loadProducts} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               </Button>
@@ -838,7 +853,7 @@ function ProductsPageInner() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>}
-                <select
+                {!isYandex && <select
                   value={warehouseStockMode}
                   onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
                   disabled={!selectedWarehouseId}
@@ -847,8 +862,8 @@ function ProductsPageInner() {
                   <option value="all">仓库库存：全部</option>
                   <option value="in_stock">该仓有库存</option>
                   <option value="out_of_stock">该仓无库存</option>
-                </select>
-                {!selectedWarehouseId && (
+                </select>}
+                {!isYandex && !selectedWarehouseId && (
                   <span className="text-xs text-muted-foreground">选择具体仓库后可按该仓库存筛选</span>
                 )}
                 {hasAdvancedFilters && (
@@ -1053,7 +1068,7 @@ function ProductsPageInner() {
                         <div>
                           {hasAdvancedFilters || search.trim()
                             ? '没有符合当前筛选条件的商品。请清空筛选后重试。'
-                            : '暂无商品。请先在店铺管理中执行同步。'}
+                            : !shopId ? '请选择店铺查看商品。' : '暂无商品。请先在店铺管理中执行同步。'}
                         </div>
                       </div>
                     </TableCell>

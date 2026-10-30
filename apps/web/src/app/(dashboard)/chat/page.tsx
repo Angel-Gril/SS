@@ -25,9 +25,17 @@ export default function ChatPage() {
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeShop = useRef(selectedShop);
+  activeShop.current = selectedShop;
+  const historyRequest = useRef(0);
 
   useEffect(() => { loadShops(); }, []);
-  useEffect(() => { if (selectedShop) loadChats(); }, [selectedShop]);
+  useEffect(() => {
+    setSelectedChat(null); setChats([]); setMessages([]); setMessageText('');
+    setLoadingChats(false); setLoadingMessages(false);
+    historyRequest.current++;
+    if (selectedShop) loadChats();
+  }, [selectedShop]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   async function loadShops() {
@@ -40,8 +48,11 @@ export default function ChatPage() {
   }
 
   async function loadChats() {
+    if (!selectedShop) return;
+    const requestedShop = selectedShop;
     setLoadingChats(true);
     const res = await api.get<{ chats: Chat[]; total_unread_count: number }>(`/api/chat/list?shopId=${selectedShop}`);
+    if (requestedShop !== activeShop.current) return;
     setLoadingChats(false);
     if (res.code === 1 && res.data) {
       setChats(res.data.chats || []);
@@ -51,9 +62,12 @@ export default function ChatPage() {
   }
 
   async function loadMessages(chatId: string) {
+    const requestedShop = selectedShop;
+    const requestId = ++historyRequest.current;
     setSelectedChat(chatId);
     setLoadingMessages(true);
     const res = await api.get<{ messages: Message[] }>(`/api/chat/history/${chatId}?shopId=${selectedShop}`);
+    if (requestedShop !== activeShop.current || requestId !== historyRequest.current) return;
     setLoadingMessages(false);
     if (res.code === 1 && res.data) {
       setMessages((res.data.messages || []).reverse());
@@ -82,7 +96,7 @@ export default function ChatPage() {
             <h2 className="font-medium flex items-center gap-1.5">
               <MessageCircle className="h-4 w-4" /> 客服消息
             </h2>
-            <Button size="sm" variant="ghost" onClick={loadChats} disabled={loadingChats}>
+            <Button size="sm" variant="ghost" onClick={loadChats} disabled={loadingChats || !selectedShop}>
               <RefreshCw className={`h-3.5 w-3.5 ${loadingChats ? 'animate-spin' : ''}`} />
             </Button>
           </div>
@@ -94,7 +108,7 @@ export default function ChatPage() {
             allowAllShops={false}
             onPlatformChange={(next) => { setPlatform(next); setSelectedShop(''); }}
             onShopChange={setSelectedShop}
-            className={shops.length > 1 ? '' : 'hidden'}
+            className="items-stretch"
           />
         </div>
         <div className="flex-1 overflow-y-auto">

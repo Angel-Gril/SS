@@ -22,6 +22,7 @@ import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount } from '@/lib/utils';
 import { describeSubstatus } from '@/lib/ozon-substatus';
 import { PlatformShopFilter, type ShopPlatformFilter } from '@/components/shops/platform-shop-filter';
+import { YandexOrderWorkbench } from '@/components/yandex/order-workbench';
 
 interface Order {
   id: string;
@@ -83,6 +84,7 @@ export default function ShipOrdersPage() {
   const [stage, setStage] = useState<PipelineStage>('awaiting_packaging');
   const [platform, setPlatform] = useState<ShopPlatformFilter>('');
   const [shopId, setShopId] = useState('');
+  const [yandexOrder, setYandexOrder] = useState<{ id: string; shopId: string } | null>(null);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [page, setPage] = useState(0);
@@ -104,12 +106,15 @@ export default function ShipOrdersPage() {
     });
   }, []);
 
-  useEffect(() => { fetchStats(); }, [platform]);
+  useEffect(() => { fetchStats(); }, [platform, shopId]);
 
   useEffect(() => { fetchOrders(); }, [stage, platform, shopId, search, page]);
 
   async function fetchStats() {
-    const res = await api.get<OrderStats>(platform ? `/api/orders/stats?platform=${encodeURIComponent(platform)}` : '/api/orders/stats');
+    const params = new URLSearchParams();
+    if (platform) params.set('platform', platform);
+    if (shopId) params.set('shopId', shopId);
+    const res = await api.get<OrderStats>(`/api/orders/stats?${params}`);
     if (res.code === 1 && res.data) setStats(res.data);
   }
 
@@ -131,8 +136,12 @@ export default function ShipOrdersPage() {
 
   async function handleSync() {
     if (shops.length === 0) return;
+    if (!platform && !shopId) {
+      toast({ title: '请选择平台或店铺后同步', variant: 'destructive' });
+      return;
+    }
     setSyncing(true);
-    const targetShops = platform ? shops.filter((shop) => shop.platform === platform) : shops;
+    const targetShops = shops.filter(shop => (!shopId || shop.id === shopId) && (!platform || shop.platform === platform));
     for (const shop of targetShops) {
       await api.post('/api/orders/sync', { shopId: shop.id });
     }
@@ -251,23 +260,23 @@ export default function ShipOrdersPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">打包发货</h1>
           <p className="text-muted-foreground text-sm mt-1">订单处理流水线 — 同步、备货、打包、发货</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={handleSync} disabled={syncing}>
             {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
             同步订单
           </Button>
-          {stage === 'awaiting_packaging' && (
+          {stage === 'awaiting_packaging' && platform === 'OZON' && shopId && (
             <Button onClick={handleBatchShip} disabled={shipping || selected.size === 0}>
               {shipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Package className="mr-2 h-4 w-4" />}
               批量备货 ({selected.size})
             </Button>
           )}
-          {stage === 'awaiting_deliver' && (
+          {stage === 'awaiting_deliver' && platform === 'OZON' && shopId && (
             <Button onClick={handleBatchShip} disabled={shipping || selected.size === 0}>
               {shipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Truck className="mr-2 h-4 w-4" />}
               批量确认备货 ({selected.size})
@@ -487,12 +496,13 @@ export default function ShipOrdersPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex gap-1 justify-end">
-                      {stage === 'awaiting_packaging' && (
+                      {order.shop.platform === 'YANDEX' && <Button size="sm" variant="outline" onClick={() => setYandexOrder({ id: order.id, shopId: order.shopId })}>处理 Yandex 订单</Button>}
+                      {stage === 'awaiting_packaging' && order.shop.platform === 'OZON' && (
                         <Button size="sm" variant="outline" onClick={() => handleSingleShip(order.id)}>
                           <Package className="h-3.5 w-3.5 mr-1" /> 备货
                         </Button>
                       )}
-                      {stage === 'awaiting_deliver' && (
+                      {stage === 'awaiting_deliver' && order.shop.platform === 'OZON' && (
                         <>
                           <Button size="sm" variant="outline" onClick={() => { setBindOrderId(order.id); setBindTrackingNumber(''); setBindPurchaseId(''); }}>
                             <Link2 className="h-3.5 w-3.5 mr-1" /> 绑定物流
@@ -683,6 +693,7 @@ export default function ShipOrdersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <YandexOrderWorkbench selection={yandexOrder} onClose={() => setYandexOrder(null)} onUpdated={() => { fetchOrders(); fetchStats(); }} />
     </div>
   );
 }

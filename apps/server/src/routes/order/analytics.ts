@@ -6,6 +6,7 @@ import { decrypt } from '../../lib/crypto.js';
 import { OzonClient } from '../../services/ozon-client.js';
 import { ORDER_FULFILLMENT_PIPELINE, resolveOrderFulfillmentStage, resolveOrderFulfillmentStatus } from 'shared/order-fulfillment-stage';
 import { buildOrderListScope } from '../../services/order-list-scope.js';
+import { platformShopScopeSchema, restrictOwnedShopIds } from '../../services/platform-shop-scope.js';
 
 export async function orderAnalyticsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -14,9 +15,11 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
   }, '日期参数无效');
 
-  app.get('/stats', async (request) => {
+  app.get('/stats', async (request, reply) => {
     const { userId } = (request as any).user;
-    const query = z.object({ platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']).optional() }).parse(request.query);
+    const parsed = platformShopScopeSchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: '平台或店铺参数无效' });
+    const query = parsed.data;
     const userShops = await prisma.shop.findMany({
       where: { userId, status: { not: 'DISABLED' } },
       select: { id: true },
@@ -30,6 +33,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
       shopIds = platformShops.map((shop) => shop.id);
     }
 
+    shopIds = restrictOwnedShopIds(shopIds, query.shopId);
     if (shopIds.length === 0) {
       return {
         code: 1,

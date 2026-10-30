@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { RefreshCw, Loader2, Package, Truck, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette, SlidersHorizontal, Save, Bookmark, RotateCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -105,6 +105,7 @@ interface Shop {
   id: string;
   name: string;
   platform: string;
+  status?: string;
 }
 
 interface SavedOrderFilter {
@@ -304,6 +305,9 @@ export default function OrdersPage() {
   const [endDate, setEndDate] = useState(defaultOrderEndDate);
   const [page, setPage] = useState(0);
   const selectedShopPlatform = shops.find(shop => shop.id === shopId)?.platform;
+  const orderRead = useRef(0);
+  const pipelineRead = useRef(0);
+  const statsRead = useRef(0);
   const [shipOrder, setShipOrder] = useState<Order | null>(null);
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
@@ -311,6 +315,7 @@ export default function OrdersPage() {
   const limit = 20;
 
   const loadPipeline = useCallback(async () => {
+    const requestId = ++pipelineRead.current;
     const params = new URLSearchParams();
     if (platform) params.set('platform', platform);
     if (shopId) params.set('shopId', shopId);
@@ -324,17 +329,13 @@ export default function OrdersPage() {
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
     const res = await api.get<{ stages: PipelineStage[] }>(`/api/orders/pipeline?${params}`);
-    if (res.code === 1 && res.data) setPipeline(res.data.stages);
+    if (requestId === pipelineRead.current && res.code === 1 && res.data) setPipeline(res.data.stages);
   }, [platform, shopId, search, searchField, serviceTagId, userColorTagId, purchaseState, shippingMethod, hasTracking, startDate, endDate]);
 
   useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) setShops(res.data);
     });
-    api.get<OrderStats>(platform ? `/api/orders/stats?platform=${encodeURIComponent(platform)}` : '/api/orders/stats').then((res) => {
-      if (res.code === 1 && res.data) setStats(res.data);
-    });
-    loadPipeline();
     api.get<ServiceTag[]>('/api/orders/service-tags').then((res) => {
       if (res.code === 1 && res.data) setServiceTags(res.data);
     });
@@ -345,9 +346,21 @@ export default function OrdersPage() {
       const parsed = JSON.parse(localStorage.getItem(SAVED_ORDER_FILTERS_KEY) || '[]');
       if (Array.isArray(parsed)) setSavedOrderFilters(parsed.slice(0, 20));
     } catch {}
-  }, [loadPipeline, platform]);
+  }, []);
+
+  useEffect(() => { loadPipeline(); }, [loadPipeline]);
+  const loadStats = useCallback(async () => {
+    const requestId = ++statsRead.current;
+    const params = new URLSearchParams();
+    if (platform) params.set('platform', platform);
+    if (shopId) params.set('shopId', shopId);
+    const response = await api.get<OrderStats>(`/api/orders/stats?${params}`);
+    if (requestId === statsRead.current && response.code === 1 && response.data) setStats(response.data);
+  }, [platform, shopId]);
+  useEffect(() => { loadStats(); }, [loadStats]);
 
   async function loadOrders() {
+    const requestId = ++orderRead.current;
     setLoading(true);
     const params = new URLSearchParams({
       offset: String(page * limit),
@@ -372,6 +385,7 @@ export default function OrdersPage() {
     if (pipelineStatus) params.set('fulfillmentStatus', pipelineStatus);
 
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
+    if (requestId !== orderRead.current) return;
     if (res.code === 1 && res.data) {
       setOrders(res.data.rows);
       setTotal(res.data.total);
@@ -540,12 +554,12 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">订单管理</h1>
           <p className="text-muted-foreground mt-1">查看和处理所有平台订单</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => handleSync(false)} disabled={!shops.length}>
             <RefreshCw className="h-4 w-4" />
             {selectedShopPlatform === 'YANDEX' ? '同步 Yandex 订单' : '同步订单'}
@@ -669,8 +683,8 @@ export default function OrdersPage() {
               shops={shops}
               platform={platform}
               shopId={shopId}
-              onPlatformChange={(next) => { setPlatform(next); setShopId(''); setPage(0); }}
-              onShopChange={(next) => { setShopId(next); setPage(0); }}
+              onPlatformChange={(next) => { setPlatform(next); setShopId(''); setSubStatus(''); setShippingMethod(''); setSelectedOrders(new Set()); setPage(0); }}
+              onShopChange={(next) => { setShopId(next); setSelectedOrders(new Set()); setPage(0); }}
             />
 
             <Input
@@ -1290,9 +1304,7 @@ export default function OrdersPage() {
         onQueued={() => {
           loadOrders();
           loadPipeline();
-          api.get<OrderStats>('/api/orders/stats').then((r) => {
-            if (r.code === 1 && r.data) setStats(r.data);
-          });
+          loadStats();
         }}
       />
       {selectedShopPlatform === 'YANDEX' && <YandexOrderSyncActionDialog shopId={shopId} open={yandexSyncDialogOpen} onOpenChange={setYandexSyncDialogOpen} sinceDays={syncSinceDays} onQueued={() => { loadOrders(); loadPipeline(); }} />}

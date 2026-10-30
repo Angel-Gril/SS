@@ -91,15 +91,15 @@ export default function ProfitPage() {
 
       <Card>
         <CardContent className="pt-4">
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
-            <div className="space-y-1">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-3 items-end">
+            <div className="space-y-1 col-span-2">
               <Label className="text-xs">平台 / 店铺</Label>
               <PlatformShopFilter
                 shops={shops}
                 platform={platform}
                 shopId={shopId}
                 compact
-                onPlatformChange={(next) => { setPlatform(next); if (next && shops.find((shop) => shop.id === shopId)?.platform !== next) setShopId(''); }}
+                onPlatformChange={(next) => { setPlatform(next); setShopId(''); }}
                 onShopChange={setShopId}
                 className="items-stretch"
               />
