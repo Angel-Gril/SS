@@ -1,3 +1,7 @@
+## 2026-11-03 1.0.483 双区官网公开发布完成
+
+`dca04318 / 1.0.483` 已通过本轮新两图、审核前PENDING数据库/预览、双审核、首次assignment和同请求幂等原始HTTP、最终数据库/队列读回及正式QA04；CNY0.20/Ozon0。双区部署备份恢复刷新、FULL VPS、REL04、website approval/CAS、匿名四包实际下载及最终验签均通过，官网现公开483；COM现有试点/分析及CN dark保持。本轮限时account凭据已撤销清理，捕获器修复仅属验收工具；原件、网络失败和质量边界见[直接适配记录](donor-workbench/direct-adaptation.md)。
+
 ## 2026-10-31 工作台非阻塞确认已完成本地验收
 
 采集/分析/生图/翻译/SKU/视频业务确认改为当前工作区确认区；关闭、取消和上下文失效不会提交请求。68 项定向、独立 Chromium/MV3 和 Cloud/Local 构建验证通过，交付 1.0.482 开发包；尚未签名、部署或公开切换。准确 owner、测试原件与未完成边界见[直接适配记录](donor-workbench/direct-adaptation.md)。

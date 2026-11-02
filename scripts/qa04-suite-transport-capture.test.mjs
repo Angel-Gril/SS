@@ -2,12 +2,59 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  attachSuiteMutationFetchCapture,
   assertExclusiveTargetOwnership,
   attachSuiteMutationNetworkCapture,
   createSuiteMutationCapture,
   classifySuiteMutationRequest,
   sanitizeSuiteTransportValue,
 } from './qa04-suite-transport-capture.mjs';
+
+for (const readable of [true, false]) test(`paused response persists before release; readable=${readable}`, async () => {
+  const listeners = new Map(), calls = [];
+  const capture = createSuiteMutationCapture();
+  attachSuiteMutationFetchCapture({
+    on(method, listener) { listeners.set(method, listener); },
+    async send(method, params, sessionId) {
+      calls.push(method);
+      assert.equal(sessionId, 'worker');
+      assert.equal(params.requestId, 'fetch-1');
+      if (method === 'Fetch.getResponseBody') {
+        if (!readable) throw Error('body lost');
+        return { body: JSON.stringify({ code: 1, data: { replayed: false } }) };
+      }
+      assert.deepEqual(params, { requestId: 'fetch-1' });
+    },
+  }, { capture, sessions: new Set(['worker']), onCaptured(pair) {
+    calls.push('persist'); assert.equal(pair.response.body.data.replayed, false);
+  } });
+  await listeners.get('Fetch.requestPaused')({ requestId: 'fetch-1', networkId: 'network-1',
+    request: { method: 'POST', url: 'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',
+      postData: JSON.stringify({ idempotencyKey: 'exact-body' }) }, responseStatusCode: 200,
+  }, 'worker');
+  assert.deepEqual(calls, readable ? ['Fetch.getResponseBody', 'persist', 'Fetch.continueRequest']
+    : ['Fetch.getResponseBody', 'Fetch.continueRequest']);
+  assert.equal(capture.snapshot().responses.length, readable ? 1 : 0);
+  assert.equal(capture.snapshot().errors.length, readable ? 0 : 1);
+});
+
+test('paused response cannot change the recorded request origin and always releases unchanged', async () => {
+  const listeners = new Map(), calls = [], capture = createSuiteMutationCapture();
+  capture.recordRequest({requestId:'worker:network',method:'POST',url:'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',postData:'{}'});
+  attachSuiteMutationFetchCapture({on(m,h){listeners.set(m,h);},async send(m,p){calls.push(m);assert.deepEqual(p,{requestId:'fetch'});}}, {capture,sessions:new Set(['worker'])});
+  await listeners.get('Fetch.requestPaused')({requestId:'fetch',networkId:'network',request:{method:'POST',url:'https://ss-erp.cn/api/extension-device/source-workbench/ai-image-suite/listing-assignments',postData:'{}'},responseStatusCode:200},'worker');
+  assert.deepEqual(calls,['Fetch.continueRequest']);
+  assert.equal(capture.snapshot().responses.length,0);
+  assert.equal(capture.snapshot().errors.length,1);
+});
+
+test('persistence failure cannot be reported as a complete successful capture', async () => {
+  const listeners=new Map(),capture=createSuiteMutationCapture();let continued=false;
+  attachSuiteMutationFetchCapture({on(m,h){listeners.set(m,h);},async send(m){if(m==='Fetch.getResponseBody')return{body:'{"code":1}'};continued=true;}},{capture,sessions:new Set(['worker']),onCaptured(){throw Error('PRIVATE_DISK_SENTINEL');}});
+  await listeners.get('Fetch.requestPaused')({requestId:'fetch',networkId:'network',request:{method:'POST',url:'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',postData:'{}'},responseStatusCode:200},'worker');
+  assert.equal(continued,true);assert.equal(capture.snapshot().errors.length,1);
+  assert.ok(!JSON.stringify(capture.snapshot()).includes('PRIVATE_DISK_SENTINEL'));
+});
 
 test('fails closed when an extension target is already owned by another CDP client', () => {
   const owned = new Map();
@@ -249,6 +296,25 @@ test('a failure before response headers preserves the request and records its co
   assert.equal(snapshot.errors.length, 1);
   assert.equal(snapshot.errors[0].requestId, 'worker:early-failure');
   assert.equal(snapshot.unresolvedRequests[0].body.idempotencyKey, 'first-assignment-unknown-outcome');
+});
+
+test('loadingFailed after response headers still captures a readable mutation body', async () => {
+  const listeners = new Map();
+  const capture = attachSuiteMutationNetworkCapture({
+    on(method, listener) { listeners.set(method, listener); },
+    async send() { return { body: JSON.stringify({ code: 1, data: { replayed: false } }) }; },
+  }, { sessions: new Set(['worker']) });
+  listeners.get('Network.requestWillBeSent')({ requestId: 'late-failure', request: {
+    method: 'POST', url: 'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',
+    postData: JSON.stringify({ contractVersion: 'extension-hosted-ai-image-listing-assignment/v2' }),
+  } }, 'worker');
+  listeners.get('Network.responseReceived')({ requestId: 'late-failure', response: {
+    status: 200, url: 'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',
+  } }, 'worker');
+  listeners.get('Network.loadingFailed')({ requestId: 'late-failure', errorText: 'net::ERR_ABORTED' }, 'worker');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(capture.requireCompleted('assignment').response.body.data.replayed, false);
+  assert.equal(capture.snapshot().errors.length, 0);
 });
 
 for (const redirected of [false, true]) test('rejects ' + (redirected ? 'redirected' : 'foreign response') + ' mutation bodies without persisting their URLs', async () => {

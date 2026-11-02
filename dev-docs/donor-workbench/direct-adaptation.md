@@ -1,5 +1,56 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-11-03 1.0.483 双区官网公开发布完成
+
+COM/CN 应用与官网公开候选均为 `dca0431857add37088d1ca3a92984cd3adb44522 / 1.0.483`。
+本轮获准的新 DOTH suite `cmvzqy1jp00605oncq4xz0p5g` 从真实 1688 精铺入口采集新快照并创建隔离
+草稿 `draft-4195cabd-4564-4526-9c97-d848ee1b63a5`；正常工作区费用确认物理点击后取得 START，
+CONTINUE 各一次。两槽均 attempt1/SUCCEEDED，原图1008×1344、成品900×1200；审核前真实 PENDING
+数据库、完整工作台/UI/截图、预览字节和 SHA 均先保存，之后才执行两次审核。首次 assignment
+200/`replayed:false` 与相同 body/幂等键 replay 200/`true` 原始响应完整；草稿 r1/v1→r2/v2、
+两条 assignment、双 APPROVED、唯一两笔 CHARGE/合计 CNY0.20、五项 pending 全0及队列只读读回通过。
+无 Ozon 发布，不读取供应商控制台，不重试未知 Provider POST。
+
+本轮根因修复属于验收工具：响应阶段 Fetch 捕获在原字节交给扩展前持久保存，再原样继续；Network
+晚到 loadingFailed 只在原响应确实不可读时失败。专用 runner 另在未保存双 PENDING 数据库快照时
+拒绝审核。24项捕获器/独占CDP回归及定向 ESLint 通过，免费旧 assignment replay 先证明捕获可用，
+随后才消费本轮费用授权。工具源码改动不混入已签名/部署的 dca04318 候选。
+
+正式 QA04 由 dca04318 干净检出的原官方入口通过，SHA256
+`93dadd464ff315a13279bad59b630493043e314cf9192069a70a8eff44005ac2`。生成投影复用签名包内原
+adapter 编译真实 GET；审核记录保留原始 HTTP，并明确将 final database 派生的 review projection
+标为 `FINAL_DATABASE_READBACK_PROJECTION`，未冒称为审核当时的 GET。图片实查：灰色连帽外套主体
+保留、无补白、手持纸杯移除，背景分别棚拍/暖色室内；内搭来源字样场景图保留、主图去除，只批准
+隔离草稿，不宣称所有商品创作质量完全一致。
+
+双区部署备份原件过期先被拒绝；按现有部署备份/临时恢复流程刷新后，两区 FULL VPS 均 PASS、
+0 failure/1既有远端备份 warning，未放宽时限。REL04、website approval、CAS 均成功；匿名四包
+实际完整下载、版本/commit/批准/签名/字节 SHA 与最终 publication verifier 通过。系统虚拟网卡 DNS
+返回非公网地址的失败保留，实际探针改用 Google/Cloudflare HTTPS DNS 一致的公网地址固定 transport，
+TLS、同源、无凭据、拒绝跳转及30秒上限不变。COM原两店/四活动设备六操作与商品分析保持，CN dark保持。
+
+COM/CN approval SHA分别为 `8ec40242e7b465ab1c30b0830c44ab19d54d60fb4b35e57eab4f74d70f768fed`、
+`824b9a4dc21da187428452138501b0fc59b7bc7889e994849b3989e67cac6aa0`；分发回执 SHA分别为
+`03756d0ff0a6f72c61629ea59660723c394a03803e256a9135aa20fadbe46249`、
+`420a6157961ee2368061a78d8a6913d6bb0284dca6667b6e94afed56c855c530`。原件只存私有
+`C:/Users/550W/AppData/Local/SS-ERP/private/release-dca04318-suite-20261103-r11`。专用9482页签已关闭，
+未处理其他浏览器；两区各2个本轮限时account session已撤销并读回为不存在，远端3份及本机2份token
+文件分别清理。现有合法设备未重新配对或撤销；两区最终latest为483、ready正常。
+
+## 2026-11-03 dca04318 fresh suite 业务完成、正式发布证据仍未闭合
+
+在独占 9482 Chrome 上，当前 dca04318 运行版本完成一次新的 DOTH 两图 hosted suite：
+START、CONTINUE、两次 `REVIEW_SLOT` 均取得成功原始 HTTP 回执，2/2 图片生成并审核通过。
+草稿随后从 revision/version 1/1 变为 2/2，数据库只读读回确认两条 assignment、两张已审核图片、
+该套图费用 CNY0.20、Ozon 写入为零；同一 assignment 请求体的幂等重放返回 `replayed:true`。
+
+本轮正式 QA04 仍不能生成，且没有执行 canary、website approval、CAS、distribution probe 或官网切换：
+首次 assignment 的网络响应在 CDP `Network.loadingFailed` 时丢失，不能用后续幂等重放替代首次
+`replayed:false` 回执；同时没有在审核前取得同一 suite 的数据库 PENDING 快照，不能把审核后状态倒填为
+审核前证据。START/CONTINUE、审核、assignment 请求、失败事件、最终只读投影和幂等回执均保存在
+`C:/Users/550W/AppData/Local/SS-ERP/private/release-dca04318-suite-20261103-r4`，不进入 Git。
+本轮 Provider 业务结果为已批准的一次 CNY0.20 套图，Ozon 写入为 0；不重复发起未知请求。
+
 ## 2026-10-31 工作台确认区与连续流程收口（1.0.482 开发包）
 
 当前工作台的正常采集、商品分析、视觉 JSON、俄文文案、托管套图、图片翻译、BYOK 单图、SKU 复制/删除和视频保存不再调用浏览器原生 `confirm()`。新增 `inline-confirmation.js` 将确认内容放在当前操作区，显示费用、数量、目标和不会自动发布的说明；取消、关闭、重复请求或草稿/SKU/选图/模型/报价变化均安全结束或使旧确认失效，不会发起新的 ERP/Provider/Ozon 写入。服务端权限、计费、审核、assignment、幂等和草稿读回 owner 未改变。

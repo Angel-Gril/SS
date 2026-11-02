@@ -5,8 +5,10 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import {
   assertExclusiveTargetOwnership,
+  attachSuiteMutationFetchCapture,
   attachSuiteMutationNetworkCapture,
 } from './qa04-suite-transport-capture.mjs';
+import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
@@ -205,6 +207,17 @@ async function main(args = process.argv.slice(2)) {
     throw new Error(`exclusive extension target attach incomplete: ${missing.join(',')}; diagnostics=${JSON.stringify(targetDiagnostics)}`);
   }
   const capture = attachSuiteMutationNetworkCapture(cdp, { sessions });
+  let persistedResponses = 0;
+  attachSuiteMutationFetchCapture(cdp, { capture, sessions, onCaptured(pair) {
+    const filename = `${options.output}.transport-${++persistedResponses}.json`;
+    writeNewArtifactDurably(filename, JSON.stringify(pair, null, 2) + String.fromCharCode(10), { mode: 0o600 });
+  } });
+  for (const sessionId of sessions) await cdp.send('Fetch.enable', { patterns: [
+    'https://ss-erp.com/api/extension-device/media-workflows/execute',
+    'https://ss-erp.cn/api/extension-device/media-workflows/execute',
+    'https://ss-erp.com/api/extension-device/source-workbench/ai-image-suite/listing-assignments',
+    'https://ss-erp.cn/api/extension-device/source-workbench/ai-image-suite/listing-assignments',
+  ].map(urlPattern => ({ urlPattern, requestStage: 'Response' })) }, sessionId);
   const requiresLifecycle = options.minimumReviews > 0 || options.minimumAssignments > 0;
   const missingLifecycle = snapshot => requiresLifecycle ? ['START', 'CONTINUE'].filter(action =>
     !snapshot.responses.some(pair => pair.request.kind === 'suite' && pair.request.body?.command?.action === action

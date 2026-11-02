@@ -122,6 +122,7 @@ export function createSuiteMutationCapture() {
     recordFailure(requestId, error) {
       const request = requests.get(String(requestId));
       if (!request) return;
+      if (completed.has(request.requestId)) return;
       errors.push({ kind: request.kind, requestId: request.requestId, error });
     },
     requireCompleted(kind) {
@@ -197,6 +198,9 @@ export function attachSuiteMutationNetworkCapture(cdp, options = {}) {
     const pending = pendingResponses.get(key);
     if (!pending) return;
     pendingResponses.delete(key);
+    await readPendingBody(pending);
+  };
+  async function readPendingBody(pending) {
     try {
       const raw = await cdp.send('Network.getResponseBody', {
         requestId: pending.requestId,
@@ -213,14 +217,21 @@ export function attachSuiteMutationNetworkCapture(cdp, options = {}) {
         ['response body is not JSON', 'suite mutation response body exceeds capture limit'].includes(message)
           ? message : 'response body unavailable');
     }
-  };
+  }
   const onFailed = (event, sessionId) => {
     if (!isSessionAllowed(sessionId)) return;
     const key = requestKey(sessionId, event?.requestId);
     if (!capture.requests.has(key)) return;
+    const pending = pendingResponses.get(key);
+    if (!pending) {
+      capture.recordFailure(key, 'network loading failed');
+      return;
+    }
     pendingResponses.delete(key);
-    rejectedRequests.add(key);
-    capture.recordFailure(key, 'network loading failed');
+    // Chromium can emit loadingFailed after responseReceived for a committed
+    // response. Give Network.getResponseBody one last chance before marking
+    // the mutation unknown; genuine pre-response failures still fail closed.
+    void readPendingBody(pending);
   };
   cdp.on('Network.requestWillBeSent', onRequest);
   cdp.on('Network.responseReceived', onResponse);
@@ -234,3 +245,39 @@ export const suiteMutationPaths = Object.freeze({
   assignment: ASSIGNMENT_PATH,
   commandGrant: COMMAND_GRANT_PATH,
 });
+
+// Response-only interception: never changes request bytes, status or headers.
+// Persist before continuing so immediate refresh/worker idle cannot lose the
+// first mutation receipt. Only explicitly owned sessions may supply evidence.
+export function attachSuiteMutationFetchCapture(cdp, { capture, sessions, onCaptured } = {}) {
+  if (!capture || !(sessions instanceof Set)) throw new Error('owned capture is required');
+  const onPaused = async (event, sessionId) => {
+    if (!sessionId || !sessions.has(sessionId)) return;
+    const input = { ...event.request, requestId: `${sessionId}:${event.networkId || event.requestId}` };
+    const kind = classifySuiteMutationRequest(input);
+    let persisting = false;
+    try {
+      if (!kind) return;
+      const request = capture.requests.get(input.requestId) || capture.recordRequest(input);
+      if (request.url !== mutationUrl(input.url)) throw new Error('request origin changed');
+      if (event.responseStatusCode >= 300 && event.responseStatusCode < 400 || event.responseErrorReason
+        || !Number.isInteger(event.responseStatusCode)) throw new Error('untrusted response');
+      const raw = await cdp.send('Fetch.getResponseBody', { requestId: event.requestId }, sessionId);
+      if (typeof raw.body !== 'string' || raw.body.length > MAX_CAPTURE_BYTES * 2) throw new Error('body limit');
+      const bytes = raw.base64Encoded ? Buffer.from(raw.body, 'base64') : Buffer.from(raw.body);
+      if (bytes.length > MAX_CAPTURE_BYTES) throw new Error('body limit');
+      const body = parseJson(bytes.toString('utf8'));
+      if (body === null) throw new Error('invalid JSON');
+      const pair = capture.recordResponse({ requestId: request.requestId, status: event.responseStatusCode,
+        url: request.url, body });
+      if (pair && onCaptured) { persisting = true; await onCaptured(pair); persisting = false; }
+    } catch {
+      if (persisting) capture.errors.push({ kind, requestId: input.requestId, error: 'paused response persistence failed' });
+      else capture.recordFailure(input.requestId, 'paused response body unavailable');
+    } finally {
+      await cdp.send('Fetch.continueRequest', { requestId: event.requestId }, sessionId);
+    }
+  };
+  cdp.on('Fetch.requestPaused', onPaused);
+  return capture;
+}
