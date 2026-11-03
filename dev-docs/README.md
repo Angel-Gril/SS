@@ -1,3 +1,7 @@
+## 2026-11-03 图片应用状态修复已双区部署
+
+`f983c6d3 / 1.0.485` 已提交推送、区域签名并部署 COM/CN；完整 preflight/build、双区 FULL VPS 与三服务/ready 通过。COM 原真实草稿两张图片只读返回 APPROVED/APPLIED，无新增生图费用或 Ozon 写入。CN 因构建峰值磁盘耗尽引起 Redis 快照写保护，首次部署自动回滚；资源恢复后经原不可变版本切换入口恢复新版，Redis 保护保持开启。官网公开仍483；准确失败、恢复、磁盘余量和安装包边界见[直接适配记录](donor-workbench/direct-adaptation.md)。
+
 ## 2026-11-03 1.0.483 双区官网公开发布完成
 
 `dca04318 / 1.0.483` 已通过本轮新两图、审核前PENDING数据库/预览、双审核、首次assignment和同请求幂等原始HTTP、最终数据库/队列读回及正式QA04；CNY0.20/Ozon0。双区部署备份恢复刷新、FULL VPS、REL04、website approval/CAS、匿名四包实际下载及最终验签均通过，官网现公开483；COM现有试点/分析及CN dark保持。本轮限时account凭据已撤销清理，捕获器修复仅属验收工具；原件、网络失败和质量边界见[直接适配记录](donor-workbench/direct-adaptation.md)。

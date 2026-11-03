@@ -1,6 +1,44 @@
 # 旧扩展直接适配 SS ERP
 
-## 2026-11-03 应用后结果状态冲突本地修复，尚未发布
+## 2026-11-03 图片应用状态修复已提交、签名并双区部署
+
+用户明确要求先提交、推送和部署，后续问题再修。业务修复提交 `56c7003c`、历史 capture fixture
+修复提交 `f983c6d31fe812ed15c00173ee6641ff40060dda` 均已推送 `feat/ai-media-prompt-registry`。
+源码 manifest 为484；标准打包器要求候选严格高于源码，最终正式签名和部署版本为 **1.0.485**。
+两区签名候选各自绑定原区域域名和同一提交，服务器验签通过；未修改正式QA04或历史复用白名单。
+
+最终干净提交的 `pnpm preflight --build` 通过：服务端499文件/7712项通过，53文件/417项按原合同
+跳过，server/Web类型、生产构建和全部选择的扩展/部署合同通过。另有本节下方的97项后端、54项
+扩展/桥接、6项真实本机PostgreSQL和真实隔离Chromium定向证据；签名Cloud包MV3安装通过。
+签名包安装证据使用合成来源页，不冒称真实1688 canary或新提交正式QA04。
+
+COM标准部署完成，API/Worker/Web进程cwd及 `/ready` 均指向最终提交。生产强制只读连接复核
+483真实套图的原草稿r2/v2：两条child均为APPROVED/APPLIED、各一个可预览输出；没有重新
+创建/生成/审核/应用。COM FULL VPS为0 failure/1既有远端备份未配置warning。
+
+CN首次标准部署在新版Worker启动检查失败并自动回滚483，失败原件保留。Redis日志确认构建封存
+期间磁盘耗尽，RDB报 `No space left on device`，写保护随后导致Worker退出；临时构建目录释放后，
+Redis连续快照成功，旧版三服务/ready恢复。未关闭 `stop-writes-on-bgsave-error`、清空Redis或业务
+数据。Inter字体曾下载超时，构建重试自行恢复；临时解析脚本在检测到构建已结束时拒绝执行，
+未改 `/etc/hosts`。恢复前重新检查区域签名、冻结目录、三服务unit与旧版相同、CN dark、磁盘及
+Redis；再原样执行仓库 `rollback.sh` 的远端版本切换入口启用已有不可变485，不重建/覆盖release。
+CN三服务cwd/ready和FULL VPS均通过，0 failure/1既有远端备份warning。最终Redis持久化为ok，
+写保护仍yes，CN磁盘可用约1.60GB；后续完整构建须先处理峰值磁盘余量，不能假定本轮恢复已解决
+构建空间需求。此次停机、自动回滚与恢复均属于部署副作用，不计作首次部署成功。
+
+双区canonical VPS原件SHA256分别为
+`3bf71e8dacd48be0b215f4620c554c97686c5f487459ce0489a2d51dc996a93c`、
+`45c89dc0e5f6e26498083eaa6415b6d1a9067f8298834e18b78247a0c2cdf9d5`；签名、完整门禁、
+失败与恢复、生产APPLIED读回原件仅在私有 `release-f983c6d3-result-readback` 目录。
+已签名COM Cloud/Local安装包交付 `C:/Users/550W/Downloads/SS-ERP-1.0.485`。
+
+本轮主动Provider/Ozon写入和新增生图费用均0；生产原自动同步继续运行，已有店铺API受限/密钥失效
+不冒称同步成功。COM现有试点/价格/分析及CN dark策略保持。两区官网latest实读仍为
+`dca04318 / 1.0.483`：本轮未生成485正式QA04、REL04、website approval，未执行官网CAS或匿名
+distribution probe，不能把服务器已部署和本机签名包交付称作官网已公开485。CHANGELOG修复继续
+保留Unreleased；后续仅记录部署结果的文档提交无需重复部署。
+
+## 2026-11-03 应用后结果状态冲突本地修复历史
 
 用户反馈结果预览/审核/应用异常后重新审查483真实原件，发现后端assignment虽成功，
 `assigned-ui.json`仍同时显示“待应用”“尚未开始生图”“正在准备图片任务”；因此483的正式发布
