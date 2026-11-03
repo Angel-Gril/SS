@@ -1,5 +1,24 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-11-03 CN 历史构建与备份清理完成
+
+用户在部署后明确授权清理CN缓存、旧备份，并进一步确认历史发布与失败构建基本均可删除。
+本轮仅维护CN磁盘；COM、R2、业务数据库和图片未作清理。按实读current与官网pointer，保留
+`f983c6d3 / 1.0.485` 当前不可变release和 `dca04318 / 1.0.483` 官网/回滚release。
+
+持有原部署flock后逐项校验规范父目录、inode/元数据及运行进程cwd，删除19个无活动消费者的旧
+release、隔离/失败构建目录。备份保留当前及官网release各一份、最新runtime一份，共3份，原
+sidecar、latest状态及两份当前认证保持原字节。211份已退役认证的小文件原件按SHA核对后移入各
+备份目录的私有 `attestation-history/user-authorized-cleanup-*`；再由原retention owner确认没有
+活动引用，删除187份旧gzip及187份sidecar。已删除备份不再提供历史恢复点；认证归档只是保留
+审计原件，不代表其旧gzip仍可恢复。另执行系统包缓存清理；没有改自动保留天数或部署门禁代码。
+
+实际释放16,179,052,544 bytes；可用空间由1,601,929,216增至17,780,957,184 bytes，`df`使用率
+96%→56%。保留的3份gzip均通过SHA256/sidecar和 `gzip -t`；退役认证归档摘要逐份一致。
+三服务进程cwd及 `/ready` 保持485，官网latest仍483；Redis主动BGSAVE成功且
+`stop-writes-on-bgsave-error=yes`。清理不需要重启/部署，没有主动Provider/Ozon写入或新费用。
+操作前清单、受保护引用、完整删除记录及核验原件仅存私有 `cn-space-cleanup-20261103`。
+
 ## 2026-11-03 图片应用状态修复已提交、签名并双区部署
 
 用户明确要求先提交、推送和部署，后续问题再修。业务修复提交 `56c7003c`、历史 capture fixture
