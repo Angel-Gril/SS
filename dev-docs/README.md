@@ -1,3 +1,7 @@
+## 2026-11-03 1.0.485 双区官网公开发布完成
+
+COM/CN 官网现公开 `f983c6d3 / 1.0.485`。本次获准的新DOTH两图、审核前UI/GET/数据库PENDING、双审核、首次assignment及同请求replay六组原始HTTP、最终数据库/队列和正式QA04均通过，实际CNY0.20/Ozon0；工作台重开仍正确显示已应用。双区REL04、approval/CAS、匿名四包实际下载与最终验签通过，临时account凭据已撤销。准确原件、环境失败及免费读回时序修正见[直接适配记录](donor-workbench/direct-adaptation.md)。
+
 ## 2026-11-03 图片应用状态修复已双区部署
 
 `f983c6d3 / 1.0.485` 已提交推送、区域签名并部署 COM/CN；完整 preflight/build、双区 FULL VPS 与三服务/ready 通过。COM 原真实草稿两张图片只读返回 APPROVED/APPLIED，无新增生图费用或 Ozon 写入。CN 因构建峰值磁盘耗尽引起 Redis 快照写保护，首次部署自动回滚；资源恢复后经原不可变版本切换入口恢复新版。后续获准清理19个旧/失败发布目录、187份旧备份及状态文件与系统包缓存，释放16.2GB，可用17.8GB/使用率56%，保留当前/官网回滚release及3份有效备份，服务与Redis保存核验通过。官网公开仍483；准确失败、恢复、清理及安装包边界见[直接适配记录](donor-workbench/direct-adaptation.md)。
