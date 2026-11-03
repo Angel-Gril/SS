@@ -139,7 +139,10 @@ function reviewedCaptureFixture(t) {
   const f = fixture(t), repository = fileURLToPath(new URL('../', import.meta.url));
   const paths = ['scripts/qa04-suite-live-response-capture.mjs', 'scripts/qa04-suite-live-response-capture.test.mjs',
     'scripts/qa04-suite-transport-capture.mjs', 'scripts/qa04-suite-transport-capture.test.mjs'];
-  for (const filename of paths) f.write(filename, readFileSync(path.join(repository, filename), 'utf8').replace(/\r\n/gu, '\n'));
+  // The allowlist approves one historical introduction, not whatever a future
+  // checkout happens to contain. Later capture repairs must still be rejected.
+  for (const filename of paths) f.write(filename, execFileSync('git',
+    ['show', 'dca0431857add37088d1ca3a92984cd3adb44522:' + filename], { cwd: repository }));
   f.git('add', '--', ...paths); f.git('commit', '-qm', 'reviewed read-only transport capture');
   return { ...f, paths, target: f.git('rev-parse', 'HEAD') };
 }
