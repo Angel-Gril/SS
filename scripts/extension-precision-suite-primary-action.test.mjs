@@ -23,3 +23,10 @@ test('no draft and busy workflows cannot trigger images',()=>{
   assert.equal(resolveSuitePrimaryAction({...ready,draftId:''}).disabled,true);
   assert.equal(resolveSuitePrimaryAction({...ready,busy:true}).disabled,true);
 });
+test('current applied outputs remain viewable after the draft revision retires its plan',()=>{
+  const history={state:'ready',listingWorkflowId:'draft-1',items:[{status:'SUCCEEDED',selectedOutputAssetId:'output',outputs:[{id:'output'}],application:{state:'APPLIED',targetId:'draft-1'}}]};
+  const action=resolveSuitePrimaryAction({...ready,history,lock:{status:'frozen'}});
+  assert.equal(action.action,'REVIEW'); assert.match(action.label,/已应用/u);
+  assert.equal(resolveSuitePrimaryAction({...ready,history:{...history,listingWorkflowId:'other'},lock:{status:'frozen'}}).action,'READ');
+  assert.equal(resolveSuitePrimaryAction({...ready,history,billing:{...ready.billing,quote:{previewHash:'b'.repeat(64)}}}).action,'START','prior applied images cannot hide a current frozen quote');
+});

@@ -391,8 +391,9 @@ function renderImageMode() {
   document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.disabled = translation.state().busy; });
 }
 function currentImageAction() {
+  const context = currentMediaContext();
   const input = { draftId: listing()?.id, busy: projection.busy || mediaMutationBusy || planSubmissionBusy,
-    billing: projection.billing, lock: promptLockState() };
+    billing: projection.billing, history: context.history, lock: promptLockState() };
   return imageMode === 'ai-main-translate' ? resolveCombinedImageAction({ ...input,
     availability: translationAvailability, translation: translation.state() }) : resolveSuitePrimaryAction(input);
 }
@@ -1028,7 +1029,7 @@ function currentMediaContext() {
     && projection.history.context?.shopId === draft.shopId
     && projection.history.context.revision === draft.revision
     && projection.history.context.draftVersion === draft.draftVersion ? projection.history : null;
-  return { draft, billing, history };
+  return { draft, billing, history, billingState: projection.billing.state };
 }
 const imageProcessContext = createImageProcessContext();
 function currentImageProcessContext(context = currentMediaContext()) {
@@ -1286,7 +1287,7 @@ function renderMedia() {
   const displayContext = currentImageProcessContext(context).presentation;
   const billing = displayContext.billing;
   const mediaBusy = projection.busy || mediaMutationBusy;
-  suiteState.textContent = describeSuite(billing);
+  suiteState.textContent = describeSuite(billing, displayContext.history);
   element('precision-assign').disabled = mediaBusy || !assignableSuiteSlots(context).length;
   const visibleHistory = (displayContext.history?.items || []).filter(item => workspaceState.all || !item.contextSkuKey || item.contextSkuKey === selectedSkuKey);
   const processView = buildImageProcess(displayContext);
@@ -1449,9 +1450,12 @@ async function refreshMediaState() {
   const identity = `${draft.id}:${draft.revision}:${draft.draftVersion}`;
   if (mediaReadback?.identity === identity) return mediaReadback.promise;
   const promise = (async () => {
-    await command('LOAD_BILLING', { listingWorkflowId: draft.id });
+    let billingError;
+    try { await command('LOAD_BILLING', { listingWorkflowId: draft.id }); }
+    catch (error) { billingError = error; }
     if (listing()?.id !== draft.id) return;
     await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: draft.id });
+    if (billingError) throw billingError;
   })();
   mediaReadback = { identity, promise };
   try { await promise; } finally { if (mediaReadback?.promise === promise) mediaReadback = null; }
@@ -1686,7 +1690,8 @@ trusted('precision-assign', () => runMediaMutation(async () => {
 }));
 async function startImageWorkflow() {
   if (!imageWorkspace.state().open) {
-    imageWorkspace.open(selectedSkuKey, { tab: imageMode === 'ai-suite' && projection.billing.suite ? 'results' : 'sources', all: true });
+    imageWorkspace.open(selectedSkuKey, { tab: imageMode === 'ai-suite'
+      && (projection.billing.suite || currentImageAction().action === 'REVIEW') ? 'results' : 'sources', all: true });
     return;
   }
   if (imageMode === 'translate') { await startTranslation(); return; }

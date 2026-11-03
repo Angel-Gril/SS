@@ -458,6 +458,11 @@ function parentHtml(watermarkJpeg, sourceMediaBridge = '') {
       item.application={id:'application-fixture',state:'APPLIED',mode:'append',contextSkuKey:'sku-1',contextSlotKey:slot.slotKey,appliedAt:'2026-09-30T08:00:01Z',rolledBackAt:null};
       slot.commands={};slot.allowedActions=[];
       assignedMedia=true; workbench.status.listing.items[0].mediaAssignmentCount=2;
+      if(${process.argv.includes('--assigned-result-flow')}){
+        item.application.targetId=workbench.status.listing.items[0].id;
+        window.__precisionAdvanceDraft();
+        billing.projection.plan=null;billing.projection.suite=null;
+      }
     }
     if(command.type==='PUBLISH'&&command.action==='PREVIEW'){
       if(!readyForPublish)throw new Error('fixture is not ready');
@@ -1924,6 +1929,31 @@ async function run() {
     assert.equal(await workspace('document.getElementById("precision-assign").disabled'), true, 'assigned output no longer offers a second application');
     await workspace('document.querySelector("[data-candidate-output=suite-output-1]").scrollIntoView({block:"center"})');
     await screenshot('assigned-suite-candidate');
+    if(process.argv.includes('--assigned-result-flow')){
+      await until(()=>workspace('document.getElementById("precision-image-process").dataset.suiteStatus==="APPLIED"'),'applied process survives the legitimate draft revision change');
+      assert.match(await workspace('document.getElementById("precision-image-process").innerText'),/已应用/u);
+      assert.doesNotMatch(await workspace('document.getElementById("precision-image-process").innerText'),/尚未开始|尚未应用/u);
+      await until(()=>workspace('document.getElementById("image-workflow-start-btn").textContent==="查看已应用图片"'),'applied result is the primary action');
+      const mutationCount=await evaluate('window.__precisionCommands.filter(c=>["EXECUTE_HOSTED_SUITE","ASSIGN_HOSTED_SUITE"].includes(c.type)).length');
+      await evaluate('window.__precisionFailNextMediaRead=true');
+      await click('#precision-image-refresh');
+      await until(()=>workspace('document.getElementById("status-text").textContent.includes("暂时不可用")'),'read failure shown without relabeling applied results');
+      assert.equal(await workspace('document.getElementById("precision-image-process").dataset.suiteStatus'),'APPLIED');
+      const readyCount=await evaluate('window.__precisionCommands.filter(c=>c.type==="READY").length');
+      await evaluate('document.getElementById("workspace").src=document.getElementById("workspace").src');
+      await until(async()=>await evaluate('window.__precisionCommands.filter(c=>c.type==="READY").length')>readyCount,'reloaded iframe handshake');
+      await until(()=>workspace('document.getElementById("image-workflow-start-btn").textContent==="查看已应用图片"'),'iframe reload restores current applied results');
+      await click('#image-workflow-start-btn');
+      assert.equal(await workspace('document.getElementById("precision-image-result-panel").hidden'),false,'view applied images opens the results directly');
+      await until(()=>workspace('document.querySelector("[data-candidate-output=suite-output-1]")?.textContent.includes("已应用到草稿")'),'assigned image still visible after reload');
+      await click('[data-candidate-output=suite-output-1] img');
+      await until(()=>workspace('document.getElementById("preview-modal").hidden===false'),'assigned preview opens after reload');
+      await screenshot('assigned-result-restored-preview');
+      assert.equal(await evaluate('window.__precisionCommands.filter(c=>["EXECUTE_HOSTED_SUITE","ASSIGN_HOSTED_SUITE"].includes(c.type)).length'),mutationCount,'view/reload/read failure sends no new generation, review or assignment');
+      assert.deepEqual(summary.pageErrors,[]);assert.deepEqual(summary.blockedRequests,[]);
+      summary.ok=true;summary.appliedResult={draftRevisionAdvanced:true,persistedApplication:true,readFailureKeepsResults:true,reloadRestoresPreview:true,noExtraMutations:true};
+      await writeFile(path.join(artifacts,'summary.json'),JSON.stringify(summary,null,2));return;
+    }
     await click('#store-switch-btn');
     await workspace('document.getElementById("erp-shop-select").value="other-fixture"');
     await click('#shop-confirm-btn');

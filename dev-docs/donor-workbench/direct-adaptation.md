@@ -1,5 +1,39 @@
 # 旧扩展直接适配 SS ERP
 
+## 2026-11-03 应用后结果状态冲突本地修复，尚未发布
+
+用户反馈结果预览/审核/应用异常后重新审查483真实原件，发现后端assignment虽成功，
+`assigned-ui.json`仍同时显示“待应用”“尚未开始生图”“正在准备图片任务”；因此483的正式发布
+验收不能视为同窗结果体验无缺陷。原schema5输入明确使用最终数据库派生的审核投影，未证明当时
+即时刷新一致。生产journal只读确认存在 `Hosted mode context is stale`：合法应用推进草稿版本后，
+旧套图绑定不再具有操作权威；不能为看图放宽旧计划的权限。
+
+唯一应用状态读回owner `extension-source-workbench.ts` 原只读取旧
+`listingDraftApplicationMutations`，漏掉 `extensionHostedListingAssignments`。本地已按当前
+owner/shop/draft/snapshot、child/job/选用output查询独立assignment，并逐条核对其仍存在于当前
+草稿payload；删除、换店、换草稿/快照或旧output均不标“已应用”。只扩展原application投影的
+数据来源，不修改schema、写入、计费、幂等、审核/发布权限或旧计划版本校验。
+
+工作台状态owner `sku-image-workspace.js` 现在区分正在读取、读取失败、已审核待应用与实际已应用；
+旧计划不可操作时仍展开当前草稿的已应用结果，不把第二张藏入历史。“查看已应用图片”直接进入结果
+页；重新打开/iframe重载仍可预览。`precision-workbench.js`在billing读取失败后仍读取当前草稿的
+媒体历史，保留失败提示，不以失败阻断已应用结果读回，也不把历史应用覆盖当前新报价。
+
+T2先RED后GREEN：后端15项包含同草稿正例及移除/换output/shop/draft/snapshot拒绝；相关后端5文件
+共97项通过，扩展/桥接54项通过。真实本机PostgreSQL完整迁移/托管assignment6项通过，新增正例
+使用真正count规划/生图transport fixture/审核/事务assignment/replay，再调用媒体history owner确认
+两条APPLIED，0 skipped，隔离schema清理。server typecheck、定向ESLint及Cloud/Local构建/verifier
+634/630通过。隔离真实Chromium `--assigned-result-flow`已验证应用推进版本、读失败保留结果、
+iframe重载及直接结果页预览，额外mutation0；原件为Windows Temp
+`ss-erp-precision-ui-evidence-qlqIS4`。浏览器回归曾因旧iframe handshake与来源tab默认行为失败，
+最终修复并通过，未将失败计PASS。另有只读生产journal探测，无Provider/Ozon请求、费用或生产写入。
+
+本轮尚未提交、推送、签名或部署；线上与官网仍483，不能声称用户安装包已包含本地修复。
+
+用户随后明确授权本轮提交、推送及双区部署。修复候选冻结为1.0.484，沿用既有签名、部署备份恢复、
+同commit校验和双区服务验证；不增加付费请求、修改准入开关或复用483业务原件冒充484正式QA04。
+部署结果以接续真实回执为准，尚未执行的官网门禁不得写作已公开。
+
 ## 2026-11-03 1.0.483 双区官网公开发布完成
 
 COM/CN 应用与官网公开候选均为 `dca0431857add37088d1ca3a92984cd3adb44522 / 1.0.483`。

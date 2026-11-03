@@ -48,6 +48,7 @@ import { PrismaAiPromptTemplateStore } from '../services/ai-prompt-template-pris
 import { executeAiImageSuitePaidProvider } from '../services/ai-image-suite-paid-execution.js';
 import { prepareAiImageSuitePaidProviderExecution } from '../services/ai-image-suite-paid-provider.js';
 import { createDonorGptImage2EditProvider, type FetchLike } from '../services/ai-image-providers.js';
+import { createExtensionSourceWorkbenchService } from '../services/extension-source-workbench.js';
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
@@ -1004,6 +1005,15 @@ describePostgres('hosted suite listing-draft assignment PostgreSQL atomicity', (
     await expect(service.assign(fixture.input)).resolves.toMatchObject({ replayed: true });
     expect(await persistedState(client, fixture)).toEqual(after);
     expect(await client.aiCostSettlement.findMany({ where: { ownerUserId: fixture.ownerUserId }, orderBy: { id: 'asc' } })).toEqual(charges);
+    const history = await createExtensionSourceWorkbenchService({ client,
+      loadAllowedPreviewOrigins: async () => ['https://count-storage.example'],
+    }).loadMediaHistory({ ownerUserId: fixture.ownerUserId, allowedShopIds: [fixture.input.shopId],
+      shopId: fixture.input.shopId, listingWorkflowId: fixture.listingWorkflowId,
+      supplyGoodsId: authority!.draft.supplyGoodsId, snapshotId: fixture.input.sourceCaptureSnapshotId,
+      revision: 2, draftVersion: 2 });
+    expect(history.items).toHaveLength(2);
+    expect(history.items.every(item => item.application?.state === 'APPLIED'
+      && item.application.targetId === fixture.listingWorkflowId)).toBe(true);
   }, 30_000);
 
   it('commits two slots once through the deferred draft fence and replays the exact batch', async () => {

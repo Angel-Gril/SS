@@ -1,12 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildSkuImageRows, buildImageProcess, partitionImageTasks } from '../extensions/ss-erp/pages/donor/sku-image-workspace.js';
+import { buildSkuImageRows, buildImageProcess, partitionImageTasks, describeSuite } from '../extensions/ss-erp/pages/donor/sku-image-workspace.js';
 import { createImageProcessPoller, createImageProcessContext } from '../extensions/ss-erp/pages/donor/image-process-poller.js';
 
 const task = (id, status = 'SUCCEEDED') => ({ id, contextSkuKey: 'sku', contextSlotKey: 'same-slot', status, reviewStatus: 'PENDING', outputs: status === 'SUCCEEDED' ? [{ id: `${id}-output`, url: `https://images.example/${id}.png` }] : [] });
 const billing = status => ({ quote: { previewHash: 'a'.repeat(64), itemCount: 2, currency: 'CNY', maximumCostMinor: 20 },
   suite: { status, slots: [{ slotKey: 'hero', goal: 'sku_hero', status: 'SUCCEEDED', media: { workflowId: 'current', outputAssetId: 'current-output', reviewStatus: 'PENDING' } },
     { slotKey: 'scene', goal: 'scene', status: status === 'SUCCEEDED' ? 'SUCCEEDED' : status === 'PARTIAL_FAILURE' ? 'FAILED' : 'RUNNING' }] } });
+
+test('current draft assignments remain expanded after the frozen plan is no longer actionable', () => {
+  const items = [task('hero'), task('scene'), task('old')];
+  for (const item of items.slice(0, 2)) { item.reviewStatus = 'APPROVED'; item.selectedOutputAssetId = item.outputs[0].id; item.application = { state: 'APPLIED', targetId: 'draft' }; }
+  const context = { draft: { id: 'draft' }, billing: { state: 'ready', quote: null, suite: null }, history: { items } };
+  assert.deepEqual(partitionImageTasks(context.history, context.billing).current.map(x => x.id), ['hero', 'scene']);
+  const process = buildImageProcess(context);
+  assert.equal(process.status, 'APPLIED'); assert.equal(process.completed, 2);
+  assert.equal(process.candidates.length, 2); assert.match(process.message, /已应用.*草稿/u);
+  assert.doesNotMatch(process.message, /尚未|待审核/u);
+  assert.match(describeSuite(context.billing, context.history), /已应用/u);
+});
+test('finished suite messaging follows review and persisted application instead of always asking for review', () => {
+  const current = billing('SUCCEEDED'); const items = [task('current')];
+  current.suite.slots[0].media.reviewStatus = 'APPROVED';
+  current.suite.slots[1].media = { workflowId: 'scene', outputAssetId: 'scene-output', reviewStatus: 'APPROVED' };
+  items[0].reviewStatus = 'APPROVED'; items.push({ ...task('scene'), reviewStatus: 'APPROVED' });
+  assert.match(buildImageProcess({ billing: current, history: { items } }).message, /审核通过.*应用/u);
+  items.forEach(x => { x.application = { state: 'APPLIED' }; });
+  assert.match(buildImageProcess({ billing: current, history: { items } }).message, /已应用/u);
+});
+test('a state read failure never claims that the existing task has not started', () => {
+  for (const state of ['idle', 'loading', 'error']) {
+    const process = buildImageProcess({ billing: { state }, history: null });
+    assert.notEqual(process.status, 'NOT_STARTED'); assert.doesNotMatch(process.message, /尚未开始/u);
+  }
+});
 
 test('the current suite owns the visible tasks; matching old slot names do not replace current workflow identity', () => {
   const history = { items: [task('old-1'), task('old-2'), task('current'), task('other-sku')] };

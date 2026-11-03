@@ -10,21 +10,44 @@ const taskLabels = {
 
 export function partitionImageTasks(history, billing) {
   const items = history?.items || [];
-  if (!billing?.suite) return { current: items.slice(0, 1), history: items.slice(1) };
+  if (!billing?.suite) {
+    const applied = items.filter(item => item.application?.state === 'APPLIED');
+    return applied.length ? { current: applied, history: items.filter(item => !applied.includes(item)) }
+      : { current: items.slice(0, 1), history: items.slice(1) };
+  }
   const currentIds = new Set(billing.suite.slots?.map(slot => slot.media?.workflowId).filter(Boolean));
   return { current: items.filter(item => currentIds.has(item.id)), history: items.filter(item => !currentIds.has(item.id)) };
 }
 
-export function buildImageProcess({ billing, history }) {
+export function buildImageProcess({ billing, history, billingState }) {
   const suite = billing?.suite;
-  if (!suite) return { status: 'NOT_STARTED', total: 0, completed: 0, slots: [], candidates: [], message: '尚未开始生图；准备计划并确认费用后，在这里查看当前过程。' };
+  if (!suite) {
+    const applied = (history?.items || []).filter(item => item.application?.state === 'APPLIED');
+    if (applied.length) {
+      const candidates = applied.flatMap(item => (item.outputs || []).filter(output => output.id === item.selectedOutputAssetId));
+      return { status: 'APPLIED', total: applied.length, completed: applied.length,
+        slots: applied.map(item => ({ slotKey: item.contextSlotKey, status: 'APPLIED', label: '草稿图片', text: '已应用到草稿' })),
+        candidates, message: `${applied.length} 张已审核图片已应用到当前草稿。` };
+    }
+    const state = billing?.state || billingState;
+    const status = state === 'error' ? 'READBACK_ERROR' : state !== 'ready' ? 'READING' : 'NOT_STARTED';
+    const message = status === 'READBACK_ERROR' ? '图片状态读取失败，请重新读取；不会重新生图或应用。'
+      : status === 'READING' ? '正在读取当前草稿的图片状态…'
+        : billing?.quote ? '套图计划已准备，请确认费用后生成。' : '当前草稿暂无套图计划。';
+    return { status, total: 0, completed: 0, slots: [], candidates: [], message };
+  }
   const tasks = partitionImageTasks(history, billing).current;
   const slots = (suite.slots || []).map((slot, index) => ({ ...slot, label: ({ sku_hero: 'SKU 主图', hero: '商品主图', scene: '场景图', detail: '详情图' })[slot.goal] || `图片 ${index + 1}`,
-    text: slot.status === 'SUCCEEDED' ? reviewStatus(slot.media?.reviewStatus) : taskLabels[slot.status] || '状态待核对' }));
+    text: tasks.find(item => item.id === slot.media?.workflowId)?.application?.state === 'APPLIED' ? '已应用到草稿'
+      : slot.status === 'SUCCEEDED' ? reviewStatus(slot.media?.reviewStatus) : taskLabels[slot.status] || '状态待核对' }));
   const total = slots.length || billing.quote?.itemCount || 0;
   const completed = slots.filter(slot => slot.status === 'SUCCEEDED').length;
   const failed = slots.filter(slot => ['FAILED', 'CANCELLED', 'UNKNOWN_OUTCOME'].includes(slot.status)).length;
-  const message = suite.status === 'SUCCEEDED' ? `已生成 ${completed}/${total} 张，请预览并审核；尚未应用到草稿。`
+  const appliedCount = slots.filter(slot => slot.text === '已应用到草稿').length;
+  const allApproved = slots.length > 0 && slots.every(slot => slot.media?.reviewStatus === 'APPROVED');
+  const message = suite.status === 'SUCCEEDED' ? appliedCount === total ? `${appliedCount} 张已审核图片已应用到当前草稿。`
+    : allApproved ? `已生成 ${completed}/${total} 张，审核通过；请应用到草稿。`
+      : `已生成 ${completed}/${total} 张，请预览并审核；尚未应用到草稿。`
     : suite.status === 'PARTIAL_FAILURE' ? `部分图片完成：已生成 ${completed}/${total} 张，${failed} 张失败或待核对；请核对原任务。`
       : `${taskLabels[suite.status] || '状态待核对'}${total ? ` · 已生成 ${completed}/${total} 张` : ''}`;
   const candidates = slots.flatMap(slot => {
@@ -48,7 +71,8 @@ export function describeImageTask(item) {
   return { text: '图片已生成 · 待审核', status: 'warning' };
 }
 
-export function describeSuite(billing) {
+export function describeSuite(billing, history) {
+  if ((history?.items || []).some(item => item.application?.state === 'APPLIED')) return buildImageProcess({ billing, history }).message;
   if (!billing) return '读取图片任务后可开始处理';
   if (!billing.quote) return '尚未开始图片处理';
   const quote = billing.quote;

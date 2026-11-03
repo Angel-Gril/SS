@@ -220,6 +220,38 @@ function workflow(id: string, updatedAt: Date, overrides: Record<string, unknown
 }
 
 describe('extension source media history service', () => {
+  it.each(['current', 'removed', 'other-output', 'other-shop', 'other-draft', 'other-snapshot'])('projects hosted assignment only while present in the current draft: %s', async (kind) => {
+    const assignment = { assignmentId: 'hosted-assignment-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      listingWorkflowId: 'listing-1', sourceCaptureSnapshotId: 'snapshot-1', executionMode: 'ERP_HOSTED',
+      assetId: 'asset-valid', jobId: 'job-1', childWorkflowId: 'workflow-1', skuKey: 'sku-1',
+      slotKey: 'product:gallery:1', assignmentScope: 'PRODUCT', createdAt: NOW,
+      ...(kind === 'other-output' ? { assetId: 'asset-old' } : {}),
+      ...(kind === 'other-shop' ? { shopId: 'shop-2' } : {}),
+      ...(kind === 'other-draft' ? { listingWorkflowId: 'listing-2' } : {}),
+      ...(kind === 'other-snapshot' ? { sourceCaptureSnapshotId: 'snapshot-2' } : {}),
+    };
+    const payload = { ownerUserId: 'owner-1', shopId: 'shop-1', id: 'listing-1', sourceCaptureSnapshotId: 'snapshot-1',
+      revision: 11, draftVersion: 7, media: { assignments: kind === 'removed' ? [] : [
+        { scope: 'PRODUCT', source: 'GENERATED', assetId: 'asset-valid', slotKey: 'product:gallery:1' },
+      ] } };
+    const client = {
+      sourceCaptureSnapshot: { findFirst: vi.fn(async () => ({ id: 'snapshot-1', version: 4, capturedAt: NOW, subject: { snapshots: [{ id: 'snapshot-1' }] } })) },
+      sourceListingWorkflow: { findMany: vi.fn(async () => [{ id: 'listing-1', shopId: 'shop-1', currentDraft: { payload } }]) },
+      aiMediaWorkflow: { findMany: vi.fn(async () => [workflow('workflow-1', NOW, {
+        listingDraftApplicationMutations: [], extensionHostedListingAssignments: [assignment],
+      })]) },
+    };
+    const service = createExtensionSourceWorkbenchService({ client: client as never, loadAllowedPreviewOrigins: async () => ['https://cdn.example'] });
+    const result = await service.loadMediaHistory({ ...scope(), allowedShopIds: ['shop-1'] });
+    if (kind === 'current') expect(result.items[0]?.application).toMatchObject({ id: 'hosted-assignment-1', state: 'APPLIED', targetId: 'listing-1', mode: 'append' });
+    else expect(result.items[0]?.application).toBeNull();
+    expect(client.aiMediaWorkflow.findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({
+      extensionHostedListingAssignments: expect.objectContaining({ where: expect.objectContaining({
+        ownerUserId: 'owner-1', listingWorkflowId: 'listing-1', shopId: 'shop-1', sourceCaptureSnapshotId: 'snapshot-1',
+      }), take: 1 }),
+    }) }));
+  });
+
   it('returns bounded durable outputs and application state without sensitive provider data', async () => {
     const rows = [
       workflow('workflow-2', new Date('2026-07-22T02:00:00.000Z')),

@@ -256,6 +256,8 @@ function mediaHistoryItem(
   ownerUserId: string,
   snapshotId: string,
   allowedOrigins: Set<string>,
+  scope: { listingWorkflowId: string; shopId: string; revision: number; draftVersion: number },
+  draftPayload: unknown,
 ) {
   const job = Array.isArray(row.jobs) ? row.jobs[0] : null;
   const jobId = String(job?.id || '');
@@ -282,6 +284,27 @@ function mediaHistoryItem(
     && selected.id === String(row.selectedOutputAssetId || '')
     ? selected.id
     : null;
+  const draft = draftPayload as any;
+  const hosted = array(row.extensionHostedListingAssignments).find((value: any) => (
+    value.ownerUserId === ownerUserId && value.shopId === scope.shopId
+    && value.listingWorkflowId === scope.listingWorkflowId && value.sourceCaptureSnapshotId === snapshotId
+    && value.executionMode === 'ERP_HOSTED' && value.childWorkflowId === row.id && value.jobId === jobId
+    && value.assetId === selectedOutputAssetId && row.reviewStatus === 'APPROVED'
+    && value.slotKey === row.contextSlotKey
+    && draft?.id === scope.listingWorkflowId && draft.ownerUserId === ownerUserId
+    && draft.shopId === scope.shopId && draft.sourceCaptureSnapshotId === snapshotId
+    && draft.revision === scope.revision && draft.draftVersion === scope.draftVersion
+    && array(draft.media?.assignments).some((item: any) => (
+      item.source === 'GENERATED' && item.assetId === value.assetId && item.slotKey === value.slotKey
+      && item.scope === value.assignmentScope
+      && (item.scope === 'PRODUCT' || item.skuKey === value.skuKey)
+    ))
+  )) as any;
+  const hostedApplication = hosted && boundedText(hosted.assignmentId, 200) ? {
+    id: String(hosted.assignmentId), mode: 'append', state: 'APPLIED', targetId: scope.listingWorkflowId,
+    contextSkuKey: hosted.assignmentScope === 'SKU' ? String(hosted.skuKey) : null,
+    contextSlotKey: String(hosted.slotKey), appliedAt: isoDate(hosted.createdAt), rolledBackAt: null,
+  } : null;
   return {
     id: String(row.id),
     operation: String(row.operation),
@@ -292,7 +315,7 @@ function mediaHistoryItem(
     contextSlotKey: row.contextSlotKey == null ? null : String(row.contextSlotKey),
     selectedOutputAssetId,
     outputs,
-    application: mediaHistoryApplication(row),
+    application: hostedApplication || mediaHistoryApplication(row),
     createdAt: isoDate(row.createdAt),
     updatedAt: isoDate(row.updatedAt),
   };
@@ -816,7 +839,7 @@ export function createExtensionSourceWorkbenchService(options: {
           currentDraftVersion: draftVersion,
         },
         take: 2,
-        select: { id: true, shopId: true },
+        select: { id: true, shopId: true, currentDraft: { select: { payload: true } } },
       });
       if (listings.length !== 1 || listings[0]?.id !== listingWorkflowId) {
         throw new ExtensionSourceWorkbenchError(
@@ -895,7 +918,7 @@ export function createExtensionSourceWorkbenchService(options: {
             },
           },
           listingDraftApplicationMutations: {
-            where: { kind: 'APPLY' },
+            where: { kind: 'APPLY', targetId: listingWorkflowId, ownerUserId },
             orderBy: [{ targetSequence: 'desc' }, { id: 'desc' }],
             take: 1,
             select: {
@@ -907,6 +930,14 @@ export function createExtensionSourceWorkbenchService(options: {
               createdAt: true,
               rolledBackBy: { select: { id: true, createdAt: true } },
             },
+          },
+          extensionHostedListingAssignments: {
+            where: { ownerUserId, shopId, listingWorkflowId, sourceCaptureSnapshotId: snapshotId,
+              boundDraftRevision: { lte: revision }, boundDraftVersion: { lte: draftVersion } },
+            take: 1,
+            select: { assignmentId: true, ownerUserId: true, shopId: true, listingWorkflowId: true,
+              sourceCaptureSnapshotId: true, executionMode: true, childWorkflowId: true, jobId: true,
+              assetId: true, slotKey: true, skuKey: true, assignmentScope: true, createdAt: true },
           },
         },
       });
@@ -932,6 +963,8 @@ export function createExtensionSourceWorkbenchService(options: {
           ownerUserId,
           snapshotId,
           allowedOrigins,
+          scope,
+          (listings[0] as any)?.currentDraft?.payload,
         )),
         nextCursor: rows.length > limit && last
           ? encodeExtensionSourceMediaHistoryCursor(scope, {
