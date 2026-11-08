@@ -20,17 +20,48 @@
                         <option value="en" data-i18n="panel_languageEnglish">English</option>
                         <option value="ru" data-i18n="panel_languageRussian">Русский</option>
                     </select> <button id="store-switch-btn"
-                        class="ghost store-switch-btn" type="button" data-i18n="panel_actionSwitchStore">切换店铺</button> <button id="settings-btn" class="ghost" type="button">设置</button> <button
-                        id="category-select-btn" class="ghost" type="button" data-i18n="panel_actionSelectCategory">选择类目</button>
-                    <button id="start-btn" class="primary" type="button" data-i18n="panel_actionStart">开始执行</button></div>
-                <div class="toolbar-actions"> <button
-                        id="process-view-btn" class="ghost process-view-btn"
-                        type="button" data-i18n="panel_actionViewProcess">查看过程</button> <button id="ai-image-process-btn" class="ghost"
-                        type="button" data-i18n="panel_actionAiImageProcess">AI生图过程</button> <button id="ai-translation-process-btn" class="ghost"
-                        type="button" data-i18n="panel_actionAiTranslationProcess">AI翻译过程</button> <button id="confirm-export-btn" class="primary"
-                        type="button" disabled="disabled" data-i18n="panel_actionUploadOzon">上传 Ozon</button> <button id="close-btn"
+                        class="ghost store-switch-btn" type="button" data-i18n="panel_actionSwitchStore">切换店铺</button> <button id="settings-btn" class="ghost" type="button">设置</button>
+                    <!-- 三个过程面板本质是同一份日志流，合并为一个入口；AI 生图/AI 翻译各自的分栏已在 process-modal 内 -->
+                    <button id="process-view-btn" class="ghost process-view-btn"
+                        type="button" data-i18n="panel_actionViewProcess">过程</button>
+                </div>
+                <div class="toolbar-actions"><button id="close-btn"
                         class="ghost" type="button" data-i18n="panel_actionClose">关闭</button></div>
             </div>
+            <!-- 2026-11：上架流程从「工具栏散落按钮」改为「步骤条」。
+                 参考精铺/知了：主流程按钮跟随当前步骤出现，而不是所有动作同时可见。
+                 工具栏此前把「切换店铺/设置」（配置）、「选择类目/开始执行」（流程）、
+                 「查看过程/AI生图过程/AI翻译过程」（同一份日志的三个入口）、
+                 「上传 Ozon」（最后一步）混在同一行，用户无法判断下一步该点哪个。 -->
+            <nav id="precision-stepper" class="precision-stepper" aria-label="上架流程">
+                <button type="button" class="stepper-step" data-step="collect" data-state="current">
+                    <span class="stepper-index">1</span><span class="stepper-label">采集</span>
+                </button>
+                <span class="stepper-arrow" aria-hidden="true">→</span>
+                <button type="button" class="stepper-step" data-step="category" data-state="pending">
+                    <span class="stepper-index">2</span><span class="stepper-label">类目</span>
+                </button>
+                <span class="stepper-arrow" aria-hidden="true">→</span>
+                <button type="button" class="stepper-step" data-step="analysis" data-state="pending">
+                    <span class="stepper-index">3</span><span class="stepper-label">AI 分析</span>
+                </button>
+                <span class="stepper-arrow" aria-hidden="true">→</span>
+                <button type="button" class="stepper-step" data-step="image" data-state="pending">
+                    <span class="stepper-index">4</span><span class="stepper-label">图片</span>
+                </button>
+                <span class="stepper-arrow" aria-hidden="true">→</span>
+                <button type="button" class="stepper-step" data-step="publish" data-state="pending">
+                    <span class="stepper-index">5</span><span class="stepper-label">上架</span>
+                </button>
+                <!-- 隐藏的原按钮：保留 DOM 与 id，使既有 event 绑定与禁用逻辑继续生效 -->
+                <span class="stepper-legacy-anchors" hidden>
+                    <button id="category-select-btn" type="button"></button>
+                    <button id="start-btn" type="button"></button>
+                    <button id="confirm-export-btn" type="button"></button>
+                    <button id="ai-image-process-btn" type="button"></button>
+                    <button id="ai-translation-process-btn" type="button"></button>
+                </span>
+            </nav>
             <div class="content">
                 <div class="content-view editor-view is-active">
                     <div id="product-editor" class="product-editor"></div>

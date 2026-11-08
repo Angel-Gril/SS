@@ -247,3 +247,103 @@
   .settings-foot > button { min-width: 0; }
   .precision-pricing-fields { grid-template-columns: 1fr; }
 }
+
+/* ===================================================================
+   2026-11 步骤条（stepper）
+   -------------------------------------------------------------------
+   背景：工具栏原本把配置项、流程动作、三个过程日志入口、最终上架
+   混在同一行（9 个按钮），用户无法判断下一步该点哪个。
+   参考精铺/知了的做法：主流程以「当前步骤 + 下一步」的形式呈现。
+   这里把 5 个阶段做成可点的步骤条，状态由 precision-workbench.js 同步：
+     data-state="done"    已完成（绿色 + 对勾）
+     data-state="current" 当前步骤（蓝色实心）
+     data-state="blocked" 前置未满足（灰色 + 不可点）
+     data-state="pending" 待开始（灰边）
+   =================================================================== */
+.precision-stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fbfdff, #f5f9ff);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.precision-stepper .stepper-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s, box-shadow .15s;
+}
+
+.precision-stepper .stepper-step:hover:not(:disabled) {
+  border-color: var(--brand-2);
+  color: var(--text);
+}
+
+.precision-stepper .stepper-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e8eef8;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.precision-stepper .stepper-step[data-state="current"] {
+  border-color: var(--brand);
+  background: #eaf2ff;
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: 0 0 0 3px rgba(0, 104, 255, .08);
+}
+
+.precision-stepper .stepper-step[data-state="current"] .stepper-index {
+  background: var(--brand);
+  color: #fff;
+}
+
+.precision-stepper .stepper-step[data-state="done"] {
+  border-color: rgba(17, 138, 87, .35);
+  background: #eefaf4;
+  color: var(--ok);
+}
+
+.precision-stepper .stepper-step[data-state="done"] .stepper-index {
+  background: var(--ok);
+  color: #fff;
+}
+
+.precision-stepper .stepper-step[data-state="blocked"] {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.precision-stepper .stepper-step:disabled {
+  cursor: not-allowed;
+}
+
+.precision-stepper .stepper-arrow {
+  flex: 0 0 auto;
+  color: #c3d0e2;
+  font-size: 12px;
+  user-select: none;
+}
+
+.stepper-legacy-anchors { display: none !important; }

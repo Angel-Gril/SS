@@ -1806,6 +1806,107 @@ async function startTranslation() {
   await command('LOAD_MEDIA_HISTORY', { listingWorkflowId: listing().id });
 }
 trusted('confirm-export-btn', openPublish);
+
+// =====================================================================
+// 2026-11 步骤条（stepper）
+// ---------------------------------------------------------------------
+// 此前工具栏把四个层次混在一行：「切换店铺/设置」（配置）、
+// 「选择类目/开始执行」（流程）、「查看过程/AI生图过程/AI翻译过程」
+// （同一份日志的三个入口）、「上传 Ozon」（最后一步）。
+// 用户无法判断下一步该点哪个，这是「操作重」的直接观感来源。
+//
+// 参考精铺/知了：主流程以「当前步骤 + 下一步」呈现，而不是所有动作同时可见。
+// 这里把 5 个阶段做成可点步骤条，状态由已缓存的状态对象推导：
+//   collect  采集    ← projection.source.sourceProductId + skus
+//   category 类目    ← listing() + editor.category
+//   analysis AI 分析 ← preparation / preparationAnalysis 的回执
+//   image    图片    ← listing() + projection.media
+//   publish  上架    ← serverPublishReady()
+//
+// 状态轮询用 600ms 低频同步，不侵入 render()：
+// 只读几个已算好的对象，改 5 个 DOM 属性，成本可忽略。
+// =====================================================================
+const STEPPER_DEFS = [
+  {
+    id: 'collect', label: '采集',
+    done: () => Boolean(projection.source.sourceProductId && projection.skus.length),
+    hint: '已从来源页采集商品；点此重新读取',
+  },
+  {
+    id: 'category', label: '类目',
+    done: () => Boolean(listing() && editor?.category),
+    hint: '点此选择 Ozon 官方类目',
+  },
+  {
+    id: 'analysis', label: 'AI 分析',
+    done: () => Boolean(preparation?.state?.()?.receipt || preparationAnalysis?.current?.()),
+    hint: '点此生成筛图、视觉与俄文候选',
+  },
+  {
+    id: 'image', label: '图片',
+    // 只有来源图不算这一步完成；必须真的存在图片处理任务或候选结果。
+    // 之前用 projection.media.length 判定，导致刚采集完就把「图片」标成 ✓，
+    // 用户以为已经可以上架 —— 与精铺的语义不符（他们这一步是「生成/审核结果」）。
+    done: () => Boolean(listing() && (
+      (projection.history && Array.isArray(projection.history.items) && projection.history.items.length > 0)
+      || (projection.billing && projection.billing.suite && Array.isArray(projection.billing.suite.slots) && projection.billing.suite.slots.length > 0)
+    )),
+    hint: '点此选择图片处理方式并生成',
+  },
+  {
+    id: 'publish', label: '上架',
+    done: () => Boolean(serverPublishReady()),
+    hint: '点此核对预览并上传 Ozon',
+  },
+];
+
+const STEPPER_ACTIONS = {
+  collect: () => { void loadProjection({ force: true }).catch(report); },
+  category: () => { void (async () => { await ensureCatalogRevision(); await categoryPicker.open(); })().catch(report); },
+  analysis: () => { void openProductAnalysis().catch(report); },
+  image: () => { void startImageWorkflow().catch(report); },
+  publish: () => { void openPublish().catch(report); },
+};
+
+function stepperDone(def) {
+  try { return def.done() === true; } catch (_e) { return false; }
+}
+
+function renderStepper() {
+  const root = element('precision-stepper');
+  if (!root) return;
+  const nodes = [...root.querySelectorAll('.stepper-step')];
+  if (nodes.length !== STEPPER_DEFS.length) return;
+  const doneFlags = STEPPER_DEFS.map(stepperDone);
+  let currentAssigned = false;
+  STEPPER_DEFS.forEach((def, i) => {
+    const node = nodes[i];
+    if (!node) return;
+    const done = doneFlags[i];
+    let state;
+    if (done) state = 'done';
+    else if (!currentAssigned) { state = 'current'; currentAssigned = true; }
+    else state = 'pending';
+    // 前置阶段未完成时，后续步骤不可点（避免用户跳过采集/类目直接点图片或上架）
+    const reachable = done || doneFlags.slice(0, i).every(Boolean);
+    node.dataset.state = state;
+    node.disabled = !reachable;
+    node.title = def.hint;
+    const index = node.querySelector('.stepper-index');
+    if (index) index.textContent = done ? '✓' : String(i + 1);
+  });
+}
+
+element('precision-stepper')?.addEventListener('click', (event) => {
+  const btn = event.target && event.target.closest ? event.target.closest('.stepper-step') : null;
+  if (!btn || btn.disabled) return;
+  const action = STEPPER_ACTIONS[btn.dataset.step];
+  if (typeof action === 'function') action();
+});
+
+renderStepper();
+globalThis.setInterval(renderStepper, 600);
+
 trusted('pricing-tool-btn', () => pricingTool.open());
 window.addEventListener('message', (event) => {
   // 2026-11 诊断：这里有 3 个静默 return，加上 COMMAND_RESULT 的 pending 查找失败，
