@@ -12,6 +12,7 @@ import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
 import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
+import { planPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
@@ -479,6 +480,53 @@ function productForCategoryRecommendation(){
     sourceCategory: projection.source.categoryName || '',
   };
 }
+// 2026-11：类目确定后自动预填官方属性。
+// 参考精铺/知了：类目一落定就带走能确定的字段，用户只需核对。
+// 只填有确定性依据的（制造国 / 类目唯一类型 / 标题受众 / 1688 材质 / 包装内容），
+// 字典字段一律通过 ERP readDraftDictionary 取 optionId，不做文本猜测。
+async function prefillOfficialAttributes(){
+  if(!listing())return { applied:0, reason:'无草稿' };
+  try{
+    await attributes.load(true);
+  }catch(error){
+    log('预填：官方属性读取失败 ' + (error && error.message || error), true);
+    return { applied:0, reason:'属性读取失败' };
+  }
+  if(typeof attributes.hasLoaded !== 'function' || !attributes.hasLoaded()) return { applied:0, reason:'属性未就绪' };
+  const fields = attributes.getFields();
+  const schemaRevision = attributes.getSchemaRevision();
+  if(!fields.length || !schemaRevision) return { applied:0, reason:'字段为空' };
+
+  // 组装商品画像。注意：projection.source 只投影 7 个字段
+  // （platform / sourceProductId / title / canonicalUrl / categoryName /
+  //  categoryPath / preferredSkuKey），采集到的结构化属性没有进投影
+  // —— skuRows 里 attrs 已被压成 label 字符串。所以这里只能用标题；
+  // 材质与受众规则都带标题 fallback，推得出就填、推不出就跳过。
+  // 不引用 projection.source.featureAttributes（该字段在投影里不存在）。
+  const product = {
+    title: projection.source.title || '',
+    sourceCategory: projection.source.categoryName || '',
+    attributes: [],
+  };
+  const plan = planPrefill(product, fields);
+  if(!plan.length) return { applied:0, reason:'无可预填项' };
+
+  const binding = currentEditorBinding();
+  const result = await runPrefill({
+    product, fields, schemaRevision,
+    queryDictionary: (input) => command('EDITOR_DICTIONARY', {
+      binding, listingWorkflowId: binding.listingWorkflowId,
+      schemaRevision: input.schemaRevision, attributeId: input.attributeId,
+      query: input.query, limit: input.limit,
+    }).then(response => response && response.data ? response.data : response),
+  });
+  if(!result.applied.length) return { applied:0, plan: plan.length, skipped: result.skipped };
+  const applied = attributes.applyPrefill(result.applied);
+  log(`属性预填：命中规则 ${plan.length} 条，写入 ${applied.applied} 项` +
+    (result.skipped.length ? `，跳过 ${result.skipped.length} 项（${result.skipped.map(s=>s.name||s.attributeId).join('/')}）` : ''));
+  status(`已自动预填 ${applied.applied} 个官方字段，请核对后保存`, 'ok');
+  return { applied: applied.applied, plan: plan.length, skipped: result.skipped };
+}
 async function ensureCatalogRevision(){
   if(catalogRevisionFromErp)return catalogRevisionFromErp;
   if(!listing())return '';
@@ -523,7 +571,10 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
       if(!created)throw new Error('ERP 草稿创建未完成，请打开「查看过程」确认失败原因');
     }
     await ensureCatalogRevision();
-    return saveEditor('CATEGORY',selection);
+    const saved = await saveEditor('CATEGORY',selection);
+    // 类目落定 → 自动预填官方属性（异步，失败不影响类目已保存）
+    void prefillOfficialAttributes().catch(error=>log('属性预填失败：'+(error&&error.message||error),true));
+    return saved;
   },onError:report,
   onState:value=>{
     if (!value.open || value.previewStatus !== 'ready') return;

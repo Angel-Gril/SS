@@ -230,6 +230,39 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
       textContext = { field, sku: field.ownership === 'SKU' ? selectedSku(value.rowIndex) : null, token: token() };
       textTitle.textContent = field.name; textArea.value = displayValue(leaf(field, textContext.sku).value); textModal.hidden = false;
     },
+    // 2026-11：本地属性预填。
+    // 类目确定后 shared/ozon/attribute-prefill.js 会给出「有确定性依据」的
+    // 若干条 change（制造国=中国、类目唯一类型、材质/受众由标题推得）。
+    // 这里把它们塞进 edits，显示为「待保存」，用户核对后点「保存商品属性」提交。
+    // 不直接调保存：预填只是候选，不能替用户提交官方字段。
+    // 供本地预填读取当前官方字段定义（含 name / dictionaryId / valuePolicy /
+    // editorMode / ownership），这些是 attribute-prefill 生成计划所必需的。
+    getFields() { return workspace && Array.isArray(workspace.fields) ? workspace.fields.slice() : []; },
+    getSchemaRevision() { return workspace ? workspace.schemaRevision : ''; },
+    hasLoaded() { return current() && Boolean(workspace); },
+    applyPrefill(changes) {
+      if (!current()) return { applied: 0, skipped: 0, reason: '官方属性尚未加载' };
+      if (!Array.isArray(changes) || !changes.length) return { applied: 0, skipped: 0, reason: '无可预填项' };
+      let applied = 0, skipped = 0;
+      const details = [];
+      for (const item of changes) {
+        try {
+          const field = fieldById(Number(item.attributeId));
+          if (!field) { skipped++; details.push({ id: item.attributeId, why: '该类目无此字段' }); continue; }
+          if (!editable(field)) { skipped++; details.push({ id: item.attributeId, why: '字段只读' }); continue; }
+          change(field, item.skuKey == null ? null : item.skuKey, item.value,
+            Array.isArray(item.dictionaryValueIds) ? item.dictionaryValueIds : [], false);
+          applied++;
+          details.push({ id: item.attributeId, name: field.name, value: item.value, source: item.source || '' });
+        } catch (error) {
+          skipped++;
+          details.push({ id: item.attributeId, why: String(error && error.message || error).slice(0, 80) });
+        }
+      }
+      renderState();
+      if (applied) status(`已预填 ${applied} 个官方字段，请核对后保存`, 'ok');
+      return { applied, skipped, details };
+    },
     reset() { workspace = null; loadedToken = requestedToken = ''; edits.clear(); modal.hidden = textModal.hidden = true; onReset(); renderState(); },
   };
 }
