@@ -591,7 +591,7 @@
     }
   }
 
-  function trusted(event) { return Boolean(event) && event.isTrusted === true; }
+  function trusted(event) { return SS_ERP_TRUST_GATE.ok(event); }
 
   nodes.confirmation.addEventListener('change', function (event) {
     if (!trusted(event)) return;

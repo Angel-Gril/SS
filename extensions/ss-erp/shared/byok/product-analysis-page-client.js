@@ -53,7 +53,7 @@
     function authorizeProductAnalysis(event, ticket) {
       var retained = preparedPermissions.get(ticket?.permissionTicket);
       preparedPermissions.delete(ticket?.permissionTicket);
-      if (!event || event.isTrusted !== true) throw error('SS_ERP_BYOK_PRODUCT_ANALYSIS_PERMISSION_GESTURE_REQUIRED');
+      if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) throw error('SS_ERP_BYOK_PRODUCT_ANALYSIS_PERMISSION_GESTURE_REQUIRED');
       if (!retained || retained.fingerprint !== JSON.stringify(ticket) || ticket.expiresAt <= Date.now()) throw error('SS_ERP_BYOK_PRODUCT_ANALYSIS_PERMISSION_TICKET_INVALID');
       if (!permissions || typeof permissions.request !== 'function') throw error('SS_ERP_BYOK_PRODUCT_ANALYSIS_PERMISSION_UNAVAILABLE');
       // Invoke Chrome synchronously in the click task. Preparing the server

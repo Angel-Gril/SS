@@ -457,34 +457,34 @@
   }
 
   paintTool.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || paintTool.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || paintTool.disabled) return;
     setTool('paint');
   });
 
   eraseTool.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || eraseTool.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || eraseTool.disabled) return;
     setTool('erase');
   });
 
   brushSize.addEventListener('input', function (event) {
-    if (!event || event.isTrusted !== true || brushSize.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || brushSize.disabled) return;
     updateBrushValue();
   });
 
   promptInput.addEventListener('input', function (event) {
-    if (!event || event.isTrusted !== true || promptInput.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || promptInput.disabled) return;
     refreshControls();
     refreshDraftStatus();
   });
 
   negativePromptInput.addEventListener('input', function (event) {
-    if (!event || event.isTrusted !== true || negativePromptInput.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || negativePromptInput.disabled) return;
     refreshControls();
     refreshDraftStatus();
   });
 
   maskCanvas.addEventListener('pointerdown', function (event) {
-    if (!event || event.isTrusted !== true || busy || completed || !isInpaint() || !sourceReady
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || busy || completed || !isInpaint() || !sourceReady
       || activePointerId !== null || event.button !== 0 || event.isPrimary === false) return;
     var point = sourcePoint(event);
     var started = mask.beginStroke({
@@ -528,7 +528,7 @@
   maskCanvas.addEventListener('lostpointercapture', function () { finishStroke(false); });
 
   undoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || undoButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || undoButton.disabled) return;
     mask.undo();
     refreshMaskPreviewState();
     renderMaskPreview();
@@ -537,7 +537,7 @@
   });
 
   redoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || redoButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || redoButton.disabled) return;
     mask.redo();
     refreshMaskPreviewState();
     renderMaskPreview();
@@ -546,7 +546,7 @@
   });
 
   clearButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || clearButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || clearButton.disabled) return;
     mask.clear();
     refreshMaskPreviewState();
     renderMaskPreview();
@@ -583,7 +583,7 @@
   });
 
   submitButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || submitButton.disabled
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || submitButton.disabled
       || busy || completed || activePointerId !== null || !editor) return;
     busy = true;
     refreshControls();
@@ -620,7 +620,7 @@
   });
 
   cancelButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || busy) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || busy) return;
     if (hasUnsubmittedChanges()
       && !window.confirm('编辑内容尚未提交，确认关闭编辑器？')) return;
     busy = true;

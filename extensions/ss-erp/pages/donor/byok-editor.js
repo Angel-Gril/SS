@@ -244,13 +244,13 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     })();
     return initialization;
   }
-  reconnect.addEventListener('click', event => { if (event.isTrusted && !reconnect.disabled) void initialize(); });
+  reconnect.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !reconnect.disabled) void initialize(); });
   for (const input of [name, endpoint, model, ...operations.querySelectorAll('input')]) input.addEventListener('input', () => { dirty = true; prepared = null; settings?.invalidatePreparedPermissions(); render(); });
-  configure.addEventListener('click', (event) => { if (event.isTrusted && !configure.disabled) void act(async () => { modal.hidden = false; await refresh(); state.textContent = '配置与密钥分开保存；选择图片任务后再确认执行。'; }); });
-  fresh.addEventListener('click', (event) => { if (!event.isTrusted || fresh.disabled) return; selectedId = ''; selectedState = permission = null; fill(null); render(); });
+  configure.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !configure.disabled) void act(async () => { modal.hidden = false; await refresh(); state.textContent = '配置与密钥分开保存；选择图片任务后再确认执行。'; }); });
+  fresh.addEventListener('click', (event) => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || fresh.disabled) return; selectedId = ''; selectedState = permission = null; fill(null); render(); });
   profileSelect.addEventListener('change', () => { selectedId = profileSelect.value; dirty = false; key.value = ''; prepared = null; void act(refresh); });
   save.addEventListener('click', (event) => {
-    if (!event.isTrusted || save.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || save.disabled) return;
     void act(async () => {
       const profile = { id: selectedId || 'precision-profile-' + crypto.randomUUID(), name: name.value.trim(), baseUrl: endpoint.value.trim(), model: model.value.trim(),
         allowedOperations: [...operations.querySelectorAll('input:checked')].map((input) => input.value), preferences: { defaultSize: '1024x1024', quality: 'auto', outputFormat: 'png' } };
@@ -259,22 +259,22 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     });
   });
   setKey.addEventListener('click', (event) => {
-    if (!event.isTrusted || setKey.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || setKey.disabled) return;
     let secret = key.value; key.value = '';
     void act(async () => {
       try { const pending = settings.setSessionKey(selectedId, secret); secret = ''; selectedState = await pending; state.textContent = '会话密钥已加载，表单已清空。'; }
       finally { secret = ''; key.value = ''; }
     });
   });
-  clearKey.addEventListener('click', (event) => { if (event.isTrusted && !clearKey.disabled) void act(async () => { selectedState = await settings.clearSessionKey(selectedId); key.value = ''; state.textContent = '会话密钥与能力记录已清除。'; }); });
-  prepare.addEventListener('click', (event) => { if (!event.isTrusted || prepare.disabled) return; void act(async () => {
+  clearKey.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !clearKey.disabled) void act(async () => { selectedState = await settings.clearSessionKey(selectedId); key.value = ''; state.textContent = '会话密钥与能力记录已清除。'; }); });
+  prepare.addEventListener('click', (event) => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || prepare.disabled) return; void act(async () => {
     const operation = selected().allowedOperations[0];
     const readiness = await settings.getReadiness({ profileId: selectedId, shopId: getShopId(), operation });
     prepared = await settings.preparePermission({ profileId: selectedId, operation, readiness });
     state.textContent = `已准备 ${new URL(selected().baseUrl).origin} 的来源授权，请明确点击授权。`;
   }); });
   request.addEventListener('click', (event) => {
-    if (!event.isTrusted || request.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || request.disabled) return;
     const readiness = prepared; prepared = null;
     let pending;
     try { pending = settings.requestPermissionFromGesture({ profile: selected(), shopId: getShopId(), operation: selected().allowedOperations[0], readiness, event }); }
@@ -324,7 +324,7 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
     render();
   }
   generate.addEventListener('click', (event) => {
-    if (!event.isTrusted || generate.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || generate.disabled) return;
     void mediaAct(async () => {
       const frozenToken = confirmationToken();
       const confirmed = await ask({ message: `使用 ${selected().name} 生成一张 BYOK 候选图？`, detail: 'ERP 不收取 AI 托管费用，但 Provider 可能收费。结果会先预览、审核，再绑定到草稿。', token: frozenToken,
@@ -343,25 +343,25 @@ export function createByokEditor({ root, container, runtime, getShopId, getBindi
       if (flowState.candidate?.deliveryState === 'BOUND') await onBound?.(flowState);
     });
   }
-  refreshGeneration.addEventListener('click', (event) => { if (event.isTrusted && !refreshGeneration.disabled) void readMediaState(); });
-  editLoad.addEventListener('click', event => { if (!event.isTrusted || editLoad.disabled) return; void mediaAct(async () => { try { editError = ''; const active = await ensureEditFlow(); editStateValue = await active.loadCatalog(); } catch (error) { editError = errorText(error); throw error; } }); });
-  editStart.addEventListener('click', event => { if (!event.isTrusted || editStart.disabled) return; void mediaAct(async () => {
+  refreshGeneration.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !refreshGeneration.disabled) void readMediaState(); });
+  editLoad.addEventListener('click', event => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || editLoad.disabled) return; void mediaAct(async () => { try { editError = ''; const active = await ensureEditFlow(); editStateValue = await active.loadCatalog(); } catch (error) { editError = errorText(error); throw error; } }); });
+  editStart.addEventListener('click', event => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || editStart.disabled) return; void mediaAct(async () => {
     const active = await ensureEditFlow(); const operation = editOperation.value; let sourceHandle = null; let maskHandle = null;
     if (operation === 'IMAGE_TO_IMAGE') editStateValue = await active.setReferences([...editSelectedKeys]);
     else { editStateValue = await active.setSource(editSource.value); sourceHandle = editStateValue.source.mediaHandle;
       if (operation === 'INPAINT') { editStateValue = await active.setMaskBlob(editMaskFile.files[0]); maskHandle = editStateValue.mask.mediaHandle; } }
     editStateValue = await active.start({ profileId: selectedId, operation, prompt: editPrompt.value.normalize('NFKC').trim(), size: size.value, sourceHandle, maskHandle });
   }); });
-  editPreview.addEventListener('click', event => { if (!event.isTrusted || editPreview.disabled) return; void mediaAct(async () => { const active = await ensureEditFlow(); const attempt = editStateValue?.snapshot?.alternatives?.find(item => item.state === 'CANDIDATE_READY'); if (!attempt) throw new Error('没有可预览的参考图候选'); editStateValue = await active.select(attempt.attemptId); editStateValue = await active.openCandidate(attempt.attemptId); }); });
-  editReview.addEventListener('click', event => { if (!event.isTrusted || editReview.disabled) return; void mediaAct(async () => { editStateValue = await edit.prepareReview(); }); });
+  editPreview.addEventListener('click', event => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || editPreview.disabled) return; void mediaAct(async () => { const active = await ensureEditFlow(); const attempt = editStateValue?.snapshot?.alternatives?.find(item => item.state === 'CANDIDATE_READY'); if (!attempt) throw new Error('没有可预览的参考图候选'); editStateValue = await active.select(attempt.attemptId); editStateValue = await active.openCandidate(attempt.attemptId); }); });
+  editReview.addEventListener('click', event => { if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || editReview.disabled) return; void mediaAct(async () => { editStateValue = await edit.prepareReview(); }); });
   editPrompt.addEventListener('input', render);
   editOperation.addEventListener('change', render);
   editSource.addEventListener('change', render);
   editMaskFile.addEventListener('change', render);
-  showPreview.addEventListener('click', (event) => { if (event.isTrusted && !showPreview.disabled) void mediaAct(() => openCandidatePreview()); });
-  approve.addEventListener('click', (event) => { if (event.isTrusted && !approve.disabled) void mediaAct(async () => { flowState = await flow.review('APPROVE'); }); });
-  reject.addEventListener('click', (event) => { if (event.isTrusted && !reject.disabled) void mediaAct(async () => { flowState = await flow.review('REJECT'); flowPreview = null; }); });
-  ingest.addEventListener('click', (event) => { if (event.isTrusted && !ingest.disabled) void mediaAct(async () => { flowState = await flow.ingest(); flowPreview = null; await onBound?.(flowState); }); });
+  showPreview.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !showPreview.disabled) void mediaAct(() => openCandidatePreview()); });
+  approve.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !approve.disabled) void mediaAct(async () => { flowState = await flow.review('APPROVE'); }); });
+  reject.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !reject.disabled) void mediaAct(async () => { flowState = await flow.review('REJECT'); flowPreview = null; }); });
+  ingest.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !ingest.disabled) void mediaAct(async () => { flowState = await flow.ingest(); flowPreview = null; await onBound?.(flowState); }); });
   render();
   return {
     cancelConfirmation: () => confirmation.cancel(),

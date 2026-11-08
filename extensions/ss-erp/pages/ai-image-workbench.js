@@ -2086,7 +2086,7 @@
   }
 
   nodes.profileSelect.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || state.busy || state.candidate
       || batchPageController() && batchPageController().isLocked()
       || document.body && document.body.dataset
@@ -2102,13 +2102,13 @@
     nodes.flowToolbar.addEventListener('click', function (event) {
       var button = event && event.target && typeof event.target.closest === 'function'
         ? event.target.closest('[data-flow-step]') : null;
-      if (!button || button.disabled || !event || event.isTrusted !== true) return;
+      if (!button || button.disabled || !SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
       setFlowStage(button.dataset.flowStep);
     });
   }
   if (nodes.flowProcessButton && typeof nodes.flowProcessButton.addEventListener === 'function') {
     nodes.flowProcessButton.addEventListener('click', function (event) {
-      if (!event || event.isTrusted !== true || nodes.flowProcessButton.disabled) return;
+      if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.flowProcessButton.disabled) return;
       var targetStage = hasReviewCandidate() || reviewPublishOnly() ? 'review' : 'media';
       setFlowStage(targetStage);
       state.processDockExpanded = targetStage === 'media';
@@ -2127,7 +2127,7 @@
   if (nodes.mediaPrimaryAction
     && typeof nodes.mediaPrimaryAction.addEventListener === 'function') {
     nodes.mediaPrimaryAction.addEventListener('click', function (event) {
-      if (!event || event.isTrusted !== true || nodes.mediaPrimaryAction.disabled) return;
+      if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.mediaPrimaryAction.disabled) return;
       handleTextMediaPrimaryAction();
     });
   }
@@ -2238,16 +2238,16 @@
     renderControls();
   });
   nodes.generateButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || reviewPublishOnly()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || reviewPublishOnly()
       || nodes.generateButton.disabled) return;
     startTextGenerationFromUserAction();
   });
   nodes.rejectButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.rejectButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.rejectButton.disabled) return;
     void reviewCandidate('REJECT');
   });
   nodes.approveButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.approveButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.approveButton.disabled) return;
     if (state.candidate && state.candidate.deliveryState === 'INGESTING') {
       void recoverIngestCandidate();
       return;
@@ -2259,19 +2259,19 @@
     void reviewCandidate('APPROVE');
   });
   nodes.publishConfirmation.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || state.busy) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || state.busy) return;
     renderPublishControls();
   });
   nodes.publishConfirmButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.publishConfirmButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.publishConfirmButton.disabled) return;
     void confirmListingPublish();
   });
   nodes.publishRecoverButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.publishRecoverButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.publishRecoverButton.disabled) return;
     void recoverListingPublish();
   });
   nodes.refreshButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.refreshButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.refreshButton.disabled) return;
     refreshWorkbenchFromUserAction();
   });
   if (document && typeof document.addEventListener === 'function') {
@@ -2289,7 +2289,7 @@
   if (nodes.workspaceRecoveryReturnButton
     && typeof nodes.workspaceRecoveryReturnButton.addEventListener === 'function') {
     nodes.workspaceRecoveryReturnButton.addEventListener('click', function (event) {
-      if (!event || event.isTrusted !== true || nodes.workspaceRecoveryReturnButton.disabled) return;
+      if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.workspaceRecoveryReturnButton.disabled) return;
       if (typeof global.close === 'function') {
         try { global.close(); } catch {}
       }

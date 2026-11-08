@@ -1491,7 +1491,7 @@
       label.appendChild(checkbox);
       label.appendChild(copy);
       checkbox.addEventListener('change', function (event) {
-        if (!event || event.isTrusted !== true) {
+        if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) {
           checkbox.checked = !checkbox.checked;
           return;
         }
@@ -1550,7 +1550,7 @@
         resolveButton.textContent = '查询原请求';
         resolveButton.disabled = view.busy || !lifecycleReady;
         resolveButton.addEventListener('click', function (event) {
-          if (!event || event.isTrusted !== true || resolveButton.disabled) return;
+          if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || resolveButton.disabled) return;
           runRecovery({
             kind: 'RESOLVE_UNKNOWN_ATTEMPT',
             slotKey: row.slotKey,
@@ -1580,11 +1580,11 @@
       retryButton.textContent = row.state === 'UNKNOWN_OUTCOME' ? '承担风险并重试' : '重试';
       retryButton.disabled = true;
       confirmation.addEventListener('change', function (event) {
-        if (!event || event.isTrusted !== true) return;
+        if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
         retryButton.disabled = view.busy || !lifecycleReady || confirmation.checked !== true;
       });
       retryButton.addEventListener('click', function (event) {
-        if (!event || event.isTrusted !== true || retryButton.disabled) return;
+        if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || retryButton.disabled) return;
         runRecovery({
           kind: 'RETRY_ATTEMPT',
           slotKey: row.slotKey,
@@ -1680,25 +1680,25 @@
   controller.subscribe(render);
 
   nodes.concurrency.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     try { controller.setConcurrency(Number(nodes.concurrency.value)); } catch {}
   });
   nodes.acceptButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.acceptButton.disabled
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.acceptButton.disabled
       || lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.ingest().catch(function () {});
   });
   nodes.recoverButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.recoverButton.disabled
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.recoverButton.disabled
       || lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.recover().catch(function () {});
   });
   nodes.clearButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.clearButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.clearButton.disabled) return;
     void controller.clear().catch(function () {});
   });
   nodes.previewClose.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     controller.markPreviewFailed();
   });
   nodes.previewImage.addEventListener('load', function () {

@@ -599,7 +599,7 @@
         + (scope === 'SLOT' ? '当前槽位' : '会话默认') + '参考图');
       remove.disabled = hostedBlocked || state.busy || Boolean(state.referenceSyncPending);
       remove.addEventListener('click', function (event) {
-        if (!event || event.isTrusted !== true || state.busy) return;
+        if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || state.busy) return;
         void removeReference(scope, item.mediaHandle);
       });
       row.appendChild(image);
@@ -707,7 +707,7 @@
         newRow.appendChild(newButton);
         record = { row: newRow, button: newButton, image: image, label: label };
         newButton.addEventListener('click', function (event) {
-          if (!event || event.isTrusted !== true || newButton.disabled) return;
+          if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || newButton.disabled) return;
           void selectAlternative(alternative.attemptId);
         });
         state.alternativeNodes.set(alternative.attemptId, record);
@@ -1444,7 +1444,7 @@
   }
 
   function handleMaskKeyboard(event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || state.busy || !state.mask) return;
     var key = event.key;
     var movement = event.shiftKey ? 0.1 : 0.02;
@@ -1538,19 +1538,19 @@
   nodes.mediaOperationBar.addEventListener('click', function (event) {
     var button = event && event.target && typeof event.target.closest === 'function'
       ? event.target.closest('[data-media-operation]') : null;
-    if (!event || event.isTrusted !== true || !button || button.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !button || button.disabled) return;
     setOperation(button.dataset.mediaOperation);
   });
 
   [nodes.operationTextToImage, nodes.operationImageToImage,
     nodes.operationFullEdit, nodes.operationInpaint].forEach(function (input) {
     input.addEventListener('change', function (event) {
-      if (!event || event.isTrusted !== true || !input.checked || input.disabled) return;
+      if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !input.checked || input.disabled) return;
       setOperation(input.value);
     });
   });
   nodes.profileSelect.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()) {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()) {
       renderControls();
       return;
     }
@@ -1568,19 +1568,19 @@
   nodes.referenceScopeGlobal.addEventListener('change', renderReferences);
   nodes.referenceScopeSlot.addEventListener('change', renderReferences);
   nodes.referenceFiles.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed() || state.busy) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed() || state.busy) return;
     void addReferences(nodes.referenceFiles.files);
   });
   nodes.sourceFile.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed() || state.busy) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed() || state.busy) return;
     void chooseSource(nodes.sourceFile.files && nodes.sourceFile.files[0]);
   });
   nodes.runEditButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.runEditButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.runEditButton.disabled) return;
     void startEdit();
   });
   nodes.mediaPrimaryAction.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || state.operation === 'TEXT_TO_IMAGE'
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || state.operation === 'TEXT_TO_IMAGE'
       || document.body.classList.contains('is-hosted-mode')
       || nodes.mediaPrimaryAction.disabled) return;
     var reason = operationInputReason();
@@ -1605,36 +1605,36 @@
     if (!nodes.runEditButton.disabled) void startEdit();
   });
   nodes.regenerateChargeConfirmation.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     renderControls();
   });
   nodes.regenerateEditButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.regenerateEditButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.regenerateEditButton.disabled) return;
     void regenerate();
   });
   nodes.restartChargeConfirmation.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     renderControls();
   });
   nodes.restartAcknowledgeButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.restartAcknowledgeButton.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || nodes.restartAcknowledgeButton.disabled) return;
     void acknowledgeRestart();
   });
   nodes.maskPaintButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || nodes.maskPaintButton.disabled) return;
     state.maskTool = 'paint';
     updateMaskToolbar();
   });
   nodes.maskEraseButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || nodes.maskEraseButton.disabled) return;
     state.maskTool = 'erase';
     updateMaskToolbar();
   });
   nodes.maskBrushSize.addEventListener('input', updateMaskToolbar);
   nodes.maskUndoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || nodes.maskUndoButton.disabled) return;
     state.mask.undo();
     state.maskVersion += 1;
@@ -1642,7 +1642,7 @@
     renderControls();
   });
   nodes.maskRedoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || nodes.maskRedoButton.disabled) return;
     state.mask.redo();
     state.maskVersion += 1;
@@ -1650,7 +1650,7 @@
     renderControls();
   });
   nodes.maskClearButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || nodes.maskClearButton.disabled) return;
     state.mask.clear();
     state.maskVersion += 1;
@@ -1658,7 +1658,7 @@
     renderControls();
   });
   nodes.editMaskCanvas.addEventListener('pointerdown', function (event) {
-    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || !hostedByokExecutionAllowed()
       || state.busy || !state.mask
       || event.button !== 0 || event.isPrimary === false || state.activePointerId !== null) return;
     var point = pointerPoint(event);
@@ -1674,12 +1674,12 @@
     renderControls();
   });
   nodes.editMaskCanvas.addEventListener('pointermove', function (event) {
-    if (!event || event.isTrusted !== true || event.pointerId !== state.activePointerId) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || event.pointerId !== state.activePointerId) return;
     state.mask.extendStroke(pointerPoint(event));
     drawMask();
   });
   nodes.editMaskCanvas.addEventListener('pointerup', function (event) {
-    if (!event || event.isTrusted !== true || event.pointerId !== state.activePointerId) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || event.pointerId !== state.activePointerId) return;
     state.mask.extendStroke(pointerPoint(event));
     if (nodes.editMaskCanvas.hasPointerCapture(event.pointerId)) {
       nodes.editMaskCanvas.releasePointerCapture(event.pointerId);
@@ -1698,7 +1698,7 @@
   });
   nodes.editMaskCanvas.addEventListener('keydown', handleMaskKeyboard);
   nodes.refreshButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void loadCapabilities();
   });
 

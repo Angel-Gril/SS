@@ -252,7 +252,9 @@
     </div>
   </div>
 </div>
-<script src="../shared/donor-workbench/product-preparation-client.js"></script>
+<!-- 统一可信事件闸门：生产等价于 event.isTrusted，自动化可用 ?sserp-e2e=1 放行 -->
+  <script src="../shared/ui/trust-gate.js"></script>
+  <script src="../shared/donor-workbench/product-preparation-client.js"></script>
 <script src="../shared/donor-workbench/workspace-contract.js"></script>
 <script src="../shared/donor-workbench/prompt-adapter.js"></script>
 <script src="../shared/donor-workbench/precision-workflow.js"></script>

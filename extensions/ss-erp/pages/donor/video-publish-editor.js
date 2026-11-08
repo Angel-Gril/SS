@@ -112,7 +112,7 @@ export function createVideoPublishEditor({ root, command, getBinding, getSkuKey,
       }
     } });
   const act = (node, handler) => node.addEventListener('click', event => {
-    if (!event.isTrusted || node.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || node.disabled) return;
     Promise.resolve().then(handler).catch(error => onMessage(error.message));
   });
   act(read, () => flow.read()); act(replay, () => flow.replay());

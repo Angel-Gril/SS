@@ -251,7 +251,7 @@
         hasNativeEventSlots = false;
       }
     }
-    if (!isNativeEvent || !hasNativeEventSlots || event.isTrusted !== true) {
+    if (!isNativeEvent || !hasNativeEventSlots || SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) {
       throw permissionError(
         'SS_ERP_BYOK_PERMISSION_GESTURE_REQUIRED',
         'Provider permission must be requested from a trusted user gesture',

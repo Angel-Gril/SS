@@ -515,7 +515,7 @@
   }
 
   function trustedActivation(event) {
-    return Boolean(event) && event.isTrusted === true;
+    return SS_ERP_TRUST_GATE.ok(event);
   }
 
   function setMobileView(view, shouldFocus) {

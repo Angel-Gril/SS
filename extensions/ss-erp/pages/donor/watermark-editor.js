@@ -182,14 +182,14 @@ export function createWatermarkEditor({ root, command, getBinding, getItems, get
   for (const input of [text, color, font, position, opacity, scale]) input.addEventListener('input', () => flow.invalidate());
   template.addEventListener('change', () => { useTemplateDefaults(); flow.invalidate(); });
   for (const [button, target] of [[textMode, 'text'], [imageMode, 'image']]) button.addEventListener('click', event => {
-    if (!event.isTrusted || button.disabled || getBusy()) return; mode = target; showMode();
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || button.disabled || getBusy()) return; mode = target; showMode();
     if (mode === 'image') useTemplateDefaults(); flow.invalidate();
   });
-  reloadTemplates.addEventListener('click', event => { if (event.isTrusted && !reloadTemplates.disabled && !getBusy()) {
+  reloadTemplates.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !reloadTemplates.disabled && !getBusy()) {
     flow.invalidate(); flow.loadTemplates().catch(report);
   } });
-  preview.addEventListener('click', event => { if (event.isTrusted && !preview.disabled && !getBusy()) flow.preview(config()).catch(report); });
-  apply.addEventListener('click', event => { if (event.isTrusted && !apply.disabled && !getBusy()) flow.apply().catch(report); });
+  preview.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !preview.disabled && !getBusy()) flow.preview(config()).catch(report); });
+  apply.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !apply.disabled && !getBusy()) flow.apply().catch(report); });
   function hide() { if (flow.state().busy) return; modal.hidden = true; previousFocus?.focus(); }
   close.addEventListener('click', hide); modal.addEventListener('click', event => { if (event.target === modal) hide(); });
   modal.addEventListener('keydown', event => {

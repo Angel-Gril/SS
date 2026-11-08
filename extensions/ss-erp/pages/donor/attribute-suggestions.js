@@ -93,7 +93,7 @@ export function createAttributeSuggestions({
     if (hasUnsavedAttributes()) state.textContent = unsavedMessage;
   }
   manual.addEventListener('click', (event) => {
-    if (!event.isTrusted || manual.disabled || modal.hidden || !data || typeof onManual !== 'function') return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || manual.disabled || modal.hidden || !data || typeof onManual !== 'function') return;
     if (context() !== token || hasUnsavedAttributes() || getBusy() || opening || applying) { sync(); return; }
     modal.hidden = true;
     epoch += 1;
@@ -101,7 +101,7 @@ export function createAttributeSuggestions({
     onManual();
   });
   apply.addEventListener('click', (event) => {
-    if (!event.isTrusted || apply.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || apply.disabled) return;
     const attempt = epoch, basis = token;
     applying = true;
     sync();

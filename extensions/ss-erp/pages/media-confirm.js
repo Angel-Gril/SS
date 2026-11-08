@@ -119,7 +119,7 @@
   }
 
   cancelButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || busy) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || busy) return;
     busy = true;
     confirmButton.disabled = true;
     cancelButton.disabled = true;
@@ -132,7 +132,7 @@
   });
 
   confirmButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || busy || expired || !imageReady
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || busy || expired || !imageReady
       || !confirmation || confirmation.completed) return;
     busy = true;
     refreshConfirmButton();

@@ -869,6 +869,8 @@
   </main>
 
   <noscript><p class="no-script">需要启用 JavaScript 才能使用 AI 图片工作台。</p></noscript>
+  <!-- 统一可信事件闸门：生产等价于 event.isTrusted，自动化可用 ?sserp-e2e=1 放行 -->
+  <script src="../shared/ui/trust-gate.js"></script>
   <script src="../shared/ai-media/image-mask-core.js"></script>
   <script src="../shared/ai-media/image-mask-layout.js"></script>
   <script src="../shared/ai-media/image-mask-canvas.js"></script>

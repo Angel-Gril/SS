@@ -160,29 +160,20 @@ function log(message, error = false) {
   if (!preparation || preparation.state().status === 'IDLE') element('process-title').textContent = message;
 }
 function report(error) { status(error.message || String(error), 'err'); log(error.message || String(error), true); }
-// 2026-11：isTrusted 检查让自动化无法验证真实流程（CDP 合成的 isTrusted 在部分
-// 区域不成立），也让「点了没反应」完全无迹可寻。生产行为保持不变（默认严格），
-// 但允许通过 __SSERP_E2E__ 或 URL 参数 sserp-e2e=1 放开，供端到端测试使用。
-function e2eBypassTrust() {
-  try {
-    if (globalThis.__SSERP_E2E__ === true) return true;
-    if (new URLSearchParams(location.search).get('sserp-e2e') === '1') {
-      globalThis.__SSERP_E2E__ = true;
-      return true;
-    }
-  } catch (_e) {}
-  return false;
-}
+// 2026-11：isTrusted 判断已统一收敛到 shared/ui/trust-gate.js。
+// 这里只是薄封装，保持既有 trustOk(event, target) 调用点不变。
+// 行为契约（生产严格、E2E 可放行、拦下留痕）全部由 gate 承担。
+// 之前批量替换误改了这个函数体，导致它调用gate时又传了 gate 自己的 target，
+// 逻辑上重复且让 disabled 检查失效。
 function trustOk(event, target) {
-  if (target.disabled) return false;
-  if (event && event.isTrusted) return true;
-  // 非可信事件：仅在显式 E2E 模式下放行，并留下痕迹便于排查
-  if (e2eBypassTrust()) {
-    try { console.warn('[SSERP] untrusted click allowed (E2E):', target.id || target.className); } catch (_e) {}
-    return true;
+  const gate = globalThis.SS_ERP_TRUST_GATE;
+  if (!gate || typeof gate.ok !== 'function') {
+    // gate 未加载时退回保守判断：宁可不响应，也不放过非可信事件
+    try { console.warn('[SSERP] trust-gate 未加载，按严格模式处理'); } catch (_e) {}
+    if (target && target.disabled) return false;
+    return Boolean(event && event.isTrusted === true);
   }
-  try { console.warn('[SSERP] untrusted click BLOCKED:', target.id || target.className); } catch (_e) {}
-  return false;
+  return gate.ok(event, target);
 }
 function trusted(id, handler) {
   const target = element(id);
@@ -252,7 +243,7 @@ const imageWorkspace = createSkuImageWorkspace({ container: element('image-queue
     button.dataset.videoSku = value.skuKey; button.dataset.videoRole = value.role;
     button.setAttribute('aria-label', `设置 ${value.skuKey} 的${value.label}`);
     button.addEventListener('keydown', event => event.stopPropagation());
-    button.addEventListener('click', event => { event.stopPropagation(); if (event.isTrusted && !button.disabled) void videoEditor.open(value.skuKey, value.role, button); });
+    button.addEventListener('click', event => { event.stopPropagation(); if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !button.disabled) void videoEditor.open(value.skuKey, value.role, button); });
     cell.append(button);
   },
   onSelect: key => { if (selectedSkuKey !== key) { selectedSkuKey = key; byok.invalidate(); } }, onChange: () => renderMedia(),
@@ -313,7 +304,7 @@ const visionTool = createVisionTool({ root: element('ui-scale-root'), command,
 const visionOpen = make('button', 'ghost', '看图生成视觉 JSON'); visionOpen.id = 'precision-vision-open';
 mediaToolbar.append(visionOpen);
 visionOpen.addEventListener('click', event => {
-  if (event.isTrusted && !visionOpen.disabled) void visionTool.open().catch(report).finally(render);
+  if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !visionOpen.disabled) void visionTool.open().catch(report).finally(render);
 });
 visualJson.addEventListener('input', () => {
   try {
@@ -562,7 +553,7 @@ const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-ro
  onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},
  onManual:()=>{attributeSuggestionReviewed=attributeSuggestionContext();element('product-editor').scrollIntoView({block:'start'});status('请手工补充官方必填属性；保存后点继续处理，上架前仍会校验完整性。');},report});
 const suggestionsOpen=make('button','ghost','自动匹配属性');suggestionsOpen.id='precision-attribute-suggestions-open';attributes.bar.append(suggestionsOpen);
-suggestionsOpen.addEventListener('click',event=>{if(event.isTrusted&&!suggestionsOpen.disabled)void attributeSuggestions.open().catch(report);});
+suggestionsOpen.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!suggestionsOpen.disabled)void attributeSuggestions.open().catch(report);});
 const fieldsSection = make('div');
 localNotice.replaceWith(fieldsSection);
 fieldsSection.append(localNotice, attributes.bar);
@@ -1415,7 +1406,7 @@ function renderMedia() {
           button.dataset.reviewDecision = decision;
           button.disabled = mediaBusy;
           button.addEventListener('click', (event) => {
-            if (!event.isTrusted || button.disabled) return;
+            if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || button.disabled) return;
             void runMediaMutation(() => reviewCandidate(item.id, output.id, decision)).catch(report);
           });
           card.append(button);
@@ -1581,7 +1572,7 @@ const preparationContinue=make('button','ghost','继续处理'),preparationStop=
 const preparationRecover=make('button','ghost','核对建草稿结果');preparationRecover.id='precision-preparation-recover';preparationRecover.disabled=true;
 preparationContinue.id='precision-preparation-continue';preparationStop.id='precision-preparation-stop';prepareShops.id='precision-preparation-shops';
 const analysisOpen=make('button','ghost','商品 AI 分析');analysisOpen.id='precision-preparation-analysis-open';
-analysisOpen.addEventListener('click',event=>{if(event.isTrusted&&!analysisOpen.disabled)void openProductAnalysis().catch(report);});
+analysisOpen.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!analysisOpen.disabled)void openProductAnalysis().catch(report);});
 preparationBar.append(preparationState,analysisOpen,preparationContinue,preparationRecover,preparationStop,prepareShops);fieldsSection.before(preparationBar);
 const processStages=make('div','precision-preparation-process');processStages.id='precision-preparation-process';element('ai-output').before(processStages);
 function renderProcessAction(){
@@ -1658,14 +1649,14 @@ async function recoverPreparation(){
  if(result.draft)await loadEditor();
  preparation.markRecovered();render();status('原采集或建草稿结果已核对，请点击开始或继续处理。','ok');
 }
-preparationRecover.addEventListener('click',event=>{if(event.isTrusted&&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});
+preparationRecover.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});
 trusted('start-btn',startProductPreparation);
-preparationContinue.addEventListener('click',event=>{if(event.isTrusted&&!preparationContinue.disabled)void continuePreparation().catch(report);});
-preparationStop.addEventListener('click',event=>{if(event.isTrusted)preparation.cancel();});
+preparationContinue.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!preparationContinue.disabled)void continuePreparation().catch(report);});
+preparationStop.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target))preparation.cancel();});
 const queueModal=make('div','settings-modal');queueModal.id='precision-preparation-shop-modal';queueModal.hidden=true;const queueDialog=make('div','settings-dialog'),queueHead=make('div','settings-head');queueHead.append(make('div','settings-title','多店连续准备 · 不自动发布'));
 const queueClose=make('button','ghost','关闭');queueClose.addEventListener('click',()=>{queueModal.hidden=true;});queueHead.append(queueClose);const queueBody=make('div','settings-body'),queueStart=make('button','primary','开始所选店铺准备');queueStart.id='precision-preparation-queue-start';queueDialog.append(queueHead,queueBody,queueStart);queueModal.append(queueDialog);element('ui-scale-root').append(queueModal);
-prepareShops.addEventListener('click',event=>{if(!event.isTrusted||preparation.isRunning())return;queueBody.replaceChildren();for(const shop of projection.shops){const label=make('label'),input=make('input');input.type='checkbox';input.value=shop.id;input.checked=shop.id===selectedShopId;label.append(input,make('span','',shop.name));queueBody.append(label);}queueModal.hidden=false;});
-queueStart.addEventListener('click',event=>{if(!event.isTrusted)return;const shops=[...queueBody.querySelectorAll('input:checked')].map(input=>input.value);queueModal.hidden=true;void(async()=>{if(!shops.length)throw Error('请选择至少一个已授权店铺');selectedShopId=shops[0];render();if(!await ensureCurrentDraft())return;await preparation.start(shops);})().catch(report).finally(render);});
+prepareShops.addEventListener('click',event=>{if(!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)||preparation.isRunning())return;queueBody.replaceChildren();for(const shop of projection.shops){const label=make('label'),input=make('input');input.type='checkbox';input.value=shop.id;input.checked=shop.id===selectedShopId;label.append(input,make('span','',shop.name));queueBody.append(label);}queueModal.hidden=false;});
+queueStart.addEventListener('click',event=>{if(!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target))return;const shops=[...queueBody.querySelectorAll('input:checked')].map(input=>input.value);queueModal.hidden=true;void(async()=>{if(!shops.length)throw Error('请选择至少一个已授权店铺');selectedShopId=shops[0];render();if(!await ensureCurrentDraft())return;await preparation.start(shops);})().catch(report).finally(render);});
 trusted('store-switch-btn', () => openModal('shop-modal'));
 trusted('shop-confirm-btn', () => { const next = element('erp-shop-select').value;
   if (next !== selectedShopId) session.clearPinnedDraft();

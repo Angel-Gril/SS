@@ -129,7 +129,7 @@ export function createLogisticsPricing({
     );
   };
   read.addEventListener('click', (event) => {
-    if (!event.isTrusted || read.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || read.disabled) return;
     const run = ++epoch;
     const selectedScope = scope.value;
     const binding = JSON.parse(JSON.stringify(getBinding()));
@@ -172,7 +172,7 @@ export function createLogisticsPricing({
       });
   });
   quote.addEventListener('click', (event) => {
-    if (!event.isTrusted || quote.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || quote.disabled) return;
     const run = ++epoch;
     const binding = JSON.parse(JSON.stringify(getBinding()));
     const selection = chosen();

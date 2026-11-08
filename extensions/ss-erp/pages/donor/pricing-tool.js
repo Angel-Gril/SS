@@ -89,7 +89,7 @@ export function createPricingTool({ root, getRows, getCurrency, getContext, getB
   const operationBusy = () => getBusy() || logistics.isBusy();
   const interactive = () => !modal.hidden && context === getContext() && !operationBusy();
   automatic.addEventListener('click', event => {
-    if (!event.isTrusted || automatic.disabled || !interactive()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || automatic.disabled || !interactive()) return;
     const run = ++viewEpoch;
     invalidate();
     const pending = logistics.open();
@@ -117,7 +117,7 @@ export function createPricingTool({ root, getRows, getCurrency, getContext, getB
   for (const input of inputs.values()) input.addEventListener('input', ()=>invalidate());
   currency.addEventListener('change', () => { inputs.get('fxRate').disabled = currency.value !== 'RUB'; invalidate(); });
   fillFreight.addEventListener('click', event => {
-    if (!event.isTrusted || fillFreight.disabled || !interactive()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || fillFreight.disabled || !interactive()) return;
     if (!freight.value || !Number.isFinite(Number(freight.value)) || Number(freight.value) < 0) {
       state.textContent = '请填写非负的统一运费估算，免运费可明确填写 0。'; return;
     }
@@ -125,7 +125,7 @@ export function createPricingTool({ root, getRows, getCurrency, getContext, getB
     for (const row of rows) row.freight.value = freight.value;
   });
   preview.addEventListener('click', event => {
-    if (!event.isTrusted || preview.disabled || !interactive()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || preview.disabled || !interactive()) return;
     try {
       invalidate(false);
       const results = session.preview(readParameters(), readRows());
@@ -146,7 +146,7 @@ export function createPricingTool({ root, getRows, getCurrency, getContext, getB
     } catch (error) { invalidate(); state.textContent = error.message; }
   });
   apply.addEventListener('click', event => {
-    if (!event.isTrusted || apply.disabled || !hasPreview || !interactive()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || apply.disabled || !hasPreview || !interactive()) return;
     try {
       if(automaticQuote&&!['validUntil','authorizationValidUntil'].every(key=>Date.parse(automaticQuote[key])>Date.now()))throw Error('物流报价已过期，请重新计算');
       session.apply(readParameters(), readRows());

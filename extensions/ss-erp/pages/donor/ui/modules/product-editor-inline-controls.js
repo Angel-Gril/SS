@@ -39,7 +39,7 @@ export function createInlineControl(arg5, arg6) {
     control.className = 'editor-control select-search-wrap'; control.textContent = selectedValue6 || '选择官方选项';
     Object.defineProperty(control, 'value', { get: () => selectedValue6 });
     control.addEventListener('click', (event) => {
-      if (event.isTrusted) arg5.openDictionary({ attributeId: arg5.attributeId, rowIndex: Number(control.dataset.rowIndex) });
+      if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) arg5.openDictionary({ attributeId: arg5.attributeId, rowIndex: Number(control.dataset.rowIndex) });
     });
     return control;
   }

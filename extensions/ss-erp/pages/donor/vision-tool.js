@@ -73,10 +73,10 @@ export function createVisionTool({ root, command, getBinding, getSkuKey, getMedi
       state.textContent = error.message; report(error);
     } finally { busy = false; sync(); }
   }
-  start.addEventListener('click', event => { if (event.isTrusted && !start.disabled) void analyze().catch(report); });
-  recover.addEventListener('click', event => { if (event.isTrusted && !recover.disabled) void analyze(true).catch(report); });
+  start.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !start.disabled) void analyze().catch(report); });
+  recover.addEventListener('click', event => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !recover.disabled) void analyze(true).catch(report); });
   apply.addEventListener('click', event => {
-    if (!event.isTrusted || apply.disabled || token !== currentToken()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || apply.disabled || token !== currentToken()) return;
     try { applyDescription(output); modal.hidden = true; } catch (error) { report(error); }
   });
   return {

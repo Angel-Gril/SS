@@ -346,14 +346,14 @@ let profilesLoaded=false,modeOverride='',mode='ERP_HOSTED',profileId='',analysis
     else if(result.receipt)onMessage('商品 AI 分析完成，请检查筛图、属性与俄文候选。','ok');
     return result;
   }
-  retry.addEventListener('click',event=>{if(event.isTrusted&&!retry.disabled)void prepare().catch(report);});
-  start.addEventListener('click',event=>{if(event.isTrusted&&!start.disabled)void analyze().catch(report);});
-    recover.addEventListener('click',event=>{if(event.isTrusted&&!recover.disabled)void action(async()=>{const state=await session.recover();if(state.receipt)onCompleted('analysis');});});
-  curation.addEventListener('click',event=>{if(event.isTrusted&&!curation.disabled)void action(async()=>{
+  retry.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!retry.disabled)void prepare().catch(report);});
+  start.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!start.disabled)void analyze().catch(report);});
+    recover.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!recover.disabled)void action(async()=>{const state=await session.recover();if(state.receipt)onCompleted('analysis');});});
+  curation.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!curation.disabled)void action(async()=>{
     if(!session.current()||!session.state().receipt&&!session.state().stageResults?.CURATION)throw new Error('筛图候选已变化');const selected=selectedImages();if(!selected.length)throw new Error('请保留至少一张当前商品参考图；来源图片仍保留。');
     await session.confirmCuration(selected.map(key=>safeKeys[rawKeys.indexOf(key)]));onCuration(selected,rawKeys);modal.hidden=true;onCompleted('analysis-review');});});
-  applyVisual.addEventListener('click',event=>{if(event.isTrusted&&!applyVisual.disabled)void action(async()=>{const value=JSON.parse(visual.value);await session.confirmVisual(value);onVisual(value);});});
-  applyAttributes.addEventListener('click',event=>{if(event.isTrusted&&!applyAttributes.disabled)void action(async()=>{
+  applyVisual.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!applyVisual.disabled)void action(async()=>{const value=JSON.parse(visual.value);await session.confirmVisual(value);onVisual(value);});});
+  applyAttributes.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!applyAttributes.disabled)void action(async()=>{
     const selectedAttributeIds=[...attributeList.querySelectorAll('input:checked')].map(input=>Number(input.value));
     const request={binding:safeBinding(),analysisInput:session.state().analysisInput,selectedAttributeIds,action:'ATTRIBUTES',operationKey:'precision-preparation-apply:'+crypto.randomUUID()};
     await session.stageApplication('ATTRIBUTES',request);
@@ -361,29 +361,29 @@ let profilesLoaded=false,modeOverride='',mode='ERP_HOSTED',profileId='',analysis
     catch(error){if(error.outcome==='NOT_SUBMITTED')await session.clearApplication();throw error;}});});
   for(const input of [title,description,tags])input.addEventListener('input',()=>{inputDirty=true;sync();});
   visual.addEventListener('input',sync);
-  manual.addEventListener('click',event=>{if(event.isTrusted&&!manual.disabled)void action(async()=>{
+  manual.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!manual.disabled)void action(async()=>{
     const result=await session.continueManually();
     if(!result.manuallyContinued)throw new Error('未能保留当前结果，请先核对原操作');
     modal.hidden=true;onMessage('当前 AI 结果已保留；未完成阶段保持未完成，请继续手工编辑。');onCompleted('analysis-manual');
   });});
-  sourceReset.addEventListener('click',event=>{if(!event.isTrusted||sourceReset.disabled)return;void action(async()=>{
+  sourceReset.addEventListener('click',event=>{if(!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)||sourceReset.disabled)return;void action(async()=>{
     await onSourceChanged();
     session.reset();
     modal.hidden=true;
     onCompleted('source-reset');
   });});
-  save.addEventListener('click',event=>{if(event.isTrusted&&!save.disabled)void action(async()=>{
+  save.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!save.disabled)void action(async()=>{
     await session.updateDraft(editedCopy());
     try{await saveCopy({titleRu:title.value,descriptionRu:description.value||null},null,request=>session.stageApplication('COPY',request));await session.clearApplication();}
     catch(error){if(error.outcome==='NOT_SUBMITTED')await session.clearApplication();throw error;}
     copyCandidate=getCopyCandidates()?.find(item=>item.sourceCurrent&&item.titleRu===title.value&&item.descriptionRu===(description.value||null));
     if(!copyCandidate)throw new Error('ERP 保存回执尚未包含所示文案，请先读取草稿核对');inputDirty=false;await session.markReviewed('copySaved');});});
-  recoverSave.addEventListener('click',event=>{if(event.isTrusted&&!recoverSave.disabled)void action(async()=>{
+  recoverSave.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!recoverSave.disabled)void action(async()=>{
     const pending=session.state().application;if(!pending) return;
     if(pending.kind==='ATTRIBUTES'){await onAttributes(pending.request);await session.clearApplication();await session.markReviewed('attributesApplied');}
     else{await saveCopy(pending.request.value,pending.request);await session.clearApplication();copyCandidate=getCopyCandidates()?.find(item=>item.sourceCurrent&&item.titleRu===title.value&&item.descriptionRu===(description.value||null));await session.markReviewed('copySaved');}
     onCompleted(pending.kind==='ATTRIBUTES'?'attributes':'copy-save');},true);});
-  approve.addEventListener('click',event=>{if(event.isTrusted&&!approve.disabled)void action(async()=>{
+  approve.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!approve.disabled)void action(async()=>{
     const candidate=getCopyCandidates()?.find(item=>item.id===copyCandidate?.id);if(!candidate?.sourceCurrent||candidate.titleRu!==title.value||candidate.descriptionRu!==description.value)throw new Error('待审核文案已变化');
     await approveCopy(candidate.id);copyCandidate=null;onCompleted('copy');});});
   return {sync,state:()=>session.state(),current:ready,
@@ -409,7 +409,7 @@ let profilesLoaded=false,modeOverride='',mode='ERP_HOSTED',profileId='',analysis
       try{await runtime?.registerUi?.();profiles=(await runtime.settings.listProfiles()).profiles||[];profilesLoaded=true;}catch{profiles=[];}
       for(const value of profiles){const option=make('option','',value.name);option.value=value.id;profile.append(option);}profile.value=profileId||profiles[0]?.id||'';profileLabel.append(profile);
       const configure=make('button','ghost','配置自带 API 与会话密钥');configure.id='precision-preparation-configure-api';
-      configure.addEventListener('click',event=>{if(event.isTrusted&&!configure.disabled)void openByokSettings().catch(report);});
+      configure.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!configure.disabled)void openByokSettings().catch(report);});
       const permission=make('button','primary','授权商品分析接口来源');permission.id='precision-preparation-analysis-permission';permission.hidden=true;permission.disabled=true;
       const readinessText=make('p','precision-preparation-notice');readinessText.id='precision-preparation-analysis-readiness';readinessText.setAttribute('role','status');
       let ticket=null,settingsEpoch=0,checking=false;
@@ -433,7 +433,7 @@ let profilesLoaded=false,modeOverride='',mode='ERP_HOSTED',profileId='',analysis
         finally{if(expected===settingsEpoch){checking=false;changed();}}
       }
       permission.addEventListener('click',event=>{
-        if(!event.isTrusted||permission.disabled||!ticket)return;
+        if(!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)||permission.disabled||!ticket)return;
         const activeTicket=ticket;ticket=null;permission.disabled=true;
         let pending;
         try{pending=runtime.authorizeProductAnalysis(event,activeTicket);}catch(error){report(error);void check();return;}

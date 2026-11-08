@@ -70,7 +70,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     for (const item of data?.copy?.pendingCandidates || []) {
       const button = make('button', 'ghost', item.sourceCurrent ? `预览待审核文案 ${item.id}` : '来源已变化 · 此候选不可审核');
       button.dataset.copyCandidate = item.id; button.disabled = !item.sourceCurrent || opening || getBusy();
-      button.addEventListener('click', (event) => { if (event.isTrusted && !button.disabled) select(item); });
+      button.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !button.disabled) select(item); });
       candidates.append(button);
     }
     review.replaceChildren();
@@ -84,7 +84,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
   title.addEventListener('input', () => { dirty.add('title'); onDirty('copy.title'); sync(); });
   description.addEventListener('input', () => { dirty.add('description'); onDirty('copy.description'); sync(); });
   generate.addEventListener('click', event => {
-    if (!event.isTrusted || generate.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || generate.disabled) return;
     const value = { fields: ['title', 'description'], ...(instructions.value.trim() ? { userInstructions: instructions.value.trim() } : {}) };
     const frozenToken = confirmationToken();
     void Promise.resolve().then(async () => {
@@ -95,11 +95,11 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     }).catch(report).finally(sync);
   });
   recover.addEventListener('click', event => {
-    if (!event.isTrusted || recover.disabled || !getGenerationPending?.()) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || recover.disabled || !getGenerationPending?.()) return;
     void Promise.resolve().then(() => saveEditor('COPY_GENERATE', {}, true)).catch(report).finally(sync);
   });
   save.addEventListener('click', (event) => {
-    if (!event.isTrusted || save.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || save.disabled) return;
     void Promise.resolve().then(async () => {
       const value = {};
       if (dirty.has('title')) {
@@ -114,7 +114,7 @@ export function createCopyEditor({ root, getEditor, getBinding, getSourceTitle, 
     }).catch(report);
   });
   approve.addEventListener('click', (event) => {
-    if (!event.isTrusted || approve.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || approve.disabled) return;
     void Promise.resolve().then(async () => {
       if (!reviewCurrent()) throw new Error('草稿或候选已变化，请重新预览');
       await saveEditor('COPY_APPROVE', { candidateId: selected.id });

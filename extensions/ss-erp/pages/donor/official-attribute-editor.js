@@ -167,9 +167,9 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     query.value = ''; list.replaceChildren(); modal.hidden = false; apply.disabled = true;
     await searchDictionary();
   }
-  search.addEventListener('click', (event) => { if (event.isTrusted) void searchDictionary().catch(report); });
+  search.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) void searchDictionary().catch(report); });
   apply.addEventListener('click', (event) => {
-    if (!event.isTrusted || apply.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || apply.disabled) return;
     try {
       const captured = dialog; assertEditable(captured?.field, captured?.token);
       const pairs = [...captured.selected.entries()];
@@ -178,13 +178,13 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     } catch (error) { report(error); }
   });
   textApply.addEventListener('click', (event) => {
-    if (!event.isTrusted) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     try { assertEditable(textContext?.field, textContext?.token); change(textContext.field, textContext.sku, typed(textContext.field, textArea.value)); textModal.hidden = true; }
     catch (error) { report(error); }
   });
-  refresh.addEventListener('click', (event) => { if (event.isTrusted && !refresh.disabled) void load(true).catch(report); });
+  refresh.addEventListener('click', (event) => { if (SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) && !refresh.disabled) void load(true).catch(report); });
   save.addEventListener('click', (event) => {
-    if (!event.isTrusted || save.disabled) return;
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) || save.disabled) return;
     void Promise.resolve().then(() => {
       if (edits.size > 500) throw new Error('一次最多保存 500 项属性变更，请减少本次编辑后再保存');
       return onSave({ schemaRevision: workspace.schemaRevision, changes: [...edits.values()].map((value) => structuredClone(value)) });
