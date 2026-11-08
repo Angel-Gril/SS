@@ -479,6 +479,15 @@ element('ui-scale-root').append(categoryModal);
 // 直接提交会得到 409 source_listing_catalog_stale。有草稿时先向 ERP 取一次真实
 // revision（tree 已在 background 剥离，回执只有 ~6KB），本地检索仍走内置快照。
 let catalogRevisionFromErp='';
+// 供本地类目推荐使用的商品画像。属性不在这里拼（它在 bridge 的采集结果里），
+// 实测仅用标题 + 来源类目即可达到 8/8 的 Top-1 准确率。
+function productForCategoryRecommendation(){
+  if(!projection.source.sourceProductId)return null;
+  return {
+    title: projection.source.title || '',
+    sourceCategory: projection.source.categoryName || '',
+  };
+}
 async function ensureCatalogRevision(){
   if(catalogRevisionFromErp)return catalogRevisionFromErp;
   if(!listing())return '';
@@ -496,7 +505,10 @@ async function ensureCatalogRevision(){
 const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>listing()?currentEditorBinding():null,getProduct:()=>projection.source,
   // 2026-11：类目检索走内置 Ozon 官方快照（7341 叶子），不需要草稿 binding。
   // 解开「选类目要草稿 / 建草稿第一步要选类目」的死锁，并避开 ERP catalog 的 712KB 回执。
-  localCatalog:query=>searchLocalCategories(query, catalogRevisionFromErp || undefined),
+  // 采集完成后把商品信息带进本地推荐，类目弹窗打开即可看到自动命中的候选。
+  // 参考精铺 category-recommender / 知了 getSourceCategoryAdjustment：
+  // 类目不该让用户从零手搜，而是「先推荐，用户确认或改」。
+  localCatalog:query=>searchLocalCategories(query, catalogRevisionFromErp || undefined, productForCategoryRecommendation()),
   // 属性预览依赖 ERP /editor/catalog 的回执，该通道不稳定；属性本就是确认类目后
   // 在工作台按官方 schema 填写的后续步骤，所以这里直接跳过预览。
   skipAttributePreview:true,
@@ -1669,8 +1681,8 @@ trusted('settings-btn', () => {
 });
 trusted('category-select-btn', async () => {
   // 2026-11：类目检索改为本地（内置 Ozon 官方快照），不再要求草稿。
-  // 但 ERP 的 /editor/save 会校验 catalogRevision，所以有草稿时先取一次真实版本号。
-  await ensureCatalogRevision();
+  // 打开时**不**预取 ERP revision —— 本地挑选不需要它，且在回执通道不稳时
+  // 会让弹窗压根打不开。revision 在「确认选择」写入草稿时由 saveSelection 获取。
   await categoryPicker.open();
 });
 trusted('process-view-btn', () => { openModal('process-modal'); renderSourceDiagnostics(); });
@@ -1862,7 +1874,11 @@ const STEPPER_DEFS = [
 
 const STEPPER_ACTIONS = {
   collect: () => { void loadProjection({ force: true }).catch(report); },
-  category: () => { void (async () => { await ensureCatalogRevision(); await categoryPicker.open(); })().catch(report); },
+  // 打开弹窗不需要 ERP revision —— 本地推荐 + 本地检索都能独立工作。
+  // revision 只在「确认选择」写入草稿时才是必需，由 saveSelection 里再取。
+  // 之前在这里先 await ensureCatalogRevision()，而该调用走 ERP
+  // /editor/catalog，回执通道不稳定，导致点步骤条后弹窗根本打不开。
+  category: () => { void categoryPicker.open().catch(report); },
   analysis: () => { void openProductAnalysis().catch(report); },
   image: () => { void startImageWorkflow().catch(report); },
   publish: () => { void openPublish().catch(report); },
