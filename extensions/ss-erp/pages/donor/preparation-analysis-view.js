@@ -286,19 +286,37 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     analysisTask=task;return task;
   }
   async function analyzeCurrent(){
+    // 2026-11 诊断：analyze 有 6 个可能挂住的 await，任何一步静默失败
+    // 都会让 UI 永远停在「等待前一步」且没有任何错误提示。
+    var __aT0 = Date.now();
+    function __aMark(label, extra) {
+      try {
+        var el = document.documentElement;
+        var prev = el.getAttribute('data-analyze-diag') || '';
+        el.setAttribute('data-analyze-diag',
+          (prev + ' >> ' + label + '@' + (Date.now() - __aT0) + 'ms' + (extra === undefined ? '' : ' ' + JSON.stringify(extra))).slice(-1600));
+      } catch (_e) {}
+    }
+    __aMark('enter');
     if(session.state().operation)throw new Error('请先核对原商品分析');
-    if(ready())return session.state();
-    if(!restoreComplete)await prepare();
+    if(ready()){__aMark('already-ready');return session.state();}
+    if(!restoreComplete){__aMark('prepare-begin');await prepare();__aMark('prepare-done');}
+    __aMark('capability-check', {available: capability?.available, message: (capability?.message||'').slice(0,60)});
     if(!capability?.available)return {unavailable:true,message:capability?.message||'商品 AI 分析尚未启用，继续手工匹配和编辑。'};
     const token=preparationToken();
     modal.hidden=false;
     const expected=confirmationToken();
+    __aMark('ask-begin', {notice: (capability.providerFeeNotice||'').slice(0,80)});
     const confirmed=await ask({message:capability.providerFeeNotice,detail:stagedEnabled?'依次执行图片筛选、商品视觉分析、属性与俄文文案生成；已完成结果会保留。':'一次分析提供筛图、视觉、属性和俄文候选。',token:expected,getToken:confirmationToken});
+    __aMark('ask-done', {confirmed: !!confirmed});
     if(!confirmed||expected!==confirmationToken())return {declined:true};
     rawKeys=selectedImages();safeKeys=await compileAnalysisSelection(rawKeys);
+    __aMark('selection-compiled', {raw: rawKeys.length, safe: (safeKeys||[]).length});
     assertPreparationToken(token);
     if(expected!==confirmationToken())return {declined:true};
+    __aMark('session-analyze-begin');
     const result=await session.analyze();
+    __aMark('session-analyze-done', {receipt: !!(result && result.receipt), manuallyContinued: !!(result && result.manuallyContinued)});
     if(result.manuallyContinued)onMessage('自动 AI 流程已停止，当前结果保留，请继续手工编辑。');
     else if(result.receipt)onMessage('商品 AI 分析完成，请检查筛图、属性与俄文候选。','ok');
     return result;

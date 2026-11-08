@@ -38,6 +38,28 @@
   var sourceTransferAttempts = 0;
   var sourceTransferEpoch = 0;
   var sourceTransferReading = false;
+
+  // =====================================================================
+  // 诊断通道（2026-11）
+  // content script 跑在 ISOLATED world，它的 console.* 无法通过 CDP 的
+  // Runtime.consoleAPICalled 抓取，调试采集链路时是盲区。
+  // 这里把最近 40 条轨迹写进 host 的 data-diag 属性 —— 主 world 可直接读取。
+  // 生产可安全保留（只有几十字节的属性写入），或后续降级为只在 ?sserp-debug 时启用。
+  // =====================================================================
+  var diagTrail = [];
+  function diagLog(label, extra) {
+    try {
+      var line = String(label) + (extra === undefined ? '' : ' ' + JSON.stringify(extra));
+      diagTrail.push(line);
+      if (diagTrail.length > 40) diagTrail.shift();
+      var el = host || document.getElementById(HOST_ID);
+      if (el) {
+        el.setAttribute('data-diag', diagTrail.join(' >> ').slice(-2000));
+        el.setAttribute('data-diag-at', String(Date.now()));
+      }
+    } catch (_e) { /* 诊断绝不能反过来影响主流程 */ }
+  }
+  globalThis.__SSERP_BRIDGE_DIAG__ = function () { return diagTrail.slice(); };
   var currentHistory = {
     state: 'idle', listingWorkflowId: '', error: '', context: null,
     items: [], nextCursor: null, receipt: null,
@@ -178,6 +200,9 @@
   }
 
   function commandResult(requestId, ok, error, receipt, data, outcome, code, failure) {
+    diagLog('commandResult', { ok: ok === true, req: String(requestId || '').slice(0, 8),
+      hasData: data !== undefined, dataKeys: data && typeof data === 'object' ? Object.keys(data).slice(0, 6).join(',') : null,
+      err: ok === true ? null : String(error || '').slice(0, 80) });
     postToFrame({
       contractVersion: Contract.CONTRACT_VERSION,
       type: 'COMMAND_RESULT',
@@ -218,19 +243,65 @@
     if (!busy) idleReaders.splice(0).forEach(function (resolve) { resolve(); });
   }
 
+  // 2026-11 修复：waitForAuthority 原先是无上限的 while 循环。
+  // 只要 busy / projectionRead / hostedAuthorityRefresh 中任何一项没有清空
+  // （例如某次 loadProjection 抛错后 busy 未复位，或 mutate 路径提前 return），
+  // 所有非 mutation 命令（EDITOR_READ / EDITOR_CATALOG / EDITOR_ATTRIBUTES …）
+  // 都会在这里永久挂起 —— 既不 resolve 也不 reject，不产出任何日志或错误，
+  // 上层只能看到「正在读取 Ozon 官方类目…」并一直等到自己超时。
+  // 这里加总时限 + 每轮让出，超时后抛出可读错误，让调用方走正常失败路径。
+  var AUTHORITY_WAIT_TIMEOUT_MS = 20000;
   async function waitForAuthority() {
-    // Read callers wait for the original write/refresh; they never retry a write.
+    var startedAt = Date.now();
     while (busy || projectionRead || hostedAuthorityRefresh) {
+      if (Date.now() - startedAt > AUTHORITY_WAIT_TIMEOUT_MS) {
+        diagLog('waitForAuthority:TIMEOUT', {
+          busy: busy, read: !!projectionRead, refresh: !!hostedAuthorityRefresh,
+          waitedMs: Date.now() - startedAt,
+        });
+        throw Object.assign(
+          new Error('工作台前序操作未结束（' + Math.round((Date.now() - startedAt) / 1000) + ' 秒），请点击「重新读取」后重试'),
+          { outcome: 'NOT_SUBMITTED', code: 'AUTHORITY_WAIT_TIMEOUT' },
+        );
+      }
       var pending = hostedAuthorityRefresh && hostedAuthorityRefresh.promise || projectionRead;
-      if (pending) await pending;
-      else await new Promise(function (resolve) { idleReaders.push(resolve); });
+      if (pending) {
+        await Promise.race([
+          pending.catch(function () {}),
+          new Promise(function (resolve) { globalThis.setTimeout(resolve, 2000); }),
+        ]);
+      } else {
+        await Promise.race([
+          new Promise(function (resolve) { idleReaders.push(resolve); }),
+          new Promise(function (resolve) { globalThis.setTimeout(resolve, 500); }),
+        ]);
+      }
     }
   }
 
+  // 2026-11 修复：readEditorRuntime 此前直接复用 sendRuntimeMessage，而后者
+  // 没有超时。ERP 侧 /editor/catalog 等接口一旦不回（网络挂起、网关无响应、
+  // 或 device scope 被吊销但连接未断），Promise 永久 pending，
+  // 类目搜索会永远停在「正在读取 Ozon 官方类目…」，且失败路径一行日志都没有。
+  // 这里给读请求加统一上限，超时后返回可读错误，让 UI 能提示重试。
+  var EDITOR_READ_TIMEOUT_MS = 60000;
   function readEditorRuntime(message) {
     var key = JSON.stringify(message);
-    if (editorReadRequests.has(key)) return editorReadRequests.get(key);
-    var pending = sendRuntimeMessage(message).finally(function () {
+    if (editorReadRequests.has(key)) { diagLog('readEditorRuntime:REUSE_CACHED', { type: message && message.type }); return editorReadRequests.get(key); }
+    diagLog('readEditorRuntime:NEW', { type: message && message.type });
+    var timer = 0;
+    var timedOut = new Promise(function (resolve) {
+      timer = globalThis.setTimeout(function () {
+        resolve({
+          ok: false,
+          code: 'EDITOR_READ_TIMEOUT',
+          outcome: 'NOT_SUBMITTED',
+          error: 'ERP 读取超时（60 秒），请检查网络与设备授权后重试',
+        });
+      }, EDITOR_READ_TIMEOUT_MS);
+    });
+    var pending = Promise.race([sendRuntimeMessage(message), timedOut]).finally(function () {
+      globalThis.clearTimeout(timer);
       if (editorReadRequests.get(key) === pending) editorReadRequests.delete(key);
     });
     editorReadRequests.set(key, pending);
@@ -238,16 +309,18 @@
   }
 
   function loadProjection(options) {
+    diagLog('loadProjection', { hasRead: !!projectionRead, force: !!(options && options.force) });
     if (projectionRead) {
       // A read started before a committed mutation cannot prove its new revision.
       // Explicit source reads must also wait for, then supersede, draft-only reads.
       if ((options && options.afterMutation === true) || (!options?.draftReadback && !projectionReadCollectsSource)) return projectionRead.then(function () {
         return loadProjection({ ...options, afterMutation: false });
       });
+      diagLog('loadProjection:reuse-pending-read');
       return projectionRead;
     }
     projectionReadCollectsSource = !options?.draftReadback;
-    projectionRead = readProjection(options).finally(function () { projectionRead = null; });
+    projectionRead = readProjection(options).finally(function () { projectionRead = null; diagLog('loadProjection:cleared'); });
     return projectionRead;
   }
 
@@ -281,14 +354,31 @@
         state: 'idle', listingWorkflowId: '', error: '', projection: null,
       };
     }
-    setBusy(true, '', busy ? busyMessage : '正在读取商品与草稿状态…', true);
+    setBusy(true, '', busy ? busyMessage : '正在读取商品…', true);
+    diagLog('readProjection:start', { epoch: epoch, platform: platform, precisionEnabled: precisionEnabled, hasCapture: !!(globalThis.SS_ERP_DONOR_1688_CAPTURE) });
+    var baseProjection;
+    // ==================================================================
+    // 阶段 1：本地采集 —— 只做页面解析，不碰 ERP。
+    // 2026-11 重构：此前采集与「ERP 店铺列表 + 工作流状态」串在同一个
+    // busy 状态里，ERP 侧任何延迟（device token 15 分钟 TTL 到期后的
+    // refresh、navigator.locks 排队、网络抖动）都会把本地采集一起拖住，
+    // 表现为「正在读取商品与草稿状态…」永久转圈，进而 source admission
+    // 永远为空 → 图片工作台注册失败 → AI 生图/审核/上架全部不可用。
+    // 现在采集完成即发布并解除 busy，ERP 状态改为阶段 2 后台加载。
+    // ==================================================================
+    var diagT0 = Date.now();
     try {
+      console.info('[SSERP-DIAG] phase1 start', 'epoch=' + epoch, 'platform=' + platform, 'precisionEnabled=' + precisionEnabled);
+      diagLog('phase1:collect-begin', { t: Date.now() - diagT0 });
       var collected = options.draftReadback ? { ok: true, data: currentProduct }
         : precisionEnabled && platform === '1688'
         ? { ok: true, data: await globalThis.SS_ERP_DONOR_1688_CAPTURE.collect({
           url: sourceUrl, extensionVersion: chrome.runtime.getManifest().version,
         }) }
         : await sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' });
+      console.info('[SSERP-DIAG] phase1 collect done', (Date.now() - diagT0) + 'ms',
+        'ok=' + (collected && collected.ok), 'hasData=' + !!(collected && collected.data));
+      diagLog('phase1:collect-done', { ms: Date.now() - diagT0, ok: !!(collected && collected.ok), hasData: !!(collected && collected.data) });
       if (!collected || !collected.ok || !collected.data) {
         throw new Error(collected && collected.error || '读取当前商品失败');
       }
@@ -296,7 +386,7 @@
       if (location.href !== sourceUrl) throw new Error('来源页面已变化，请重新读取');
       currentProduct = collected.data;
       currentProductUrl = sourceUrl;
-      var baseProjection = Contract.createProjection({
+      baseProjection = Contract.createProjection({
         platform: platform,
         product: currentProduct,
         busy: true,
@@ -312,56 +402,92 @@
         history: sameSource ? currentHistory : {}, billing: sameSource ? currentBilling : {},
       });
       publishProjection();
-
-      var results = await Promise.all([
-        sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops', deviceOnly: true }).catch(function (error) {
-          return { ok: false, error: error && error.message ? error.message : String(error) };
-        }),
-        sendRuntimeMessage({
-          type: 'ss-erp:source-listing-workbench-status',
-          sourceProductId: baseProjection.source.sourceProductId,
-          platform: platform,
-        }).catch(function (error) {
-          return { ok: false, error: error && error.message ? error.message : String(error) };
-        }),
-      ]);
-      if (epoch !== refreshEpoch) return;
-      if (location.href !== sourceUrl) throw new Error('来源页面已变化，请重新读取');
-      var shopResult = results[0];
-      var statusResult = results[1];
-      var error = '';
-      if (!shopResult || !shopResult.ok) error = shopResult && shopResult.error || '店铺授权读取失败';
-      if (!statusResult || !statusResult.ok) {
-        error = error || statusResult && statusResult.error || 'ERP 工作流读取失败';
-      }
-      var nextProjection = Contract.createProjection({
-        platform: platform,
-        product: currentProduct,
-        shops: shopResult && shopResult.ok ? shopResult.data : [],
-        handoff: statusResult && statusResult.ok ? statusResult.handoff : null,
-        workbench: statusResult && statusResult.ok
-          ? statusResult.result
-          : { state: 'unavailable', reason: 'runtime_unavailable' },
-        history: currentHistory,
-        billing: currentBilling,
-        busy: mutationPending,
-        busyMessage: mutationPending ? busyMessage : '',
-        error: error,
-      });
-      if (options.draftReadback && !error && !draftReadbackMatches(options.draftReadback, nextProjection)) {
-        throw new Error('草稿读回的来源快照或店铺版本已变化，请重新读取');
-      }
-      currentProjection = nextProjection;
-      currentHistory = currentProjection.history;
-      publishProjection();
-      return true;
+      diagLog('phase1:published', { hasProduct: !!currentProduct, title: (currentProjection.source && currentProjection.source.title || '').slice(0, 40), skus: (currentProjection.skus || []).length });
     } catch (error) {
-      if (epoch !== refreshEpoch) return;
-      setBusy(false, error && error.message ? error.message : String(error), '', true);
+      if (epoch !== refreshEpoch) return false;
+      // 2026-11 诊断：content script 的 console 无法通过 CDP 抓取，
+      // 因此把失败上下文直接拼进 projection.error，让工作台 UI 显示出来。
+      var captureApi = globalThis.SS_ERP_DONOR_1688_CAPTURE;
+      var strategyApi = globalThis.SS_ERP_DONOR_STRATEGIES;
+      var diagDetail = '[采集失败] '
+        + (error && error.message ? error.message : String(error))
+        + ' | 耗时=' + (Date.now() - diagT0) + 'ms'
+        + ' | platform=' + platform
+        + ' | precisionEnabled=' + precisionEnabled
+        + ' | hasCapture=' + !!captureApi
+        + ' | hasStrategies=' + !!strategyApi
+        + ' | hasContract=' + !!Contract
+        + ' | url=' + String(sourceUrl).slice(0, 50);
+      diagLog('phase1:catch', { msg: String(error && error.message || error).slice(0, 150), ms: Date.now() - diagT0 });
+      setBusy(false, diagDetail, '', true);
       return false;
     } finally {
+      // 采集一结束就解除 busy，绝不为 ERP 侧等待。
       if (epoch === refreshEpoch) setBusy(false, currentProjection.error, '', true);
     }
+
+    // ==================================================================
+    // 阶段 2：ERP 店铺与工作流状态 —— 后台异步，失败不影响商品可用性。
+    // draftReadback 必须保持严格同步语义（编辑写入后的读回校验），
+    // 因此该场景仍走等价的同步路径。
+    // ==================================================================
+    if (options.draftReadback) {
+      return readErpState(baseProjection, platform, sourceUrl, epoch, options);
+    }
+    void readErpState(baseProjection, platform, sourceUrl, epoch, options).catch(function (error) {
+      console.warn('[SSERP] ERP 状态加载失败，商品仍可用:',
+        error && error.message ? error.message : String(error));
+    });
+    return true;
+  }
+
+  /**
+   * 读取 ERP 店铺列表与工作流状态并合并进 currentProjection。
+   * 与采集解耦：调用方可以选择 await（draftReadback）或 fire-and-forget。
+   */
+  async function readErpState(baseProjection, platform, sourceUrl, epoch, options) {
+    var results = await Promise.all([
+      sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops', deviceOnly: true }).catch(function (error) {
+        return { ok: false, error: error && error.message ? error.message : String(error) };
+      }),
+      sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-status',
+        sourceProductId: baseProjection.source.sourceProductId,
+        platform: platform,
+      }).catch(function (error) {
+        return { ok: false, error: error && error.message ? error.message : String(error) };
+      }),
+    ]);
+    if (epoch !== refreshEpoch) return false;
+    if (location.href !== sourceUrl) return false;
+    var shopResult = results[0];
+    var statusResult = results[1];
+    var error = '';
+    if (!shopResult || !shopResult.ok) error = shopResult && shopResult.error || '店铺授权读取失败';
+    if (!statusResult || !statusResult.ok) {
+      error = error || statusResult && statusResult.error || 'ERP 工作流读取失败';
+    }
+    var nextProjection = Contract.createProjection({
+      platform: platform,
+      product: currentProduct,
+      shops: shopResult && shopResult.ok ? shopResult.data : [],
+      handoff: statusResult && statusResult.ok ? statusResult.handoff : null,
+      workbench: statusResult && statusResult.ok
+        ? statusResult.result
+        : { state: 'unavailable', reason: 'runtime_unavailable' },
+      history: currentHistory,
+      billing: currentBilling,
+      busy: mutationPending,
+      busyMessage: mutationPending ? busyMessage : '',
+      error: error,
+    });
+    if (options && options.draftReadback && !error && !draftReadbackMatches(options.draftReadback, nextProjection)) {
+      throw new Error('草稿读回的来源快照或店铺版本已变化，请重新读取');
+    }
+    currentProjection = nextProjection;
+    currentHistory = currentProjection.history;
+    publishProjection();
+    return true;
   }
 
   async function collectSource(requestId) {
@@ -882,9 +1008,14 @@
   }
 
   async function editorCommand(command) {
+    diagLog('editorCommand:enter', { type: command.type, busy: busy, read: !!projectionRead,
+      wbState: currentProjection.workbench.state,
+      items: (currentProjection.workbench.status && currentProjection.workbench.status.listing
+        ? currentProjection.workbench.status.listing.items.length : -1) });
     const mutation = ['EDITOR_SAVE', 'EDITOR_COPY_GENERATE', 'VISION_ANALYZE', 'PREPARATION_ANALYZE', 'PREPARATION_APPLY'].includes(command.type);
     if (mutation && busy) return commandResult(command.requestId, false, busyMessage, null, undefined, 'NOT_SUBMITTED');
     if (!mutation) await waitForAuthority();
+    diagLog('editorCommand:afterWait', { type: command.type });
     let listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
     const matches = () => Boolean(listing && currentProjection.handoff
       && command.binding?.shopId === listing.shopId
@@ -895,6 +1026,8 @@
       listing = currentProjection.workbench.status.listing.items.find(function (item) { return item.id === command.listingWorkflowId; });
       if (!refreshed || !matches()) {
         const reason = currentProjection.error || (!listing ? '设备会话已失效或当前草稿尚未读取' : '来源快照或店铺已变化');
+        diagLog('editorCommand:contextStale', { type: command.type, refreshed: !!refreshed,
+          hasListing: !!listing, reason: String(reason).slice(0, 80) });
         return commandResult(command.requestId, false, `${reason}，请点击“重新读取”后再编辑`, null, undefined, 'NOT_SUBMITTED', 'EDITOR_CONTEXT_REFRESH_REQUIRED');
       }
     }
@@ -916,6 +1049,7 @@
           : command.type === 'LOGISTICS_SCOPES' ? 'logistics-scopes' : command.type === 'LOGISTICS_SERVICES' ? 'logistics-services' : command.type === 'LOGISTICS_QUOTE' ? 'logistics-quote'
         : command.type === 'EDITOR_COPY_CAPABILITY' ? 'copy-capability' : command.type === 'EDITOR_COPY_GENERATE' ? 'copy-generate'
         : command.type === 'EDITOR_ATTRIBUTES' ? 'attributes' : command.type === 'EDITOR_DICTIONARY' ? 'dictionary' : 'read';
+      diagLog('editorCommand:dispatch', { type: command.type });
       const response = await (mutation ? sendRuntimeMessage : readEditorRuntime)({
         type: command.type.startsWith('PREPARATION_') ? 'ss-erp:source-workbench-preparation-' + command.type.slice(12).toLowerCase()
           : command.type === 'VISION_CAPABILITY' ? 'ss-erp:source-workbench-vision-capability'
@@ -1187,13 +1321,19 @@
   }
 
   globalThis.addEventListener('message', function (event) {
-    if (!frame || event.source !== frame.contentWindow || event.origin !== extensionOrigin) return;
+    // 2026-11 诊断：这里是 iframe → bridge 的唯一入口，有 4 个静默 return。
+    // 任何一处命中都会让上游 command() 只能等到 90 秒超时，且看不到原因。
+    if (!frame) { diagLog('msg-entry:NO_FRAME', { type: (event.data && event.data.type) || '?' }); return; }
+    if (event.source !== frame.contentWindow) { diagLog('msg-entry:SOURCE_MISMATCH', { type: (event.data && event.data.type) || '?' }); return; }
+    if (event.origin !== extensionOrigin) { diagLog('msg-entry:ORIGIN_MISMATCH', { origin: String(event.origin).slice(0, 50), type: (event.data && event.data.type) || '?' }); return; }
     var command;
     try {
       command = Contract.parseFrameCommand(event.data);
-    } catch {
+    } catch (error) {
+      diagLog('msg-entry:PARSE_FAIL', { type: (event.data && event.data.type) || '?', err: String(error && error.message || error).slice(0, 120) });
       return;
     }
+    diagLog('msg-entry:OK', { type: command.type });
     if (command.type === 'ENTRY_ACCEPTED') {
       var entry = entryRequest;
       var matches = entry && entry.context && command.entryRequestId === entry.requestId
@@ -1263,12 +1403,29 @@
       return false;
     }
     if (message && message.type === 'ss-erp:precision-source-attest') {
-      if (!sender || sender.id !== chrome.runtime.id || !precisionEnabled || !frame
-        || !/^[a-f0-9]{48}$/u.test(message.nonce || '')
-        || message.sourcePlatform !== currentProjection.source.platform
-        || message.sourceProductId !== currentProjection.source.sourceProductId) {
+      // 2026-11 诊断：这一层此前只 sendResponse({ok:false})，background 侧
+      // 无法区分「被拒」和「没收到」，最终只表现为 5 秒 ATTESTATION_EXPIRED。
+      var attestReason = '';
+      if (!sender) attestReason = 'no-sender';
+      else if (sender.id !== chrome.runtime.id) attestReason = 'sender-id';
+      else if (!precisionEnabled) attestReason = 'precision-disabled';
+      else if (!frame) attestReason = 'no-frame';
+      else if (!/^[a-f0-9]{48}$/u.test(message.nonce || '')) attestReason = 'nonce-format';
+      else if (message.sourcePlatform !== currentProjection.source.platform) attestReason = 'platform-mismatch';
+      else if (message.sourceProductId !== currentProjection.source.sourceProductId) attestReason = 'product-mismatch';
+      if (attestReason) {
+        diagLog('attest:reject', {
+          reason: attestReason,
+          msgPlatform: message.sourcePlatform,
+          msgProductId: message.sourceProductId,
+          projPlatform: currentProjection.source.platform,
+          projProductId: currentProjection.source.sourceProductId,
+          hasProduct: !!currentProduct,
+          nonceLen: String(message.nonce || '').length,
+        });
         sendResponse({ ok: false }); return false;
       }
+      diagLog('attest:accept', { productId: message.sourceProductId });
       sendRuntimeMessage({ type: 'ss-erp:precision-source-attestation', nonce: message.nonce })
         .then((response) => sendResponse({ ok: response && response.ok === true }))
         .catch(() => sendResponse({ ok: false }));

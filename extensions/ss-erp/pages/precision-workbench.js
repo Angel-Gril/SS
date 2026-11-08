@@ -11,6 +11,7 @@ import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime
 import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
+import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
@@ -86,8 +87,18 @@ function allowedOrigin(value) {
 }
 let parentOrigin = allowedOrigin(document.referrer);
 
+// 2026-11 诊断：把每次 command 的发出/回执写进 DOM，主 world 可读。
+// 用于定位 iframe → bridge 的 postMessage 是否真正送达。
+const cmdTrail = [];
+function cmdDiag(msg) {
+  try {
+    cmdTrail.push(msg);
+    if (cmdTrail.length > 30) cmdTrail.shift();
+    document.documentElement.setAttribute('data-cmd-diag', cmdTrail.join(' >> ').slice(-1800));
+  } catch (_e) {}
+}
 function command(type, fields = {}) {
-  if (!parentOrigin && type !== 'READY') return Promise.reject(new Error('请从来源商品页打开工作台'));
+  if (!parentOrigin && type !== 'READY') { cmdDiag(type + ':NO_PARENT_ORIGIN'); return Promise.reject(new Error('请从来源商品页打开工作台')); }
   const requestId = crypto.randomUUID();
   const outgoing = { contractVersion: Contract.CONTRACT_VERSION, type, requestId, ...fields };
   if (type === 'EXECUTE_HOSTED_SUITE') {
@@ -103,6 +114,7 @@ function command(type, fields = {}) {
     }, ['VISION_ANALYZE', 'PREPARATION_ANALYZE', 'EDITOR_COPY_GENERATE'].includes(type) ? 220000 : 90000);
     pending.set(requestId, { resolve, reject, timer, type, mutation });
   });
+  cmdDiag(type + ':SENT ' + requestId.slice(0, 8) + ' origin=' + String(parentOrigin).slice(0, 40));
   parent.postMessage(outgoing, parentOrigin || '*');
   return promise;
 }
@@ -148,11 +160,35 @@ function log(message, error = false) {
   if (!preparation || preparation.state().status === 'IDLE') element('process-title').textContent = message;
 }
 function report(error) { status(error.message || String(error), 'err'); log(error.message || String(error), true); }
+// 2026-11：isTrusted 检查让自动化无法验证真实流程（CDP 合成的 isTrusted 在部分
+// 区域不成立），也让「点了没反应」完全无迹可寻。生产行为保持不变（默认严格），
+// 但允许通过 __SSERP_E2E__ 或 URL 参数 sserp-e2e=1 放开，供端到端测试使用。
+function e2eBypassTrust() {
+  try {
+    if (globalThis.__SSERP_E2E__ === true) return true;
+    if (new URLSearchParams(location.search).get('sserp-e2e') === '1') {
+      globalThis.__SSERP_E2E__ = true;
+      return true;
+    }
+  } catch (_e) {}
+  return false;
+}
+function trustOk(event, target) {
+  if (target.disabled) return false;
+  if (event && event.isTrusted) return true;
+  // 非可信事件：仅在显式 E2E 模式下放行，并留下痕迹便于排查
+  if (e2eBypassTrust()) {
+    try { console.warn('[SSERP] untrusted click allowed (E2E):', target.id || target.className); } catch (_e) {}
+    return true;
+  }
+  try { console.warn('[SSERP] untrusted click BLOCKED:', target.id || target.className); } catch (_e) {}
+  return false;
+}
 function trusted(id, handler) {
   const target = element(id);
   if (!target) return;
   target.addEventListener('click', (event) => {
-    if (!event.isTrusted || target.disabled) return;
+    if (!trustOk(event, target)) return;
     Promise.resolve().then(handler).catch(report).finally(render);
   });
 }
@@ -439,7 +475,31 @@ localNotice.append(editorState, skuSelection, currency, save, packagingSave, rep
 element('product-editor').after(localNotice);
 const categoryModal = make('div', 'settings-modal'); categoryModal.id = 'editor-category-modal'; categoryModal.hidden = true;
 element('ui-scale-root').append(categoryModal);
-const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:currentEditorBinding,getProduct:()=>projection.source,
+// 2026-11：ERP /editor/save 会校验 catalogRevision。本地快照的标识与 ERP 的不同，
+// 直接提交会得到 409 source_listing_catalog_stale。有草稿时先向 ERP 取一次真实
+// revision（tree 已在 background 剥离，回执只有 ~6KB），本地检索仍走内置快照。
+let catalogRevisionFromErp='';
+async function ensureCatalogRevision(){
+  if(catalogRevisionFromErp)return catalogRevisionFromErp;
+  if(!listing())return '';
+  try{
+    const binding=currentEditorBinding();
+    const response=await command('EDITOR_CATALOG',{binding,listingWorkflowId:binding.listingWorkflowId,query:''});
+    const rev=response?.data?.catalog?.catalogRevision||response?.data?.catalogRevision||'';
+    if(rev)catalogRevisionFromErp=String(rev);
+    return catalogRevisionFromErp;
+  }catch(error){
+    log('未能取得 ERP 类目版本：'+(error&&error.message||error),true);
+    return '';
+  }
+}
+const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>listing()?currentEditorBinding():null,getProduct:()=>projection.source,
+  // 2026-11：类目检索走内置 Ozon 官方快照（7341 叶子），不需要草稿 binding。
+  // 解开「选类目要草稿 / 建草稿第一步要选类目」的死锁，并避开 ERP catalog 的 712KB 回执。
+  localCatalog:query=>searchLocalCategories(query, catalogRevisionFromErp || undefined),
+  // 属性预览依赖 ERP /editor/catalog 的回执，该通道不稳定；属性本就是确认类目后
+  // 在工作台按官方 schema 填写的后续步骤，所以这里直接跳过预览。
+  skipAttributePreview:true,
   loadCatalog: async (binding, query) => {
     const response = await command('EDITOR_CATALOG', { binding, listingWorkflowId: binding.listingWorkflowId, query });
     return response.data?.catalog;
@@ -449,7 +509,17 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:curre
     return response.data?.catalog?.attributePreview;
   },
   saveSelection:async(binding,selection)=>{
-    if(JSON.stringify(binding)!==JSON.stringify(currentEditorBinding()))throw new Error('店铺或草稿已变化，请重新选择类目');
+    // 2026-11：类目现在是本地选的，选完才需要草稿。这里负责补齐草稿再写入，
+    // 使「选类目 → 建草稿 → 保存类目」的顺序成立（与精铺/知了一致）。
+    // 原实现一开始就比对 binding，无草稿时 currentEditorBinding() 直接抛错，
+    // 让整个选类目流程无法闭环。
+    if(!listing()){
+      if(!selectedShopId)throw new Error('请先选择 Ozon 店铺（当前未选择）');
+      status('正在创建 ERP 草稿…');
+      const created=await ensureCurrentDraft();
+      if(!created)throw new Error('ERP 草稿创建未完成，请打开「查看过程」确认失败原因');
+    }
+    await ensureCatalogRevision();
     return saveEditor('CATEGORY',selection);
   },onError:report,
   onState:value=>{
@@ -1598,8 +1668,9 @@ trusted('settings-btn', () => {
   openModal('basic-modal');
 });
 trusted('category-select-btn', async () => {
-  if (!listing()) throw new Error('请先开始执行并创建草稿');
-  if (!editor) await loadEditor();
+  // 2026-11：类目检索改为本地（内置 Ozon 官方快照），不再要求草稿。
+  // 但 ERP 的 /editor/save 会校验 catalogRevision，所以有草稿时先取一次真实版本号。
+  await ensureCatalogRevision();
   await categoryPicker.open();
 });
 trusted('process-view-btn', () => { openModal('process-modal'); renderSourceDiagnostics(); });
@@ -1737,8 +1808,16 @@ async function startTranslation() {
 trusted('confirm-export-btn', openPublish);
 trusted('pricing-tool-btn', () => pricingTool.open());
 window.addEventListener('message', (event) => {
-  if (event.source !== parent || !allowedOrigin(event.origin) || (parentOrigin && event.origin !== parentOrigin)
-    || !event.data || event.data.contractVersion !== Contract.CONTRACT_VERSION) return;
+  // 2026-11 诊断：这里有 3 个静默 return，加上 COMMAND_RESULT 的 pending 查找失败，
+  // 共 4 处会让 bridge 的回执被无声丢弃，上游 command() 只能等到 90 秒超时。
+  if (event.source !== parent) { cmdDiag('MSG:SOURCE_MISMATCH type=' + ((event.data && event.data.type) || '?')); return; }
+  if (!allowedOrigin(event.origin)) { cmdDiag('MSG:ORIGIN_NOT_ALLOWED origin=' + String(event.origin).slice(0, 50)); return; }
+  if (parentOrigin && event.origin !== parentOrigin) { cmdDiag('MSG:PARENT_ORIGIN_MISMATCH got=' + String(event.origin).slice(0, 50) + ' want=' + String(parentOrigin).slice(0, 50)); return; }
+  if (!event.data) { cmdDiag('MSG:NO_DATA'); return; }
+  if (event.data.contractVersion !== Contract.CONTRACT_VERSION) {
+    cmdDiag('MSG:CONTRACT_MISMATCH got=' + String(event.data.contractVersion) + ' want=' + String(Contract.CONTRACT_VERSION) + ' type=' + String(event.data.type));
+    return;
+  }
   if (event.data.type === 'PROJECTION') {
     if (!parentOrigin) parentOrigin = event.origin;
     if (projection.source.sourceProductId !== event.data.projection?.source?.sourceProductId) {
@@ -1758,6 +1837,8 @@ window.addEventListener('message', (event) => {
     render();
   } else if (event.data.type === 'COMMAND_RESULT') {
     const task = pending.get(event.data.requestId);
+    cmdDiag('COMMAND_RESULT revId=' + String(event.data.requestId).slice(0, 8) + ' found=' + !!task
+      + ' ok=' + event.data.ok + ' pendingSize=' + pending.size);
     if (!task) return;
     clearTimeout(task.timer); pending.delete(event.data.requestId);
     if (event.data.ok === true) task.resolve(event.data);

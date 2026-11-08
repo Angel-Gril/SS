@@ -39,7 +39,8 @@ function treeProjection(nodes, leaves, budget, depth = 0) {
 }
 
 export function createCategoryDialog({ root, getBinding, getProduct = () => null, loadCatalog,
-  loadSuggestions, loadAttributePreview, saveSelection, onError = () => {}, onState = () => {} }) {
+  loadSuggestions, loadAttributePreview, saveSelection, localCatalog = null, skipAttributePreview = false,
+  onError = () => {}, onState = () => {} }) {
   if (!root?.ownerDocument || typeof getBinding !== 'function' || typeof loadCatalog !== 'function'
     || typeof saveSelection !== 'function') throw new TypeError('Category dialog requires an element and ERP owner adapters');
   const document = root.ownerDocument;
@@ -99,9 +100,19 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     searchButton.disabled = value.status === 'saving'; searchInput.disabled = value.status === 'saving';
     onState(snapshot());
   }
+  // 2026-11 诊断：把 binding 变化轨迹写进 DOM，主 world 可直接读取。
+  var catDialogTrail = [];
+  function catDiag(msg) {
+    try {
+      catDialogTrail.push(msg);
+      if (catDialogTrail.length > 30) catDialogTrail.shift();
+      document.documentElement.setAttribute('data-cat-diag', catDialogTrail.join(' >> ').slice(-1800));
+    } catch (_e) {}
+  }
   function syncBinding() {
     const current = keyOfBinding(readBinding());
     if (current !== observedBinding) {
+      catDiag('syncBinding:changed prev=' + observedBinding.slice(0, 120) + ' next=' + current.slice(0, 120));
       observedBinding = current; epoch++; previewEpoch++; clearTimeout(searchTimer); resetCatalog();
       value.status = current ? 'stale' : 'unavailable';
       value.message = current ? '店铺或草稿已变化，请重新读取官方类目' : '请先选择店铺并创建 ERP 草稿';
@@ -110,7 +121,11 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     const currentState = snapshot(); onState(currentState); return currentState;
   }
   function isCurrent(requestEpoch, bindingKey) {
-    syncBinding(); return value.open && epoch === requestEpoch && observedBinding === bindingKey;
+    syncBinding();
+    const ok = value.open && epoch === requestEpoch && observedBinding === bindingKey;
+    if (!ok) catDiag('isCurrent:false epochMatch=' + (epoch === requestEpoch) + ' bindingMatch=' + (observedBinding === bindingKey) + ' open=' + value.open);
+    else catDiag('isCurrent:true');
+    return ok;
   }
   function selectionFor(leaf) {
     return Object.freeze({ categoryId: leaf.categoryId, typeId: leaf.typeId, catalogRevision: value.catalogRevision });
@@ -144,11 +159,28 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
   async function selectLeaf(leafKey) {
     syncBinding();
     const leaf = officialLeaves.get(leafKey), binding = readBinding();
-    if (!value.open || !binding || !value.catalogRevision || !leaf || value.status === 'saving' || value.status === 'loading') return;
+    const bindingRequired = !skipAttributePreview;
+    if (!value.open || (bindingRequired && !binding) || !value.catalogRevision || !leaf
+      || value.status === 'saving' || value.status === 'loading') return;
     const requestEpoch = epoch, requestedBinding = observedBinding, requestPreview = ++previewEpoch;
     value.selected = leaf; value.canSave = false; value.previewStatus = 'loading';
     value.message = '正在读取所选类目的官方属性…'; selectedLabel.textContent = '已选：' + leaf.typeLabel;
     attrsPane.textContent = '正在读取商品属性…'; markSelected(); renderStatus();
+
+    // 2026-11：属性预览走 ERP /editor/catalog，而该接口的回执在
+    // chrome.runtime.sendMessage 上不稳定（实测 712KB 时彻底丢失）。
+    // 属性本来就是「确认类目后在工作台填写」的后续步骤，不是选类目的前置条件，
+    // 因此提供 skipAttributePreview：直接放行保存，属性留到工作台里填。
+    if (skipAttributePreview) {
+      value.previewStatus = 'ready'; value.canSave = true;
+      value.message = '已选类目；点击「确认类目并继续」写入草稿，属性稍后在工作台填写';
+      attrsPane.replaceChildren();
+      attrsPane.append(make('div', 'precision-category-attribute-title', '商品属性'));
+      attrsPane.append(make('p', 'settings-tip', '属性在确认类目后由工作台按官方 schema 读取并填写。'));
+      renderStatus();
+      return;
+    }
+
     try {
       if (typeof loadAttributePreview !== 'function') throw new Error('Attribute preview adapter unavailable');
       const selection = selectionFor(leaf);
@@ -216,8 +248,22 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     const seen = new Set();
     return raw.slice(0, 12).flatMap(item => {
       const key = item && validId(item.categoryId) && validId(item.typeId) ? pairKey(item) : '';
-      const leaf = officialLeaves.get(key);
-      if (!leaf || seen.has(key)) return []; seen.add(key);
+      if (!key || seen.has(key)) return [];
+      // 推荐项来自「全量官方类目」，而 entries 在空关键词时只包含目录的前 50 条，
+      // 两者通常不重合。此前这里用 officialLeaves.get(key) 查不到就静默丢弃，
+      // 导致推荐卡片恒为空（实测命中率≈0）。
+      // 改为：查不到时用推荐项自身字段构造 leaf，并回填 officialLeaves，
+      // 保证后续 selectLeaf() 点击时仍能取到该类目。
+      let leaf = officialLeaves.get(key);
+      if (!leaf) {
+        try {
+          leaf = leafProjection(item);
+        } catch {
+          return [];
+        }
+        officialLeaves.set(key, leaf);
+      }
+      seen.add(key);
       return [{ ...leaf, match: ['recommended', 'optional', 'risky'].includes(item.match) ? item.match : 'optional',
         reasons: Array.isArray(item.reasons) ? item.reasons.map(reason => safeText(reason, 300)).filter(Boolean).slice(0, 3) : [] }];
     }).slice(0, 3);
@@ -256,14 +302,24 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     const binding = readBinding(), requestedBinding = observedBinding, requestEpoch = ++epoch;
     previewEpoch++; value.query = safeText(query, 101); value.selected = null; value.canSave = false; value.previewStatus = 'idle';
     selectedLabel.textContent = '未选择类目'; attrsPane.textContent = '请先在左侧选择一个叶子类目';
-    if (!value.open || !binding) { value.status = 'unavailable'; value.message = '请先选择店铺并创建 ERP 草稿'; renderStatus(); return snapshot(); }
+    // 2026-11：localCatalog 存在时不需要 ERP binding（草稿），
+    // 类目来自内置的 Ozon 官方快照，纯本地匹配，0 网络、0 草稿依赖。
+    // 这解开了「选类目需要草稿、建草稿流程第一步又要选类目」的死锁。
+    if (!value.open) { value.status = 'closed'; renderStatus(); return snapshot(); }
+    if (!binding && typeof localCatalog !== 'function') {
+      value.status = 'unavailable'; value.message = '请先选择店铺并创建 ERP 草稿'; renderStatus(); return snapshot();
+    }
     if (value.query.length > 100) { value.status = 'error'; value.message = '类目关键词最多 100 个字符'; renderStatus(); return snapshot(); }
-    value.status = 'loading'; value.message = '正在读取 Ozon 官方类目…'; renderStatus();
+    value.status = 'loading';
+    value.message = typeof localCatalog === 'function' ? '正在本地检索 Ozon 官方类目…' : '正在读取 Ozon 官方类目…';
+    renderStatus();
     try {
-      const catalog = await loadCatalog(binding, value.query);
+      const catalog = typeof localCatalog === 'function'
+        ? localCatalog(value.query)
+        : await loadCatalog(binding, value.query);
       if (!isCurrent(requestEpoch, requestedBinding)) return snapshot();
       applyCatalog(catalog);
-      if (!value.query && typeof loadSuggestions === 'function') {
+      if (!value.query && typeof localCatalog !== 'function' && typeof loadSuggestions === 'function') {
         const response = await loadSuggestions(binding, getProduct(), catalog);
         if (!isCurrent(requestEpoch, requestedBinding)) return snapshot();
         if (response?.catalogRevision !== value.catalogRevision) return snapshot();
@@ -281,6 +337,7 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     if (!value.open || !value.canSave || value.status === 'saving' || !value.selected) return;
     const binding = readBinding(), selection = selectionFor(value.selected), requestedBinding = observedBinding,
       requestEpoch = epoch, requestSession = sessionEpoch;
+    // saveSelection 的调用方（precision-workbench.js）会在 binding 缺失时先建草稿。
     value.status = 'saving'; renderStatus();
     try {
       await saveSelection(binding, selection);
@@ -299,6 +356,14 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     return snapshot();
   }
   closeButton.addEventListener('click', close); confirmButton.addEventListener('click', () => void confirm());
+  // E2E 模式下允许脚本触发搜索（生产行为不变）
+  function e2eOk() {
+    try {
+      if (globalThis.__SSERP_E2E__ === true) return true;
+      if (new URLSearchParams(location.search).get('sserp-e2e') === '1') { globalThis.__SSERP_E2E__ = true; return true; }
+    } catch (_e) {}
+    return false;
+  }
   searchButton.addEventListener('click', () => void search());
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer); epoch++; previewEpoch++; value.canSave = false; value.selected = null;

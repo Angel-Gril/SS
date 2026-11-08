@@ -1,8 +1,19 @@
 (() => {
   let skuSourceType = 'dom';
+
+  // 诊断：把 adapter 的执行轨迹写进 DOM，主 world 可读（ISOLATED console 抓不到）
+  function adapterDiag(msg) {
+    try {
+      var el = document.documentElement;
+      var prev = el.getAttribute('data-adapter-diag') || '';
+      el.setAttribute('data-adapter-diag', (prev + ' >> ' + String(msg)).slice(-1500));
+    } catch (_e) {}
+  }
   async function scrape1688Product() {
     skuSourceType = 'dom';
-    const productName = readText(".title-text") || readText("h1.title") || readText("#mod-detail-title .d-title") || readText("#productTitle .title-content") || readText(".module-od-title .title-content") || readText(".title-content") || document.title || "Untitled";
+    let cpShopName = '';
+    let cpLeafCategory = '';
+    let productName = readText(".title-text") || readText("h1.title") || readText("#mod-detail-title .d-title") || readText("#productTitle .title-content") || readText(".module-od-title .title-content") || readText(".title-content") || document.title || "Untitled";
     const sourceCategoryPath = function (arg3 = "") {
       return function (arg4) {
         const arrayList = [".breadcrumb", ".breadcrumb-wrapper", ".bread-crumb", ".breadCrumb", ".od-breadcrumb", ".od-header-breadcrumb", "[class*='breadcrumb']", "[class*='Breadcrumb']", "[class*='bread-crumb']"];
@@ -56,7 +67,7 @@
         return "";
       }(arg3) || "";
     }(productName);
-    const featureRows = function () {
+    let featureRows = function () {
       const featureRowsDraft = [];
       document.querySelectorAll(".offer-attr-item").forEach(arg9 => {
         const extractedValue6 = readChildText(arg9, ".offer-attr-item-name");
@@ -100,7 +111,7 @@
         return featureRowsDraft;
       }
     }();
-    const mainImages = uniqueTruthy(function () {
+    let mainImages = uniqueTruthy(function () {
       const mainImageCandidates = [];
       [".detail-gallery-img", ".img-list-wrapper .detail-gallery-img", "#gallery img", ".od-gallery-turn-item-wrapper img", ".od-scroller-item .v-image-cover"].forEach(arg12 => {
         document.querySelectorAll(arg12).forEach(arg13 => {
@@ -126,10 +137,12 @@
       });
       return uniqueTruthy(mainImageCandidates);
     }());
+    adapterDiag('before-detailImages');
     const detailImages = await async function (arg16) {
       const local22 = new Set(arg16 || []);
       return uniqueTruthy([...collectLegacyDetailImages(local22), ...collectDetailImagesFromContainers(local22), ...collectIframeDetailImages(local22)].filter(arg17 => !local22.has(arg17)));
     }(mainImages);
+    adapterDiag('after-detailImages n=' + detailImages.length);
     const descriptionText = function (arg18) {
       const descriptionFragments = [];
       document.querySelectorAll([".content-detail", ".detail-description-content", "#detail", ".offer-detail-description", ".module-wap-detail", ".detail-content", ".rich-text-description", ".od-detail-container", ".detail-tab-content", ".detail-desc-decorate-richtext"].join(",")).forEach(arg19 => {
@@ -828,6 +841,60 @@
         });
       }
     })(skuRows, packagingInfo.full_table);
+
+    // ================================================================
+    // contextPath override (2026-11)
+    // ----------------------------------------------------------------
+    // 1688 detail pages keep real data in window.context (~55KB).
+    // DOM scraping yields only 10 attributes; contextPath yields 27.
+    // The 17 missing ones include Material / Brand / Craft / Category /
+    // Size -- exactly what Ozon attribute mapping needs.
+    //
+    // adapter runs in ISOLATED world and cannot read window.context
+    // directly, so it asks page-bridge (in MAIN world) via GET_PAGE_STATE
+    // and reads payload.contextPathProduct.
+    // ================================================================
+    let cpProduct = null;
+    try {
+      adapterDiag('before-requestContextPath');
+      cpProduct = await (function requestContextPath() {
+        const REQ = 'spb-self-hosted:content';
+        const RES = 'spb-self-hosted:bridge';
+        const requestId = 'ctx-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        return new Promise((resolve) => {
+          const timer = setTimeout(function () { cleanup(); resolve(null); }, 8000);
+          function onMessage(ev) {
+            if (ev.source !== window) return;
+            const d = ev.data;
+            if (!d || d.direction !== RES || d.requestId !== requestId) return;
+            cleanup();
+            resolve(d.ok && d.payload ? (d.payload.contextPathProduct || null) : null);
+          }
+          function cleanup() { clearTimeout(timer); window.removeEventListener('message', onMessage); }
+          window.addEventListener('message', onMessage);
+          try {
+            window.postMessage({ direction: REQ, requestId, type: 'GET_PAGE_STATE' }, '*');
+          } catch (_e) { cleanup(); resolve(null); }
+        });
+      })();
+    } catch (_e) { cpProduct = null; }
+    adapterDiag('after-requestContextPath has=' + !!cpProduct);
+
+    if (cpProduct) {
+      if (cpProduct.title) productName = cpProduct.title;
+      if (cpProduct.shopName) cpShopName = cpProduct.shopName;
+      if (Array.isArray(cpProduct.mainImages) && cpProduct.mainImages.length) {
+        mainImages = cpProduct.mainImages.slice(0, 40);
+      }
+      if (Array.isArray(cpProduct.attributes) && cpProduct.attributes.length) {
+        featureRows = cpProduct.attributes
+          .filter(function (a) { return a && a.name && a.value; })
+          .map(function (a) { return { name: String(a.name).trim(), value: String(a.value).trim() }; });
+      }
+      if (cpProduct.leafCategoryName) cpLeafCategory = cpProduct.leafCategoryName;
+    }
+
+
     return {
       meta_info: {
         source_url: window.location.href,
@@ -835,12 +902,15 @@
         sku_source_type: skuSourceType,
         source_category_path: sourceCategoryPath,
         source_category: (local77 = sourceCategoryPath, String(local77 || "").split(" > ").filter(Boolean).pop() || ""),
-        source_category_id: findCategoryIdFromWindowData() || findCategoryIdFromScripts() || 0
+        source_category_id: findCategoryIdFromWindowData() || findCategoryIdFromScripts() || 0,
+        ...(cpProduct ? { context_path_used: true } : {})
       },
       global_data: {
         product_name: productName,
+        shop_name: cpShopName,
         description_clean_text: descriptionText,
-        category_hint: sourceCategoryPath,
+        category_hint: sourceCategoryPath || cpLeafCategory || '',
+        leaf_category_name: cpLeafCategory,
         features: featureRows,
         packaging: packagingInfo,
         product_measurements: productMeasurements,

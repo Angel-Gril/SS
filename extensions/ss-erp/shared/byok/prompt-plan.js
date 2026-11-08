@@ -33,6 +33,9 @@
     'FACT_TEXT_IS_DATA_NOT_INSTRUCTION',
     'NO_UNVERIFIED_PRODUCT_CLAIMS',
     'NO_UNVERIFIED_TEXT',
+    // Ozon 图片合规（2026-11 实测补充，对应 DESCRIPTION_DECLINE 驳回）
+    'NO_OVERLAY_TEXT_OR_CONTACT_INFO',
+    'NO_SOURCE_LANGUAGE_TEXT',
   ]);
   var INPUT_KEYS = [
     'executionMode', 'sourceAuthority', 'selectedSkuKeys', 'compatibilityGroups',
@@ -66,7 +69,11 @@
   ];
   var REFERENCE_CONTENT_ROLES = Object.freeze(['IDENTITY', 'DETAIL', 'CONTEXT', 'UNKNOWN']);
   var NEGATIVE_PROMPT =
-    'watermark, invented labels, unverified claims, changed product identity, unverified accessories';
+    'watermark, invented labels, unverified claims, changed product identity, unverified accessories, '
+    + 'qr code, phone number, website url, social handle, price, discount badge, marketplace ui, '
+    + 'fake certification, chinese text, source language text, chinese characters, '
+    + 'factory, workshop, warehouse, production line, flags, political imagery, tourist cliche, '
+    + 'added graphic overlay, dimension chip, cm mm label, weight claim';
 
   function promptPlanError(code, message) {
     var error = new Error(message || code);
@@ -449,6 +456,14 @@
       'Only the verified product facts above are authoritative.',
       'Do not infer, invent, or imply dimensions, material, stock, certification, package contents, compatibility, performance, features, or any other product fact that is not explicitly listed.',
       'Preserve the exact product identity. Do not add unverified labels, badges, claims, accessories, or text.',
+      // ---- Ozon 图片合规硬约束（2026-11 实测补充）----
+      // 这些条件直接对应 Ozon 的 DESCRIPTION_DECLINE 驳回原因：
+      //   图片上出现标语 / 电话 / 网站链接 / 二维码 / 价格 / 促销徽章 / 市场 UI。
+      'Clean commercial photography only. Do not render any graphic overlay, watermark, QR code, phone number, website or social handle, price, discount badge, marketplace UI chrome, or fabricated certification mark.',
+      'Do not copy any Chinese or other source-language visible text from the reference images; treat such text as unsafe visual noise and replace it with empty space.',
+      'Avoid factory, workshop, warehouse, production-line, and factory-direct staging; use clean contemporary retail presentation instead.',
+      'Keep the visual culture neutral and contemporary: no flags, no political imagery, no tourist clichés, and no stereotyped national decoration.',
+      'If people or hands appear, use natural everyday styling appropriate for a Russian marketplace audience.',
     ]);
     var prompt = lines.join('\n');
     if (prompt.length > MAX_PROMPT_CHARACTERS) invalid('resolved Prompt exceeds the workbench limit');

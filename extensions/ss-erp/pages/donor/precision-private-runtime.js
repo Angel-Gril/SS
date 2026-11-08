@@ -2,7 +2,10 @@ const REGISTER_UI = 'ss-erp:precision-frame-ui-register';
 const forbiddenResponseKey = (key) => /^(?:apikey|authorization|secret|secrets|secretkey|password|accesstoken|refreshtoken|credential|credentials)$/u.test(key.replace(/[_-]/g, '').toLowerCase());
 
 function publicResponse(value, depth = 0, budget = { count: 0 }) {
-  if (depth > 16 || ++budget.count > 50000) return false;
+  if (depth > 16 || ++budget.count > 50000) {
+    try { document.documentElement.setAttribute('data-public-response', 'FAIL depth=' + depth + ' count=' + budget.count); } catch (_e) {}
+    return false;
+  }
   if (!value || typeof value !== 'object') return true;
   if (Array.isArray(value)) return value.every((item) => publicResponse(item, depth + 1, budget));
   return Object.keys(value).every((key) => !forbiddenResponseKey(key) && publicResponse(value[key], depth + 1, budget));

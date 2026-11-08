@@ -136,6 +136,38 @@
     async function registerFrame(sender) {
       var frame = normalizeFrame(sender, runtimeId, true);
       var observed = await load();
+      var frameKey = String(frame.tabId);
+      var observedEntry = observed.records[frameKey];
+
+      // =================================================================
+      // 幂等路径（2026-11）
+      // -----------------------------------------------------------------
+      // 原实现无条件先走 sourceFor() → resolveSource() → attestation，
+      // 而 attestation 依赖 source 页面在 TTL 内回 ACK。
+      // 结果是：即使已有完全有效的注册记录，任何一次 ACK 抖动都会让
+      // 重复注册整体失败，工作台于是反复显示「扩展注册失败」。
+      // 这里在 frame（tabId + frameId + documentId）完全一致且未过期时，
+      // 直接续期，不再触发 attestation —— O(1)、零网络、零竞态。
+      // 只有页面 reload（新 frameId/documentId）才需要重新取证。
+      // =================================================================
+      if (observedEntry
+        && observedEntry.expiresAt > currentTime()
+        && equal(observedEntry.frame, frame)
+        && ['UI_REGISTERED', 'MEDIA_READY'].includes(observedEntry.state)) {
+        return enqueue(async function () {
+          var state = await load();
+          if (state.revision !== observed.revision) fail('PRECISION_FRAME_STATE_CHANGED');
+          var entry = state.records[frameKey];
+          if (!entry || !equal(entry.frame, frame)) fail('PRECISION_FRAME_SENDER_DENIED');
+          var renewedAt = currentTime();
+          // createdAt 必须同步推进：load() 会校验 expiresAt - createdAt <= ttlMs
+          entry.createdAt = renewedAt;
+          entry.expiresAt = renewedAt + ttlMs;
+          await save(state);
+          return Object.freeze({ state: entry.state, registered: true, renewed: true });
+        });
+      }
+
       var source = await sourceFor(frame);
       return enqueue(async function () {
         var state = await load();

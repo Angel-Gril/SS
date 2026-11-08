@@ -2,7 +2,11 @@
   'use strict';
 
   var CONTRACT_VERSION = 'extension-precision-source-admission/v1';
-  var ATTESTATION_TTL_MS = 5000;
+  // 2026-11：原值 5000ms 装不下 prepare() 里 readDevice() 的 ERP 网络往返
+// （device status + 可能的 token refresh）。实测会稳定触发
+// SS_ERP_PRECISION_SOURCE_ATTESTATION_EXPIRED，而 attest 消息还没发出。
+// 20s 与 frame registry 的 DEFAULT_TTL_MS 同量级，且远小于 MAX_TTL_MS(15min)。
+  var ATTESTATION_TTL_MS = 20000;
   var MAX_PENDING = 16;
   var QUERY_TYPE = 'ss-erp:precision-source-attest';
   var ACK_TYPE = 'ss-erp:precision-source-attestation';
@@ -93,6 +97,10 @@
     }
     function finish(operation, error, result) {
       if (operation.settled) return;
+      try {
+        console.error('[SSERP-ADM] finish', error && error.code || 'ok',
+          'stack=' + String(new Error().stack || '').split('\n').slice(1, 4).join(' | '));
+      } catch (_e) {}
       operation.settled = true;
       operations.delete(operation);
       if (operation.nonce && pending.get(operation.nonce) === operation) pending.delete(operation.nonce);
@@ -120,12 +128,26 @@
     }
     async function prepare(operation) {
       try {
+        var prepT0 = timestamp();
         var current = await currentTab(operation);
-        if (!current) return;
+        if (!current) {
+          console.error('[SSERP-ADM] prepare:path-A currentTab-null',
+            'settled=' + operation.settled, 'elapsed=' + (timestamp() - prepT0));
+          return;
+        }
+        var deviceT0 = timestamp();
         var authority = device(await config.readDevice());
-        if (!active(operation)) return;
+        console.error('[SSERP-ADM] readDevice cost', (timestamp() - deviceT0) + 'ms',
+          'total=' + (timestamp() - prepT0) + 'ms');
+        if (!active(operation)) {
+          console.error('[SSERP-ADM] prepare:path-B inactive-after-device',
+            'elapsed=' + (timestamp() - prepT0));
+          return;
+        }
         var latest = await currentTab(operation);
         if (!latest || latest.url.href !== current.url.href || !sameProduct(latest.source, current.source)) {
+          console.error('[SSERP-ADM] prepare:path-C source-changed',
+            'hasLatest=' + !!latest, 'settled=' + operation.settled);
           if (!operation.settled) throw admissionError('SS_ERP_PRECISION_SOURCE_CHANGED');
           return;
         }

@@ -707,6 +707,15 @@
             }
           }
           requestDispatched = true;
+          // 2026-11 诊断：transport 的 fetch 此前没有任何计时日志，
+          // 一旦 ERP 侧慢于 requestTimeoutMs（默认 10s），只会 abort 成
+          // 「source workbench request timed out」，看不到是哪一步、
+          // 也看不到真实耗时。这里记录 dispatch / done 和耗时。
+          var __txT0 = Date.now();
+          try {
+            console.error('[SSERP-TX] dispatch', method, path,
+              'timeout=' + (typeof timeoutMs === 'number' ? timeoutMs : '?') + 'ms');
+          } catch (_e) {}
           var response = await fetchImpl(baseUrl + path, {
             method: method,
             headers: {
@@ -718,6 +727,10 @@
             redirect: 'error',
             signal: controller.signal,
           });
+          try {
+            console.error('[SSERP-TX] done', method, path,
+              'status=' + (response && response.status), 'cost=' + (Date.now() - __txT0) + 'ms');
+          } catch (_e) {}
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
           }

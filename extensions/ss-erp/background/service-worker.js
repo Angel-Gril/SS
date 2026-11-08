@@ -2920,7 +2920,19 @@ function getPrecisionFrameRegistry() {
   const sessionApi = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION;
   if (!factory || !sessionApi) throw new Error('精铺扩展会话模块未加载');
   precisionFrameRegistry = factory.createRegistry({ runtimeId: chrome.runtime.id, sessionStorage: chrome.storage.session,
-    resolveSource: (frame) => getPrecisionSourceAdmission().resolveSource(frame),
+    // 2026-11 诊断埋点：resolveSource 失败时把具体 code 打出来，
+    // 否则上层只会看到 SS_ERP_RUNTIME_MESSAGE_HANDLER_FAILED，无法定位。
+    resolveSource: async (frame) => {
+      try {
+        return await getPrecisionSourceAdmission().resolveSource(frame);
+      } catch (error) {
+        console.error('[SSERP-DIAG] resolveSource failed:',
+          (error && error.code) || (error && error.name) || String(error),
+          '|', (error && error.message) || '',
+          '| frame=', JSON.stringify(frame));
+        throw error;
+      }
+    },
     validateMediaContext: validatePrecisionMediaContext, normalizeMediaContext: sessionApi.normalizeContext,
     now: () => Date.now() });
   return precisionFrameRegistry;
@@ -6734,17 +6746,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'ss-erp:source-workbench-vision-capability', 'ss-erp:source-workbench-vision-analyze',
     ...['capability','context','analyze','read','apply'].map(action => 'ss-erp:source-workbench-preparation-' + action)].includes(message.type)) {
     let mutationAttempted = false;
+    // 2026-11 诊断：editor 类请求会先做 handoff 读取 + 一次 ERP getStatus，
+    // 再分发到具体动作。这段链条上有 4 个 await，任一挂起都会让上层永久等待，
+    // 而 Service Worker 侧此前完全没有日志。这里给每一步打耗时。
     Promise.resolve().then(async () => {
+      const diagT0 = Date.now();
+      const diagMark = (label) => {
+        try { console.error('[SSERP-SW] editor', label, message.type.replace('ss-erp:source-listing-workbench-', '').replace('ss-erp:', ''), (Date.now() - diagT0) + 'ms'); } catch (_e) {}
+      };
+      diagMark('begin');
       const platform = sourceWorkflowPlatform(message.platform);
       const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
       const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      diagMark('handoff-read');
       if (!handoff) throw new Error('请先采集当前来源商品');
       const client = getSourceListingWorkflowClient();
       const status = await client.getStatus({ snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId });
+      diagMark('status-fetched');
       const listing = currentSourceListingContext(status, message.listingWorkflowId);
       const requested = message.binding;
       if (!listing || !requested || requested.snapshotId !== handoff.snapshotId || requested.supplyGoodsId !== handoff.supplyGoodsId
-        || requested.shopId !== listing.shopId || requested.listingWorkflowId !== listing.listingWorkflowId) throw new Error('草稿编辑上下文已变化');
+        || requested.shopId !== listing.shopId || requested.listingWorkflowId !== listing.listingWorkflowId) {
+        diagMark('context-mismatch hasListing=' + !!listing + ' hasReq=' + !!requested);
+        throw new Error('草稿编辑上下文已变化');
+      }
+      diagMark('context-ok');
       const binding = {
         snapshotId: handoff.snapshotId, supplyGoodsId: handoff.supplyGoodsId, shopId: listing.shopId,
         listingWorkflowId: listing.listingWorkflowId, draftRevision: requested.draftRevision, draftVersion: requested.draftVersion,
@@ -6778,8 +6804,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : message.type.endsWith('-attributes') ? await client.readDraftAttributes(binding)
         : message.type.endsWith('-dictionary') ? await client.readDraftDictionary({ binding, schemaRevision: message.schemaRevision,
           attributeId: message.attributeId, query: message.query, limit: message.limit }) : await client.readDraftEditor(binding);
-      if (!result || result.state !== 'ready') throw new Error('草稿编辑读取或保存未完成');
-      return result;
+      diagMark('action-done');
+      // =================================================================
+      // 2026-11 修复：chrome.runtime.sendMessage 的 response 有内部上限。
+      // catalog 的完整 Ozon 类目树（treeTop=22 但递归展开 712KB）会让
+      // content script 的 callback 永远不触发 —— background 明明返回 ready，
+      // UI 却永久停在「正在读取 Ozon 官方类目…」。
+      // 契约里 data.tree 是可选字段，因此把树移到 session storage，
+      // 只回传 entries / recommendations / catalogRevision（实测 <20KB）。
+      // 前端需要展开树时再单独取（下次迭代）。
+      // =================================================================
+      var finalResult = result;
+      if (result && result.catalog && Array.isArray(result.catalog.tree)) {
+        try {
+          var treeKey = 'ss-erp:catalog-tree:' + String(result.catalog.catalogRevision || '');
+          var treeNodeCount = result.catalog.tree.length;
+          await chrome.storage.session.set({ [treeKey]: result.catalog.tree });
+          finalResult = { ...result, catalog: { ...result.catalog } };
+          delete finalResult.catalog.tree;
+          finalResult.catalog.treeRef = treeKey;
+          console.error('[SSERP-SW] editor tree offloaded msgType=' + message.type.replace('ss-erp:source-listing-workbench-', '')
+            + ' key=' + treeKey + ' topNodes=' + treeNodeCount);
+        } catch (offloadError) {
+          finalResult = result;
+          console.error('[SSERP-SW] editor tree offload FAILED', offloadError && offloadError.message);
+        }
+      }
+      // 2026-11 关键诊断：测量回传给 content script 的 payload 大小。
+      // chrome.runtime.sendMessage 的 response 有内部上限；catalog 的完整
+      // Ozon 类目树（最多 5000 节点 + 10000 leaf）序列化后可能达到数 MB，
+      // 一旦超限，content script 的 callback 永远不会触发 —— 表现为
+      // background 明明处理成功，UI 却永久停在「正在读取 Ozon 官方类目…」。
+      try {
+        var payloadBytes = JSON.stringify(finalResult).length;
+        var treeNodes = (finalResult && finalResult.catalog && Array.isArray(finalResult.catalog.tree)) ? finalResult.catalog.tree.length : 0;
+        var entryCount = (finalResult && finalResult.catalog && Array.isArray(finalResult.catalog.entries)) ? finalResult.catalog.entries.length : 0;
+        console.error('[SSERP-SW] editor payload', message.type.replace('ss-erp:source-listing-workbench-', ''),
+          'json=' + payloadBytes + 'B (' + Math.round(payloadBytes / 1024) + 'KB)',
+          'treeTop=' + treeNodes, 'entries=' + entryCount,
+          'state=' + (finalResult && finalResult.state));
+      } catch (_e) {}
+      if (!finalResult || finalResult.state !== 'ready') throw new Error('草稿编辑读取或保存未完成');
+      return finalResult;
     }).then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message || String(error),
       outcome: error.outcome || (mutationAttempted ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED'), code: error.code || null,
       failureCode: error.failureCode || null, failureKind: error.failureKind || null, stage: error.stage || null }));

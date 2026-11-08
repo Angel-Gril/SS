@@ -291,7 +291,18 @@
     return result;
   }
 
+  // 2026-11 修复：precision-frame-ui-register 由 runtime-message-authorization 的
+  // PRECISION_FRAME.PUBLIC_UI_REGISTER 定义、由 background service-worker 的
+  // authorization dispatcher 处理，但此前没有列入本文件的 KNOWN_TYPES，
+  // 导致 onMessage 第一道门 isKnownRuntimeMessageType() 直接返回 false，
+  // 消息被静默丢弃 → 工作台永远显示「扩展注册失败」，
+  // 连带 AI 筛图 / 自带 API 生图 / 审核 / 入库全部不可用。
+  var PRECISION_FRAME_TYPES = setOf([
+    'ss-erp:precision-frame-ui-register',
+  ]);
+
   var KNOWN_TYPES = union(
+    PRECISION_FRAME_TYPES,
     setOf(['ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
       'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',
       'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear']),
@@ -425,6 +436,13 @@
   function isAllowedRuntimeMessageSender(type, sender, runtimeId) {
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
+    // 工作台 iframe 注册：与 product-analysis 相同的来源约束，
+    // 必须是嵌在来源商品页里的 precision-workbench.html iframe。
+    if (PRECISION_FRAME_TYPES.has(messageType)) {
+      return sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
+        && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)
+        && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId);
+    }
     if (messageType.startsWith('ss-erp:product-analysis-') || messageType.startsWith('ss-erp:preparation-checkpoint-')) {
       return sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
         && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)

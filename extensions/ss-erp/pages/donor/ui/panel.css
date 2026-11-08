@@ -86,10 +86,20 @@
         padding: 0
     }
 
+    /* 2026-11 修复：原实现把面板硬编码为设计尺寸 1440x960 且 flex:0 0 auto。
+       工作台以 iframe 形式嵌在 1688 页面里时容器只有约 1030x708，
+       居中的 1440x960 面板四边溢出 205px / 126px，
+       顶部工具条（选择类目 / 开始执行 / 店铺切换）被裁到视口外且页面不可滚动，
+       导致这些 trusted() 按钮在自动化与低分辨率下都点不到。
+       改为「不超过设计尺寸，但不超出视口」，与 settings.css 的写法保持一致。 */
     .panel {
-        width: var(--panel-design-width);
-        height: var(--panel-design-height);
-        flex: 0 0 auto;
+        width: min(var(--panel-design-width), calc(100vw - var(--panel-edge-gap) * 2));
+        height: min(var(--panel-design-height), calc(100vh - var(--panel-edge-gap) * 2));
+        max-width: 100%;
+        max-height: 100%;
+        flex: 0 1 auto;
+        min-width: 0;
+        min-height: 0;
         background: var(--bg);
         border: 1px solid rgba(255, 255, 255, .65);
         border-radius: 22px;
