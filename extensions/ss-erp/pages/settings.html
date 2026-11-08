@@ -227,24 +227,38 @@
         <div id="logisticsDistributionFeatureSection">
         <div style="margin-top:18px;padding-top:18px;border-top:1px solid rgba(100,116,139,0.2);display:flex;flex-direction:column;gap:12px;">
           <h3 style="margin:0;color:#0f172a;font-size:14px;">扩展设备配对</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
-            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
-              <span>部署标识</span>
-              <input id="logisticsDeploymentInput" type="text" autocomplete="off" placeholder="例如 cn-production" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
-            </label>
-            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
-              <span>一次性配对码</span>
-              <input id="logisticsPairingCodeInput" type="password" autocomplete="one-time-code" placeholder="输入 ERP 生成的配对码" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
-            </label>
-            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
-              <span>设备名称</span>
-              <input id="logisticsDeviceLabelInput" type="text" autocomplete="off" placeholder="例如 Chrome - 厦门" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
-            </label>
+          <!-- 2026-11：配对是一次性动作，不该长期占据设置面板。
+               已配对时只显示一行摘要；重新配对/解除配对收进默认收起的折叠区，
+               输入框也不再重复渲染两份。 -->
+          <div id="devicePairedSummary" hidden style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;align-items:center;gap:8px;color:#118a57;font-size:13px;font-weight:700;">
+              <span aria-hidden="true">&#10003;</span><span>本机已配对</span>
+            </div>
+            <div id="devicePairedInfo" style="color:#64748b;font-size:12px;"></div>
           </div>
-          <div class="actions">
-            <button id="pairLogisticsDeviceBtn" class="btn btn-primary" type="button">配对设备</button>
-            <button id="revokeLogisticsDeviceBtn" class="btn btn-muted" type="button">解除本机配对</button>
-          </div>
+          <details id="devicePairingDetails">
+            <summary style="cursor:pointer;color:#64748b;font-size:12px;user-select:none;">重新配对 / 解除配对</summary>
+            <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px;">
+              <div id="devicePairingGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
+                <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+                  <span>部署标识</span>
+                  <input id="logisticsDeploymentInput" type="text" autocomplete="off" placeholder="例如 cn-production" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+                  <span>一次性配对码</span>
+                  <input id="logisticsPairingCodeInput" type="password" autocomplete="one-time-code" placeholder="输入 ERP 生成的配对码" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+                  <span>设备名称</span>
+                  <input id="logisticsDeviceLabelInput" type="text" autocomplete="off" placeholder="例如 Chrome - 厦门" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+                </label>
+              </div>
+              <div class="actions">
+                <button id="pairLogisticsDeviceBtn" class="btn btn-primary" type="button">配对设备</button>
+                <button id="revokeLogisticsDeviceBtn" class="btn btn-muted" type="button">解除本机配对</button>
+              </div>
+            </div>
+          </details>
         </div>
         <div id="logisticsDistributionStatus" class="status compact"></div>
         <div id="logisticsFeatureControls">

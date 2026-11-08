@@ -1675,8 +1675,29 @@ trusted('settings-btn', () => {
   const values = [['商品标题', projection.source.title], ['来源平台', projection.source.platform], ['来源类目', projection.source.categoryName || '未提供'],
     ['当前店铺', projection.shops.find(shop => shop.id === selectedShopId)?.name || '未选择'], ['已选 SKU', String(draftSkuChoices().length)], ['来源图片', String(projection.media.length)], ['店铺草稿', draft ? '已创建' : '尚未创建']];
   info.replaceChildren(...values.map(([label, value]) => { const row = make('div', 'field'); row.append(make('label', '', label), make('div', '', value)); return row; }));
-  const diagnostics=make('details','precision-preparation-diagnostics');diagnostics.append(make('summary','','高级诊断'),make('pre','',JSON.stringify({draft: draft?{id:draft.id,revision:draft.revision,draftVersion:draft.draftVersion}:null,policy:projection.billing?.policyRevision||'由 ERP 核验'},null,2)));
-  info.append(diagnostics);void preparationAnalysis.settings(info,()=>byok.openSettings()).catch(report);
+  // 2026-11：草稿 revision / draftVersion / policyRevision 是内部状态，
+  // 不该以「高级诊断」这种含糊标题摆在设置里让用户点开就看到一串版本号。
+  // 这类信息只在排查时有用，因此：
+  //   1) 只在 URL 带 ?sserp-debug=1 时渲染
+  //   2) 标题写明「内部版本号（一般无需查看）」
+  //   3) 默认折叠
+  // 用户真正需要知道的是上面那行「店铺草稿：已创建 / 尚未创建」。
+  const showInternals = (() => {
+    try { return new URLSearchParams(location.search).get('sserp-debug') === '1'; } catch { return false; }
+  })();
+  if (showInternals) {
+    const diagnostics = make('details', 'precision-preparation-diagnostics');
+    diagnostics.append(
+      make('summary', '', '调试信息 · 内部版本号（一般无需查看）'),
+      make('pre', '', JSON.stringify({
+        draft: draft ? { id: draft.id, revision: draft.revision, draftVersion: draft.draftVersion } : null,
+        policy: projection.billing?.policyRevision || '由 ERP 核验',
+      }, null, 2)),
+    );
+    info.append(diagnostics);
+  }
+  info.append(make('p', 'settings-tip', '草稿版本与策略编号由 ERP 自动维护，无需手动核对。排查问题时可在地址后加 ?sserp-debug=1 查看。'));
+  void preparationAnalysis.settings(info,()=>byok.openSettings()).catch(report);
   openModal('basic-modal');
 });
 trusted('category-select-btn', async () => {

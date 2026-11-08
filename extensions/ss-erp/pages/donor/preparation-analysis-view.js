@@ -48,7 +48,11 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
   let safeKeys=[],rawKeys=[],mediaToken='',capability=null,opening=false,applying=false,loadedIdentity='',restoreComplete=false;
   let prepareTask=null,analysisTask=null,prepareError='',preparePhase='';
   let stagedEnabled=false,lastCuration='',lastVision='',heartbeat=null,heartbeatStage='',heartbeatStartedAt=0,elapsedSeconds=0;
-  let mode='ERP_HOSTED',profileId='',analysisModel='qwen-vl-plus',profiles=[],inputDirty=false,lastReceipt='',copyCandidate=null,settingsChanged=false;
+  // 2026-11：执行方式（ERP 托管 / 自带 API）不再让用户默认选择。
+// 实测概念统计里这一个是最大噪声源（2495 处引用），而它本质上是
+// 「哪条链路可用」的自动判断：有 BYOK 档案就走自带 API，没有就走托管。
+// 用户仍可在「高级」里强制覆盖，覆盖结果记在 modeOverride。
+let profilesLoaded=false,modeOverride='',mode='ERP_HOSTED',profileId='',analysisModel='qwen-vl-plus',profiles=[],inputDirty=false,lastReceipt='',copyCandidate=null,settingsChanged=false;
   const modal=make('div','settings-modal precision-preparation-analysis-shell');modal.id='precision-preparation-analysis-modal';modal.hidden=true;
   const dialog=make('div','settings-dialog precision-preparation-analysis-dialog'),head=make('div','settings-head');
   head.append(make('div','settings-title','采集与 AI · 检查商品准备候选'));
@@ -84,6 +88,13 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
 
   const safeBinding=()=>{try{return getBinding();}catch{return null;}};
   const currentMediaToken=()=>JSON.stringify(getMedia().map(item=>[item.key,item.url]));
+  // 自动判定执行方式：有可用 BYOK 档案 → 自带 API，否则 → ERP 托管。
+  // 这是把「模式选择」从用户视野里拿掉的核心：用户不需要知道有两条链路，
+  // 只需要知道「能不能分析」。强制覆盖通过 modeOverride 保留。
+  function resolveMode(){
+    if(modeOverride==='ERP_HOSTED'||modeOverride==='BYOK')return modeOverride;
+    return profiles.length?'BYOK':'ERP_HOSTED';
+  }
   const preparationToken=()=>JSON.stringify([safeBinding(),getSkuKey(),getCategoryRevision(),currentMediaToken()]);
   const confirmationToken=()=>JSON.stringify([preparationToken(),selectedImages(),mode,profileId,analysisModel,capability,stagedEnabled]);
   const assertPreparationToken=token=>{if(token!==preparationToken())throw Object.assign(new Error('商品、草稿、SKU、图片或官方字段已变化，请重新读取分析准备。'),{outcome:'NOT_SUBMITTED'});};
@@ -227,6 +238,18 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     const originalBinding=safeBinding(),owner=identity(originalBinding);
     const unchanged=()=>assertPreparationToken(token);
     unchanged();
+    // profiles 只在 settings() 里加载过 —— 而用户可能从未打开设置。
+    // 不主动拉一次，resolveMode() 永远看到空数组、永远判成 ERP 托管，
+    // 配了 BYOK 档案的用户会被静默降级。
+    if(!profilesLoaded){
+      try{
+        await runtime?.registerUi?.();
+        profiles=(await runtime.settings.listProfiles()).profiles||[];
+      }catch{profiles=[];}
+      profilesLoaded=true;
+    }
+    // 无论是否恢复历史设置，mode 都必须来自自动判定（或用户 override）。
+    mode=resolveMode();
     const missing=prerequisites().find(step=>!step[2]);
     if(missing){restoreComplete=false;capability=null;prepareError='';sync();throw Object.assign(new Error(missing[3]),{outcome:'NOT_SUBMITTED'});}
     if(owner===loadedIdentity&&session.current()&&(session.state().receipt||session.state().operation||session.state().manuallyContinued)){restoreComplete=true;prepareError='';sync();return;}
@@ -244,7 +267,9 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
       const saved=stored?.checkpoint||stored;
       if(!settingsChanged&&saved?.context&&identity(saved.context.binding)===owner){
         stagedEnabled=saved.context.stagedAnalysis===true;
-        mode=saved.context.mode;analysisModel=saved.context.analysisModel||analysisModel;profileId=saved.context.profileId||'';
+        // 恢复历史设置时，把已保存的模式转成 override，避免覆盖自动判定
+        if(saved.context.mode==='ERP_HOSTED'||saved.context.mode==='BYOK')modeOverride=saved.context.mode;
+        mode=resolveMode();analysisModel=saved.context.analysisModel||analysisModel;profileId=saved.context.profileId||'';
         const restoredKeys=[],restoredRaw=[];
         for(const item of getMedia()){const compiled=await compileHostedReferenceSelection([item.key],getMedia());if(saved.context.sourceMediaKeys.includes(compiled[0])){restoredKeys.push(compiled[0]);restoredRaw.push(item.key);}}
         unchanged();
@@ -368,12 +393,20 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
     async recover(){return action(async()=>{await prepare();return session.recover();});},
     async settings(container,openByokSettings){
       const connection=make('section','precision-preparation-settings');connection.append(make('h4','','AI 连接'));
+      // 执行方式默认「自动」：有 BYOK 档案就走自带 API，否则走 ERP 托管。
+      // 用户不需要理解有两条链路，只要知道能不能分析。手动覆盖收进折叠区。
       const modeLabel=make('label','field','执行方式'),modeSelect=make('select');modeSelect.id='precision-preparation-mode';
-      for(const [value,label] of [['ERP_HOSTED','ERP 托管'],['BYOK','自带 API']]){const option=make('option','',label);option.value=value;modeSelect.append(option);}modeSelect.value=mode;modeLabel.append(modeSelect);
+      for(const [value,label] of [['AUTO','自动（推荐）'],['ERP_HOSTED','强制 ERP 托管'],['BYOK','强制自带 API']]){const option=make('option','',label);option.value=value;modeSelect.append(option);}modeSelect.value=modeOverride||'AUTO';modeLabel.append(modeSelect);
+      const modeHint=make('p','precision-preparation-notice');modeHint.id='precision-preparation-mode-hint';
+      // 不在这里立即执行：此刻 profiles 还没赋值（下面才 await listProfiles），
+      // 会误判成「未配置档案」。改由 changed() 在档案加载后刷新。
+      const refreshModeHint=()=>{const resolved=resolveMode();modeHint.textContent=`当前走：${resolved==='BYOK'?'自带 API（已配置分析档案）':'ERP 托管（未配置自带 API 档案，由店铺额度计费）'}`;};
+      const modeDetails=make('details','precision-preparation-advanced');
+      modeDetails.append(make('summary','','高级 · 执行方式'),modeLabel,modeHint);
       const modelLabel=make('label','field','商品分析模型（自带 API）'),model=make('select');model.id='precision-preparation-analysis-model';
       for(const value of ['qwen3.5-plus','qwen-vl-plus','qwen-vl-max']){const option=make('option','',value);option.value=value;model.append(option);}model.value=analysisModel;modelLabel.append(model);
       const profileLabel=make('label','field','自带 API 档案'),profile=make('select');profile.id='precision-preparation-analysis-profile';
-      try{await runtime?.registerUi?.();profiles=(await runtime.settings.listProfiles()).profiles||[];}catch{profiles=[];}
+      try{await runtime?.registerUi?.();profiles=(await runtime.settings.listProfiles()).profiles||[];profilesLoaded=true;}catch{profiles=[];}
       for(const value of profiles){const option=make('option','',value.name);option.value=value.id;profile.append(option);}profile.value=profileId||profiles[0]?.id||'';profileLabel.append(profile);
       const configure=make('button','ghost','配置自带 API 与会话密钥');configure.id='precision-preparation-configure-api';
       configure.addEventListener('click',event=>{if(event.isTrusted&&!configure.disabled)void openByokSettings().catch(report);});
@@ -382,10 +415,13 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
       let ticket=null,settingsEpoch=0,checking=false;
       const permissionInput=()=>({binding:safeBinding(),profileId:profile.value,skuKey:getSkuKey(),analysisModel:model.value});
       function changed(){const pending=Boolean(session.state().operation||session.state().application);modeSelect.disabled=model.disabled=profile.disabled=configure.disabled=pending||session.state().busy||getBusy();
-        modelLabel.hidden=profileLabel.hidden=configure.hidden=modeSelect.value!=='BYOK';permission.disabled=!ticket||checking||pending;}
+        refreshModeHint();
+        // 模型/档案/配置只在「确实走自带 API」时才需要露出
+        const byokActive=resolveMode()==='BYOK';
+        modelLabel.hidden=profileLabel.hidden=configure.hidden=!byokActive;permission.disabled=!ticket||checking||pending;}
       async function check(){
         const expected=++settingsEpoch;ticket=null;permission.hidden=true;
-        if(modeSelect.value!=='BYOK'){readinessText.textContent='托管能力与计费由当前 ERP 店铺核验。';changed();return;}
+        if(resolveMode()!=='BYOK'){readinessText.textContent='托管能力与计费由当前 ERP 店铺核验。';changed();return;}
         if(!safeBinding()||!getSkuKey()||!profile.value){readinessText.textContent='请先准备当前商品草稿并配置自带 API 档案。';changed();return;}
         checking=true;readinessText.textContent='正在核对商品分析模型、设备店铺许可和接口来源…';changed();
         try{
@@ -403,8 +439,19 @@ export function createPreparationAnalysisView({root, runtime, command, getBindin
         try{pending=runtime.authorizeProductAnalysis(event,activeTicket);}catch(error){report(error);void check();return;}
         void Promise.resolve(pending).then(()=>{restoreComplete=false;loadedIdentity='';return check();}).catch(error=>{report(error);void check();});
       });
-      for(const input of [modeSelect,model,profile])input.addEventListener('change',()=>{if(opening||applying||session.state().busy||session.state().operation||session.state().application){changed();return;}mode=modeSelect.value;analysisModel=model.value;profileId=profile.value;settingsChanged=true;restoreComplete=false;loadedIdentity='';changed();void check();});
-      connection.append(modeLabel,profileLabel,modelLabel,configure,permission,readinessText,make('p','precision-preparation-notice','图片模型与商品分析模型分别配置。密钥只加载到扩展当前浏览器会话。'));changed();container.append(connection);void check();
+      for(const input of [modeSelect,model,profile])input.addEventListener('change',()=>{
+        if(opening||applying||session.state().busy||session.state().operation||session.state().application){changed();return;}
+        // AUTO → 清空 override，回到自动判定；其余把选择记成 override
+        modeOverride=modeSelect.value==='AUTO'?'':modeSelect.value;
+        mode=resolveMode();
+        analysisModel=model.value;profileId=profile.value;
+        settingsChanged=true;restoreComplete=false;loadedIdentity='';
+        refreshModeHint();changed();void check();
+      });
+      connection.append(profileLabel,modelLabel,configure,permission,readinessText,
+        make('p','precision-preparation-notice','图片模型与商品分析模型分别配置。密钥只加载到扩展当前浏览器会话。'),
+        modeDetails);
+      changed();container.append(connection);void check();
     },
   };
 }

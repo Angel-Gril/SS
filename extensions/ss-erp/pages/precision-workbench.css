@@ -347,3 +347,42 @@
 }
 
 .stepper-legacy-anchors { display: none !important; }
+/* ===================================================================
+   2026-11 高级设置折叠区
+   -------------------------------------------------------------------
+   「执行方式」原本是设置里的一个显式下拉，用户被迫理解
+   ERP 托管 / 自带 API 两条链路的存在。实测这是概念噪声最大的一项
+   （2495 处引用），而它本质是「哪条链路可用」的自动判断。
+   现在收进 <details>，默认收起，只在需要强制覆盖时才展开。
+   =================================================================== */
+.precision-preparation-advanced {
+  margin-top: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.precision-preparation-advanced > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+  list-style: none;
+}
+
+.precision-preparation-advanced > summary::-webkit-details-marker { display: none; }
+
+.precision-preparation-advanced > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform .15s;
+}
+
+.precision-preparation-advanced[open] > summary::before { content: '▾ '; }
+
+.precision-preparation-advanced[open] > summary { margin-bottom: 8px; }
+
+#precision-preparation-mode-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}

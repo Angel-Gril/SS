@@ -1195,6 +1195,7 @@
       }
       pairedDeviceStatusPromise.then(function (state) {
         pairedDeviceStatus = state || null;
+        reflectPairingUi(state);
         if (!state || state.state !== 'paired') {
           var stateMessage = state && state.state === 'authorization_required'
             ? '已检测到扩展，等待设备配对'
@@ -1214,6 +1215,31 @@
         );
       });
     });
+  }
+
+  // 2026-11：设备配对只在「首次 / 失效」时占据界面。
+  // 已配对时只显示一行摘要，输入框收进默认收起的折叠区。
+  // 依据：概念统计里「设备配对」在参考实现中为 0 处，而我们有 323 处，
+  // 是「操作重」的第三大来源 —— 但它对用户其实只是一次性动作。
+  function reflectPairingUi(state) {
+    var summary = document.getElementById('devicePairedSummary');
+    var info = document.getElementById('devicePairedInfo');
+    var details = document.getElementById('devicePairingDetails');
+    var paired = Boolean(state) && state.state === 'paired';
+    if (summary) summary.hidden = !paired;
+    if (info && paired) {
+      var parts = [];
+      if (state.deploymentId) parts.push('部署 ' + state.deploymentId);
+      if (state.deviceId) parts.push('设备 ' + String(state.deviceId).slice(0, 18));
+      if (state.expiresAt) {
+        try { parts.push('有效至 ' + new Date(state.expiresAt).toLocaleDateString()); } catch (e) {}
+      }
+      info.textContent = parts.join(' · ');
+    } else if (info) {
+      info.textContent = '';
+    }
+    // 已配对 → 收起重配表单；未配对/失效 → 直接展开，让用户能操作
+    if (details) details.open = !paired;
   }
 
   function pairLogisticsDevice() {
@@ -1250,6 +1276,7 @@
       return refreshPairedDeviceStatus({ showStatus: true }).then(function (status) {
         if (status && status.state === 'paired') applyPairedDeviceStatus(status);
         setStatus(logisticsDistributionStatus, '设备配对成功', 'success');
+      reflectPairingUi({ state: 'paired', deploymentId: deploymentId, deviceId: '' });
         loadAnalyticsShops();
         return true;
       });
@@ -1326,6 +1353,7 @@
       return refreshPairedDeviceStatus({ showStatus: false }).then(function () {
         setStatus(erpStatusNode, '本机设备配对已清除；可重新配对或使用兼容 Token', 'warn');
         setStatus(logisticsDistributionStatus, '本机设备配对已清除', 'warn');
+      reflectPairingUi(null);
         loadLogisticsDistributionStatus();
         loadAnalyticsShops();
         return true;
