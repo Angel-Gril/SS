@@ -11,14 +11,30 @@
  */
 async function resolveUnresolved(suggestions, ctx) {
   if (!suggestions || !Array.isArray(suggestions.suggestions)) return;
-  const { categoryId, typeId, send } = ctx || {};
+  const { categoryId, typeId, send, direct } = ctx || {};
+  // 诊断：把入参留在全局，便于确认是哪一步没拿到 id
+  try {
+    globalThis.__SSERP_RESOLVE_DIAG = {
+      hasSuggestions: Boolean(suggestions),
+      count: suggestions && Array.isArray(suggestions.suggestions) ? suggestions.suggestions.length : null,
+      categoryId: categoryId == null ? null : String(categoryId),
+      typeId: typeId == null ? null : String(typeId),
+      hasSend: typeof send === 'function',
+      names: suggestions && Array.isArray(suggestions.suggestions) ? suggestions.suggestions.map(c => c.attributeName) : null,
+      at: Date.now(),
+    };
+  } catch (_e) {}
   const cid = Number(categoryId), tid = Number(typeId);
   if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) return;
 
   // attributeName → attributeId：ERP 的 candidate 只给名字，没有 id
   let nameToId = new Map();
   try {
-    const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
+    // 必须走 directSend（chrome.runtime.sendMessage 直发 SW）。
+    // 注入的 send 是 workbench 的 command → postMessage → bridge，
+    // 而 bridge 的 waitForAuthority 会挂起所有非 mutation 命令，
+    // 所以直连消息用 command 发出去也是永远不回的。
+    const schema = await direct('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
     const fields = (schema && schema.fields) || [];
     for (const f of fields) nameToId.set(String(f.name || '').trim(), Number(f.attributeId));
   } catch (_e) { return; }
@@ -34,7 +50,7 @@ async function resolveUnresolved(suggestions, ctx) {
         const query = String(raw == null ? '' : raw).trim();
         if (!query) continue;
         try {
-          const found = await send('ss-erp:direct-ozon-attribute-values', {
+          const found = await direct('ss-erp:direct-ozon-attribute-values', {
             categoryId: cid, typeId: tid, attributeId, query, limit: 50,
           });
           const values = (found && found.values) || [];
@@ -77,6 +93,13 @@ export function createAttributeSuggestions({
   command,
   getBinding,
   getEditor,
+  // 2026-11：类目 id 直接读原始 editor.category（getEditor() 经 binding 校验，
+  // 草稿刚建/刚刷新时返回 null，导致直连 schema 拿不到 id 而早退）。
+  getCategory,
+  // 直连消息必须走 chrome.runtime.sendMessage：command 的投递链是
+  // postMessage → content/donor-workbench-bridge.js → SW，而 bridge 的
+  // waitForAuthority 会挂起所有非 mutation 命令，直连消息发出去永远不回。
+  directSend,
   getBusy,
   hasUnsavedAttributes = () => false,
   getSkuLabel,
@@ -240,11 +263,20 @@ export function createAttributeSuggestions({
         //  can be suggested" —— 用户点了也填不进任何东西。
         // 字典解析我们自己能用直连做（Ozon 的 attribute/values 接口），
         // 所以拿到 ERP 的候选后，在渲染前把未解析的值补成 dictionary_value_id。
-        const __editor = typeof getEditor === 'function' ? getEditor() : null;
+        // 2026-11：类目 id 不能从 currentEditorForPublish() 取 —— 它要求
+        // binding 完全相等，草稿刚建/刚刷新时返回 null，于是这里拿不到 id、
+        // resolveUnresolved 直接早退（实测 0 条直连消息）。getCategory 直接读
+        // 编辑器原始 category，不做 binding 校验。
+        const __category = (typeof getCategory === 'function' ? getCategory() : null)
+          || (typeof getEditor === 'function' ? ((getEditor() || {}).category) : null)
+          || null;
         await resolveUnresolved(data, {
-          categoryId: __editor && __editor.category && __editor.category.categoryId,
-          typeId: __editor && __editor.category && __editor.category.typeId,
+          categoryId: __category && __category.categoryId,
+          typeId: __category && __category.typeId,
           send: command,
+          // 直连消息必须用 chrome.runtime.sendMessage（workbench 注入的 directSend），
+          // 用 command 会经 bridge 被 waitForAuthority 挂住。
+          direct: typeof directSend === 'function' ? directSend : command,
         });
         if (attempt !== epoch || modal.hidden) return;
         data.suggestions.forEach((candidate, index) => {

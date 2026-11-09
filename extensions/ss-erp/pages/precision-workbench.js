@@ -672,6 +672,9 @@ const attributes = createOfficialAttributeEditor({
     if (!name.startsWith('ss-erp:direct-')) return command(type, fields);
     return directSend({ type: name, payload: fields || {} }).then((result) => ({ data: result, ok: true }));
   },
+  // 2026-11：类目 id 用原始 editor.category，不经 currentEditorForPublish 的
+  // binding 校验 —— 后者在草稿刚建/刚刷新时返回 null，导致直连读不到 schema。
+  getCategory: () => (editor && editor.category) || null,
   getEditor: () => {
     const data = currentEditorForPublish(); return data ? { ...data, selectedSkuKeys: editorSkuKeys() } : null;
   }, getBinding: currentEditorBinding,
@@ -681,7 +684,7 @@ const attributes = createOfficialAttributeEditor({
 });
 let attributeSuggestionReviewed='';
 const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
-const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,
+const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,getCategory:()=>(editor&&editor.category)||null,directSend:(msg)=>directSend(msg),
  hasUnsavedAttributes:()=>[...unsavedListingFields].some(key=>key.startsWith('official-')),
  getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),getSkuLabel:key=>projection.skus.find(sku=>sku.key===key)?.label||key,
  onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},

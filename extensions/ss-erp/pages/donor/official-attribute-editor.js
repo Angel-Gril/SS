@@ -38,7 +38,7 @@ function schemaRevisionFor(categoryId, typeId, fields) {
   return out.slice(0, 64);
 }
 
-export function createOfficialAttributeEditor({ root, send, getEditor, getBinding, getBusy, onSave, onDirty, onReset, onChanged, report, status }) {
+export function createOfficialAttributeEditor({ root, send, getEditor, getBinding, getBusy, onSave, onDirty, onReset, onChanged, report, status, getCategory }) {
   const make = (tag, className, text) => {
     const node = document.createElement(tag); if (className) node.className = className;
     if (text !== undefined) node.textContent = text; return node;
@@ -147,9 +147,11 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
       // 「正在读取官方属性并预填…」。
       // 直连失败才回退 ERP —— 保留旧路径作为兜底，但正常情况不会再走它。
       let value = null;
-      const data0 = getEditor();
-      const categoryId = Number(data0 && data0.category && data0.category.categoryId);
-      const typeId = Number(data0 && data0.category && data0.category.typeId);
+      // 用注入的 getCategory（原始 editor.category），不用 getEditor() ——
+      // 后者经 currentEditorForPublish 的 binding 校验，可能返回 null。
+      const cat0 = (typeof getCategory === 'function' ? getCategory() : null) || (getEditor() || {}).category || null;
+      const categoryId = Number(cat0 && cat0.categoryId);
+      const typeId = Number(cat0 && cat0.typeId);
       if (Number.isSafeInteger(categoryId) && categoryId > 0 && Number.isSafeInteger(typeId) && typeId > 0) {
         try {
           const direct = await send('ss-erp:direct-ozon-attributes', { categoryId, typeId });
@@ -206,9 +208,9 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     apply.disabled = true; search.disabled = true;
     try {
       // 2026-11：字典也走直连，与 schema 读取保持一致（ERP 那条路同样会挂）。
-      const data1 = getEditor();
-      const cid1 = Number(data1 && data1.category && data1.category.categoryId);
-      const tid1 = Number(data1 && data1.category && data1.category.typeId);
+      const cat1 = (typeof getCategory === 'function' ? getCategory() : null) || (getEditor() || {}).category || null;
+      const cid1 = Number(cat1 && cat1.categoryId);
+      const tid1 = Number(cat1 && cat1.typeId);
       let result = null;
       try {
         const direct = await send('ss-erp:direct-ozon-attribute-values', {
