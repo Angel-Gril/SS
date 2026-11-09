@@ -85,6 +85,24 @@ export function planPrefill(product, fields) {
     plan.push({ attributeId, name: String(field.name || ''), ...spec });
   };
 
+  // 0. 型号名称（9048）：必填。Ozon 用它把同款合并成一张商品卡片，
+  //    所以必须对同一商品稳定 —— 用 offerId（1688 货号）而不是随机串。
+  if (byId.has(9048)) {
+    const model = String(product && (product.offerId || product.sourceProductId) || '').trim()
+      || String(product && product.title || '').trim().slice(0, 40)
+      || 'MODEL';
+    push(9048, { kind: 'text', query: '', value: model.slice(0, 100), pick: 'raw', reason: '货号作型号，保证同款合并' });
+  }
+
+  // 0b. 品牌（85）：必填。
+  //     1688 白牌商品在 Ozon 侧没有品牌，官方允许用「Нет бренда」占位。
+  //     这个值实测不在字典前 100 条（要翻 7 页），而且 `value` 搜索参数无效，
+  //     所以先用 query 查，查不到就用已知 id 兜底。
+  if (byId.has(85)) {
+    push(85, { kind: 'dictionary', query: 'Нет бренда', pick: 'exact', reason: '1688 白牌无品牌',
+      fallbackValueId: 126745801, fallbackValue: 'Нет бренда' });
+  }
+
   // 1. 制造国：1688 货源基本为中国
   if (byId.has(4389)) {
     push(4389, { kind: 'dictionary', query: COUNTRY_QUERY, pick: 'exact', reason: '1688 货源默认中国' });
@@ -121,12 +139,19 @@ export function planPrefill(product, fields) {
 }
 
 /** 从字典返回值里挑一个 */
-export function pickDictionaryValue(values, pick) {
+export function pickDictionaryValue(values, pick, query) {
   const list = Array.isArray(values) ? values.filter((v) => v && Number.isSafeInteger(v.id)) : [];
   if (!list.length) return null;
   if (pick === 'exact') {
-    const exact = list.find((v) => COUNTRY_MATCH.test(normalize(v.value)));
-    return exact || null;
+    // exact 按传入的 query 精确比对；没给 query 时退回制造国的固定词表。
+    const want = normalize(query || '');
+    if (want) {
+      const hit = list.find((v) => normalize(v.value) === want);
+      if (hit) return hit;
+      // 字典可能返回带前缀/括号的变体，做一次「包含」兜底
+      return list.find((v) => normalize(v.value).includes(want)) || null;
+    }
+    return list.find((v) => COUNTRY_MATCH.test(normalize(v.value))) || null;
   }
   if (pick === 'single') return list.length === 1 ? list[0] : null;
   // fuzzy：优先最短值（通常是通用词而不是细分变体）
@@ -163,8 +188,21 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
         limit,
       });
       const values = response?.dictionary?.values || response?.values || [];
-      const chosen = pickDictionaryValue(values, item.pick);
+      const chosen = pickDictionaryValue(values, item.pick, item.query);
       if (!chosen) {
+        // 兜底：某些字典值（例如「Нет бренда」）不在前 N 条，且 `value` 搜索
+        // 参数对它们无效。这类值如果已经实测确认过 id，就直接用。
+        if (item.fallbackValueId) {
+          applied.push({
+            attributeId: item.attributeId,
+            skuKey: null,
+            value: String(item.fallbackValue || ''),
+            dictionaryValueIds: [item.fallbackValueId],
+            reviewed: false,
+            source: `本地预填 · ${item.reason} → ${item.fallbackValue}（兜底 id）`,
+          });
+          continue;
+        }
         skipped.push({ attributeId: item.attributeId, name: item.name, reason: `字典无匹配（query=${item.query || '空'}，候选 ${values.length} 个）` });
         continue;
       }
@@ -177,6 +215,18 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
         source: `本地预填 · ${item.reason} → ${chosen.value}`,
       });
     } catch (error) {
+      // 查询本身失败时同样允许兜底，否则一次网络抖动就丢掉必填字段
+      if (item.fallbackValueId) {
+        applied.push({
+          attributeId: item.attributeId,
+          skuKey: null,
+          value: String(item.fallbackValue || ''),
+          dictionaryValueIds: [item.fallbackValueId],
+          reviewed: false,
+          source: `本地预填 · ${item.reason} → ${item.fallbackValue}（兜底 id）`,
+        });
+        continue;
+      }
       skipped.push({ attributeId: item.attributeId, name: item.name, reason: String(error && error.message || error).slice(0, 120) });
     }
   }

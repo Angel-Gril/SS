@@ -509,6 +509,10 @@ async function prefillOfficialAttributes(){
   const product = {
     title: projection.source.title || '',
     sourceCategory: projection.source.categoryName || '',
+    // 型号名称（9048）是必填，且必须对同一商品稳定 —— Ozon 用它把同款合并成
+    // 一张卡片。用 1688 货号，不要用标题（标题会随人改）。
+    sourceProductId: projection.source.sourceProductId || '',
+    offerId: projection.source.sourceProductId || '',
     attributes: [],
   };
   const plan = planPrefill(product, fields);
