@@ -684,7 +684,7 @@ const attributes = createOfficialAttributeEditor({
 });
 let attributeSuggestionReviewed='';
 const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
-const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,getCategory:()=>(editor&&editor.category)||null,directSend:(msg)=>directSend(msg),
+const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,getCategory:()=>(editor&&editor.category)||null,directSend:(msg)=>directSend(msg),getProduct:()=>({title:projection.source.title||'',offerId:projection.source.sourceProductId||'',sourceProductId:projection.source.sourceProductId||'',typeId:(editor&&editor.category&&editor.category.typeId)||0,skus:projection.skus.map(s=>({key:s.key,label:s.label}))}),
  hasUnsavedAttributes:()=>[...unsavedListingFields].some(key=>key.startsWith('official-')),
  getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),getSkuLabel:key=>projection.skus.find(sku=>sku.key===key)?.label||key,
  onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},
@@ -1953,7 +1953,8 @@ trusted('precision-assign', () => runMediaMutation(async () => {
 let directImageBusy = false;
 let directImageResults = [];
 
-async function directSend(message) {
+async function directSend(message, attempt) {
+  const tries = Number(attempt) || 0;
   return new Promise((resolve, reject) => {
     const payload = { contractVersion: Contract.CONTRACT_VERSION, ...message };
     let settled = false;
@@ -1968,7 +1969,19 @@ async function directSend(message) {
         settled = true;
         clearTimeout(timer);
         const lastError = chrome.runtime.lastError;
-        if (lastError) { reject(new Error(String(lastError.message || lastError).slice(0, 200))); return; }
+        if (lastError) {
+          const text = String(lastError.message || lastError);
+          // 2026-11：「The message port closed before a response was received」
+          // 是 MV3 service worker 被这次消息唤醒时发生的断开 —— 不是业务失败。
+          // 实测同一类消息在 SW 已经醒着时 100% 成功（ozon-attributes 23ms），
+          // 只有在 SW 休眠期间首发会撞上。重试一次即可，SW 此时已经起来了。
+          if (tries < 1 && /port closed|message port closed|Could not establish/i.test(text)) {
+            directSend(message, tries + 1).then(resolve, reject);
+            return;
+          }
+          reject(new Error(text.slice(0, 200)));
+          return;
+        }
         if (!response) { reject(new Error('直连通道没有返回')); return; }
         if (response.ok === false) { reject(new Error(String(response.error || '直连请求失败').slice(0, 300))); return; }
         resolve(response.result);

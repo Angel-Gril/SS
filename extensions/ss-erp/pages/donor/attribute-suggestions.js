@@ -1,3 +1,119 @@
+import { planPrefill, planVariantPrefill, pickDictionaryValue } from '../../shared/ozon/attribute-prefill.js';
+
+/**
+ * 用直连把 ERP 报的 unresolvedValues 解析成官方 dictionary_value_id。
+ *
+ * ERP 的 attribute-suggestions 只做文本匹配，遇到 STRICT_DICTIONARY 字段就
+ * 把值原样丢进 unresolvedValues，理由是「必须由服务器解析」——而它自己的
+ * 解析器（EDITOR_DICTIONARY）在草稿刚建/刚改类目时会挂起，所以永远解析不了。
+ *
+ * Ozon 的 /v1/description-category/attribute/values 就是权威字典，直连即可。
+ * 解析成功的值补进 row.dictionaryValueIds，并把该值从 unresolvedValues 移除，
+ * 界面上的警告随之消失，勾选框也能真正勾上。
+ */
+
+/**
+ * 把我们自己的规则预填结果，转成 ERP suggestions 的同形状，合并进同一个弹窗。
+ *
+ * 2026-11 实测：ERP 的 blockedSuggestions 是 {attributeName, message}，没有值、
+ * 没有候选 —— 它在说「这个字段我完全没东西可推」，不是「我解析失败」。
+ * 受影响的正是服装类目的必填项：Бренд / Сезон / Пол / Российский размер。
+ *
+ * 而这些恰好都能由规则给出来：
+ *   brand   pinned dictionary_value_id 126745801（Нет бренда）
+ *   Пол     标题「女装」→ женщины
+ *   size    SKU 规格 "30541-粉色 / S" → S → 查 4295 字典
+ *   color   SKU 规格 → 粉色 → 查 10096 字典
+ *   型号     货号（保证同款合并）
+ *
+ * 所以两个功能是互补的：ERP 负责「从商品文本推材质/里料/生产商尺码」，
+ * 规则负责「必填但 ERP 推不出的」。合并方式是把两者放进同一个弹窗，
+ * 而不是删掉任一边。
+ */
+async function buildRuleSuggestions(ctx) {
+  const { categoryId, typeId, direct, product } = ctx || {};
+  const diag = { at: Date.now(), categoryId: categoryId == null ? null : String(categoryId),
+    typeId: typeId == null ? null : String(typeId), hasDirect: typeof direct === 'function',
+    productKeys: product ? Object.keys(product) : null, skuCount: product && product.skus ? product.skus.length : null };
+  try { globalThis.__SSERP_RULE_DIAG = diag; } catch (_e) {}
+  const cid = Number(categoryId), tid = Number(typeId);
+  if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) {
+    diag.reason = 'bad ids'; return [];
+  }
+
+  let fields = [];
+  try {
+    const schema = await direct('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
+    fields = (schema && schema.fields) || [];
+  } catch (e) { diag.reason = 'schema failed: ' + String(e && e.message || e).slice(0, 120); return []; }
+  diag.fieldCount = fields.length;
+  if (!fields.length) { diag.reason = 'no fields'; return []; }
+
+  const plan = planPrefill(product || {}, fields).concat(planVariantPrefill(product || {}, fields));
+  diag.planCount = plan.length;
+  diag.planIds = plan.map(p => p.attributeId + ':' + (p.kind || '') + ':' + String(p.query || p.value || '').slice(0, 12));
+  if (!plan.length) { diag.reason = 'plan empty'; return []; }
+
+  // fieldId → 已解析的 { attributeName, rows }
+  const byAttribute = new Map();
+  for (const item of plan) {
+    const field = fields.find((f) => Number(f.attributeId) === Number(item.attributeId));
+    if (!field) continue;
+    const name = String(field.name || item.name || '');
+    if (!name) continue;
+
+    let entry = byAttribute.get(Number(item.attributeId));
+    if (!entry) {
+      entry = { attributeId: Number(item.attributeId), attributeName: name, rows: [] };
+      byAttribute.set(Number(item.attributeId), entry);
+    }
+
+    if (item.kind === 'text') {
+      entry.rows.push({
+        skuKey: item.skuKey || null,
+        value: String(item.value || ''),
+        evidence: [{ path: '规则', value: item.reason || '本地规则' }],
+        unresolvedValues: [],
+        dictionaryValueIds: [],
+      });
+      continue;
+    }
+
+    // 字典字段：直连查，用 pickDictionaryValue 的严格策略（歧义返回 null）
+    let values = [];
+    try {
+      const found = await direct('ss-erp:direct-ozon-attribute-values', {
+        categoryId: cid, typeId: tid, attributeId: item.attributeId,
+        query: item.query || '', limit: 50,
+      });
+      values = (found && found.values) || [];
+    } catch (_e) { values = []; }
+
+    const chosen = pickDictionaryValue(values, item.pick, item.query, {
+      id: item.fallbackValueId,
+      typeId: item.attributeId === 8229 ? tid : undefined,
+    });
+    entry.rows.push({
+      skuKey: item.skuKey || null,
+      value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
+      evidence: [{ path: '规则', value: item.reason || '本地规则' }],
+      unresolvedValues: chosen ? [] : [String(item.query || '')],
+      dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
+    });
+  }
+
+  return Array.from(byAttribute.values())
+    .filter((entry) => entry.rows.length)
+    .map((entry, index) => ({
+      candidateId: 'rule:' + entry.attributeId,
+      attributeName: entry.attributeName,
+      attributeId: entry.attributeId,
+      rows: entry.rows,
+      source: 'rule',
+      _order: index,
+    }));
+}
+
 /**
  * 用直连把 ERP 报的 unresolvedValues 解析成官方 dictionary_value_id。
  *
@@ -96,6 +212,7 @@ export function createAttributeSuggestions({
   // 2026-11：类目 id 直接读原始 editor.category（getEditor() 经 binding 校验，
   // 草稿刚建/刚刷新时返回 null，导致直连 schema 拿不到 id 而早退）。
   getCategory,
+  getProduct,
   // 直连消息必须走 chrome.runtime.sendMessage：command 的投递链是
   // postMessage → content/donor-workbench-bridge.js → SW，而 bridge 的
   // waitForAuthority 会挂起所有非 mutation 命令，直连消息发出去永远不回。
@@ -278,6 +395,24 @@ export function createAttributeSuggestions({
           // 用 command 会经 bridge 被 waitForAuthority 挂住。
           direct: typeof directSend === 'function' ? directSend : command,
         });
+        if (attempt !== epoch || modal.hidden) return;
+
+        // 把我们自己的规则预填结果并进同一个弹窗。
+        // ERP 的 blockedSuggestions 只是「这个字段我没东西可推」，而那些字段
+        // （品牌 / 性别 / 尺码 / 颜色 / 型号）恰好都能由规则给出。
+        // 规则建议排前面 —— 它们是必填项，ERP 反而给不了。
+        try {
+          const ruleSuggestions = await buildRuleSuggestions({
+            categoryId: __category && __category.categoryId,
+            typeId: __category && __category.typeId,
+            direct: typeof directSend === 'function' ? directSend : command,
+            product: typeof getProduct === 'function' ? getProduct() : null,
+          });
+          if (attempt !== epoch || modal.hidden) return;
+          if (ruleSuggestions.length) {
+            data.suggestions = ruleSuggestions.concat(data.suggestions || []);
+          }
+        } catch (_e) { /* 规则侧失败不影响 ERP 结果 */ }
         if (attempt !== epoch || modal.hidden) return;
         data.suggestions.forEach((candidate, index) => {
           const card = make('section', 'precision-attribute-suggestion');
