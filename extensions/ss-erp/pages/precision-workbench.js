@@ -14,6 +14,8 @@ import { createCategoryDialog } from './donor/category-dialog.js';
 import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
 import { planPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
 import { createDirectHealthPanel } from '../shared/ozon/direct-health-panel.js';
+import { buildDirectPromptPlan, SLOT_BLUEPRINTS } from '../shared/ozon/direct-prompt-plan.js';
+import { selectReferences, referenceSelectionInfo } from '../shared/ozon/reference-selector.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
@@ -1888,6 +1890,139 @@ trusted('precision-assign', () => runMediaMutation(async () => {
   await refreshConfirmedMedia('图片已应用到草稿');
   if(preparation?.state().status==='WAITING_INPUT'&&preparation.state().stepId==='media')queueMicrotask(()=>{void continuePreparation().catch(report);});
 }));
+// 2026-11：直连生图。
+// 参考图走索引规则（reference-selector），提示词走纯规则（direct-prompt-plan），
+// 请求由 service worker 直发 provider —— 全程不经过 ERP 的 operation 状态机。
+// 这条路径存在的理由：ERP 的 EXECUTE_HOSTED_SUITE 一旦 operation 卡在未确认，
+// 整条链停摆且 recover() 清不掉（实测）。直连路径失败就是失败，能立刻看到原因。
+let directImageBusy = false;
+let directImageResults = [];
+
+async function directSend(message) {
+  return new Promise((resolve, reject) => {
+    const payload = { contractVersion: Contract.CONTRACT_VERSION, ...message };
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('直连请求超时（240 秒）'));
+    }, 240000);
+    try {
+      chrome.runtime.sendMessage(payload, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const lastError = chrome.runtime.lastError;
+        if (lastError) { reject(new Error(String(lastError.message || lastError).slice(0, 200))); return; }
+        if (!response) { reject(new Error('直连通道没有返回')); return; }
+        if (response.ok === false) { reject(new Error(String(response.error || '直连请求失败').slice(0, 300))); return; }
+        resolve(response.result);
+      });
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+}
+
+/** 组装直连生图需要的商品画像（只用 projection 里真实存在的字段） */
+function directProductProfile() {
+  return {
+    title: projection.source.title || '',
+    categoryName: projection.source.categoryName || '',
+    attributes: [],
+  };
+}
+
+/**
+ * 直连生图：选参考图 → 生成提示词 → 逐张调 provider。
+ * @param {object} options { limit, onlySlot, timeoutMs }
+ */
+async function directGenerateImage(options = {}) {
+  if (directImageBusy) throw new Error('直连生图正在进行中');
+  directImageBusy = true;
+  const startedAt = Date.now();
+  try {
+    const health = directHealth.last() || await directHealth.check();
+    if (!health || !health.image || health.image.ok !== true) {
+      throw new Error('生图 Provider 不可用：' + (health && health.image ? health.image.message : '未检查'));
+    }
+
+    const references = selectReferences(projection.media, referenceSelectionInfo().selectedLimit);
+    if (!references.length) throw new Error('没有可用的参考图（需要至少有主图）');
+    status(`直连生图：已按索引选出 ${references.length} 张参考图`);
+
+    const plan = buildDirectPromptPlan({
+      product: directProductProfile(),
+      media: projection.media,
+      skus: projection.skus.map((sku) => ({ key: sku.key, label: sku.label, imageUrl: sku.imageUrl })),
+    });
+
+    const slots = options.onlySlot
+      ? plan.sharedGallery.filter((slot) => slot.slotId === options.onlySlot)
+      : plan.sharedGallery.slice(0, Number(options.limit) > 0 ? Number(options.limit) : 1);
+    if (!slots.length) throw new Error('提示词计划为空');
+
+    directImageResults = [];
+    for (const slot of slots) {
+      status(`直连生图：${slot.goalType} 生成中（约 35 秒）…`);
+      const result = await directSend({
+        type: 'ss-erp:direct-image-generate',
+        payload: {
+          prompt: slot.prompt,
+          inputImageUrls: slot.inputImageUrls,
+          timeoutMs: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 180000,
+        },
+      });
+      directImageResults.push({ slot, ...result });
+      log(`直连生图完成：${slot.goalType} ${(result.elapsedMs / 1000).toFixed(1)}s`);
+    }
+
+    const ok = directImageResults.filter((item) => item.url);
+    status(`直连生图完成：${ok.length}/${slots.length} 张，共 ${((Date.now() - startedAt) / 1000).toFixed(0)} 秒`, 'ok');
+    renderDirectImageResults();
+    return directImageResults;
+  } finally {
+    directImageBusy = false;
+  }
+}
+
+/** 把直连生图的结果渲染到图片工作台的候选区（复用现有 DOM） */
+function renderDirectImageResults() {
+  const host = element('precision-image-candidates') || element('image-queue');
+  if (!host || !directImageResults.length) return;
+  const wrap = make('section', 'precision-direct-results');
+  wrap.append(make('h4', '', `直连生图结果（${directImageResults.length} 张）`));
+  for (const item of directImageResults) {
+    const card = make('article', 'precision-direct-result');
+    if (item.url) {
+      const img = make('img');
+      img.src = item.url; img.alt = item.slot.goalType; img.crossOrigin = 'anonymous';
+      img.referrerPolicy = 'no-referrer';
+      img.loading = 'lazy';
+      card.append(img);
+    }
+    card.append(make('p', '', `${item.slot.goalType} · ${(item.elapsedMs / 1000).toFixed(1)}s`));
+    if (item.url) {
+      const a = make('a', 'ghost', '打开原图');
+      a.href = item.url; a.target = '_blank'; a.rel = 'noreferrer';
+      card.append(a);
+    }
+    wrap.append(card);
+  }
+  host.append(wrap);
+}
+
+// 直连生图按钮接线。用 trusted() 保持与其他入口一致的 isTrusted 语义。
+trusted('precision-direct-generate-btn', async () => {
+  await directGenerateImage({ limit: 1 });
+});
+trusted('precision-direct-generate-all-btn', async () => {
+  await directGenerateImage({ limit: 7 });
+});
+
 async function startImageWorkflow() {
   if (!imageWorkspace.state().open) {
     imageWorkspace.open(selectedSkuKey, { tab: imageMode === 'ai-suite'
