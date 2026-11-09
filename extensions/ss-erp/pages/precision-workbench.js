@@ -660,7 +660,19 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
   },
 });
 const attributes = createOfficialAttributeEditor({
-  root: element('ui-scale-root'), send: command, getEditor: () => {
+  root: element('ui-scale-root'),
+  // 2026-11：直连类型必须绕过 command。
+  // command 的投递链是 postMessage → content/donor-workbench-bridge.js → SW，
+  // 而 bridge 的 waitForAuthority 在 busy 卡住时会挂起**所有**非 mutation 命令
+  // （既不 resolve 也不 reject，一条 postMessage 都不发出）。属性 schema 与字典
+  // 因此永远读不到，界面停在「正在读取官方属性并预填…」。
+  // 直连消息走 chrome.runtime.sendMessage 直接到 SW，同一跳不经过 bridge。
+  send: (type, fields) => {
+    const name = String(type || '');
+    if (!name.startsWith('ss-erp:direct-')) return command(type, fields);
+    return directSend({ type: name, payload: fields || {} }).then((result) => ({ data: result, ok: true }));
+  },
+  getEditor: () => {
     const data = currentEditorForPublish(); return data ? { ...data, selectedSkuKeys: editorSkuKeys() } : null;
   }, getBinding: currentEditorBinding,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), onSave: (value) => saveEditor('ATTRIBUTES', value),

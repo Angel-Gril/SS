@@ -310,6 +310,8 @@
     'ss-erp:direct-ozon-post',
     'ss-erp:direct-ozon-credentials-read',
     'ss-erp:direct-ozon-credentials-write',
+    'ss-erp:direct-ozon-attributes',
+    'ss-erp:direct-ozon-attribute-values',
     'ss-erp:direct-image-probe',
     'ss-erp:direct-image-generate',
     'ss-erp:direct-image-provider-read',

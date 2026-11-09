@@ -6647,6 +6647,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ss-erp:direct-ozon-credentials-write':
         if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(ozonClient.writeCredentials(payload));
+      // 2026-11：属性 schema 与字典改走直连。
+      // 原来这两件走 ERP 的 EDITOR_ATTRIBUTES / EDITOR_DICTIONARY，实测在
+      // 草稿刚建/刚改类目时挂死（100 秒内一条 postMessage 都没发出），
+      // 界面永久停在「正在读取官方属性并预填…」。
+      case 'ss-erp:direct-ozon-attributes':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.readCategoryAttributes(payload.categoryId, payload.typeId));
+      case 'ss-erp:direct-ozon-attribute-values':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.readAttributeValues(payload));
       case 'ss-erp:direct-image-probe':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(imageClient.probeImageProvider(payload.provider));

@@ -14,6 +14,30 @@ const displayValue = (value) => value == null ? '' : typeof value === 'object' ?
 // ERP 的 EDITOR_ATTRIBUTES 在草稿刚建/刚改类目时会长时间不返回。
 const LOAD_WAIT_CAP_MS = 45000;
 
+/**
+ * 直连读到的 schema 没有 ERP 的 schemaRevision，但上游用 64 位 hex 做校验。
+ * 这里按「类目 + 类型 + 字段指纹」拼一个稳定值：同一 schema 反复读得到同一个
+ * revision，字段集合变化时才会变（用于丢弃过期编辑）。
+ */
+function schemaRevisionFor(categoryId, typeId, fields) {
+  const seed = String(categoryId) + ':' + String(typeId) + '|'
+    + fields.map((f) => String(f.attributeId) + ',' + String(f.name || '') + ',' + String(f.dictionaryId || 0)).join(';');
+  // 简单 32 位 FNV-1a 展开成 64 位 hex（两段并用不同初值，避免碰撞集中）
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < seed.length; i++) {
+    const c = seed.charCodeAt(i);
+    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
+    h2 ^= (c + i); h2 = (h2 * 0x85ebca6b) >>> 0;
+  }
+  const part = (n) => ('00000000' + (n >>> 0).toString(16)).slice(-8);
+  let out = '';
+  for (let k = 0; k < 4; k++) {
+    h1 = (h1 * 0x01000193) >>> 0; h2 = (h2 * 0x85ebca6b) >>> 0;
+    out += part(h1 ^ (h2 + k));
+  }
+  return out.slice(0, 64);
+}
+
 export function createOfficialAttributeEditor({ root, send, getEditor, getBinding, getBusy, onSave, onDirty, onReset, onChanged, report, status }) {
   const make = (tag, className, text) => {
     const node = document.createElement(tag); if (className) node.className = className;
@@ -117,14 +141,43 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     const task = { basis, promise: null };
     task.promise = Promise.resolve().then(async () => {
       if (basis !== token()) return;
-      let reply;
-      try { reply = await send('EDITOR_ATTRIBUTES', { listingWorkflowId: data.binding.listingWorkflowId, binding }); }
-      catch (error) { if (basis !== token()) return; throw error; }
-      // Superseded reads are discarded. A caller awaiting the new revision
-      // continues with its own bound read instead of inheriting a stale error.
-      if (basis !== token()) return;
-      const value = reply.data?.workspace;
-      if (reply.data?.state !== 'ready' || !value || !Array.isArray(value.fields) || !Array.isArray(value.values) || !/^[a-f0-9]{64}$/u.test(value.schemaRevision || '')) throw new Error('官方属性读取未完成，请重新读取官方属性');
+      // 2026-11：属性 schema 改走直连 Ozon。
+      // 原来只有 ERP 的 EDITOR_ATTRIBUTES 一条路，而它在草稿刚建/刚改类目时
+      // 会挂死（实测 100 秒内一条 postMessage 都没发出），界面永久停在
+      // 「正在读取官方属性并预填…」。
+      // 直连失败才回退 ERP —— 保留旧路径作为兜底，但正常情况不会再走它。
+      let value = null;
+      const data0 = getEditor();
+      const categoryId = Number(data0 && data0.category && data0.category.categoryId);
+      const typeId = Number(data0 && data0.category && data0.category.typeId);
+      if (Number.isSafeInteger(categoryId) && categoryId > 0 && Number.isSafeInteger(typeId) && typeId > 0) {
+        try {
+          const direct = await send('ss-erp:direct-ozon-attributes', { categoryId, typeId });
+          const fields = direct && direct.fields;
+          if (Array.isArray(fields) && fields.length) {
+            value = {
+              fields,
+              // 直连不返回已填值；交给 applyPrefill / 用户填写。
+              // 空数组让 change() 走「新建」分支，不会覆盖任何已有内容。
+              values: [],
+              // schemaRevision 必须是 64 位 hex（上游有正则校验）。
+              // 这里用「类目 + 类型 + 字段数」构造一个稳定值，同一 schema 反复
+              // 读取得到同一个 revision，字段变了才变。
+              schemaRevision: schemaRevisionFor(categoryId, typeId, fields),
+            };
+          }
+        } catch (directError) {
+          try { console.warn('[SSERP] 直连属性读取失败，回退 ERP', directError); } catch (_e) {}
+        }
+      }
+      if (!value) {
+        let reply;
+        try { reply = await send('EDITOR_ATTRIBUTES', { listingWorkflowId: data.binding.listingWorkflowId, binding }); }
+        catch (error) { if (basis !== token()) return; throw error; }
+        if (basis !== token()) return;
+        value = reply.data?.workspace;
+        if (reply.data?.state !== 'ready' || !value || !Array.isArray(value.fields) || !Array.isArray(value.values) || !/^[a-f0-9]{64}$/u.test(value.schemaRevision)) throw new Error('官方属性读取未完成，请重新读取官方属性');
+      }
       if (workspace && workspace.schemaRevision !== value.schemaRevision || clearAfterSave) {
         if (!clearAfterSave && edits.size) status('官方字段已更新，旧属性编辑需重新填写', 'warn');
         edits.clear(); onReset();
@@ -152,9 +205,27 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
     if (query.value.length > 200) throw new Error('字典查询最多 200 个字符');
     apply.disabled = true; search.disabled = true;
     try {
-      const reply = await send('EDITOR_DICTIONARY', { listingWorkflowId: getBinding().listingWorkflowId, binding: getBinding(),
-        schemaRevision: workspace.schemaRevision, attributeId: captured.field.attributeId, query: query.value.trim(), limit: 100 });
-      const result = reply.data?.dictionary;
+      // 2026-11：字典也走直连，与 schema 读取保持一致（ERP 那条路同样会挂）。
+      const data1 = getEditor();
+      const cid1 = Number(data1 && data1.category && data1.category.categoryId);
+      const tid1 = Number(data1 && data1.category && data1.category.typeId);
+      let result = null;
+      try {
+        const direct = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: cid1, typeId: tid1,
+          attributeId: captured.field.attributeId, query: query.value.trim(), limit: 100,
+        });
+        if (direct && Array.isArray(direct.values)) {
+          result = { schemaRevision: workspace.schemaRevision, attributeId: captured.field.attributeId, values: direct.values };
+        }
+      } catch (directError) {
+        try { console.warn('[SSERP] 直连字典读取失败，回退 ERP', directError); } catch (_e) {}
+      }
+      if (!result) {
+        const reply = await send('EDITOR_DICTIONARY', { listingWorkflowId: getBinding().listingWorkflowId, binding: getBinding(),
+          schemaRevision: workspace.schemaRevision, attributeId: captured.field.attributeId, query: query.value.trim(), limit: 100 });
+        result = reply.data?.dictionary;
+      }
       if (dialog !== captured || captured.token !== token() || reply.data?.state !== 'ready' || !result || result.schemaRevision !== workspace.schemaRevision
         || result.attributeId !== captured.field.attributeId || !Array.isArray(result.values)) throw new Error('官方字典已变化，请重新打开');
       list.replaceChildren();

@@ -46,6 +46,7 @@
     'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear',
     'ss-erp:direct-ozon-probe', 'ss-erp:direct-ozon-post',
     'ss-erp:direct-ozon-credentials-read', 'ss-erp:direct-ozon-credentials-write',
+    'ss-erp:direct-ozon-attributes', 'ss-erp:direct-ozon-attribute-values',
     'ss-erp:direct-image-probe', 'ss-erp:direct-image-generate',
     'ss-erp:direct-image-provider-read', 'ss-erp:direct-image-provider-write',
     'ss-erp:direct-publish', 'ss-erp:direct-publish-verify', 'ss-erp:direct-publish-build',

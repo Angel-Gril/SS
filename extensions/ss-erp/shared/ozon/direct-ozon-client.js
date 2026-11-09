@@ -183,6 +183,78 @@ const ENDPOINTS = Object.freeze({
   productList: '/v3/product/list',
 });
 
+/**
+ * 读取类目的官方属性 schema（直连 Ozon，不经过 ERP）。
+ *
+ * ERP 的 EDITOR_ATTRIBUTES 在草稿刚建/刚改类目时会长时间不响应，实测挂死
+ * 100 秒以上且一条 postMessage 都没发出。属性 schema 本身是 Ozon 的公开
+ * 接口，没必要绕一层。
+ *
+ * Ozon 返回的字段结构 → 工作台编辑器需要的结构：
+ *   id            -> attributeId
+ *   name          -> name
+ *   is_required   -> required
+ *   dictionary_id -> dictionaryId（有值即 STRICT_DICTIONARY + DROPDOWN）
+ *   type          -> valueType
+ *   is_collection -> cardinality / maxValues
+ */
+async function readCategoryAttributes(categoryId, typeId, options = {}) {
+  const cid = Number(categoryId), tid = Number(typeId);
+  if (!Number.isSafeInteger(cid) || cid <= 0) throw new Error('类目 ID 无效');
+  if (!Number.isSafeInteger(tid) || tid <= 0) throw new Error('类型 ID 无效');
+  const reply = await ozonPost(ENDPOINTS.categoryAttributes, {
+    description_category_id: cid, type_id: tid, language: 'ZH_HANS',
+  }, options);
+  const raw = Array.isArray(reply && reply.result) ? reply.result : [];
+  const fields = raw.map((item) => {
+    const dictionaryId = Number(item && item.dictionary_id) || 0;
+    const isCollection = Boolean(item && item.is_collection);
+    return {
+      attributeId: Number(item && item.id),
+      name: String((item && item.name) || ''),
+      required: Boolean(item && item.is_required),
+      dictionaryId,
+      // ERP 里这两项决定「能不能编辑」和「填文本还是选下拉」
+      valuePolicy: dictionaryId ? 'STRICT_DICTIONARY' : 'FREE_TEXT',
+      editorMode: dictionaryId ? 'DROPDOWN' : 'TEXT',
+      valueType: String((item && item.type) || 'String'),
+      cardinality: isCollection ? 'MULTIPLE' : 'SINGLE',
+      maxValues: isCollection ? 10 : 1,
+      // 变体属性（颜色/尺码）Ozon 侧没有独立标记；名字能判断的交给调用方，
+      // 这里统一给 SKU，让 applyPrefill 按 skuKey 落行时不被拒绝。
+      ownership: 'SKU',
+      description: String((item && item.description) || '').slice(0, 400),
+    };
+  }).filter((f) => Number.isSafeInteger(f.attributeId) && f.attributeId > 0 && f.name);
+
+  return { categoryId: cid, typeId: tid, fields, total: fields.length };
+}
+
+/**
+ * 查字典值（直连）。query 用 `value` 参数，Ozon 对部分字典（如品牌）忽略它，
+ * 所以调用方仍需准备兜底 id。
+ */
+async function readAttributeValues(input, options = {}) {
+  const cid = Number(input && input.categoryId), tid = Number(input && input.typeId);
+  const attributeId = Number(input && input.attributeId);
+  if (!Number.isSafeInteger(attributeId) || attributeId <= 0) throw new Error('属性 ID 无效');
+  if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid)) throw new Error('类目/类型 ID 无效');
+  const body = {
+    description_category_id: cid, type_id: tid, attribute_id: attributeId,
+    language: 'ZH_HANS', limit: Math.min(Math.max(Number(input && input.limit) || 50, 1), 1000),
+    last_value_id: Number(input && input.lastValueId) || 0,
+  };
+  const query = String((input && input.query) || '').trim();
+  if (query) body.value = query;
+  const reply = await ozonPost(ENDPOINTS.attributeValues, body, options);
+  const raw = Array.isArray(reply && reply.result) ? reply.result : [];
+  return {
+    values: raw.map((v) => ({ id: Number(v && v.id), value: String((v && v.value) || '') }))
+      .filter((v) => Number.isSafeInteger(v.id) && v.id > 0),
+    hasNext: Boolean(reply && reply.has_next),
+  };
+}
+
 // MV3 service worker 是 classic script，不支持 ES module。
 // 这里挂到 globalThis，由 service-worker.js 用 importScripts 引入。
 globalThis.SSERP_DIRECT_OZON = Object.freeze({
@@ -192,4 +264,8 @@ globalThis.SSERP_DIRECT_OZON = Object.freeze({
   writeCredentials,
   ozonPost,
   probe,
+  // 2026-11：属性 schema 与字典也走直连，不再依赖 ERP 的 EDITOR_ATTRIBUTES /
+  // EDITOR_DICTIONARY（那条路实测会挂死，且一条 postMessage 都不发出）。
+  readCategoryAttributes,
+  readAttributeValues,
 });
