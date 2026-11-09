@@ -314,6 +314,9 @@
     'ss-erp:direct-image-generate',
     'ss-erp:direct-image-provider-read',
     'ss-erp:direct-image-provider-write',
+    'ss-erp:direct-publish',
+    'ss-erp:direct-publish-verify',
+    'ss-erp:direct-publish-build',
   ]);
 
   var KNOWN_TYPES = union(
@@ -460,6 +463,13 @@
         && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId);
     }
     if (messageType.startsWith('ss-erp:product-analysis-') || messageType.startsWith('ss-erp:preparation-checkpoint-')) {
+      return sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
+        && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)
+        && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId);
+    }
+    // 直连通道（Ozon / 生图 / 上架）只允许从工作台 iframe 发起，
+    // 与 product-analysis 同一套来源约束：必须嵌在来源商品页里、frameId > 0。
+    if (DIRECT_API_TYPES.has(messageType)) {
       return sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
         && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)
         && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId);

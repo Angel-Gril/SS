@@ -4709,6 +4709,11 @@ try {
 } catch (error) {
   console.warn('[SS ERP] direct image client load failed', error);
 }
+try {
+  importScripts('../shared/ozon/direct-publish.js');
+} catch (error) {
+  console.warn('[SS ERP] direct publish client load failed', error);
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[ozon-calc] installed');
@@ -6620,6 +6625,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (typeof message.type === 'string' && message.type.startsWith('ss-erp:direct-')) {
     const ozonClient = globalThis.SSERP_DIRECT_OZON;
     const imageClient = globalThis.SSERP_DIRECT_IMAGE;
+    const publishClient = globalThis.SSERP_DIRECT_PUBLISH;
     const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
     const reply = (promise) => {
       Promise.resolve(promise).then(
@@ -6653,6 +6659,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ss-erp:direct-image-provider-write':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(imageClient.writeImageProvider(payload));
+      case 'ss-erp:direct-publish':
+        if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
+        return reply(publishClient.publishProduct(payload.item, payload.options));
+      case 'ss-erp:direct-publish-verify':
+        if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
+        return reply(publishClient.verifyProduct(payload.offerId));
+      case 'ss-erp:direct-publish-build':
+        if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
+        return reply(Promise.resolve(publishClient.buildItem(payload.item)));
       default:
         return false;
     }

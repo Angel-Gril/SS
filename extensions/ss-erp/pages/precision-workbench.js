@@ -13,6 +13,7 @@ import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
 import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
 import { planPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
+import { createDirectHealthPanel } from '../shared/ozon/direct-health-panel.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
@@ -527,6 +528,38 @@ async function prefillOfficialAttributes(){
   status(`已自动预填 ${applied.applied} 个官方字段，请核对后保存`, 'ok');
   return { applied: applied.applied, plan: plan.length, skipped: result.skipped };
 }
+// 2026-11：直连通道自检面板。
+// 放在开跑之前，把「凭据 / Ozon 直连 / 生图 Provider」三件事一次性说清楚。
+// 直连消息由 service worker 处理（panel 里发不出去，也不该发）。
+const directHealth = createDirectHealthPanel({
+  root: element('precision-direct-health-mount'),
+  make,
+  send: (message) => new Promise((resolve, reject) => {
+    const payload = { contractVersion: Contract.CONTRACT_VERSION, ...message };
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('自检响应超时（20 秒）'));
+    }, 20000);
+    try {
+      chrome.runtime.sendMessage(payload, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const lastError = chrome.runtime.lastError;
+        if (lastError) { reject(new Error(String(lastError.message || lastError).slice(0, 200))); return; }
+        resolve(response);
+      });
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    }
+  }),
+});
+
 async function ensureCatalogRevision(){
   if(catalogRevisionFromErp)return catalogRevisionFromErp;
   if(!listing())return '';

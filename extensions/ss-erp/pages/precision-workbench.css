@@ -386,3 +386,89 @@
   font-size: 12px;
   color: var(--muted);
 }
+/* ===================================================================
+   2026-11 直连通道自检面板
+   -------------------------------------------------------------------
+   放在工具栏与步骤条之间。三行分别对应「凭据 / Ozon 直连 / 生图 Provider」，
+   每种状态都有明确色调，失败时 detail 直接给出「下一步该做什么」。
+   =================================================================== */
+.precision-direct-health {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+  font-size: 12px;
+}
+
+.precision-direct-health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.precision-direct-health-title {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.precision-direct-health-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #eef2f8;
+  color: var(--muted);
+}
+
+.precision-direct-health-badge[data-tone="ok"]      { background: #eefaf4; color: var(--ok); }
+.precision-direct-health-badge[data-tone="bad"]     { background: #fdeeee; color: #b42318; }
+.precision-direct-health-badge[data-tone="warn"]    { background: #fff7e6; color: #b54708; }
+.precision-direct-health-badge[data-tone="running"] { background: #eaf2ff; color: var(--brand); }
+
+.precision-direct-health-run {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.precision-direct-health-run:disabled { opacity: .6; cursor: default; }
+
+.precision-direct-health-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.precision-direct-health-row {
+  display: grid;
+  grid-template-columns: 96px 52px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.precision-direct-health-name { color: var(--muted); }
+
+.precision-direct-health-state {
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.precision-direct-health-state[data-tone="ok"]      { color: var(--ok); }
+.precision-direct-health-state[data-tone="bad"]     { color: #b42318; }
+.precision-direct-health-state[data-tone="warn"]    { color: #b54708; }
+.precision-direct-health-state[data-tone="running"] { color: var(--brand); }
+
+.precision-direct-health-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
