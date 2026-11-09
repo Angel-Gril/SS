@@ -11,7 +11,9 @@
 // Ozon 返回的 result.errors，不会留一个「未确认」的影子让用户去点 recover。
 
 const PICTURE_IMPORT_PATH = '/v2/product/pictures/import';
-const PRODUCT_IMPORT_PATH = '/v1/product/import';
+// Ozon 的上架端点是 /v3，不是 /v1。/v1/product/import 会返回 404 page not found
+// （实测踩过）。状态查询才是 /v1。
+const PRODUCT_IMPORT_PATH = '/v3/product/import';
 const IMPORT_STATUS_PATH = '/v1/product/import/info';
 const PRODUCT_INFO_PATH = '/v3/product/info/list';
 
@@ -95,6 +97,11 @@ function buildItem(input) {
     })
     .filter(Boolean);
 
+  // 2026-11 实测：Ozon 的尺寸是**顶层平铺**字段，不能嵌套在 dimensions 里。
+  // 嵌套写法不会报错，但 Ozon 会回 missing_dimension(width/height/depth)，
+  // 商品仍然建出来，只是尺寸为空 —— 这个坑实测踩过（productId 6917728895）。
+  // 参考 shared/ozon/ozon-upload-adapter.js 的同一处结论。
+  const dimensionUnit = String(input.dimensionUnit || 'mm').slice(0, 4);
   const item = {
     offer_id: offerId,
     name,
@@ -105,7 +112,10 @@ function buildItem(input) {
     vat: String(input.vat == null ? '0' : input.vat).slice(0, 8),
     weight,
     weight_unit: String(input.weightUnit || 'g').slice(0, 4),
-    dimensions: { height, depth, width, dimension_unit: String(input.dimensionUnit || 'mm').slice(0, 4) },
+    height,
+    depth,
+    width,
+    dimension_unit: dimensionUnit,
     primary_image: images[0],
     images,
     attributes,
