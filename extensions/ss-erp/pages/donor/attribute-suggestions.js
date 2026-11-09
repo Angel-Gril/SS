@@ -1,7 +1,82 @@
+/**
+ * 用直连把 ERP 报的 unresolvedValues 解析成官方 dictionary_value_id。
+ *
+ * ERP 的 attribute-suggestions 只做文本匹配，遇到 STRICT_DICTIONARY 字段就
+ * 把值原样丢进 unresolvedValues，理由是「必须由服务器解析」——而它自己的
+ * 解析器（EDITOR_DICTIONARY）在草稿刚建/刚改类目时会挂起，所以永远解析不了。
+ *
+ * Ozon 的 /v1/description-category/attribute/values 就是权威字典，直连即可。
+ * 解析成功的值补进 row.dictionaryValueIds，并把该值从 unresolvedValues 移除，
+ * 界面上的警告随之消失，勾选框也能真正勾上。
+ */
+async function resolveUnresolved(suggestions, ctx) {
+  if (!suggestions || !Array.isArray(suggestions.suggestions)) return;
+  const { categoryId, typeId, send } = ctx || {};
+  const cid = Number(categoryId), tid = Number(typeId);
+  if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) return;
+
+  // attributeName → attributeId：ERP 的 candidate 只给名字，没有 id
+  let nameToId = new Map();
+  try {
+    const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
+    const fields = (schema && schema.fields) || [];
+    for (const f of fields) nameToId.set(String(f.name || '').trim(), Number(f.attributeId));
+  } catch (_e) { return; }
+
+  for (const candidate of suggestions.suggestions) {
+    const attributeId = nameToId.get(String(candidate.attributeName || '').trim());
+    if (!Number.isSafeInteger(attributeId)) continue;
+    for (const row of (candidate.rows || [])) {
+      if (!row || !Array.isArray(row.unresolvedValues) || !row.unresolvedValues.length) continue;
+      const stillUnresolved = [];
+      row.dictionaryValueIds = Array.isArray(row.dictionaryValueIds) ? row.dictionaryValueIds : [];
+      for (const raw of row.unresolvedValues) {
+        const query = String(raw == null ? '' : raw).trim();
+        if (!query) continue;
+        try {
+          const found = await send('ss-erp:direct-ozon-attribute-values', {
+            categoryId: cid, typeId: tid, attributeId, query, limit: 50,
+          });
+          const values = (found && found.values) || [];
+          // 复用主预填的匹配策略：唯一命中才接受，有歧义就不填
+          const picked = pickBest(values, query);
+          if (picked && !row.dictionaryValueIds.includes(picked.id)) {
+            row.dictionaryValueIds.push(picked.id);
+            row.resolvedByDirect = true;
+          } else {
+            stillUnresolved.push(raw);
+          }
+        } catch (_e) { stillUnresolved.push(raw); }
+      }
+      row.unresolvedValues = stillUnresolved;
+    }
+  }
+}
+
+/** 与 attribute-prefill 的 pickDictionaryValue 同策略：精确 > 词干 > 唯一包含 */
+function pickBest(values, query) {
+  const list = Array.isArray(values) ? values.filter(v => v && Number.isSafeInteger(v.id)) : [];
+  if (!list.length) return null;
+  const want = String(query).toLowerCase().replace(/\s+/g, ' ').trim();
+  const eq = list.filter(v => String(v.value).toLowerCase().trim() === want);
+  if (eq.length === 1) return eq[0];
+  const stem = (s) => String(s).toLowerCase().replace(/[^а-яёa-z0-9]/gi, '')
+    .replace(/(ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ым|им|ых|их|ую|юю|а|я|о|е|ы|и|у|ю)$/u, '').slice(0, 12);
+  const ws = stem(want);
+  if (ws.length >= 3) {
+    const byStem = list.filter(v => stem(v.value) === ws);
+    if (byStem.length === 1) return byStem[0];
+    if (byStem.length > 1) return byStem.slice().sort((a,b) => Math.abs(String(a.value).length-want.length) - Math.abs(String(b.value).length-want.length))[0];
+  }
+  const contains = list.filter(v => String(v.value).toLowerCase().includes(want) || (want.length >= 4 && want.includes(String(v.value).toLowerCase())));
+  return contains.length === 1 ? contains[0] : null;
+}
+
 export function createAttributeSuggestions({
   root,
   command,
   getBinding,
+  getEditor,
   getBusy,
   hasUnsavedAttributes = () => false,
   getSkuLabel,
@@ -159,6 +234,19 @@ export function createAttributeSuggestions({
         if (basis !== context()) { invalidate(); return; }
         data = reply.data?.suggestions;
         if (!data || data.state !== 'ready') throw Error('属性匹配响应不完整');
+        // 2026-11：ERP 只做「从商品文本推候选属性」，遇到严格字典字段时它自己
+        // 不解析，直接回 unresolvedValues，界面上就成了
+        // "Strict dictionary values must be resolved by the server before they
+        //  can be suggested" —— 用户点了也填不进任何东西。
+        // 字典解析我们自己能用直连做（Ozon 的 attribute/values 接口），
+        // 所以拿到 ERP 的候选后，在渲染前把未解析的值补成 dictionary_value_id。
+        const __editor = typeof getEditor === 'function' ? getEditor() : null;
+        await resolveUnresolved(data, {
+          categoryId: __editor && __editor.category && __editor.category.categoryId,
+          typeId: __editor && __editor.category && __editor.category.typeId,
+          send: command,
+        });
+        if (attempt !== epoch || modal.hidden) return;
         data.suggestions.forEach((candidate, index) => {
           const card = make('section', 'precision-attribute-suggestion');
           const label = make('label'),

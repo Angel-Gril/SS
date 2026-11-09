@@ -202,6 +202,23 @@ async function readCategoryAttributes(categoryId, typeId, options = {}) {
   const cid = Number(categoryId), tid = Number(typeId);
   if (!Number.isSafeInteger(cid) || cid <= 0) throw new Error('类目 ID 无效');
   if (!Number.isSafeInteger(tid) || tid <= 0) throw new Error('类型 ID 无效');
+
+  // 2026-11：schema 按「类目:类型」缓存到 chrome.storage.session。
+  // 属性 schema 对同一类目是稳定的，而它是一次 30-80KB 的响应。
+  // 缓存后同一类目的第二个商品几乎零延迟，也让「反复点预填」不再打 Ozon。
+  const cacheKey = 'ss-erp:direct:schema:' + cid + ':' + tid;
+  const TTL_MS = 6 * 60 * 60 * 1000;
+  const bypass = Boolean(options && options.bypassCache);
+  if (!bypass) {
+    try {
+      const got = await chrome.storage.session.get(cacheKey);
+      const hit = got && got[cacheKey];
+      if (hit && Array.isArray(hit.fields) && hit.fields.length && (Date.now() - Number(hit.at || 0)) < TTL_MS) {
+        return { categoryId: cid, typeId: tid, fields: hit.fields, total: hit.fields.length, cached: true };
+      }
+    } catch (_e) { /* 缓存读失败就当没有 */ }
+  }
+
   const reply = await ozonPost(ENDPOINTS.categoryAttributes, {
     description_category_id: cid, type_id: tid, language: 'ZH_HANS',
   }, options);
@@ -227,7 +244,13 @@ async function readCategoryAttributes(categoryId, typeId, options = {}) {
     };
   }).filter((f) => Number.isSafeInteger(f.attributeId) && f.attributeId > 0 && f.name);
 
-  return { categoryId: cid, typeId: tid, fields, total: fields.length };
+  // 写缓存（失败不影响返回）
+  if (fields.length) {
+    try {
+      await chrome.storage.session.set({ [cacheKey]: { at: Date.now(), fields } });
+    } catch (_e) { /* 配额或权限问题忽略 */ }
+  }
+  return { categoryId: cid, typeId: tid, fields, total: fields.length, cached: false };
 }
 
 /**

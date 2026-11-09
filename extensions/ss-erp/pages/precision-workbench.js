@@ -681,7 +681,7 @@ const attributes = createOfficialAttributeEditor({
 });
 let attributeSuggestionReviewed='';
 const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
-const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,
+const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,
  hasUnsavedAttributes:()=>[...unsavedListingFields].some(key=>key.startsWith('official-')),
  getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),getSkuLabel:key=>projection.skus.find(sku=>sku.key===key)?.label||key,
  onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},

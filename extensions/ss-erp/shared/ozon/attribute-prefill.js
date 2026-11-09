@@ -48,21 +48,26 @@ const AUDIENCE_MAP = [
 
 // 1688 颜色 → Ozon 俄文颜色（查询词）。
 // 服装/鞋类类目把「商品颜色」列为必填，1688 侧一般有「颜色」或「颜色分类」属性。
+// 2026-11：三元组 [中文正则, 俄文, 中文]。
+// 字典查询用 language=ZH_HANS，返回的是**中文**值（实测「商品颜色」返回
+// 白色/黑色/粉色）。只给俄文会一个都匹配不上，所以两个都给：
+//   ru   写进 Ozon 时的可读值 / 兜底
+//   zh   查字典用的 query
 const COLOR_MAP = [
-  [/(黑)/, 'черный'],
-  [/(白)/, 'белый'],
-  [/(红)/, 'красный'],
-  [/(蓝)/, 'синий'],
-  [/(绿)/, 'зеленый'],
-  [/(黄)/, 'желтый'],
-  [/(粉)/, 'розовый'],
-  [/(紫)/, 'фиолетовый'],
-  [/(灰)/, 'серый'],
-  [/(棕|咖|褐)/, 'коричневый'],
-  [/(米|杏|卡其|驼)/, 'бежевый'],
-  [/(橙|橘)/, 'оранжевый'],
-  [/(金)/, 'золотой'],
-  [/(银)/, 'серебряный'],
+  [/(黑)/, 'черный', '黑色'],
+  [/(白)/, 'белый', '白色'],
+  [/(红)/, 'красный', '红色'],
+  [/(蓝)/, 'синий', '蓝色'],
+  [/(绿)/, 'зеленый', '绿色'],
+  [/(黄)/, 'желтый', '黄色'],
+  [/(粉)/, 'розовый', '粉色'],
+  [/(紫)/, 'фиолетовый', '紫色'],
+  [/(灰)/, 'серый', '灰色'],
+  [/(棕|咖|褐)/, 'коричневый', '棕色'],
+  [/(米|杏|卡其|驼)/, 'бежевый', '米色'],
+  [/(橙|橘)/, 'оранжевый', '橙色'],
+  [/(金)/, 'золотой', '金色'],
+  [/(银)/, 'серебряный', '银色'],
 ];
 
 const COUNTRY_QUERY = 'Китай';
@@ -133,12 +138,13 @@ const SIZE_TOKEN = /\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|\d{2}(?:\/\d{2})?)\b/gi;
 export function parseVariantSpecs(skus) {
   const list = Array.isArray(skus) ? skus : [];
   const colors = [];
+  const colorsZh = [];
   const sizes = [];
   for (const sku of list) {
     const text = String(sku && (sku.label || sku.spec || sku.name) || '');
     if (!text) continue;
-    for (const [re, ru] of COLOR_MAP) {
-      if (re.test(text) && !colors.includes(ru)) colors.push(ru);
+    for (const [re, ru, zh] of COLOR_MAP) {
+      if (re.test(text) && !colors.includes(ru)) { colors.push(ru); colorsZh.push(zh); }
     }
     const tokens = text.match(SIZE_TOKEN) || [];
     for (const t of tokens) {
@@ -146,7 +152,7 @@ export function parseVariantSpecs(skus) {
       if (!sizes.includes(up)) sizes.push(up);
     }
   }
-  return { colors, sizes };
+  return { colors, colorsZh, sizes };
 }
 
 /** 按线索在 fields 里找目标字段；找不到返回 null */
@@ -187,6 +193,13 @@ function attributeValue(attributes, patterns) {
  *   kind: 'dictionary' | 'text'
  *   pick: 'exact' | 'single' | 'fuzzy' | 'raw'
  */
+/** 从 product 里取出 typeId（工作台会放进 category / typeId 字段） */
+function typeIdOf(product) {
+  const raw = product && (product.typeId || (product.category && product.category.typeId));
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+
 export function planPrefill(product, fields) {
   const list = Array.isArray(fields) ? fields : [];
   const title = String(product && product.title || '');
@@ -231,7 +244,10 @@ export function planPrefill(product, fields) {
   pushResolved('country', { kind: 'dictionary', query: COUNTRY_QUERY, pick: 'exact', reason: '1688 货源默认中国' });
 
   // 2. 类型：类目唯一选项时直接选；否则不猜
-  pushResolved('type', { kind: 'dictionary', query: '', pick: 'single', reason: '类目唯一类型' });
+  // 类型：类目只有 1 个选项时直接用；多个候选时必须按 typeId 反查，
+  // 不能猜（实测连衣裙类目有 2 个候选，猜就是 50% 错）。
+  pushResolved('type', { kind: 'dictionary', query: '', pick: 'single',
+    byTypeId: typeIdOf(product), reason: '类目唯一类型（否则按 typeId 反查）' });
 
   // 3. 适用人群 / 性别
   const audience = AUDIENCE_MAP.find(([re]) => re.test(title));
@@ -262,11 +278,12 @@ export function planPrefill(product, fields) {
   const variant = parseVariantSpecs(product && product.skus);
   // variant.colors 已经是俄文（parseVariantSpecs 内部走 COLOR_MAP），
   // 不能再用它去匹配中文正则 —— 那会永远落空（实测「商品颜色」就是这么漏的）。
-  let colorQuery = variant.colors[0] || '';
+  // 字典是 ZH_HANS，查询用中文；colorsZh 与 colors 一一对应。
+  let colorQuery = variant.colorsZh[0] || '';
   if (!colorQuery) {
     const colorText = attributeValue(attributes, [/^颜色/, /颜色分类/, /^цвет/i]) || title;
     const color = COLOR_MAP.find(([re]) => re.test(colorText));
-    if (color) colorQuery = color[1];
+    if (color) colorQuery = color[2];
   }
   if (colorQuery) {
     pushResolved('color', { kind: 'dictionary', query: colorQuery, pick: 'fuzzy', reason: `颜色「${colorQuery}」` });
@@ -314,8 +331,9 @@ export function planVariantPrefill(product, fields) {
         skuKey: key,
         attributeId: Number(colorField.attributeId),
         name: String(colorField.name || ''),
-        kind: 'dictionary', query: parsed.colors[0], pick: 'fuzzy',
-        reason: `SKU 颜色「${parsed.colors[0]}」`,
+        // 字典是 ZH_HANS，查询用中文（colorsZh），可读值用俄文
+        kind: 'dictionary', query: parsed.colorsZh[0] || parsed.colors[0], pick: 'fuzzy',
+        reason: `SKU 颜色「${parsed.colorsZh[0] || parsed.colors[0]}」`,
       });
     }
     if (sizeField && parsed.sizes.length) {
@@ -331,23 +349,84 @@ export function planVariantPrefill(product, fields) {
   return out;
 }
 
-/** 从字典返回值里挑一个 */export function pickDictionaryValue(values, pick, query) {
+/** 从字典返回值里挑一个 */
+export function pickDictionaryValue(values, pick, query, extra) {
   const list = Array.isArray(values) ? values.filter((v) => v && Number.isSafeInteger(v.id)) : [];
   if (!list.length) return null;
-  if (pick === 'exact') {
-    // exact 按传入的 query 精确比对；没给 query 时退回制造国的固定词表。
-    const want = normalize(query || '');
-    if (want) {
-      const hit = list.find((v) => normalize(v.value) === want);
-      if (hit) return hit;
-      // 字典可能返回带前缀/括号的变体，做一次「包含」兜底
-      return list.find((v) => normalize(v.value).includes(want)) || null;
-    }
-    return list.find((v) => COUNTRY_MATCH.test(normalize(v.value))) || null;
+
+  // 已知 id 优先。品牌「Нет бренда」这类值查不到（Ozon 的 value 参数对它无效），
+  // 只能靠实测确认过的 id 直接命中。
+  const pinnedId = Number(extra && extra.id);
+  if (Number.isSafeInteger(pinnedId) && pinnedId > 0) {
+    const pinned = list.find((v) => v.id === pinnedId);
+    if (pinned) return pinned;
   }
+
+  // 「类型」类字段的字典 id 就是 type_id 本身（Ozon 只允许该类目下的类型）。
+  // 候选 >1 时按它直查，比任何文本匹配都可靠。
+  const typeId = Number(extra && extra.typeId);
+  if (Number.isSafeInteger(typeId) && typeId > 0) {
+    const byType = list.find((v) => v.id === typeId);
+    if (byType) return byType;
+  }
+
   if (pick === 'single') return list.length === 1 ? list[0] : null;
-  // fuzzy：优先最短值（通常是通用词而不是细分变体）
-  return list.slice().sort((a, b) => String(a.value || '').length - String(b.value || '').length)[0] || null;
+
+  const want = normalize(query || '');
+  if (!want) {
+    if (!query && byCountryOnly(pick)) {
+      return list.find((v) => COUNTRY_MATCH.test(normalize(v.value))) || null;
+    }
+    return null;
+  }
+
+  // 1) 完全相等
+  const equal = list.filter((v) => normalize(v.value) === want);
+  if (equal.length === 1) return equal[0];
+
+  // 2) 俄文词干相等（розовый / розовая / розовое 归为同一词）
+  //    2026-11 实测：查 "розовый"（粉色）时 Ozon 模糊搜索第一条返回「白色」。
+  //    旧实现取「最短值」或「第一个」，等于把不相关的值当答案。
+  //    这里只在唯一命中时接受，有歧义就返回 null —— 填错比不填危险。
+  if (pick !== 'exact') {
+    const stem = russianStem(want);
+    if (stem.length >= 3) {
+      const byStem = list.filter((v) => russianStem(normalize(v.value)) === stem);
+      if (byStem.length === 1) return byStem[0];
+      if (byStem.length > 1) {
+        return byStem.slice().sort((a, b) =>
+          Math.abs(normalize(a.value).length - want.length) - Math.abs(normalize(b.value).length - want.length))[0];
+      }
+    }
+  }
+
+  // 3) 包含关系：唯一匹配才接受
+  if (pick === 'fuzzy') {
+    const contains = list.filter((v) => {
+      const t = normalize(v.value);
+      return t.includes(want) || (want.length >= 4 && want.includes(t));
+    });
+    if (contains.length === 1) return contains[0];
+  }
+
+  return null;
+}
+
+function byCountryOnly(pick) {
+  return pick === 'exact';
+}
+
+/**
+ * 极简俄文词干：去掉常见形容词词尾，把
+ * розовый / розовая / розовое / розового 归到 "розов"。
+ * 不做完整词形分析，只覆盖颜色与尺码用到的后缀。
+ */
+function russianStem(word) {
+  return String(word || '')
+    .toLowerCase()
+    .replace(/[^а-яёa-z0-9]/gi, '')
+    .replace(/(ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ым|им|ых|их|ую|юю|а|я|о|е|ы|и|у|ю)$/u, '')
+    .slice(0, 12);
 }
 
 /**
@@ -384,7 +463,7 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
         limit,
       });
       const values = response?.dictionary?.values || response?.values || [];
-      const chosen = pickDictionaryValue(values, item.pick, item.query);
+      const chosen = pickDictionaryValue(values, item.pick, item.query, { id: item.fallbackValueId, typeId: item.byTypeId });
       if (!chosen) {
         // 兜底：某些字典值（例如「Нет бренда」）不在前 N 条，且 `value` 搜索
         // 参数对它们无效。这类值如果已经实测确认过 id，就直接用。
