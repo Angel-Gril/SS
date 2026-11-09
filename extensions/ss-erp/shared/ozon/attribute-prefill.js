@@ -111,10 +111,43 @@ const FIELD_HINTS = {
     names: [/商品颜色/, /^颜色$/i, /^цвет$/i],
   },
   size: {
-    ids: [4295],
-    names: [/俄罗斯尺码/, /^尺码$/i, /^размер$/i],
+    ids: [4295, 9689, 9695],
+    names: [/российский размер/i, /^尺码$/i, /俄罗斯尺码/],
+  },
+  sizeManufacturer: {
+    ids: [9533, 9688],
+    names: [/размер производителя/i, /生产商尺码/],
   },
 };
+
+// 2026-11：尺码不硬编码映射表。
+// 精铺和知了都没有 S→42 的换算表（精铺只在 fill-rules 里列了「尺码/размер/size」
+// 关键词，实际把规格原样交给模型；知了只采集 size_name_cn）。硬编码一张表既
+// 覆盖不全，又会随类目变化。
+// 正确做法：从 SKU 规格里抽出尺码原文（S / M / L / 42 / XL），交给 Ozon 的
+// 4295（Российский размер）字典去匹配 —— 官方字典就是权威换算表。
+// 同理，颜色用 variant-spec.js 已有的中文→俄文映射。
+const SIZE_TOKEN = /\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|\d{2}(?:\/\d{2})?)\b/gi;
+
+/** 从 SKU 规格文本里抽颜色词与尺码词 */
+export function parseVariantSpecs(skus) {
+  const list = Array.isArray(skus) ? skus : [];
+  const colors = [];
+  const sizes = [];
+  for (const sku of list) {
+    const text = String(sku && (sku.label || sku.spec || sku.name) || '');
+    if (!text) continue;
+    for (const [re, ru] of COLOR_MAP) {
+      if (re.test(text) && !colors.includes(ru)) colors.push(ru);
+    }
+    const tokens = text.match(SIZE_TOKEN) || [];
+    for (const t of tokens) {
+      const up = String(t).toUpperCase();
+      if (!sizes.includes(up)) sizes.push(up);
+    }
+  }
+  return { colors, sizes };
+}
 
 /** 按线索在 fields 里找目标字段；找不到返回 null */
 function resolveField(fields, hint) {
@@ -222,11 +255,29 @@ export function planPrefill(product, fields) {
     }
   }
 
-  // 6. 颜色：从 1688 颜色属性或标题取（服装/鞋类必填）
-  const colorText = attributeValue(attributes, [/^颜色/, /颜色分类/, /^цвет/i]) || title;
-  const color = COLOR_MAP.find(([re]) => re.test(colorText));
-  if (color) {
-    pushResolved('color', { kind: 'dictionary', query: color[1], pick: 'fuzzy', reason: `颜色「${color[1]}」` });
+  // 6. 颜色 / 尺码：服装鞋类必填，且必须与 SKU 变体一致。
+  //    数据来源优先级：SKU 规格文本（"30541-粉色 / S"）> 1688 属性 > 标题。
+  //    颜色用本地中文→俄文映射；尺码不映射，直接把 S/M/L/42 交给 4295 字典匹配
+  //    —— 官方字典就是权威换算表，硬编码一张表既不全也会随类目失效。
+  const variant = parseVariantSpecs(product && product.skus);
+  // variant.colors 已经是俄文（parseVariantSpecs 内部走 COLOR_MAP），
+  // 不能再用它去匹配中文正则 —— 那会永远落空（实测「商品颜色」就是这么漏的）。
+  let colorQuery = variant.colors[0] || '';
+  if (!colorQuery) {
+    const colorText = attributeValue(attributes, [/^颜色/, /颜色分类/, /^цвет/i]) || title;
+    const color = COLOR_MAP.find(([re]) => re.test(colorText));
+    if (color) colorQuery = color[1];
+  }
+  if (colorQuery) {
+    pushResolved('color', { kind: 'dictionary', query: colorQuery, pick: 'fuzzy', reason: `颜色「${colorQuery}」` });
+  }
+
+  if (variant.sizes.length) {
+    // 多尺码时先取第一个（其余由变体表格逐行填），单尺码直接就是它
+    pushResolved('size', {
+      kind: 'dictionary', query: variant.sizes[0], pick: 'fuzzy',
+      reason: `SKU 尺码「${variant.sizes.slice(0, 4).join('/')}」查 4295 字典`,
+    });
   }
 
   return plan;

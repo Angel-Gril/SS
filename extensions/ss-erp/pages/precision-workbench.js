@@ -513,6 +513,9 @@ async function prefillOfficialAttributes(){
     // 一张卡片。用 1688 货号，不要用标题（标题会随人改）。
     sourceProductId: projection.source.sourceProductId || '',
     offerId: projection.source.sourceProductId || '',
+    // 变体规格（"30541-粉色 / S"）：颜色与尺码都从这里取。
+    // 服装鞋类的 Цвет товара / Российский размер 都是必填，且必须与 SKU 一致。
+    skus: projection.skus.map((sku) => ({ key: sku.key, label: sku.label })),
     attributes: [],
   };
   const plan = planPrefill(product, fields);
