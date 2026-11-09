@@ -9,6 +9,9 @@
 
 const NETWORK_HINT = '浏览器网络被拦截。请检查代理规则：*.ozon.ru 应走直连（DIRECT），不要走代理。';
 
+// 这些措辞只会出现在扩展自己的门禁里，用户无法据此采取任何行动。
+const INTERNAL_FAILURE = /不允许的扩展消息来源|扩展消息安全策略不可用|SS_ERP_RUNTIME_MESSAGE_|SS_ERP_BYOK_[A-Z_]+|frameId|documentId|senderSurface/i;
+
 /**
  * 把一次自检结果翻译成一句可行动的说明。
  * @param {{ok?:boolean, kind?:string, message?:string, elapsedMs?:number}} check
@@ -22,6 +25,14 @@ export function describeCheck(check) {
   if (item.ok === true) {
     const timing = Number.isFinite(ms) && ms > 0 ? `（${formatMs(ms)}）` : '';
     return raw || `正常${timing}`;
+  }
+
+  // 内部策略/协议类错误：用户改不了，也不该看到原文。
+  // 这类失败（例如「不允许的扩展消息来源」）是扩展自己的门禁拒绝了自己，
+  // 对用户来说等于「点了没反应」。统一换成一句可重试的话，细节留在 console。
+  if (INTERNAL_FAILURE.test(raw)) {
+    try { console.warn('[SSERP] internal gate failure:', raw); } catch (_e) {}
+    return '内部状态未就绪，正在重试。若持续失败请在设置里重新配对设备。';
   }
 
   switch (kind) {
