@@ -98,37 +98,61 @@ async function generateImage(input, options = {}) {
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
   const prompt = String((input && input.prompt) || '').trim();
   if (!prompt) throw new Error('提示词为空');
+  const body = {};
   const startedAt = Date.now();
 
   if (provider.mode === 'dashscope-async') {
     return await generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt });
   }
 
-  const body = {
-    model: provider.model,
-    prompt,
-    n: 1,
-    size: provider.size,
-  };
+  const refs = Array.isArray(input && input.inputImageUrls)
+    ? input.inputImageUrls.filter((u) => /^https:\/\//.test(String(u))).slice(0, 6)
+    : [];
   if (provider.quality) body.quality = provider.quality;
   if (provider.aspectRatio) body.aspect_ratio = provider.aspectRatio;
-  // 图生图：OpenAI 兼容端点用 image（单图）或 image[]（多图），两者都带，交给 provider 忽略多余的
-  const refs = Array.isArray(input && input.inputImageUrls)
-    ? input.inputImageUrls.filter((u) => /^https:\/\//.test(String(u))).slice(0, 9)
-    : [];
-  if (refs.length === 1) body.image = refs[0];
-  else if (refs.length > 1) body.image = refs;
 
   let response;
   try {
-    response = await fetchWithTimeout(provider.baseUrl + '/images/generations', {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + provider.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    }, timeoutMs);
+    // 2026-11 实测：gpt-image-2 的 /images/generations 明确拒绝 image 字段
+    //   {"error":{"message":"当前生图模式不接受参考图或蒙版，请使用图片编辑接口"}}
+    // 所以有参考图时必须走 /images/edits（multipart/form-data），
+    // 无参考图才走 /images/generations（JSON）。
+    if (refs.length) {
+      const form = new FormData();
+      form.append('model', provider.model);
+      form.append('prompt', prompt);
+      form.append('n', '1');
+      if (provider.size) form.append('size', provider.size);
+      let appended = 0;
+      for (let i = 0; i < refs.length; i++) {
+        try {
+          const imgRes = await fetchWithTimeout(refs[i], {}, 30000);
+          if (!imgRes.ok) continue;
+          const blob = await imgRes.blob();
+          const ext = (blob.type || 'image/png').includes('jpeg') ? 'jpg' : 'png';
+          form.append('image', blob, 'ref_' + (i + 1) + '.' + ext);
+          appended++;
+        } catch (_e) { /* 单张失败不影响其它参考图 */ }
+      }
+      if (!appended) throw new Error('参考图全部下载失败，无法走图片编辑接口');
+      response = await fetchWithTimeout(provider.baseUrl + '/images/edits', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + provider.apiKey },  // 让浏览器自己带 boundary
+        body: form,
+      }, timeoutMs);
+    } else {
+      const bodyJson = { model: provider.model, prompt, n: 1, size: provider.size };
+      if (provider.quality) bodyJson.quality = provider.quality;
+      if (provider.aspectRatio) bodyJson.aspect_ratio = provider.aspectRatio;
+      response = await fetchWithTimeout(provider.baseUrl + '/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + provider.apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(bodyJson),
+      }, timeoutMs);
+    }
   } catch (error) {
     const aborted = /abort/i.test(String(error && error.name));
     throw Object.assign(
