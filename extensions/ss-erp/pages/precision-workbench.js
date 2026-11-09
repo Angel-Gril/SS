@@ -1758,6 +1758,11 @@ async function recoverPreparation(){
  if(result.state!=='ready')throw Error(result.message||'原采集或建草稿结果仍未核对，不会重新提交');
  if(result.draft&&result.draft.shopId!==shopAtStart)throw Error('请切回原请求的店铺核对草稿');
  if(result.draft)await loadEditor();
+ // 2026-11：核对完成后要同时解除类目弹窗的错误态。
+ // 本函数原来只调 render()，而弹窗有自己的 value 对象 —— 结果是状态栏说
+ // 「已核对」、弹窗仍显示「类目保存未确认」且确认按钮禁用，用户点两次、
+ // 两次都成功、界面还在挡着他。
+ try{categoryPicker.clearError?.();}catch(error){log('类目弹窗错误态清除失败 '+(error&&error.message||error),true);}
  preparation.markRecovered();render();status('原采集或建草稿结果已核对，请点击开始或继续处理。','ok');
 }
 preparationRecover.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});

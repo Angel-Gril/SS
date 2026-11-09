@@ -35,16 +35,100 @@ const MATERIAL_MAP = [
   [/(蜡)/, 'воск'],
 ];
 
-// 标题受众 → Ozon Для кого 查询词
+// 标题受众 → Ozon Для кого / 性别 查询词
+// 2026-11：1688 女装标题常用「女装」「男装」而不是「女士/男士」，
+// 缺这两个词时「性别」这类必填字段会漏掉（连衣裙实测漏了 9163）。
 const AUDIENCE_MAP = [
   [/(婴儿|宝宝|新生儿)/, 'новорожденные'],
   [/(儿童|孩子|小孩|幼儿|学生)/, 'дети'],
-  [/(男士|男款|男式|boy|men)/i, 'мужчины'],
-  [/(女士|女款|女式|girl|women)/i, 'женщины'],
+  [/(男士|男款|男式|男装|boy|men)/i, 'мужчины'],
+  [/(女士|女款|女式|女装|girl|women)/i, 'женщины'],
+  [/(中性|情侣|男女同款|unisex)/i, 'унисекс'],
+];
+
+// 1688 颜色 → Ozon 俄文颜色（查询词）。
+// 服装/鞋类类目把「商品颜色」列为必填，1688 侧一般有「颜色」或「颜色分类」属性。
+const COLOR_MAP = [
+  [/(黑)/, 'черный'],
+  [/(白)/, 'белый'],
+  [/(红)/, 'красный'],
+  [/(蓝)/, 'синий'],
+  [/(绿)/, 'зеленый'],
+  [/(黄)/, 'желтый'],
+  [/(粉)/, 'розовый'],
+  [/(紫)/, 'фиолетовый'],
+  [/(灰)/, 'серый'],
+  [/(棕|咖|褐)/, 'коричневый'],
+  [/(米|杏|卡其|驼)/, 'бежевый'],
+  [/(橙|橘)/, 'оранжевый'],
+  [/(金)/, 'золотой'],
+  [/(银)/, 'серебряный'],
 ];
 
 const COUNTRY_QUERY = 'Китай';
 const COUNTRY_MATCH = /^китай$/i;
+
+// 2026-11：不能只按 attributeId 硬编码规则。
+// 实测两个类目的必填字段 ID 完全不同：
+//   圣诞装饰品 17028733/95421   品牌=85  型号=9048  适用人群=8449
+//   连衣裙     200000933/93182  品牌=31  卡片合并=8292  性别=9163
+// 唯一稳定的是「名字的意思」。所以每条规则给两组线索：
+//   ids   已知的 attributeId（快路径，命中就不用比名字）
+//   names 名称正则（兜底，跨类目通用）
+// 命中任一即视为该字段。
+const FIELD_HINTS = {
+  brand: {
+    ids: [85, 31],
+    names: [/品牌/, /^бренд$/i, /торгов.*марк/i],
+  },
+  model: {
+    // 「型号名称」和「合并至一张卡片」是同一件事在不同类目下的叫法
+    ids: [9048, 8292],
+    names: [/型号名称/, /合并至一张卡片/, /модель/i],
+  },
+  audience: {
+    ids: [8449, 9163],
+    names: [/适用人群/, /^для кого$/i, /^性别$/i, /^пол$/i],
+  },
+  country: {
+    ids: [4389],
+    names: [/制造国/, /生产国/, /страна.*изготов/i, /страна.*произв/i],
+  },
+  type: {
+    ids: [8229],
+    names: [/^类型$/i, /^тип$/i],
+  },
+  material: {
+    ids: [6383],
+    names: [/^材质$/i, /^материал$/i],
+  },
+  packing: {
+    ids: [4384],
+    names: [/包装内容/, /комплектац/i],
+  },
+  color: {
+    ids: [10096],
+    names: [/商品颜色/, /^颜色$/i, /^цвет$/i],
+  },
+  size: {
+    ids: [4295],
+    names: [/俄罗斯尺码/, /^尺码$/i, /^размер$/i],
+  },
+};
+
+/** 按线索在 fields 里找目标字段；找不到返回 null */
+function resolveField(fields, hint) {
+  if (!hint) return null;
+  for (const id of hint.ids) {
+    const hit = fields.find((f) => Number(f.attributeId) === Number(id));
+    if (hit) return hit;
+  }
+  for (const re of hint.names) {
+    const hit = fields.find((f) => re.test(String(f.name || '')));
+    if (hit) return hit;
+  }
+  return null;
+}
 
 function normalize(value) {
   return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().toLowerCase();
@@ -84,55 +168,65 @@ export function planPrefill(product, fields) {
     if (field.ownership === 'SYSTEM') return;       // 系统管理字段不填
     plan.push({ attributeId, name: String(field.name || ''), ...spec });
   };
+  // 用名称线索解析后直接入 plan（跨类目通用路径）
+  const pushResolved = (hintKey, spec) => {
+    const field = resolveField(list, FIELD_HINTS[hintKey]);
+    if (!field) return;
+    push(Number(field.attributeId), spec);
+  };
 
-  // 0. 型号名称（9048）：必填。Ozon 用它把同款合并成一张商品卡片，
+  // 0. 型号 / 合并卡片：必填。Ozon 用它把同款合并成一张商品卡片，
   //    所以必须对同一商品稳定 —— 用 offerId（1688 货号）而不是随机串。
-  if (byId.has(9048)) {
-    const model = String(product && (product.offerId || product.sourceProductId) || '').trim()
+  //    不同类目叫法不同：圣诞装饰品是「型号名称」，服装是「合并至一张卡片」。
+  pushResolved('model', {
+    kind: 'text', query: '',
+    value: (String(product && (product.offerId || product.sourceProductId) || '').trim()
       || String(product && product.title || '').trim().slice(0, 40)
-      || 'MODEL';
-    push(9048, { kind: 'text', query: '', value: model.slice(0, 100), pick: 'raw', reason: '货号作型号，保证同款合并' });
-  }
+      || 'MODEL').slice(0, 100),
+    pick: 'raw', reason: '货号作型号，保证同款合并',
+  });
 
-  // 0b. 品牌（85）：必填。
-  //     1688 白牌商品在 Ozon 侧没有品牌，官方允许用「Нет бренда」占位。
-  //     这个值实测不在字典前 100 条（要翻 7 页），而且 `value` 搜索参数无效，
-  //     所以先用 query 查，查不到就用已知 id 兜底。
-  if (byId.has(85)) {
-    push(85, { kind: 'dictionary', query: 'Нет бренда', pick: 'exact', reason: '1688 白牌无品牌',
-      fallbackValueId: 126745801, fallbackValue: 'Нет бренда' });
-  }
+  // 0b. 品牌：必填。1688 白牌商品在 Ozon 侧没有品牌，官方允许「Нет бренда」占位。
+  //     这个值不在字典前 100 条（要翻 7 页），且 `value` 搜索参数无效，
+  //     所以先用 query 查，查不到就用实测确认过的 id 兜底。
+  pushResolved('brand', {
+    kind: 'dictionary', query: 'Нет бренда', pick: 'exact', reason: '1688 白牌无品牌',
+    fallbackValueId: 126745801, fallbackValue: 'Нет бренда',
+  });
 
   // 1. 制造国：1688 货源基本为中国
-  if (byId.has(4389)) {
-    push(4389, { kind: 'dictionary', query: COUNTRY_QUERY, pick: 'exact', reason: '1688 货源默认中国' });
-  }
+  pushResolved('country', { kind: 'dictionary', query: COUNTRY_QUERY, pick: 'exact', reason: '1688 货源默认中国' });
 
   // 2. 类型：类目唯一选项时直接选；否则不猜
-  if (byId.has(8229)) {
-    push(8229, { kind: 'dictionary', query: '', pick: 'single', reason: '类目唯一类型' });
-  }
+  pushResolved('type', { kind: 'dictionary', query: '', pick: 'single', reason: '类目唯一类型' });
 
-  // 3. 适用人群
+  // 3. 适用人群 / 性别
   const audience = AUDIENCE_MAP.find(([re]) => re.test(title));
-  if (audience && byId.has(8449)) {
-    push(8449, { kind: 'dictionary', query: audience[1], pick: 'fuzzy', reason: `标题受众「${audience[1]}」` });
+  if (audience) {
+    pushResolved('audience', { kind: 'dictionary', query: audience[1], pick: 'fuzzy', reason: `标题受众「${audience[1]}」` });
   }
 
   // 4. 材质：优先 1688 材质属性，其次标题
   const materialText = attributeValue(attributes, [/材质/, /материал/i]) || title;
   const material = MATERIAL_MAP.find(([re]) => re.test(materialText));
-  if (material && byId.has(6383)) {
-    push(6383, { kind: 'dictionary', query: material[1], pick: 'fuzzy', reason: `材质「${material[1]}」` });
+  if (material) {
+    pushResolved('material', { kind: 'dictionary', query: material[1], pick: 'fuzzy', reason: `材质「${material[1]}」` });
   }
 
   // 5. 包装内容：FREE_TEXT 直填
   const packing = attributeValue(attributes, [/包装内容/, /配件/, /套装包含/, /комплект/i]);
-  if (packing && byId.has(4384)) {
-    const field = byId.get(4384);
-    if ((field.valuePolicy || '') !== 'STRICT_DICTIONARY' && !field.dictionaryId) {
-      push(4384, { kind: 'text', query: '', value: packing.slice(0, 500), pick: 'raw', reason: '1688 包装内容直填' });
+  if (packing) {
+    const field = resolveField(list, FIELD_HINTS.packing);
+    if (field && (field.valuePolicy || '') !== 'STRICT_DICTIONARY' && !field.dictionaryId) {
+      push(Number(field.attributeId), { kind: 'text', query: '', value: packing.slice(0, 500), pick: 'raw', reason: '1688 包装内容直填' });
     }
+  }
+
+  // 6. 颜色：从 1688 颜色属性或标题取（服装/鞋类必填）
+  const colorText = attributeValue(attributes, [/^颜色/, /颜色分类/, /^цвет/i]) || title;
+  const color = COLOR_MAP.find(([re]) => re.test(colorText));
+  if (color) {
+    pushResolved('color', { kind: 'dictionary', query: color[1], pick: 'fuzzy', reason: `颜色「${color[1]}」` });
   }
 
   return plan;

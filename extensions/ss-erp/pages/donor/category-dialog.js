@@ -388,5 +388,22 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
       value = { ...value, open: true, status: 'loading', query: '', message: '正在读取 Ozon 官方类目…' };
       searchInput.value = ''; root.hidden = false; renderStatus(); searchInput.focus(); return search('');
     }, close, search, syncBinding, state() { return syncBinding(); },
+    // 2026-11：核对完「建草稿结果」之后调用。
+    // recoverPreparation() 之前只调 workbench 的 render()，管不到本 dialog 自己的
+    // value 对象，于是出现「状态栏说已核对、这里还显示类目保存未确认、确认按钮仍禁用」
+    // —— 用户点了两次、两次都成功，界面还在挡着他。
+    // 不重新搜索（不打断已选类目），只把错误态和可保存位恢复。
+    clearError() {
+      if (!value.open || value.status === 'saving') return snapshot();
+      if (value.status !== 'error' && value.previewStatus !== 'error') return snapshot();
+      value.status = 'ready';
+      value.previewStatus = value.selected ? 'ready' : 'idle';
+      value.canSave = Boolean(value.selected);
+      value.message = value.selected
+        ? '已核对原请求结果；可继续确认类目'
+        : '已核对原请求结果，请重新选择类目';
+      renderStatus();
+      return snapshot();
+    },
   });
 }
