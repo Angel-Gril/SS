@@ -451,26 +451,8 @@
   function isAllowedRuntimeMessageSender(type, sender, runtimeId) {
     var normalized = String(type == null ? '' : type).trim();
     var surface = senderSurface(sender, runtimeId);
-    // 全路径诊断：确认 direct-* 走到了哪一条 return。
-    var __t = function (branch, result) {
-      try {
-        // 只记录 direct-* ，避免被 editor-attributes 等高频消息覆盖
-        if (!normalized.startsWith('ss-erp:direct-')) return result;
-        globalThis.__SSERP_AUTH_TRACE = {
-          type: normalized, surface: surface, branch: branch, result: result,
-          isNew: isNewType(normalized),
-          inPrivate: PRIVATE_PREPARATION_TYPES.has(normalized),
-          sender: { id: sender && sender.id || null, url: sender && sender.url || null,
-            origin: sender && sender.origin || null,
-            tabId: sender && sender.tab && sender.tab.id,
-            tabUrl: sender && sender.tab && sender.tab.url || null,
-            frameId: sender && sender.frameId,
-            hasDocId: !!(sender && sender.documentId) },
-          at: Date.now(),
-        };
-      } catch (_e) {}
-      return result;
-    };
+    // 诊断钩子已停用（保留调用点）。
+    var __t = function (branch, result) { return result; };
     if (isNewType(normalized)) {
       var descriptor = descriptorFor(normalized);
       if (surface === SENDER_SURFACES.PRECISION_FRAME) {

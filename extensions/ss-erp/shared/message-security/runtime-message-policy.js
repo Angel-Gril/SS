@@ -454,20 +454,9 @@
 
   function isAllowedRuntimeMessageSender(type, sender, runtimeId) {
     var messageType = text(type);
-    // 全路径诊断：记录走到了哪一个 return 分支
-    var __trace = function (branch, result) {
-      try {
-        globalThis.__SSERP_SENDER_TRACE = {
-          type: messageType, branch: branch, result: result,
-          sender: { id: sender?.id || null, url: sender?.url || null, origin: sender?.origin || null,
-            tabId: sender?.tab?.id == null ? null : sender.tab.id,
-            frameId: sender?.frameId == null ? null : sender.frameId,
-            hasDocumentId: typeof sender?.documentId === 'string' && Boolean(sender.documentId) },
-          at: Date.now(),
-        };
-      } catch (_e) {}
-      return result;
-    };
+    // 诊断钩子已停用（保留调用点，避免再次改动 return 结构）。
+    // 排查消息门禁时把它恢复成写 globalThis 的实现即可。
+    var __trace = function (branch, result) { return result; };
     if (!KNOWN_TYPES.has(messageType)) return __trace('unknown-type', false);
     // 工作台 iframe 注册：与 product-analysis 相同的来源约束，
     // 必须是嵌在来源商品页里的 precision-workbench.html iframe。

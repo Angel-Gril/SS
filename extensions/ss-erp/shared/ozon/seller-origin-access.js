@@ -108,9 +108,26 @@
         return;
       }
 
+      // 2026-11：静态 host_permissions 已含 https://*/*（manifest 把该项从
+      // optional_host_permissions 移进 host_permissions 之后），contains 恒为 true。
+      // 先 contains 再决定是否 request，就不会再弹「允许访问」的授权框 ——
+      // 精铺/知了 从来不会弹，因为它们同样把通配写在静态 host_permissions 里。
+      var requestPermission = function (callback) {
+        if (typeof permissions.contains === 'function') {
+          try {
+            permissions.contains(permissionSpec(), function (alreadyGranted) {
+              if (alreadyGranted === true) { callback(true); return; }
+              permissions.request(permissionSpec(), callback);
+            });
+            return;
+          } catch (_error) { /* contains 不可用，落到下面的直接 request */ }
+        }
+        permissions.request(permissionSpec(), callback);
+      };
+
       // Keep the request synchronous with the trusted click handler.
       try {
-        permissions.request(permissionSpec(), function (requested) {
+        requestPermission(function (requested) {
           var requestError = runtimeErrorMessage();
           inspect(function (verification) {
             if (!verification.ok) {
