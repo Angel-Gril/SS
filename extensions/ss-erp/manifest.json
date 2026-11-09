@@ -55,9 +55,7 @@
     "https://detail.tmall.com/*",
     "https://www.goofish.com/*",
     "https://goofish.com/*",
-    "https://2.taobao.com/*"
-  ],
-  "optional_host_permissions": [
+    "https://2.taobao.com/*",
     "https://*/*"
   ],
   "background": {

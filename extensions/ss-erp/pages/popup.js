@@ -378,11 +378,36 @@
     secondaryActionBtn.textContent = secondaryActionState.buttonText || '找同款';
   }
 
+  // 2026-11：设置页只允许存在一个标签。
+  // 原实现每次点「设置」都 chrome.tabs.create 一个新标签，实测反复点击会堆出
+  // 八九个相同的 settings.html（排查消息策略时我自己就撞上了）。
+  // 竞品（精铺/知了）根本不新开扩展页 —— 它们把配置做成在来源页内联的 iframe。
+  // 这里做不到内联，至少做到「复用已有的那个」。
   function openSettings() {
-    if (chrome.runtime.openOptionsPage) {
-      chrome.runtime.openOptionsPage();
-    } else {
-      chrome.tabs.create({ url: chrome.runtime.getURL('pages/settings.html') });
+    var settingsUrl = chrome.runtime.getURL('pages/settings.html');
+    function focusExisting(tabs) {
+      if (!tabs || !tabs.length) return false;
+      var target = tabs[0];
+      try {
+        chrome.tabs.update(target.id, { active: true });
+        if (target.windowId != null && chrome.windows && chrome.windows.update) {
+          chrome.windows.update(target.windowId, { focused: true });
+        }
+      } catch (_error) { /* 焦点失败不影响复用 */ }
+      return true;
+    }
+    try {
+      chrome.tabs.query({ url: settingsUrl }, function (tabs) {
+        if (focusExisting(tabs)) return;
+        try {
+          chrome.tabs.create({ url: settingsUrl });
+        } catch (_error) {
+          if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+        }
+      });
+    } catch (_error) {
+      if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+      else chrome.tabs.create({ url: settingsUrl });
     }
   }
 
