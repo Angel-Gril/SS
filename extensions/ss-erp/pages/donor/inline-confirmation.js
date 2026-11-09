@@ -63,7 +63,14 @@ export function createInlineConfirmation({ container, make = (tag) => document.c
     } catch { stale(); return false; }
     return true;
   };
-  const trusted = event => event?.isTrusted === true;
+  // 2026-11：原来是 `event?.isTrusted === true`，是统一 gate 那一轮漏掉的写法
+  // （替换脚本只匹配 event.isTrusted，没覆盖可选链）。后果很严重：
+  // 确认框的「确认继续」在 isTrusted 为 false 时直接 return，Promise 永不
+  // resolve，analyzeCurrent 会永远停在 ask-begin —— 界面表现就是点了
+  // 「分析所选图片」后进度一直「等待前一步」，且没有任何报错提示。
+  const trusted = event => (globalThis.SS_ERP_TRUST_GATE && typeof globalThis.SS_ERP_TRUST_GATE.ok === 'function')
+    ? globalThis.SS_ERP_TRUST_GATE.ok(event, event && (event.currentTarget || event.target))
+    : event?.isTrusted === true;
   cancel.addEventListener('click', event => { if (trusted(event)) settle(false); });
   accept.addEventListener('click', event => {
     if (!trusted(event) || !pending) return;

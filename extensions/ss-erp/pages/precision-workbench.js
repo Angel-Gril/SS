@@ -570,8 +570,29 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
       const created=await ensureCurrentDraft();
       if(!created)throw new Error('ERP 草稿创建未完成，请打开「查看过程」确认失败原因');
     }
-    await ensureCatalogRevision();
-    const saved = await saveEditor('CATEGORY',selection);
+    // 2026-11：selection 是在 category-dialog 的 confirm() 开头构造的，
+    // 那一刻 value.catalogRevision 还是**本地快照**标识（ozon-official-snapshot-7341）。
+    // 本地挑选不需要 ERP revision，但 ERP /editor/save 会拿它跟自己的
+    // catalogRevision 比对，不匹配就回 409 source_listing_catalog_stale，
+    // 界面上表现为「类目保存未确认」。所以写入前必须用 ERP 的真实值覆盖。
+    const erpRevision = await ensureCatalogRevision();
+    const submitSelection = erpRevision && selection.catalogRevision !== erpRevision
+      ? { ...selection, catalogRevision: erpRevision }
+      : selection;
+    let saved;
+    try {
+      saved = await saveEditor('CATEGORY', submitSelection);
+    } catch (error) {
+      const stale = String((error && error.code) || '') === 'source_listing_catalog_stale'
+        || /catalog changed/i.test(String((error && error.message) || ''));
+      if (!stale) throw error;
+      // revision 在两次请求之间又变了：强制重取后重试一次
+      catalogRevisionFromErp = '';
+      const fresh = await ensureCatalogRevision();
+      if (!fresh) throw error;
+      log('类目版本已刷新为 ' + String(fresh).slice(0, 16) + '…，重试保存');
+      saved = await saveEditor('CATEGORY', { ...selection, catalogRevision: fresh });
+    }
     // 类目落定 → 自动预填官方属性（异步，失败不影响类目已保存）
     void prefillOfficialAttributes().catch(error=>log('属性预填失败：'+(error&&error.message||error),true));
     return saved;

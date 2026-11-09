@@ -314,7 +314,9 @@ export function createSkuPickerController({
     },
     onApplySelection: helperFn12,
     onUserActivity: function (arg28) {
-      if (arg28?.isTrusted && !resolvedValue1.skuPicker?.hidden && arg28.target !== resolvedValue1.skuPicker) {
+      if ((globalThis.SS_ERP_TRUST_GATE && typeof globalThis.SS_ERP_TRUST_GATE.ok === 'function'
+      ? globalThis.SS_ERP_TRUST_GATE.ok(arg28, arg28 && (arg28.currentTarget || arg28.target))
+      : arg28?.isTrusted) && !resolvedValue1.skuPicker?.hidden && arg28.target !== resolvedValue1.skuPicker) {
         helperFn5();
       }
     },

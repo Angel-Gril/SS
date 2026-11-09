@@ -345,9 +345,18 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
       // syncBinding while awaiting the receipt; only a different dialog session
       // should prevent closing this successfully saved selection.
       if (value.open && sessionEpoch === requestSession) close();
-    } catch {
+    } catch (error) {
       if (!isCurrent(requestEpoch, requestedBinding)) return;
-      value.status = 'error'; value.canSave = false; value.message = '类目保存未确认，请重新读取草稿后选择'; renderStatus();
+      // 2026-11：原来是无参数 catch，把 saveSelection 的真实失败原因全部吞掉，
+      // 界面只剩「类目保存未确认」这种无法行动的文案。现在透出原始信息，
+      // 并同时在控制台留痕，便于判断是 ERP 拒单、回读校验失败还是网络问题。
+      const detail = String((error && error.message) || error || '').trim().slice(0, 240);
+      value.status = 'error'; value.canSave = false;
+      value.message = detail
+        ? `类目保存未确认：${detail}`
+        : '类目保存未确认，请重新读取草稿后选择';
+      renderStatus();
+      try { console.warn('[SSERP] CATEGORY_SAVE_UNCONFIRMED', detail || '(no message)', error); } catch (_e) {}
       notifyError('CATEGORY_SAVE_UNCONFIRMED', value.message);
     }
   }
