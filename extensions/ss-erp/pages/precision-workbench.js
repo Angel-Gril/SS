@@ -1795,6 +1795,15 @@ trusted('settings-btn', () => {
     info.append(diagnostics);
   }
   info.append(make('p', 'settings-tip', '草稿版本与策略编号由 ERP 自动维护，无需手动核对。排查问题时可在地址后加 ?sserp-debug=1 查看。'));
+  // 完整设置以内联 iframe 打开，不新开扩展标签（见 settings-iframe-modal 注释）
+  const openFullSettings = make('button', 'ghost', '打开完整设置');
+  openFullSettings.id = 'precision-open-full-settings';
+  openFullSettings.type = 'button';
+  openFullSettings.addEventListener('click', (event) => {
+    if (!event.isTrusted && !globalThis.__SSERP_E2E__) return;
+    openSettingsIframe();
+  });
+  info.append(openFullSettings);
   void preparationAnalysis.settings(info,()=>byok.openSettings()).catch(report);
   openModal('basic-modal');
 });
@@ -2021,6 +2030,28 @@ trusted('precision-direct-generate-btn', async () => {
 });
 trusted('precision-direct-generate-all-btn', async () => {
   await directGenerateImage({ limit: 7 });
+});
+
+// 完整设置以内联 iframe 打开。src 懒加载：只有用户真的点开才加载 settings.html，
+// 避免 workbench 一打开就多拉 24KB + 6 个脚本。
+let settingsIframeLoaded = false;
+function openSettingsIframe() {
+  const modal = element('settings-iframe-modal');
+  const frame = element('settings-iframe');
+  if (!modal || !frame) return;
+  if (!settingsIframeLoaded) {
+    frame.src = chrome.runtime.getURL('pages/settings.html');
+    settingsIframeLoaded = true;
+  }
+  modal.hidden = false;
+}
+function closeSettingsIframe() {
+  const modal = element('settings-iframe-modal');
+  if (modal) modal.hidden = true;
+}
+element('settings-iframe-close')?.addEventListener('click', (event) => {
+  if (!event.isTrusted && !globalThis.__SSERP_E2E__) return;
+  closeSettingsIframe();
 });
 
 async function startImageWorkflow() {

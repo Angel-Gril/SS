@@ -255,6 +255,24 @@
       <div class="settings-body" id="basic-info"></div>
     </div>
   </div>
+  <!-- 2026-11：完整设置用 iframe 内联，不新开扩展标签。
+       竞品（精铺/知了）把配置做成来源页内的面板，从不新开扩展页；我们从 popup
+       点「设置」会 chrome.tabs.create 一个新标签，反复点就堆出一排相同的
+       settings.html。这里给出内联入口，src 懒加载（首次打开才设）。 -->
+  <div id="settings-iframe-modal" class="settings-modal settings-iframe-modal" hidden>
+    <div class="settings-dialog settings-iframe-dialog">
+      <div class="settings-head">
+        <div>
+          <div class="settings-title">完整设置</div>
+          <div class="settings-tip">ERP 连接、设备配对、物流与费用默认值</div>
+        </div>
+        <button id="settings-iframe-close" class="ghost" type="button">关闭</button>
+      </div>
+      <div class="settings-iframe-shell">
+        <iframe id="settings-iframe" title="完整设置" loading="lazy"></iframe>
+      </div>
+    </div>
+  </div>
   <div id="shop-modal" class="settings-modal" hidden>
     <div class="settings-dialog">
       <div class="settings-head"><div class="settings-title">选择店铺</div><button class="ghost" data-close-modal="shop-modal">关闭</button></div>

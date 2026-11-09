@@ -157,7 +157,22 @@ async function waitImport(taskId, options = {}) {
       return { status, result, history };
     }
   }
-  return { status: 'timeout', result: null, history };
+  // 2026-11 实测：Ozon 这个类目的导入常常超过 300 秒甚至 600 秒。
+  // 之前返回 'timeout' 会被上层当成失败，而商品其实已经建好了 —— 用户据此
+  // 重新提交就会产生重复商品。这里再查一次，仍无结论时返回 'processing'
+  // （「还在处理」，不是错误）。
+  try {
+    const last = await ozon().ozonPost(IMPORT_STATUS_PATH, { task_id: Number(taskId) });
+    const lastStatus = String((last && last.result && last.result.status) || '').toLowerCase();
+    if (['imported', 'failed', 'partial_success'].includes(lastStatus)) {
+      history.push({ attempt: 'final', status: lastStatus });
+      return { status: lastStatus, result: last.result, history };
+    }
+    history.push({ attempt: 'final', status: lastStatus || 'unknown' });
+  } catch (_error) {
+    history.push({ attempt: 'final', error: String((_error && _error.message) || _error).slice(0, 160) });
+  }
+  return { status: 'processing', result: null, history };
 }
 
 /**
@@ -231,11 +246,19 @@ async function publishProduct(input, options = {}) {
     }
   }
 
+  // processing 不是失败：导入已受理，Ozon 还在处理。调用方应提示「稍后复查」
+  // 而不是让用户重新提交（那会产生重复商品）。
+  const accepted = waited.status === 'imported' || waited.status === 'partial_success';
+  const processing = waited.status === 'processing';
   return {
-    ok: waited.status === 'imported' || waited.status === 'partial_success',
+    ok: accepted,
+    processing,
     offerId,
     taskId,
     status: waited.status,
+    recheckHint: processing
+      ? 'Ozon 已受理导入，仍在处理。请稍后用 /v1/product/import/info 以 task_id 复查，不要重复提交。'
+      : null,
     item,
     errors,
     raw: waited.result,
