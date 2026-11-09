@@ -553,8 +553,14 @@
     return false;
   }
 
-  root.SS_ERP_RUNTIME_MESSAGE_POLICY = {
+  // 2026-11：职责拆分。
+  // 本文件是 legacy 规则表，运行时判定入口只有一个 —— runtime-message-authorization.js。
+  // 之前两个文件都写 SS_ERP_RUNTIME_MESSAGE_POLICY，后加载的覆盖前者，导致
+  // 「改了 policy 却不生效」这种无痕故障（实测：direct-* 消息一直报
+  // 不允许的扩展消息来源，因为真正执行的是 authorization 的版本）。
+  // 现在本文件只导出 LEGACY 名字，authorization 独占 RUNTIME 名字。
+  root.SS_ERP_LEGACY_MESSAGE_POLICY = Object.freeze({
     isAllowedRuntimeMessageSender: isAllowedRuntimeMessageSender,
     isKnownRuntimeMessageType: isKnownRuntimeMessageType,
-  };
+  });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

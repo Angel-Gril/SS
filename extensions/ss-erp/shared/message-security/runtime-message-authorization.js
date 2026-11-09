@@ -1,7 +1,8 @@
 (function (root) {
   'use strict';
 
-  var legacyPolicy = root.SS_ERP_RUNTIME_MESSAGE_POLICY;
+  // 优先读拆分后的 LEGACY 名字；回退读旧名字，保证滚动升级期间不炸。
+  var legacyPolicy = root.SS_ERP_LEGACY_MESSAGE_POLICY || root.SS_ERP_RUNTIME_MESSAGE_POLICY;
   if (!legacyPolicy
     || typeof legacyPolicy.isKnownRuntimeMessageType !== 'function'
     || typeof legacyPolicy.isAllowedRuntimeMessageSender !== 'function') {
