@@ -283,8 +283,55 @@ export function planPrefill(product, fields) {
   return plan;
 }
 
-/** 从字典返回值里挑一个 */
-export function pickDictionaryValue(values, pick, query) {
+/**
+ * SKU 级变体预填计划。
+ *
+ * 类目级预填只能给「默认值」（第一个颜色、第一个尺码）。服装鞋类的
+ * Цвет товара(lle) / Российский размер 是**变体属性**，Ozon 要求每个 SKU
+ * 各自一行，否则整批商品不可售（实测 error_attribute_values_empty）。
+ *
+ * 这里为每个 SKU 单独生成一条计划，带上 skuKey —— runPrefill 会把它写进
+ * applied[].skuKey，属性编辑器按 skuKey 落行。
+ *
+ * @returns [{skuKey, attributeId, name, kind, query, pick, reason}]
+ */
+export function planVariantPrefill(product, fields) {
+  const list = Array.isArray(fields) ? fields : [];
+  const skus = Array.isArray(product && product.skus) ? product.skus : [];
+  if (!skus.length) return [];
+
+  const colorField = resolveField(list, FIELD_HINTS.color);
+  const sizeField = resolveField(list, FIELD_HINTS.size);
+  if (!colorField && !sizeField) return [];
+
+  const out = [];
+  for (const sku of skus) {
+    const key = String(sku && (sku.key || sku.skuKey) || '').trim();
+    if (!key) continue;
+    const parsed = parseVariantSpecs([sku]);
+    if (colorField && parsed.colors.length) {
+      out.push({
+        skuKey: key,
+        attributeId: Number(colorField.attributeId),
+        name: String(colorField.name || ''),
+        kind: 'dictionary', query: parsed.colors[0], pick: 'fuzzy',
+        reason: `SKU 颜色「${parsed.colors[0]}」`,
+      });
+    }
+    if (sizeField && parsed.sizes.length) {
+      out.push({
+        skuKey: key,
+        attributeId: Number(sizeField.attributeId),
+        name: String(sizeField.name || ''),
+        kind: 'dictionary', query: parsed.sizes[0], pick: 'fuzzy',
+        reason: `SKU 尺码「${parsed.sizes[0]}」`,
+      });
+    }
+  }
+  return out;
+}
+
+/** 从字典返回值里挑一个 */export function pickDictionaryValue(values, pick, query) {
   const list = Array.isArray(values) ? values.filter((v) => v && Number.isSafeInteger(v.id)) : [];
   if (!list.length) return null;
   if (pick === 'exact') {
@@ -308,8 +355,12 @@ export function pickDictionaryValue(values, pick, query) {
  *
  * @returns {applied: [...changes], skipped: [...]}
  */
-export async function runPrefill({ product, fields, schemaRevision, queryDictionary, limit = 8 }) {
-  const plan = planPrefill(product, fields);
+export async function runPrefill({ product, fields, schemaRevision, queryDictionary, limit = 8, includeVariants = true }) {
+  // 类目级默认值 + 每个 SKU 的变体值，扁平拼在一起。
+  // 类目级先跑，SKU 级后跑 —— 后者会覆盖同一字段在同一 skuKey 上的值。
+  const basePlan = planPrefill(product, fields);
+  const variantPlan = includeVariants ? planVariantPrefill(product, fields) : [];
+  const plan = basePlan.concat(variantPlan);
   const applied = [];
   const skipped = [];
 
@@ -317,7 +368,7 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
     if (item.kind === 'text') {
       applied.push({
         attributeId: item.attributeId,
-        skuKey: null,
+        skuKey: item.skuKey || null,
         value: item.value,
         dictionaryValueIds: [],
         reviewed: false,
@@ -340,7 +391,7 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
         if (item.fallbackValueId) {
           applied.push({
             attributeId: item.attributeId,
-            skuKey: null,
+            skuKey: item.skuKey || null,
             value: String(item.fallbackValue || ''),
             dictionaryValueIds: [item.fallbackValueId],
             reviewed: false,
@@ -353,7 +404,7 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
       }
       applied.push({
         attributeId: item.attributeId,
-        skuKey: null,
+        skuKey: item.skuKey || null,
         value: String(chosen.value || ''),
         dictionaryValueIds: [chosen.id],
         reviewed: false,
@@ -364,7 +415,7 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
       if (item.fallbackValueId) {
         applied.push({
           attributeId: item.attributeId,
-          skuKey: null,
+          skuKey: item.skuKey || null,
           value: String(item.fallbackValue || ''),
           dictionaryValueIds: [item.fallbackValueId],
           reviewed: false,

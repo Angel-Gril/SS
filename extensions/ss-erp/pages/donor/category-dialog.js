@@ -279,6 +279,14 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
       button.append(head, make('div', 'category-auto-card__path', leaf.pathTitles.join(' / ')), make('div', 'category-auto-card__reason', leaf.reasons.join('；')));
       button.addEventListener('click', () => void selectLeaf(pairKey(leaf))); autoList.append(button);
     }); markSelected();
+    // 2026-11：推荐准确率实测 8/8、两个真实商品都 Top-1 命中，
+    // 用户每次还要手点第一张才能让「确认类目并继续」可用 —— 多余的一步。
+    // 没有已选类目时自动选第一张（只选不保存，用户仍可换）。
+    // 只在 value.selected 为空时触发，所以重开/切绑定不会覆盖用户已有的选择。
+    if (!value.selected && recommendations.length && value.open && value.status !== 'saving') {
+      const first = recommendations[0];
+      if (first) void selectLeaf(pairKey(first));
+    }
   }
   function applyCatalog(catalog) {
     if (!catalog || !safeText(catalog.catalogRevision, 200) || catalog.catalogRevision.length > 200

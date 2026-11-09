@@ -3739,8 +3739,11 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(10, 18, 34, .56);
-        backdrop-filter: none;
+        /* 2026-11：0.56 时背后的工具栏、SKU 提示、底部状态栏全都清晰可见，
+           截图里看着像「叠了三层」。加深到 0.72 并轻微模糊背景，
+           让 modal 成为唯一的视觉焦点。功能不变，只是不让用户分心。 */
+        background: rgba(10, 18, 34, .72);
+        backdrop-filter: blur(2px);
         padding: 18px
     }
 
