@@ -1,0 +1,263 @@
+// 生图直连客户端（在 service worker 里跑）
+//
+// 参考实现（精铺 modules/image-generation/runner.js 的 executeImageProvider）：
+//   走 runtime message 转 provider，支持 OpenAI 兼容的 /v1/images/generations。
+//
+// 实测数据（本机 shinyapi.com/v1）：
+//   /v1/models                    [200]  1,530ms
+//   /v1/images/generations        [超时] 30,362ms  ← 30 秒不够！gpt-image-2 比文本慢得多
+// 所以这里默认 180 秒，且区分「提交超时」与「生成失败」。
+//
+// 另一条路：DashScope 原生文生图需要 X-DashScope-Async: enable + /tasks/{id} 轮询
+// （长任务同步必超时，见 reports/05 的 G3 条目）。两种都支持。
+
+const DEFAULT_TIMEOUT_MS = 180000;
+const IMAGE_CREDENTIALS_KEY = 'ss-erp:image-provider:v1';
+
+async function readImageProvider() {
+  try {
+    const stored = await chrome.storage.local.get(IMAGE_CREDENTIALS_KEY);
+    const v = stored && stored[IMAGE_CREDENTIALS_KEY];
+    if (!v || typeof v !== 'object') return null;
+    const baseUrl = String(v.baseUrl || '').trim().replace(/\/+$/, '');
+    const apiKey = String(v.apiKey || '').trim();
+    const model = String(v.model || '').trim();
+    if (!baseUrl || !apiKey || !model) return null;
+    return {
+      baseUrl,
+      apiKey,
+      model,
+      size: String(v.size || '1008x1344').slice(0, 20),
+      quality: String(v.quality || 'high').slice(0, 20),
+      mode: v.mode === 'dashscope-async' ? 'dashscope-async' : 'openai-images',
+      aspectRatio: String(v.aspectRatio || '3:4').slice(0, 8),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeImageProvider(input) {
+  const baseUrl = String((input && input.baseUrl) || '').trim().replace(/\/+$/, '');
+  const apiKey = String((input && input.apiKey) || '').trim();
+  const model = String((input && input.model) || '').trim();
+  if (!/^https:\/\//.test(baseUrl)) throw new Error('baseUrl 必须是 https:// 开头');
+  if (apiKey.length < 10) throw new Error('API Key 长度异常');
+  if (!model) throw new Error('必须填写模型名');
+  await chrome.storage.local.set({
+    [IMAGE_CREDENTIALS_KEY]: {
+      baseUrl, apiKey, model,
+      size: String((input && input.size) || '1008x1344').slice(0, 20),
+      quality: String((input && input.quality) || 'high').slice(0, 20),
+      mode: input && input.mode === 'dashscope-async' ? 'dashscope-async' : 'openai-images',
+      aspectRatio: String((input && input.aspectRatio) || '3:4').slice(0, 8),
+      savedAt: Date.now(),
+    },
+  });
+  return { baseUrl, model, mode: (input && input.mode) || 'openai-images' };
+}
+
+function pickImageUrl(response) {
+  const first = Array.isArray(response) ? response[0]
+    : Array.isArray(response && response.images) ? response.images[0]
+      : Array.isArray(response && response.data) ? response.data[0]
+        : response && (response.data || response.image || response);
+  const url = first && (first.url || first.imageUrl || first.outputUrl);
+  if (url) return { url: String(url), b64: '' };
+  const b64 = first && (first.b64_json || first.b64Json);
+  if (b64) return { url: '', b64: String(b64) };
+  const taskId = (response && (response.output && response.output.task_id)) || (response && response.task_id);
+  if (taskId) return { url: '', b64: '', taskId: String(taskId) };
+  return { url: '', b64: '' };
+}
+
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 生成一张图。
+ *
+ * @param {object} input
+ *   prompt       提示词
+ *   inputImageUrls  参考图 URL（图生图时传）
+ *   provider     可选，覆盖已存配置
+ * @returns { url, b64, taskId, elapsedMs, model }
+ */
+async function generateImage(input, options = {}) {
+  const provider = (input && input.provider) || (await readImageProvider());
+  if (!provider) throw new Error('尚未配置生图 Provider（baseUrl / apiKey / model）');
+
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
+  const prompt = String((input && input.prompt) || '').trim();
+  if (!prompt) throw new Error('提示词为空');
+  const startedAt = Date.now();
+
+  if (provider.mode === 'dashscope-async') {
+    return await generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt });
+  }
+
+  const body = {
+    model: provider.model,
+    prompt,
+    n: 1,
+    size: provider.size,
+  };
+  if (provider.quality) body.quality = provider.quality;
+  if (provider.aspectRatio) body.aspect_ratio = provider.aspectRatio;
+  // 图生图：OpenAI 兼容端点用 image（单图）或 image[]（多图），两者都带，交给 provider 忽略多余的
+  const refs = Array.isArray(input && input.inputImageUrls)
+    ? input.inputImageUrls.filter((u) => /^https:\/\//.test(String(u))).slice(0, 9)
+    : [];
+  if (refs.length === 1) body.image = refs[0];
+  else if (refs.length > 1) body.image = refs;
+
+  let response;
+  try {
+    response = await fetchWithTimeout(provider.baseUrl + '/images/generations', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + provider.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }, timeoutMs);
+  } catch (error) {
+    const aborted = /abort/i.test(String(error && error.name));
+    throw Object.assign(
+      new Error(aborted
+        ? `生图超时（${Math.round(timeoutMs / 1000)}s）。实测 gpt-image-2 单张需要 30s 以上，可提高 timeoutMs 或改用异步模式。`
+        : `生图网络失败：${String((error && error.message) || error).slice(0, 160)}`),
+      { phase: 'request', elapsedMs: Date.now() - startedAt },
+    );
+  }
+
+  const text = await response.text().catch(() => '');
+  if (!response.ok) {
+    const snippet = text.replace(/\s+/g, ' ').slice(0, 240);
+    const hint = response.status === 401 || response.status === 403
+      ? '（API Key 无效或无该模型权限）'
+      : response.status === 429 ? '（限流，请降低并发）'
+        : /model/i.test(snippet) ? '（模型名可能不存在，或该模型在免费额度外）' : '';
+    throw Object.assign(new Error(`生图返回 ${response.status}${hint}：${snippet}`), {
+      httpStatus: response.status, phase: 'response', elapsedMs: Date.now() - startedAt,
+    });
+  }
+
+  let parsed;
+  try { parsed = text ? JSON.parse(text) : {}; }
+  catch { throw new Error(`生图返回了非 JSON：${text.slice(0, 160)}`); }
+
+  const picked = pickImageUrl(parsed);
+  if (!picked.url && !picked.b64 && !picked.taskId) {
+    throw new Error(`生图返回里找不到图像：${JSON.stringify(parsed).slice(0, 200)}`);
+  }
+  return {
+    ...picked,
+    model: provider.model,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+/** DashScope 原生异步：提交 → 轮询 /tasks/{id} */
+async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt }) {
+  const submit = await fetchWithTimeout(provider.baseUrl + '/services/aigc/text2image/image-synthesis', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + provider.apiKey,
+      'Content-Type': 'application/json',
+      'X-DashScope-Async': 'enable',
+    },
+    body: JSON.stringify({
+      model: provider.model,
+      input: { prompt },
+      parameters: { size: String(provider.size || '1024*1024').replace('x', '*'), n: 1 },
+    }),
+  }, 30000);
+
+  const submitText = await submit.text().catch(() => '');
+  if (!submit.ok) {
+    throw Object.assign(new Error(`DashScope 提交失败 ${submit.status}：${submitText.slice(0, 200)}`), {
+      httpStatus: submit.status, phase: 'submit',
+    });
+  }
+  const submitJson = JSON.parse(submitText || '{}');
+  const taskId = submitJson && submitJson.output && submitJson.output.task_id;
+  if (!taskId) throw new Error(`DashScope 未返回 task_id：${submitText.slice(0, 160)}`);
+
+  const deadline = startedAt + timeoutMs;
+  let delay = 3000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(10000, Math.round(delay * 1.4));
+    const poll = await fetchWithTimeout(
+      'https://dashscope.aliyuncs.com/api/v1/tasks/' + encodeURIComponent(taskId),
+      { headers: { Authorization: 'Bearer ' + provider.apiKey } },
+      30000,
+    );
+    const pollText = await poll.text().catch(() => '');
+    let json = {};
+    try { json = JSON.parse(pollText || '{}'); } catch { /* 继续轮询 */ }
+    const status = json && json.output && json.output.task_status;
+    if (status === 'SUCCEEDED') {
+      const results = (json.output && json.output.results) || [];
+      const url = results[0] && results[0].url;
+      if (!url) throw new Error(`DashScope 任务成功但没有图片 URL：${pollText.slice(0, 160)}`);
+      return { url: String(url), b64: '', taskId, model: provider.model, elapsedMs: Date.now() - startedAt };
+    }
+    if (status === 'FAILED' || status === 'CANCELED') {
+      throw new Error(`DashScope 任务 ${status}：${pollText.slice(0, 200)}`);
+    }
+  }
+  throw new Error(`DashScope 生图超时（${Math.round(timeoutMs / 1000)}s），task_id=${taskId}`);
+}
+
+/** 生图 Provider 自检：只验证 /models 可达与 Key 有效，不消耗额度 */
+async function probeImageProvider(providerOverride) {
+  const provider = providerOverride || (await readImageProvider());
+  if (!provider) return { ok: false, kind: 'NO_CREDENTIALS', message: '尚未配置生图 Provider' };
+  const startedAt = Date.now();
+  try {
+    const response = await fetchWithTimeout(provider.baseUrl + '/models', {
+      headers: { Authorization: 'Bearer ' + provider.apiKey },
+    }, 25000);
+    const text = await response.text().catch(() => '');
+    if (!response.ok) {
+      return {
+        ok: false, kind: response.status === 401 || response.status === 403 ? 'BAD_CREDENTIALS' : 'HTTP_ERROR',
+        elapsedMs: Date.now() - startedAt,
+        message: `生图 Provider 返回 ${response.status}：${text.slice(0, 180)}`,
+      };
+    }
+    let ids = [];
+    try { ids = ((JSON.parse(text) || {}).data || []).map((m) => m.id); } catch { /* 忽略 */ }
+    const hasModel = !ids.length || ids.includes(provider.model);
+    return {
+      ok: true,
+      kind: hasModel ? 'OK' : 'MODEL_MISSING',
+      elapsedMs: Date.now() - startedAt,
+      models: ids.slice(0, 20),
+      message: hasModel
+        ? `生图 Provider 正常（${Date.now() - startedAt}ms，模型 ${provider.model} 可用）`
+        : `Provider 可达但模型 ${provider.model} 不在列表里（共 ${ids.length} 个）`,
+    };
+  } catch (error) {
+    return { ok: false, kind: 'NETWORK', elapsedMs: Date.now() - startedAt, message: String((error && error.message) || error).slice(0, 240) };
+  }
+}
+
+// 同上：挂到 globalThis 供 service-worker.js 使用。
+globalThis.SSERP_DIRECT_IMAGE = Object.freeze({
+  IMAGE_CREDENTIALS_KEY,
+  readImageProvider,
+  writeImageProvider,
+  generateImage,
+  probeImageProvider,
+});

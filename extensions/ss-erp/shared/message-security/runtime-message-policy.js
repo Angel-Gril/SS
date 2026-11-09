@@ -301,7 +301,23 @@
     'ss-erp:precision-frame-ui-register',
   ]);
 
+  // 2026-11：Ozon / 生图直连通道。
+  // 这两组消息绕过 ERP，由 service worker 直接对 api-seller.ozon.ru 与
+  // 用户自己的生图 Provider 发请求。目的是把「设备配对 / 草稿 revision /
+  // operation 状态机」从主路径上摘掉，只保留异步审计上报。
+  var DIRECT_API_TYPES = setOf([
+    'ss-erp:direct-ozon-probe',
+    'ss-erp:direct-ozon-post',
+    'ss-erp:direct-ozon-credentials-read',
+    'ss-erp:direct-ozon-credentials-write',
+    'ss-erp:direct-image-probe',
+    'ss-erp:direct-image-generate',
+    'ss-erp:direct-image-provider-read',
+    'ss-erp:direct-image-provider-write',
+  ]);
+
   var KNOWN_TYPES = union(
+    DIRECT_API_TYPES,
     PRECISION_FRAME_TYPES,
     setOf(['ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
       'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',

@@ -4696,6 +4696,20 @@ try {
   console.warn('[ozon-calc] erp package exporter import failed', error);
 }
 
+// 2026-11：Ozon / 生图直连（不经 ERP）。
+// 放在 SW 里发请求的原因：panel iframe 的 fetch 失败时只报 "Failed to fetch"，
+// 拿不到状态码；SW 有 host_permissions，能区分「代理坏了」和「凭据错了」。
+try {
+  importScripts('../shared/ozon/direct-ozon-client.js');
+} catch (error) {
+  console.warn('[SS ERP] direct ozon client load failed', error);
+}
+try {
+  importScripts('../shared/ozon/direct-image-client.js');
+} catch (error) {
+  console.warn('[SS ERP] direct image client load failed', error);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[ozon-calc] installed');
   if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
@@ -6601,6 +6615,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (globalThis.SS_ERP_PREPARATION_RUNTIME_HANDLER?.TYPES.includes(message.type)) {
     void getPreparationRuntimeHandler().handle(message, sender).then(sendResponse);
     return true;
+  }
+  // 2026-11：直连通道处理。全部在 SW 内完成，不碰 ERP 状态机。
+  if (typeof message.type === 'string' && message.type.startsWith('ss-erp:direct-')) {
+    const ozonClient = globalThis.SSERP_DIRECT_OZON;
+    const imageClient = globalThis.SSERP_DIRECT_IMAGE;
+    const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+    const reply = (promise) => {
+      Promise.resolve(promise).then(
+        (result) => { try { sendResponse({ ok: true, result }); } catch (_e) {} },
+        (error) => { try { sendResponse({ ok: false, error: String((error && error.message) || error).slice(0, 400) }); } catch (_e) {} },
+      );
+      return true;
+    };
+    switch (message.type) {
+      case 'ss-erp:direct-ozon-probe':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.probe(payload.credentials));
+      case 'ss-erp:direct-ozon-post':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.ozonPost(String(payload.path || ''), payload.body, { credentials: payload.credentials }));
+      case 'ss-erp:direct-ozon-credentials-read':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.readCredentials());
+      case 'ss-erp:direct-ozon-credentials-write':
+        if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(ozonClient.writeCredentials(payload));
+      case 'ss-erp:direct-image-probe':
+        if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(imageClient.probeImageProvider(payload.provider));
+      case 'ss-erp:direct-image-generate':
+        if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(imageClient.generateImage(payload, { timeoutMs: payload.timeoutMs }));
+      case 'ss-erp:direct-image-provider-read':
+        if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(imageClient.readImageProvider());
+      case 'ss-erp:direct-image-provider-write':
+        if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
+        return reply(imageClient.writeImageProvider(payload));
+      default:
+        return false;
+    }
   }
   if (message.type === 'ss-erp:precision-erp-launch-claim') {
     void getErpSourcePrecisionLauncher().claim(message, sender).then(result => sendResponse({ ok: true, result }))
