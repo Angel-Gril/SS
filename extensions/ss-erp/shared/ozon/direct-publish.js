@@ -17,7 +17,7 @@ const PRODUCT_IMPORT_PATH = '/v3/product/import';
 const IMPORT_STATUS_PATH = '/v1/product/import/info';
 const PRODUCT_INFO_PATH = '/v3/product/info/list';
 
-const PICTURE_SETTLE_MS = 20000;   // 实测：图片处理需要这么久
+// 2026-11 实测：20 秒常常不够。pictures/import 提交后 Ozon 会先生成 CDN 副本\n// （/v3/product/info/list 的 primary_image 立刻有值），但 images 数组要更久才填。\n// 用 20 秒时多次出现 images:0 且零错误的「成功但无图」商品（product 6919447399）。\nconst PICTURE_SETTLE_MS = 40000;
 const POLL_INTERVAL_MS = 5000;
 const POLL_MAX = 24;               // 120 秒
 
@@ -197,6 +197,26 @@ async function publishProduct(input, options = {}) {
     onTick: options.onTick,
   });
   mark('import_finished', { status: waited.status });
+
+  // 2026-11：导入成功但 images 为空的补救。
+  // 实测 product 6919447399 status=imported、errors=[] 但 images:0，
+  // 重新 importPictures 一次再等 25 秒，images 才变成 1。
+  // 这条补救让「成功但无图」不再需要人工发现。
+  try {
+    if (waited.status === 'imported' || waited.status === 'partial_success') {
+      const snapshot = await verifyProduct(offerId);
+      if (snapshot && snapshot.found && Number(snapshot.images) === 0) {
+        mark('pictures_missing', { productId: snapshot.productId });
+        await importPictures(offerId, item.images);
+        mark('pictures_retried');
+        await new Promise((r) => setTimeout(r, 25000));
+        const after = await verifyProduct(offerId);
+        mark('pictures_recheck', { images: after && after.images });
+      }
+    }
+  } catch (_error) {
+    mark('pictures_retry_failed');
+  }
 
   const errors = [];
   const items = (waited.result && Array.isArray(waited.result.items)) ? waited.result.items : [];
