@@ -34,10 +34,20 @@
   // These messages keep their dedicated private handler, which claims the
   // registered precision document and checks its current source/draft binding.
   // Do not include them in NEW_TYPES: the generic BYOK dispatcher does not own them.
+  // 2026-11：这个文件在本文件之后加载并**覆盖** globalThis.SS_ERP_RUNTIME_MESSAGE_POLICY，
+  // 所以只改 runtime-message-policy.js 是不生效的 —— 实测所有 direct-* 消息被
+  // 下面 isAllowedRuntimeMessageSender 的 `if (surface) return false` 挡住，
+  // 面板显示「不允许的扩展消息来源」，而 legacy policy 里的 sender 校验根本没被调用。
+  // 直连通道与 product-analysis 同源（precision-workbench iframe），因此放进同一张白名单。
   var PRIVATE_PREPARATION_TYPES = new Set([
     'ss-erp:product-analysis-readiness', 'ss-erp:product-analysis-analyze', 'ss-erp:product-analysis-read',
     'ss-erp:product-analysis-permission-prepare', 'ss-erp:product-analysis-permission-commit',
     'ss-erp:preparation-checkpoint-read', 'ss-erp:preparation-checkpoint-write', 'ss-erp:preparation-checkpoint-clear',
+    'ss-erp:direct-ozon-probe', 'ss-erp:direct-ozon-post',
+    'ss-erp:direct-ozon-credentials-read', 'ss-erp:direct-ozon-credentials-write',
+    'ss-erp:direct-image-probe', 'ss-erp:direct-image-generate',
+    'ss-erp:direct-image-provider-read', 'ss-erp:direct-image-provider-write',
+    'ss-erp:direct-publish', 'ss-erp:direct-publish-verify', 'ss-erp:direct-publish-build',
   ]);
 
   var MESSAGE_TYPES = Object.freeze({
@@ -440,23 +450,41 @@
   function isAllowedRuntimeMessageSender(type, sender, runtimeId) {
     var normalized = String(type == null ? '' : type).trim();
     var surface = senderSurface(sender, runtimeId);
+    // 全路径诊断：确认 direct-* 走到了哪一条 return。
+    var __t = function (branch, result) {
+      try {
+        // 只记录 direct-* ，避免被 editor-attributes 等高频消息覆盖
+        if (!normalized.startsWith('ss-erp:direct-')) return result;
+        globalThis.__SSERP_AUTH_TRACE = {
+          type: normalized, surface: surface, branch: branch, result: result,
+          isNew: isNewType(normalized),
+          inPrivate: PRIVATE_PREPARATION_TYPES.has(normalized),
+          sender: { id: sender && sender.id || null, url: sender && sender.url || null,
+            origin: sender && sender.origin || null,
+            tabId: sender && sender.tab && sender.tab.id,
+            tabUrl: sender && sender.tab && sender.tab.url || null,
+            frameId: sender && sender.frameId,
+            hasDocId: !!(sender && sender.documentId) },
+          at: Date.now(),
+        };
+      } catch (_e) {}
+      return result;
+    };
     if (isNewType(normalized)) {
       var descriptor = descriptorFor(normalized);
       if (surface === SENDER_SURFACES.PRECISION_FRAME) {
-        return Boolean(descriptor && (descriptor.registration || PROVIDER_SETTINGS_TYPES.has(normalized) || WORKBENCH_TYPES.has(normalized)));
+        return __t('new+precision', Boolean(descriptor && (descriptor.registration || PROVIDER_SETTINGS_TYPES.has(normalized) || WORKBENCH_TYPES.has(normalized))));
       }
-      return Boolean(descriptor && surface === descriptor.surface);
+      return __t('new+other', Boolean(descriptor && surface === descriptor.surface));
     }
     if (surface === SENDER_SURFACES.WORKBENCH && LEGACY_WORKBENCH_TYPES.has(normalized)) {
-      return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
+      return __t('legacy-workbench', legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId));
     }
     if (surface === SENDER_SURFACES.PRECISION_FRAME && PRIVATE_PREPARATION_TYPES.has(normalized)) {
-      return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
+      return __t('private+precision', legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId));
     }
-    // A future workbench/settings page must not inherit the broad legacy extension
-    // page allowlist. Legacy pages continue through the existing policy unchanged.
-    if (surface) return false;
-    return legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId);
+    if (surface) return __t('surface-denied', false);
+    return __t('legacy-fallback', legacyPolicy.isAllowedRuntimeMessageSender(normalized, sender, runtimeId));
   }
 
   function assertSafeString(value, forbiddenValues) {
