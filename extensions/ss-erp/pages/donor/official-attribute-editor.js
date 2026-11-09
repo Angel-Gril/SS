@@ -10,6 +10,10 @@ const editable = (field) => !['SYSTEM', 'MEDIA'].includes(field.ownership)
   && ['EDITABLE', 'MANUAL_REQUIRED', 'SKU_MATRIX'].includes(field.editorMode);
 const displayValue = (value) => value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 
+// 单个属性读取最多等这么久；超时视为那次请求已死，重置状态让用户能重试。
+// ERP 的 EDITOR_ATTRIBUTES 在草稿刚建/刚改类目时会长时间不返回。
+const LOAD_WAIT_CAP_MS = 45000;
+
 export function createOfficialAttributeEditor({ root, send, getEditor, getBinding, getBusy, onSave, onDirty, onReset, onChanged, report, status }) {
   const make = (tag, className, text) => {
     const node = document.createElement(tag); if (className) node.className = className;
@@ -88,7 +92,20 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
   async function load(force = false, clearAfterSave = false) {
     if (loadTask) {
       const pending = loadTask;
-      await pending.promise;
+      // 2026-11：这里原来是无条件 await pending.promise。
+      // 一旦某次 EDITOR_ATTRIBUTES 因为 ERP 侧不响应而悬挂，loadTask 永远不会
+      // 被 finally 清掉，之后每次 load() 都 await 这个死掉的 promise ——
+      // 界面永久停在「正在读取官方属性并预填…」，而且一条命令都不再发出
+      // （实测 hook sendMessage 后 __cmdLog 为空）。
+      // 加一个有上限的等待：等不到就放弃这次合并，自己重新发。
+      const settled = await Promise.race([
+        pending.promise.then(() => true).catch(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), LOAD_WAIT_CAP_MS)),
+      ]);
+      if (!settled) {
+        if (loadTask === pending) { loadTask = null; loading = false; }
+        throw new Error('读取官方属性超时（' + Math.round(LOAD_WAIT_CAP_MS / 1000) + ' 秒未响应，已重置，请重试）');
+      }
       if (pending.basis === token() && !clearAfterSave) return;
     }
     const data = getEditor();

@@ -12,7 +12,7 @@ import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
 import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
-import { planPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
+import { planPrefill, planVariantPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
 import { createDirectHealthPanel } from '../shared/ozon/direct-health-panel.js';
 import { buildDirectPromptPlan, SLOT_BLUEPRINTS } from '../shared/ozon/direct-prompt-plan.js';
 import { selectReferences, referenceSelectionInfo } from '../shared/ozon/reference-selector.js';
@@ -487,7 +487,8 @@ function productForCategoryRecommendation(){
 // 参考精铺/知了：类目一落定就带走能确定的字段，用户只需核对。
 // 只填有确定性依据的（制造国 / 类目唯一类型 / 标题受众 / 1688 材质 / 包装内容），
 // 字典字段一律通过 ERP readDraftDictionary 取 optionId，不做文本猜测。
-async function prefillOfficialAttributes(){
+async function prefillOfficialAttributes(options){
+  const force = Boolean(options && options.force);
   if(!listing())return { applied:0, reason:'无草稿' };
   try{
     await attributes.load(true);
@@ -518,8 +519,15 @@ async function prefillOfficialAttributes(){
     skus: projection.skus.map((sku) => ({ key: sku.key, label: sku.label })),
     attributes: [],
   };
+  // 类目级 + SKU 级两段都要算，runPrefill 内部会合并。
+  // 之前只判断 planPrefill：类目级 0 条就提前返回，即使每个 SKU 都有
+  // 颜色尺码可填（服装常见）也直接放弃。
   const plan = planPrefill(product, fields);
-  if(!plan.length) return { applied:0, reason:'无可预填项' };
+  const variantPlan = planVariantPrefill(product, fields);
+  if(!plan.length && !variantPlan.length){
+    log('属性预填：0 条命中；字段 ' + fields.length + ' 个，SKU ' + (product.skus || []).length + ' 个', true);
+    return { applied:0, reason:'该商品没有可预填的字段' };
+  }
 
   const binding = currentEditorBinding();
   const result = await runPrefill({
@@ -1769,6 +1777,17 @@ async function recoverPreparation(){
  preparation.markRecovered();render();status('原采集或建草稿结果已核对，请点击开始或继续处理。','ok');
 }
 preparationRecover.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!preparationRecover.disabled)void recoverPreparation().catch(report).finally(render);});
+// 2026-11：属性预填的手动入口。
+// 自动预填挂在 saveSelection 的成功路径上，而 steps[category].run() 在
+// 「该类目已保存过」时直接 return completed:true、不调 saveSelection ——
+// 于是重开一个已配过类目的商品，预填永远不跑，界面停在「0 项待保存」。
+trusted('precision-prefill-attributes', async () => {
+  status('正在读取官方属性并预填…');
+  const result = await prefillOfficialAttributes({ force: true });
+  if (!result || !result.applied) {
+    status('属性预填：' + String((result && result.reason) || '无命中项'), 'warn');
+  }
+});
 trusted('start-btn',startProductPreparation);
 preparationContinue.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!preparationContinue.disabled)void continuePreparation().catch(report);});
 preparationStop.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target))preparation.cancel();});
