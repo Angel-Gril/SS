@@ -744,23 +744,30 @@ const directLane = createDirectLanePanel({
   root: fieldsSection, make,
   send: (type, payload) => directSend({ type, payload: payload || {} }),
   getContext: () => {
-    if (!editor || !editor.category) return null;
+    // 2026-11：这里**不再**要求 editor/category 已加载。已上架商品的直连上架
+    // 只需要来源货号 + SKU 列表，属性/尺寸/图片都从 Ozon 读；ERP 草稿读不到
+    // （catalog_stale、bridge 挂起）不该让直连车道跟着瘫。
     let binding = null;
-    try { binding = currentEditorBinding(); } catch (_e) { return null; }
-    const keys = Array.isArray(editor.selectedSkuKeys) ? editor.selectedSkuKeys : [];
-    const skus = keys.map((key) => {
-      const parts = String(key).split('|');
-      const spec = parts.length > 1 ? parts[parts.length - 1].trim() : String(key);
-      const hit = projection.skus.find((sku) => String(sku.label || '').trim() === spec);
-      return { key, label: hit ? hit.label : spec, cost: hit ? hit.priceCny : null };
-    });
+    try { binding = currentEditorBinding(); } catch (_e) { binding = null; }
+    const editorKeys = (editor && Array.isArray(editor.selectedSkuKeys)) ? editor.selectedSkuKeys : [];
+    const skus = editorKeys.length
+      ? editorKeys.map((key, index) => {
+        const parts = String(key).split('|');
+        const spec = parts.length > 1 ? parts[parts.length - 1].trim() : String(key);
+        const hit = projection.skus.find((sku) => String(sku.label || '').trim() === spec);
+        return { key, label: hit ? hit.label : spec, cost: hit ? hit.priceCny : null };
+      })
+      : projection.skus.map((sku) => ({ key: sku.key, label: sku.label, cost: sku.priceCny }));
     const images = (projection.media || []).map((item) => {
       const tail = String(item.key || '').split('|').pop();
       return /^https:\/\//.test(tail) ? tail : '';
     }).filter(Boolean).slice(0, 10);
     return {
-      binding, category: editor.category,
+      binding,
+      category: (editor && editor.category) || null,
       offerBase: projection.source.sourceProductId || '',
+      // 规则标题要拿源商品标题里的特征词（无袖/雪纺/夏季…）
+      sourceTitle: projection.source.title || '',
       skus, images,
     };
   },

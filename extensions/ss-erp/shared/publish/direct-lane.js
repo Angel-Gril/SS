@@ -16,13 +16,19 @@
 const READ_ONLY_OWNERSHIPS = new Set(['SYSTEM', 'MEDIA']);
 
 /** SKU 规格里抽一个稳定的后缀（S / M / L / 2XL / 42），抽不到就用序号 */
-function offerSuffix(label, index) {
+export function offerSuffix(label, index) {
   const text = String(label || '');
   const token = text.match(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|\d{2,3}(?:\/\d{2})?)\b/i);
   if (token) return String(token[0]).toUpperCase().replace(/\//g, '-');
   const tail = text.split(/[\/|]/).pop().trim();
   if (tail && tail.length <= 12 && /^[\w\u4e00-\u9fa5-]+$/u.test(tail)) return tail;
   return String(index + 1);
+}
+
+/** offer_id：基础货号 + 规格后缀（S/M/L/2XL…），任何地方都用同一套 */
+export function offerIdFor(offerBase, label, index) {
+  const base = String(offerBase || '').trim();
+  return base ? base + '-' + offerSuffix(label, index) : '';
 }
 
 function valuesOfRow(row) {
