@@ -2,7 +2,7 @@ import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
-import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
+import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
 import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
 
@@ -41,6 +41,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const markup = mkNumber('加价 CNY', '0', { step: '1', min: '0' });
   const strike = mkNumber('折扣前倍率', '1.5', { step: '0.1', min: '1' });
   const stockInput = mkNumber('库存', '10', { step: '1', min: '0' });
+  // 货号前缀：默认取来源商品号；改它就能用同一份采集结果建一条全新 listing
+  const offerBaseWrap = make('label', '', '货号前缀 ');
+  const offerBaseInput = make('input');
+  offerBaseInput.type = 'text';
+  offerBaseInput.style.width = '150px';
+  offerBaseWrap.append(offerBaseInput);
   const weightInput = mkNumber('重量 g', '250', { step: '10', min: '1' });
   const widthInput = mkNumber('宽 mm', '200', { step: '10', min: '1' });
   const heightInput = mkNumber('高 mm', '40', { step: '1', min: '1' });
@@ -51,7 +57,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
   const autoPricing = make('button', 'ghost', '按成本自动定价');
-  toolbar.append(multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
+  toolbar.append(offerBaseWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
 
   const copyRow = make('div', 'precision-local-fields');
@@ -333,9 +339,77 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     };
   }
 
+  /** 类目缓存：类目确认时由工作台写入，ERP 草稿读不到时靠它继续 */
+  async function readCachedCategory(sourceId) {
+    if (!sourceId) return null;
+    try {
+      const key = 'ss-erp:direct-lane:category:' + sourceId;
+      const got = await chrome.storage.local.get(key);
+      const hit = got && got[key];
+      if (hit && Number(hit.categoryId) > 0 && Number(hit.typeId) > 0) {
+        return { categoryId: Number(hit.categoryId), typeId: Number(hit.typeId), typeName: String(hit.typeName || '') };
+      }
+    } catch (_error) { /* 没缓存就返回 null */ }
+    return null;
+  }
+
+  /**
+   * 新商品的属性：Ozon schema + 本地规则（planPrefill / planVariantPrefill）+ 官方字典。
+   * 与弹窗里那套规则同源，所以「必填 6 项」在直连车道上同样成立。
+   */
+  async function attributesFromRules(context, category, skus) {
+    const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: category.categoryId, typeId: category.typeId });
+    const fields = (schema && schema.fields) || [];
+    if (!fields.length) return { fields: [], values: [] };
+    const product = {
+      title: context.sourceTitle || '',
+      offerId: context.offerBase,
+      sourceProductId: context.offerBase,
+      typeId: category.typeId,
+      skus: skus.map((sku) => ({ key: sku.key, label: sku.label })),
+      attributes: [],
+    };
+    const items = planPrefill(product, fields).concat(planVariantPrefill(product, fields));
+    const values = [];
+    for (const item of items) {
+      if (item.kind === 'text') {
+        values.push({ attributeId: item.attributeId, skuKey: item.skuKey || null, value: String(item.value || ''), dictionaryValueIds: [] });
+        continue;
+      }
+      let list = [];
+      try {
+        const found = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: category.categoryId, typeId: category.typeId,
+          attributeId: item.attributeId, query: '', limit: 1000,
+        });
+        list = (found && found.values) || [];
+      } catch (_error) { list = []; }
+      const queries = Array.isArray(item.queries) && item.queries.length ? item.queries : [item.query || ''];
+      let chosen = null;
+      for (const query of queries) {
+        chosen = pickDictionaryValue(list, item.pick, query, {
+          id: item.fallbackValueId,
+          typeId: item.attributeId === 8229 ? category.typeId : undefined,
+        });
+        if (chosen) break;
+      }
+      values.push({
+        attributeId: item.attributeId,
+        skuKey: item.skuKey || null,
+        value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
+        dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
+      });
+    }
+    return { fields, values };
+  }
+
   async function buildPlan() {
     const context = getContext();
     if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+    // 货号前缀可改：用它就能基于同一份采集建一条全新 listing
+    const prefixed = String(offerBaseInput.value || '').trim();
+    if (!prefixed) offerBaseInput.value = context.offerBase;
+    else context.offerBase = prefixed;
     const skus = context.skus || [];
     const offers = skus.map((sku, index) => offerIdFor(context.offerBase, sku.key, index));
 
@@ -349,10 +423,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       return { plan, context, workspace: null };
     }
 
-    // 新商品：必须有 ERP 草稿（要拿属性工作区）
-    if (!context.binding) throw new Error('新商品需要先读取 ERP 草稿（当前草稿不可用）');
-    const workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding });
-    workspaceCache = workspace;
+    // 新商品：优先用 ERP 属性工作区；读不到（catalog_stale / 草稿轮换 / bridge 挂起）
+    // 就用 Ozon schema + 本地规则自己算 —— 直连车道不该被 ERP 拖住。
+    let workspace = null;
+    if (context.binding) {
+      try { workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
+      catch (_error) { workspace = null; }
+    }
+    if (workspace) {
+      workspaceCache = workspace;
+    } else {
+      const category = context.category && context.category.categoryId
+        ? context.category
+        : await readCachedCategory(context.sourceProductId || context.offerBase);
+      if (!category) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
+      context.category = category;
+      workspace = await attributesFromRules(context, category, skus);
+      if (!workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
+    }
 
     // 标题为空时自动用规则生成一次
     if (!String(titleInput.value || '').trim()) {

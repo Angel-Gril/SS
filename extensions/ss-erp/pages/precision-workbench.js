@@ -657,6 +657,16 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
       log('类目版本已刷新为 ' + String(fresh).slice(0, 16) + '…，重试保存');
       saved = await saveEditor('CATEGORY', { ...selection, catalogRevision: fresh });
     }
+    // 2026-11：类目同时缓存到本地 —— 直连车道在 ERP 草稿读不到时（catalog_stale、
+    // 草稿轮换、bridge 挂起）仍需要 categoryId/typeId，否则新商品卡在「没有类目」。
+    try {
+      const sourceId = projection && projection.source ? projection.source.sourceProductId : '';
+      if (sourceId) {
+        await chrome.storage.local.set({
+          ['ss-erp:direct-lane:category:' + sourceId]: { ...selection, at: Date.now() },
+        });
+      }
+    } catch (_e) { /* 缓存失败不影响类目已保存 */ }
     // 类目落定 → 自动预填官方属性（异步，失败不影响类目已保存）
     void prefillOfficialAttributes().catch(error=>log('属性预填失败：'+(error&&error.message||error),true));
     return saved;
