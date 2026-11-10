@@ -525,8 +525,13 @@ export function createAttributeSuggestions({
     );
   function sync() {
     if (modal.hidden) return;
-    const stale = applying ? identity(context()) !== identity(token) : context() !== token;
-    if (stale) { invalidate(); return; }
+    const current = context();
+    // 草稿 revision 会因为「刚保存过类目/属性」或 ERP 冻结候选而推进，
+    // 那只是版本号变了，弹窗里的候选仍然是刚拿到的。只有草稿身份变了才算失效。
+    if (current !== token) {
+      if (identity(current) === identity(token)) token = current;
+      else { invalidate(); return; }
+    }
     close.disabled = applying;
     apply.disabled = getBusy() || hasUnsavedAttributes() || opening || applying || !data || !selected().length;
     manual.disabled = getBusy() || hasUnsavedAttributes() || opening || applying || !data;
@@ -547,7 +552,11 @@ export function createAttributeSuggestions({
     sync();
     void Promise.resolve()
       .then(async () => {
-        if (attempt !== epoch || context() !== basis) throw Error('草稿已变化，请重新读取候选');
+        if (attempt !== epoch) throw Error('草稿已变化，请重新读取候选');
+        // revision 推进不算变化（候选是刚拿到的），只有草稿身份变了才作废
+        if (context() !== basis && identity(context()) !== identity(basis)) {
+          throw Error('草稿已变化，请重新读取候选');
+        }
         if (hasUnsavedAttributes()) throw Error(unsavedMessage);
         if (getBusy()) throw Error('请等待当前操作完成后再应用属性');
         const chosen = selected();
@@ -616,7 +625,7 @@ export function createAttributeSuggestions({
     async open() {
       if (hasUnsavedAttributes()) throw Error(unsavedMessage);
       if (getBusy() || applying) throw Error('请等待当前操作完成后再自动匹配');
-      const basis = context();
+      let basis = context();
       if (!basis) throw Error('请先创建草稿并确认官方类目');
       const attempt = ++epoch;
       token = basis;
@@ -661,7 +670,15 @@ export function createAttributeSuggestions({
             listingWorkflowId: binding.listingWorkflowId,
           });
         if (attempt !== epoch || modal.hidden) return;
-        if (basis !== context()) { invalidate(); return; }
+        // 刚刚保存过类目/属性时，草稿 revision 已经推进，basis 必然过期。
+        // 只要「草稿身份」（snapshot/商品/店铺/工作流）没变，就把基准更新到当前值，
+        // 不要拿旧 revision 把刚拿到的候选整份丢掉 —— 之前就是这么白丢的。
+        if (basis !== context()) {
+          if (identity(basis) === identity(context())) {
+            basis = context();
+            token = basis;
+          } else { invalidate(); return; }
+        }
         data = reply.data?.suggestions;
         if (!data || data.state !== 'ready') throw Error('属性匹配响应不完整');
         // 兜底：规则侧在 ERP 之前跑，如果那次撞上 SW 冷启动失败（schema 还没进
@@ -760,6 +777,13 @@ export function createAttributeSuggestions({
               `${blocked.attributeName}：${blocked.message}`,
             ),
           );
+        const filledRows = ((data.workspace && data.workspace.values) || [])
+          .filter((row) => row && ((row.value !== null && row.value !== undefined && row.value !== '')
+            || (Array.isArray(row.dictionaryValueIds) && row.dictionaryValueIds.length)));
+        const filledCount = filledRows.length;
+        const fieldNameById = new Map(((data.workspace && data.workspace.fields) || [])
+          .map((field) => [Number(field.attributeId), String(field.name || '')]));
+        const filledNames = [...new Set(filledRows.map((row) => fieldNameById.get(Number(row.attributeId)) || String(row.attributeId)))];
         if (ruleError) {
           list.append(
             make('p', 'precision-attribute-warning', '规则预填未完成：' + ruleError),
@@ -774,8 +798,10 @@ export function createAttributeSuggestions({
         state.textContent = data.suggestions.length
           ? `已匹配 ${data.suggestions.length} 组属性`
             + (ruleSuggestions.length ? `（其中规则 ${ruleSuggestions.length} 组）` : '')
+            + `，草稿已有 ${filledCount} 项官方属性值`
+            + (filledNames.length ? `（${filledNames.slice(0, 12).join(' / ')}）` : '')
             + '，请确认后应用。'
-          : '没有可安全匹配的属性，请在当前表格补充。';
+          : `没有可安全匹配的属性，请在当前表格补充（草稿已有 ${filledCount} 项官方属性值）。`;
       } catch (error) {
         if (attempt !== epoch || modal.hidden) return;
         state.textContent = error.message;
