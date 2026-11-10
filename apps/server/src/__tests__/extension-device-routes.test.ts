@@ -250,6 +250,61 @@ describe('extension device routes', () => {
     expect(response.json()).toMatchObject({ code: 0, errorCode: 'image_upload_rejected', msg: '图片超出 20MB 限制' });
   });
 
+  it('records a finished direct listing for the paired device owner', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-2', actorUserId: 'owner-2', allowedShopIds: ['shop-2'], scopes: ['capture:write'],
+      };
+    });
+    const syncDirectListing = vi.fn(async () => ({ supplyGoodsId: 'goods-1', created: false, itemCount: 1 }));
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, { ...deps, authenticateCollectDevice, syncDirectListing } as any);
+    const body = {
+      shopId: 'shop-2',
+      sourcePlatform: '1688',
+      sourceProductId: '715234567890',
+      title: 'Платье миди',
+      items: [{ offerId: '715234567890-1', productId: 6919447399, images: ['https://cdn.example.test/a.png'] }],
+    };
+
+    const response = await app.inject({ method: 'POST', url: '/direct-listings', payload: body });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ code: 1, data: { supplyGoodsId: 'goods-1', created: false, itemCount: 1 } });
+    expect(syncDirectListing).toHaveBeenCalledWith({
+      ownerUserId: 'owner-2',
+      payload: expect.objectContaining({
+        sourceProductId: '715234567890',
+        items: [expect.objectContaining({ offerId: '715234567890-1', productId: '6919447399' })],
+      }),
+    });
+  });
+
+  it('refuses direct listing sync for foreign shops, weak scopes, and invalid payloads', async () => {
+    const deps = dependencies();
+    let scopes = ['listing:review'];
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1', actorUserId: 'owner-1', allowedShopIds: ['shop-1'], scopes,
+      };
+    });
+    const syncDirectListing = vi.fn();
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, { ...deps, authenticateCollectDevice, syncDirectListing } as any);
+    const body = {
+      sourcePlatform: '1688', sourceProductId: '1', title: 'T', items: [{ offerId: '1-1', images: [] }],
+    };
+
+    expect((await app.inject({ method: 'POST', url: '/direct-listings', payload: body })).statusCode).toBe(403);
+    scopes = ['capture:write'];
+    const foreign = await app.inject({ method: 'POST', url: '/direct-listings', payload: { ...body, shopId: 'shop-9' } });
+    expect(foreign.statusCode).toBe(404);
+    const invalid = await app.inject({ method: 'POST', url: '/direct-listings', payload: { ...body, items: [] } });
+    expect(invalid.statusCode).toBe(400);
+    expect(syncDirectListing).not.toHaveBeenCalled();
+  });
+
   it('rejects malformed device collect batches before calling persistence', async () => {
     const deps = dependencies();
     const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {

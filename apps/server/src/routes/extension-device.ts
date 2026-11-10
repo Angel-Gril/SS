@@ -16,6 +16,11 @@ import {
 } from '../services/shop-analytics-snapshot.js';
 import { ExtensionDeviceShopConfigConflictError } from '../services/extension-device-shop-prisma.js';
 import {
+  directListingSyncSchema,
+  type DirectListingSyncPayload,
+  type DirectListingSyncResult,
+} from '../services/direct-listing-sync.js';
+import {
   productSelectionRuleSchema,
   toggleProductSelectionRuleSchema,
   createPrismaProductSelectionRuleRepository,
@@ -145,6 +150,11 @@ export interface ExtensionDeviceRoutesOptions {
     | { ok: true; data: { url: string; filename: string; backend: string } }
     | { ok: false; statusCode: number; msg: string }
   >;
+  /** 扩展直连上架完成后的最终数据同步；只记录结果，不触发 Ozon 写入。 */
+  syncDirectListing?: (input: {
+    ownerUserId: string;
+    payload: DirectListingSyncPayload;
+  }) => Promise<DirectListingSyncResult>;
   authenticateAccount?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -199,6 +209,7 @@ const idParamsSchema = z.object({ id: z.string().trim().min(1).max(200) });
 const shopParamsSchema = z.object({ shopId: z.string().trim().min(1).max(200) });
 const SHOP_ANALYTICS_BODY_LIMIT = 2 * 1024 * 1024;
 const DEVICE_IMAGE_BODY_LIMIT = 30 * 1024 * 1024;
+const DIRECT_LISTING_BODY_LIMIT = 512 * 1024;
 const deviceImageSchema = z.object({
   dataUrl: z.string().min(1),
   filename: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._-]+$/u).optional(),
@@ -518,6 +529,29 @@ export async function extensionDeviceRoutes(
         });
       }
       return reply.send({ code: 1, msg: 'ok', data: result.data });
+    });
+  }
+
+  if (options.authenticateCollectDevice && options.syncDirectListing) {
+    const syncDirectListing = options.syncDirectListing;
+    app.post('/direct-listings', {
+      bodyLimit: DIRECT_LISTING_BODY_LIMIT,
+      preHandler: [options.authenticateCollectDevice],
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const device = deviceScopeContext(request, reply, 'capture:write');
+      if (!device) return reply;
+      const parsed = directListingSyncSchema.safeParse(request.body);
+      if (!parsed.success) return invalidInput(reply);
+      if (parsed.data.shopId && !device.allowedShopIds.includes(parsed.data.shopId)) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      const data = await syncDirectListing({ ownerUserId: device.ownerUserId, payload: parsed.data });
+      return reply.send({ code: 1, msg: 'ok', data });
     });
   }
 
