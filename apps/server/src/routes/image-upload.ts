@@ -6,8 +6,14 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
-import { UploadLimiterUnavailableError, uploadLimiter } from '../lib/upload-limiter.js';
-import { getConfig } from '../config/system-config-schema.js';
+import {
+  ALLOWED_IMAGE_MIME as ALLOWED_MIME,
+  checkUploadLimits,
+  checkUploadQuota,
+  checkUploadRateLimit,
+  normalizeMime,
+  storeDataUrlImage,
+} from '../services/image-upload-ingest.js';
 import {
   parseBatchResizeInput,
   parseUploadFromUrlInput,
@@ -23,8 +29,6 @@ import {
 const MAX_BYTES = IMAGE_PROCESSING_MAX_BYTES;
 
 const LARGE_BODY_LIMIT = 30 * 1024 * 1024;
-
-const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
 const ALLOWED_ATTACHMENT_MIME = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -52,45 +56,6 @@ const ATTACHMENT_EXT_MAP: Record<string, string> = {
   'application/x-zip-compressed': 'zip',
   'text/plain': 'txt',
 };
-
-type UploadLimitCheck = { allowed: true } | { allowed: false; reason: string; statusCode: 429 | 503 };
-
-async function checkUploadRateLimit(userId: string): Promise<UploadLimitCheck> {
-  const rateLimitEnabled = await getConfig('upload_rate_limit_enabled');
-  if (rateLimitEnabled) {
-    const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
-    if (!await uploadLimiter.checkRateLimit(userId, maxPerMinute)) {
-      return { allowed: false, reason: `上传过于频繁，每分钟最多 ${maxPerMinute} 次`, statusCode: 429 };
-    }
-  }
-
-  return { allowed: true };
-}
-
-async function checkUploadQuota(userId: string, bytes: number): Promise<UploadLimitCheck> {
-  const quotaEnabled = await getConfig('upload_daily_quota_enabled');
-  if (quotaEnabled) {
-    const maxMB = await getConfig('upload_daily_quota_mb');
-    const maxBytes = maxMB * 1024 * 1024;
-    if (!await uploadLimiter.checkDailyQuota(userId, bytes, maxBytes)) {
-      const usedMB = Math.round(await uploadLimiter.getDailyUsage(userId) / 1024 / 1024);
-      return { allowed: false, reason: `今日上传配额已用完（${usedMB}MB / ${maxMB}MB）`, statusCode: 429 };
-    }
-  }
-
-  return { allowed: true };
-}
-
-async function checkUploadLimits(userId: string, bytes: number): Promise<UploadLimitCheck> {
-  try {
-    const rateCheck = await checkUploadRateLimit(userId);
-    if (!rateCheck.allowed) return rateCheck;
-    return checkUploadQuota(userId, bytes);
-  } catch (error) {
-    if (!(error instanceof UploadLimiterUnavailableError)) throw error;
-    return { allowed: false, reason: '上传限流服务暂不可用，请稍后重试', statusCode: 503 };
-  }
-}
 
 export async function imageUploadRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -142,35 +107,15 @@ export async function imageUploadRoutes(app: FastifyInstance) {
   // 浏览器直传：前端把文件 base64 编码后放 body.dataUrl，自动转存到当前后端
   app.post('/upload-base64', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
     const body = request.body as { dataUrl: string; filename?: string; shopId?: string };
-    if (!body?.dataUrl) return reply.status(400).send({ code: 0, msg: '缺少 dataUrl' });
-    const m = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(body.dataUrl);
-    if (!m) return reply.status(400).send({ code: 0, msg: 'dataUrl 格式错误，需为 data:image/...;base64,...' });
-    const mime = normalizeMime(m[1]!);
-    if (!ALLOWED_MIME.has(mime)) {
-      return reply.status(400).send({ code: 0, msg: `不支持的图片类型: ${mime}` });
-    }
-    const buf = Buffer.from(m[2]!, 'base64');
-    if (buf.length > MAX_BYTES) {
-      return reply.status(413).send({ code: 0, msg: `图片超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
-    }
-
     const { userId } = (request as any).user;
-
-    // 检查上传限制
-    const limitCheck = await checkUploadLimits(userId, buf.length);
-    if (!limitCheck.allowed) {
-      return reply.status(limitCheck.statusCode).send({ code: 0, msg: limitCheck.reason });
-    }
-
-    const ext = mime.split('/')[1]!.replace('jpeg', 'jpg');
-    const filename = body.filename || `upload_${Date.now()}.${ext}`;
-    try {
-      const backend = await getStorageBackend(body.shopId);
-      const result = await backend.uploadBuffer(buf, filename, mime, { category: 'raw', ownerId: userId });
-      return reply.send({ code: 1, msg: 'ok', data: result });
-    } catch (e: any) {
-      return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
-    }
+    const result = await storeDataUrlImage({
+      ownerUserId: userId,
+      dataUrl: body?.dataUrl,
+      filename: body?.filename,
+      shopId: body?.shopId,
+    });
+    if (!result.ok) return reply.status(result.statusCode).send({ code: 0, msg: result.msg });
+    return reply.send({ code: 1, msg: 'ok', data: result.data });
   });
 
   // 通用附件上传：支持图片、PDF、Office、ZIP、纯文本（用于公告附件等）
@@ -362,8 +307,4 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
     return reply.send({ code: 1, msg: 'ok', data: { results } });
   });
-}
-
-function normalizeMime(value: string): string {
-  return value.split(';')[0]!.trim().toLowerCase();
 }

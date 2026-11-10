@@ -132,6 +132,19 @@ export interface ExtensionDeviceRoutesOptions {
     };
     log?: { warn: (metadata: unknown, message: string) => void };
   }) => Promise<ExtensionDeviceCollectBatchResult>;
+  /**
+   * 扩展直连生图的结果托管：扩展把图片字节交给 ERP，由存储 owner 落到对象存储
+   * （失败时按配置回退到 Ozon 登录态上传），返回可用于上架的 https 链接。
+   */
+  storeImage?: (input: {
+    ownerUserId: string;
+    dataUrl: string;
+    filename?: string;
+    shopId?: string;
+  }) => Promise<
+    | { ok: true; data: { url: string; filename: string; backend: string } }
+    | { ok: false; statusCode: number; msg: string }
+  >;
   authenticateAccount?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -185,6 +198,12 @@ export function extensionDeviceClaimRateLimitKey(request: FastifyRequest): strin
 const idParamsSchema = z.object({ id: z.string().trim().min(1).max(200) });
 const shopParamsSchema = z.object({ shopId: z.string().trim().min(1).max(200) });
 const SHOP_ANALYTICS_BODY_LIMIT = 2 * 1024 * 1024;
+const DEVICE_IMAGE_BODY_LIMIT = 30 * 1024 * 1024;
+const deviceImageSchema = z.object({
+  dataUrl: z.string().min(1),
+  filename: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._-]+$/u).optional(),
+  shopId: z.string().trim().min(1).max(200).optional(),
+}).strict();
 
 const claimRateLimitConfig = {
   rateLimit: {
@@ -469,6 +488,36 @@ export async function extensionDeviceRoutes(
         log: request.log,
       });
       return reply.status(result.statusCode).send(result.body);
+    });
+  }
+
+  if (options.authenticateCollectDevice && options.storeImage) {
+    const storeImage = options.storeImage;
+    app.post('/images', {
+      bodyLimit: DEVICE_IMAGE_BODY_LIMIT,
+      preHandler: [options.authenticateCollectDevice],
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const device = deviceScopeContext(request, reply, 'capture:write');
+      if (!device) return reply;
+      const parsed = deviceImageSchema.safeParse(request.body);
+      if (!parsed.success) return invalidInput(reply);
+      if (parsed.data.shopId && !device.allowedShopIds.includes(parsed.data.shopId)) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      const result = await storeImage({ ownerUserId: device.ownerUserId, ...parsed.data });
+      if (!result.ok) {
+        return reply.status(result.statusCode).send({
+          code: 0,
+          errorCode: 'image_upload_rejected',
+          msg: result.msg,
+        });
+      }
+      return reply.send({ code: 1, msg: 'ok', data: result.data });
     });
   }
 

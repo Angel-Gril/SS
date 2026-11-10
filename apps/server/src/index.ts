@@ -118,6 +118,7 @@ import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/
 import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
 import { createOzonPublisherEntrypointRolloutService } from './services/ozon-publisher-entrypoint-rollout.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
+import { storeDataUrlImage } from './services/image-upload-ingest.js';
 import { extensionErpSourceLaunchRoutes } from './routes/extension-erp-source-launch.js';
 import { createExtensionErpSourceLaunchService, createRedisErpSourceLaunchGrantStore } from './services/extension-erp-source-launch.js';
 import { authenticate } from './lib/auth.js';
@@ -2245,6 +2246,7 @@ if (isExtensionDeviceAuthEnabled()) {
       repository: extensionDeviceRepository, authConfig: extensionDeviceAuthConfig,
     }),
     managementRepository: extensionDeviceRepository,
+    storeImage: storeDataUrlImage,
     collectBatch: async (input) => collectBatchForOwner({
       ownerUserId: input.ownerUserId,
       body: input.body,

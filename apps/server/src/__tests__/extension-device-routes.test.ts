@@ -171,6 +171,85 @@ describe('extension device routes', () => {
     }));
   });
 
+  it('stores a device-uploaded generated image for an authorized shop', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-2',
+        actorUserId: 'owner-2',
+        allowedShopIds: ['shop-2'],
+        scopes: ['capture:write'],
+      };
+    });
+    const storeImage = vi.fn(async () => ({
+      ok: true as const,
+      data: { url: 'https://cdn.example.test/generated/a.png', filename: 'a.png', backend: 'oss' as const },
+    }));
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, { ...deps, authenticateCollectDevice, storeImage } as any);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+    const response = await app.inject({
+      method: 'POST',
+      url: '/images',
+      payload: { dataUrl, filename: 'a.png', shopId: 'shop-2' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toMatchObject({ code: 1, data: { url: 'https://cdn.example.test/generated/a.png' } });
+    expect(storeImage).toHaveBeenCalledWith({ ownerUserId: 'owner-2', dataUrl, filename: 'a.png', shopId: 'shop-2' });
+  });
+
+  it('refuses device image uploads without scope, for foreign shops, or with a malformed body', async () => {
+    const deps = dependencies();
+    let scopes = ['listing:review'];
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1', actorUserId: 'owner-1', allowedShopIds: ['shop-1'], scopes,
+      };
+    });
+    const storeImage = vi.fn();
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, { ...deps, authenticateCollectDevice, storeImage } as any);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+
+    const weakScope = await app.inject({ method: 'POST', url: '/images', payload: { dataUrl } });
+    expect(weakScope.statusCode).toBe(403);
+    expect(weakScope.json()).toMatchObject({ errorCode: 'insufficient_scope' });
+
+    scopes = ['capture:write'];
+    const foreignShop = await app.inject({ method: 'POST', url: '/images', payload: { dataUrl, shopId: 'shop-9' } });
+    expect(foreignShop.statusCode).toBe(404);
+    expect(foreignShop.json()).toMatchObject({ errorCode: 'device_shop_not_found' });
+
+    const malformed = await app.inject({ method: 'POST', url: '/images', payload: { dataUrl: 42 } });
+    expect(malformed.statusCode).toBe(400);
+    const smuggledOwner = await app.inject({
+      method: 'POST', url: '/images', payload: { dataUrl, ownerUserId: 'attacker-owner' },
+    });
+    expect(smuggledOwner.statusCode).toBe(400);
+    expect(storeImage).not.toHaveBeenCalled();
+  });
+
+  it('relays the storage refusal status for device image uploads', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1', actorUserId: 'owner-1', allowedShopIds: ['shop-1'], scopes: ['capture:write'],
+      };
+    });
+    const storeImage = vi.fn(async () => ({ ok: false as const, statusCode: 413, msg: '图片超出 20MB 限制' }));
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, { ...deps, authenticateCollectDevice, storeImage } as any);
+
+    const response = await app.inject({
+      method: 'POST', url: '/images', payload: { dataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({ code: 0, errorCode: 'image_upload_rejected', msg: '图片超出 20MB 限制' });
+  });
+
   it('rejects malformed device collect batches before calling persistence', async () => {
     const deps = dependencies();
     const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
