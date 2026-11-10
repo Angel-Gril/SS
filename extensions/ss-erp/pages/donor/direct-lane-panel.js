@@ -3,6 +3,7 @@ import { buildRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
+import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -60,13 +61,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   titleWrap.append(titleInput);
   const generateTitle = make('button', 'ghost', '生成标题');
   const describeBtn = make('button', 'ghost', '视觉描述');
+  const promptPlanBtn = make('button', 'ghost', '生成图片提示词');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
   descInput.placeholder = '（可留空）';
   descInput.style.minWidth = '360px';
   descWrap.append(descInput);
-  copyRow.append(titleWrap, generateTitle, describeBtn, descWrap);
+  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, descWrap);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
   // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
@@ -105,6 +107,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let warehouses = [];
   let workspaceCache = null;
   let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
+  let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
   // offerId → { priceInput, oldPriceInput }
   const priceInputs = new Map();
 
@@ -560,6 +563,47 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         state.textContent = `视觉描述：${result.summary.slice(0, 120)}`;
       } catch (error) {
         state.textContent = `视觉描述失败：${String((error && error.message) || error).slice(0, 160)}`;
+        report?.(error);
+      }
+    })();
+  });
+
+  promptPlanBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void (async () => {
+      try {
+        if (!lastVisionReport) throw new Error('先点「视觉描述」——提示词计划要基于视觉报告');
+        const cfg = await readTitleAiConfig();
+        if (!cfg) throw new Error('先在上面填 AI key');
+        const context = getContext();
+        const skus = (context.skus || []).map((sku, index) => {
+          const parsed = parseVariantSpecs([{ label: sku.label }]);
+          return { rowIndex: index + 1, skuLabel: sku.label, specs: { color_name_cn: parsed.colorsZh[0] || '', size_name_cn: parsed.sizes[0] || '' } };
+        });
+        const rawData = {
+          sku_matrix: skus,
+          sourceTitle: context.sourceTitle || '',
+          images: (context.images || []).length,
+        };
+        state.textContent = `规划图片提示词（${cfg.model}）…`;
+        const result = await buildImagePromptPlan({
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+          model: 'qwen3.6-flash',
+          visionReport: lastVisionReport,
+          rawData,
+          categoryTitle: (context.category && context.category.typeName) || '',
+        });
+        lastPromptPlan = result.plan;
+        const slots = (result.plan.sharedGalleryPlans || []).map((slot) => ({
+          slotId: slot.slotId, goal: slot.goalType,
+          sellingPoint: String(slot.sellingPoint || '').slice(0, 60),
+          prompt: String(slot.prompt || '').slice(0, 120),
+        }));
+        output.textContent = JSON.stringify({ parsed: result.parsed, heroes: (result.plan.skuHeroPlans || []).length, slots }, null, 2).slice(0, 3000);
+        state.textContent = `图片提示词：${slots.length} 个详情槽位 + ${(result.plan.skuHeroPlans || []).length} 个主图`;
+      } catch (error) {
+        state.textContent = `提示词规划失败：${String((error && error.message) || error).slice(0, 180)}`;
         report?.(error);
       }
     })();
