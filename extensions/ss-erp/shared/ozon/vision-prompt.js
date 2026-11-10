@@ -11,9 +11,10 @@
 // 上游：pages/donor/direct-lane-panel.js 的「视觉描述」
 // 下游：标题（title-ai.js）、属性观察（回填）、生图提示词（待接）
 
-const REQUIRED_TAG_COUNT = 10;
-const SEARCH_TAG_COUNT = 6;
-const TAG_MAX_LENGTH = 40;
+// 与精铺 fill-rules.js 对齐：28 个标签、每个 ≤28 字符、取前 20 个作为搜索词
+const REQUIRED_TAG_COUNT = 28;
+const SEARCH_TAG_COUNT = 20;
+const TAG_MAX_LENGTH = 28;
 
 /** 只保留前 N 个字段，避免把 53 个官方字段整份塞进提示词 */
 function summarizeFields(fields) {

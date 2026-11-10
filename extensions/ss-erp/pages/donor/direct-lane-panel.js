@@ -4,6 +4,7 @@ import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiC
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
+import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -49,7 +50,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const refreshWarehouses = make('button', 'ghost', '刷新仓库');
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
-  toolbar.append(multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, stockInput.wrap,
+  const autoPricing = make('button', 'ghost', '按成本自动定价');
+  toolbar.append(multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
 
   const copyRow = make('div', 'precision-local-fields');
@@ -62,14 +64,15 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const generateTitle = make('button', 'ghost', '生成标题');
   const describeBtn = make('button', 'ghost', '视觉描述');
   const promptPlanBtn = make('button', 'ghost', '生成图片提示词');
-  const genImageBtn = make('button', 'primary', '按计划生一张主图');
+  const genImageBtn = make('button', 'ghost', '出 1 张主图');
+  const genAllBtn = make('button', 'primary', '按计划出 8 张');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
   descInput.placeholder = '（可留空）';
   descInput.style.minWidth = '360px';
   descWrap.append(descInput);
-  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, genImageBtn, descWrap);
+  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn, descWrap);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
   // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
@@ -109,6 +112,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let workspaceCache = null;
   let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
   let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
+  let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
   // offerId → { priceInput, oldPriceInput }
   const priceInputs = new Map();
 
@@ -610,34 +614,95 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     })();
   });
 
+  /** 按 PromptPlan 出图：hero + 7 个详情槽位，limit 控制本轮张数 */
+  async function runPlanImages(limit) {
+    if (!lastPromptPlan) throw new Error('先点「生成图片提示词」');
+    const context = getContext();
+    const slots = [];
+    const hero = (lastPromptPlan.skuHeroPlans || [])[0];
+    if (hero && hero.prompt) slots.push({ goalType: 'sku_hero', prompt: hero.prompt });
+    for (const slot of (lastPromptPlan.sharedGalleryPlans || [])) {
+      if (slot && slot.prompt) slots.push({ goalType: slot.goalType || slot.slotId, prompt: slot.prompt });
+    }
+    if (!slots.length) throw new Error('计划里没有可用提示词');
+    const chosen = slots.slice(0, Math.max(1, limit));
+    const results = [];
+    for (let index = 0; index < chosen.length; index += 1) {
+      const slot = chosen[index];
+      state.textContent = `生图 ${index + 1}/${chosen.length}：${slot.goalType}（约 30–60 秒）…`;
+      const result = await send('ss-erp:direct-image-generate', {
+        prompt: slot.prompt,
+        // 采集到的原图作参考，保持同款同色（精铺的 referenceSelection 思路）
+        inputImageUrls: (context.images || []).slice(0, 3),
+        timeoutMs: 180000,
+      });
+      const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
+      results.push({ index: index + 1, goalType: slot.goalType, url: url || null, elapsedMs: result && result.elapsedMs });
+      output.textContent = JSON.stringify(results, null, 1).slice(0, 3000);
+    }
+    const ok = results.filter((one) => one.url).length;
+    state.textContent = `生图完成：${ok}/${results.length} 张`;
+    lastImageResults = results;
+    return results;
+  }
+
   genImageBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void runPlanImages(1).catch((error) => {
+      state.textContent = `生图失败：${String((error && error.message) || error).slice(0, 200)}`;
+      report?.(error);
+    });
+  });
+  genAllBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void runPlanImages(8).catch((error) => {
+      state.textContent = `生图失败：${String((error && error.message) || error).slice(0, 200)}`;
+      report?.(error);
+    });
+  });
+
+  autoPricing.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
       try {
-        if (!lastPromptPlan) throw new Error('先点「生成图片提示词」');
-        const context = getContext();
-        const hero = (lastPromptPlan.skuHeroPlans || [])[0];
-        const gallery = (lastPromptPlan.sharedGalleryPlans || [])[0];
-        const prompt = String((hero && hero.prompt) || (gallery && gallery.prompt) || '').trim();
-        if (!prompt) throw new Error('计划里没有可用提示词');
-        state.textContent = '直连生图中（约 35–90 秒）…';
-        output.textContent = JSON.stringify({ prompt: prompt.slice(0, 400) }, null, 2);
-        const result = await send('ss-erp:direct-image-generate', {
-          prompt,
-          // 用采集到的原图做参考，保持同款同色（精铺的 referenceSelection 思路）
-          inputImageUrls: (context.images || []).slice(0, 3),
-          timeoutMs: 180000,
-        });
-        const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
-        state.textContent = url ? `主图已生成（${Math.round((result.elapsedMs || 0) / 1000)}s）` : '生图返回里没有 URL';
-        output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
-        if (url) {
-          const link = make('div', '', '');
-          link.textContent = url;
-          table.append(link);
+        const { plan } = await buildPlan();
+        renderTable(plan);
+        const breakdown = [];
+        for (const item of plan.items) {
+          const cost = Number(item.__cost);
+          if (!Number.isFinite(cost) || cost <= 0) { breakdown.push({ offerId: item.offerId, skipped: 'no cost' }); continue; }
+          const result = calculatePricing({
+            procurementCostCny: cost,
+            packageWeightG: Number(weightInput.input.value),
+            lengthCm: Number(depthInput.input.value) / 10,
+            widthCm: Number(widthInput.input.value) / 10,
+            heightCm: Number(heightInput.input.value) / 10,
+            commissionRate: 20.5,          // DOTH 店 FBS 档（商品详情 commissions 实测）
+            targetMarginRate: 20,
+            frontDiscountRate: Number(strike.input.value) > 1 ? 30 : 0,
+            preferredMode: 'auto',
+          });
+          const best = (result && result.bestByMode && result.bestByMode[0] && result.bestByMode[0].best) || null;
+          if (!best) { breakdown.push({ offerId: item.offerId, ok: false, reason: (result && result.reason) || 'no tariff' }); continue; }
+          const inputs = priceInputs.get(item.offerId);
+          if (inputs) {
+            inputs.priceInput.value = Number(best.salePriceCny).toFixed(2);
+            // 折扣前价按「售价 / (1 - 折扣率)」反推，保证折扣是真的
+            const discount = 0.3;
+            inputs.oldPriceInput.value = (Number(best.salePriceCny) / (1 - discount)).toFixed(2);
+          }
+          item.price = Number(best.salePriceCny).toFixed(2);
+          item.oldPrice = (Number(best.salePriceCny) / 0.7).toFixed(2);
+          breakdown.push({
+            offerId: item.offerId, mode: best.mode, tariff: best.tariff && best.tariff.channelName,
+            billableKg: best.billableWeightKg, crossBorderCny: best.crossBorderFeeCny,
+            priceCny: best.salePriceCny, priceRub: Math.round(Number(best.salePriceCny) * 11.1359),
+          });
         }
+        output.textContent = JSON.stringify(breakdown, null, 2).slice(0, 2500);
+        state.textContent = '已按成本 + 精铺运费档定价：核对每行售价后再上架';
       } catch (error) {
-        state.textContent = `生图失败：${String((error && error.message) || error).slice(0, 200)}`;
+        state.textContent = String((error && error.message) || error);
         report?.(error);
       }
     })();
