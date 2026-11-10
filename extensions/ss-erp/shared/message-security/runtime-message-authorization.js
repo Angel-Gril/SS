@@ -53,6 +53,7 @@
   // 2026-11：直连车道的 ERP 读。属性/文案/包装要读服务端权威值，但绝不能走
   // bridge（waitForAuthority 一挂就永远不返回），所以由 SW 直接 HTTP 读。
   'ss-erp:direct-erp-editor',
+  'ss-erp:direct-erp-sync',
   'ss-erp:direct-ai-text',
   ]);
 

@@ -320,6 +320,7 @@
     'ss-erp:direct-publish-verify',
     'ss-erp:direct-publish-build',
     'ss-erp:direct-erp-editor',
+    'ss-erp:direct-erp-sync',
     'ss-erp:direct-ai-text',
   ]);
 

@@ -960,16 +960,20 @@ async function readExtensionDeviceCollectStatus() {
   };
 }
 
-async function submitExtensionDeviceCollectBatch(payload) {
+// 设备令牌 POST 的唯一实现：采集回传、生成图片托管、直连上架最终同步共用。
+// 401/410 一律按授权撤销处理；网络异常按「结果未知」上报，不自动重试写请求。
+async function postExtensionDeviceJson(path, payload, options) {
+  const label = options && options.label || '设备请求';
+  const errorPrefix = options && options.errorPrefix || 'device_request';
   const result = await readExtensionDeviceCollectOperation();
   if (!result.ok) return result;
   const operation = result.operation;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+  const timeoutId = setTimeout(() => controller.abort(), options && options.timeoutMs || 60_000);
   let response;
   let body;
   try {
-    response = await fetch(operation.baseUrl + '/api/extension-device/collect/batch', {
+    response = await fetch(operation.baseUrl + path, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -985,7 +989,7 @@ async function submitExtensionDeviceCollectBatch(payload) {
     if (response.status === 401 || response.status === 410) {
       await getLogisticsDeviceCredentials().clearIfCurrent(operation, {
         status: response.status,
-        reason: 'device_collect_authorization_revoked',
+        reason: errorPrefix + '_authorization_revoked',
       });
       await clearLegacyCompatibilityCredential();
       await markExtensionDeviceAuthority('revoked', operation);
@@ -1003,8 +1007,8 @@ async function submitExtensionDeviceCollectBatch(payload) {
     return {
       ok: false,
       state: 'paired',
-      errorCode: 'device_collect_outcome_unknown',
-      error: error && error.message ? error.message : '设备采集请求失败',
+      errorCode: errorPrefix + '_outcome_unknown',
+      error: error && error.message ? error.message : label + '请求失败',
       outcome: 'UNKNOWN_OUTCOME',
       automaticRetryAllowed: false,
       guardSessionId: operation.sessionId,
@@ -1017,8 +1021,8 @@ async function submitExtensionDeviceCollectBatch(payload) {
     return {
       ok: false,
       state: 'paired',
-      errorCode: body && body.errorCode || 'device_collect_failed',
-      error: body && (body.msg || body.error) || ('设备采集失败: HTTP ' + response.status),
+      errorCode: body && body.errorCode || errorPrefix + '_failed',
+      error: body && (body.msg || body.error) || (label + '失败: HTTP ' + response.status),
       status: response.status,
       legacyFallbackAllowed: false,
     };
@@ -1028,11 +1032,51 @@ async function submitExtensionDeviceCollectBatch(payload) {
       ok: false,
       state: 'paired',
       errorCode: 'device_authority_changed',
-      error: '设备授权在采集期间已变化，请刷新状态后重试',
+      error: '设备授权在' + label + '期间已变化，请刷新状态后重试',
       legacyFallbackAllowed: false,
     };
   }
   return { ok: true, state: 'paired', authMode: 'device', body, legacyFallbackAllowed: false };
+}
+
+function submitExtensionDeviceCollectBatch(payload) {
+  return postExtensionDeviceJson('/api/extension-device/collect/batch', payload, {
+    label: '设备采集', errorPrefix: 'device_collect',
+  });
+}
+
+// 直连通道对 ERP 的两个出口：生成图片托管、上架完成后的最终数据同步。
+async function postDirectDeviceData(path, payload, options) {
+  const result = await postExtensionDeviceJson(path, payload, options);
+  if (!result.ok) return { ok: false, errorCode: result.errorCode, error: result.error };
+  if (!result.body || result.body.code !== 1) {
+    return { ok: false, errorCode: result.body && result.body.errorCode || 'device_request_failed',
+      error: result.body && (result.body.msg || result.body.error) || 'ERP 未接受该请求' };
+  }
+  return { ok: true, data: result.body.data || {} };
+}
+
+let directImageHost = null;
+function getDirectImageHost() {
+  if (directImageHost) return directImageHost;
+  const api = globalThis.SSERP_DIRECT_IMAGE_HOST;
+  if (!api || typeof api.createImageHost !== 'function') throw new Error('图片托管模块未加载');
+  directImageHost = api.createImageHost({
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    postDevice: (path, body) => postDirectDeviceData(path, body, {
+      label: '图片托管', errorPrefix: 'device_image', timeoutMs: 120_000,
+    }),
+  });
+  return directImageHost;
+}
+
+// 生成 → 托管，返回可用于上架的链接。托管失败时保留 Provider 链接或预览，不丢弃已付费结果。
+async function generateHostedDirectImage(imageClient, payload) {
+  const generated = await imageClient.generateImage(payload, { timeoutMs: payload.timeoutMs });
+  const hosted = await getDirectImageHost().host({
+    url: generated.url, b64: generated.b64, jobId: payload.jobId, shopId: payload.shopId,
+  });
+  return { ...hosted, model: generated.model, elapsedMs: generated.elapsedMs };
 }
 
 globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT = Object.freeze({
@@ -4706,6 +4750,7 @@ try {
 }
 try {
   importScripts('../shared/ozon/direct-image-client.js');
+  importScripts('../shared/ozon/direct-image-host.js');
 } catch (error) {
   console.warn('[SS ERP] direct image client load failed', error);
 }
@@ -6663,7 +6708,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return reply(imageClient.probeImageProvider(payload.provider));
       case 'ss-erp:direct-image-generate':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
-        return reply(imageClient.generateImage(payload, { timeoutMs: payload.timeoutMs }));
+        return reply(generateHostedDirectImage(imageClient, payload));
       case 'ss-erp:direct-image-provider-read':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(imageClient.readImageProvider());
@@ -6700,6 +6745,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return kind === 'attributes' ? result.workspace : result.editor;
         }));
       }
+      // 上架完成后的最终数据同步：只把结果记到 ERP，不触发任何 Ozon 写入。
+      case 'ss-erp:direct-erp-sync':
+        return reply(postDirectDeviceData('/api/extension-device/direct-listings', payload, {
+          label: '上架结果同步', errorPrefix: 'device_direct_listing',
+        }).then((result) => {
+          if (!result.ok) throw new Error(result.error || 'ERP 同步失败');
+          return result.data;
+        }));
       case 'ss-erp:direct-publish-verify':
         if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
         return reply(publishClient.verifyProduct(payload.offerId));
