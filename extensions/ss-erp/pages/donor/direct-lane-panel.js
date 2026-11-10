@@ -1,5 +1,6 @@
 import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js';
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
+import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -64,6 +65,26 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   descWrap.append(descInput);
   copyRow.append(titleWrap, generateTitle, descWrap);
 
+  // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
+  // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
+  const aiRow = make('div', 'precision-local-fields');
+  const aiBase = make('input');
+  aiBase.type = 'text';
+  aiBase.placeholder = DEFAULT_TITLE_AI.baseUrl;
+  aiBase.style.minWidth = '300px';
+  const aiModel = make('input');
+  aiModel.type = 'text';
+  aiModel.placeholder = DEFAULT_TITLE_AI.model;
+  aiModel.style.width = '170px';
+  const aiKey = make('input');
+  aiKey.type = 'password';
+  aiKey.placeholder = 'API key（留空=用规则生成）';
+  aiKey.style.width = '220px';
+  const aiSave = make('button', 'ghost', '保存 AI 配置');
+  const aiStatus = make('span', '', 'AI 未配置：标题用规则生成');
+  aiStatus.style.color = '#94a3b8';
+  aiRow.append(make('span', '', 'AI 文本：'), aiBase, aiModel, aiKey, aiSave, aiStatus);
+
   const actions = make('div', 'precision-local-fields');
   const precheck = make('button', 'ghost', '预检载荷');
   const publishBtn = make('button', 'primary', '直连上架');
@@ -73,7 +94,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const table = make('div');
   const output = make('pre');
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
-  panel.append(head, toolbar, copyRow, actions, table, output);
+  panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
   root.append(panel);
 
   let busy = false;
@@ -173,8 +194,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     }
   }
 
-  /** 标题：规则生成。类目俄文名 + 性别 + 材质 + 特征词 */
-  function generateTitleFor(context, workspace, ozonAttrs) {
+  /** 从 ERP 工作区或 Ozon 商品属性里取「Пол / Материал / Тип」三个值 */
+  function collectAttributePairs(workspace, ozonAttrs) {
     const fields = (workspace && workspace.fields) || [];
     const values = (workspace && workspace.values) || [];
     const byId = new Map(fields.map((field) => [Number(field.attributeId), field]));
@@ -187,18 +208,28 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       if (Array.isArray(row.dictionaryValueIds) && row.dictionaryValueIds.length && !row.value) return '';
       return Array.isArray(row.value) ? row.value.join(' ') : String(row.value || '');
     };
-    const attributes = [];
+    const pairs = [];
     for (const [id, name] of [[9163, 'Пол'], [6383, 'Материал'], [8229, 'Тип']]) {
       const field = byId.get(id);
       const value = attrValue(id);
-      if (value) attributes.push({ name: (field && field.name) || name, value });
+      if (value) pairs.push({ name: (field && field.name) || name, value });
     }
+    return pairs;
+  }
+
+  /** 标题：规则生成。类目俄文名 + 性别 + 材质 + 特征词 */
+  function generateTitleFor(context, workspace, ozonAttrs) {
+    const pairs = collectAttributePairs(workspace, ozonAttrs);
+    const attrValue = (id) => {
+      const pair = pairs.find((one) => one.name === (id === 9163 ? 'Пол' : id === 6383 ? 'Материал' : 'Тип'));
+      return pair ? pair.value : '';
+    };
     return buildRuTitle({
       typeName: context.category && context.category.typeName,
       sourceTitle: context.sourceTitle,
       gender: attrValue(9163),
       material: attrValue(6383),
-      attributes,
+      attributes: pairs,
     });
   }
 
@@ -511,6 +542,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           if (workspace) workspaceCache = workspace;
         }
         let ozonAttrs = null;
+        let pairs = [];
         if (!workspace) {
           const skus = context.skus || [];
           const offers = skus.map((sku, index) => offerIdFor(context.offerBase, sku.key, index));
@@ -521,10 +553,31 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
             value: (attribute.values || []).map((value) => String(value.value || '')).filter(Boolean).join(' '),
           }));
         }
+        pairs = collectAttributePairs(workspace, ozonAttrs);
+
+        // 配了文本模型就先用模型；失败再退回规则，界面上说明走的是哪条路
+        const aiConfig = await readTitleAiConfig();
+        if (aiConfig) {
+          try {
+            state.textContent = `正在用 ${aiConfig.model} 生成标题…`;
+            const ai = await generateTitleWithAi({
+              ...aiConfig,
+              sourceTitle: context.sourceTitle,
+              typeName: context.category && context.category.typeName,
+              attributes: pairs,
+            });
+            titleInput.value = ai.title;
+            state.textContent = `标题由 ${aiConfig.model} 生成`;
+            return;
+          } catch (error) {
+            state.textContent = `AI 生成失败，改用规则：${String((error && error.message) || error).slice(0, 120)}`;
+          }
+        }
+
         const built = generateTitleFor(context, workspace, ozonAttrs);
         titleInput.value = built.title;
         state.textContent = built.title
-          ? `标题已生成（${built.parts.join(' / ')}）` + (built.dropped.length ? `；丢弃：${built.dropped.slice(0, 8).join(',')}` : '')
+          ? `标题已生成（规则：${built.parts.join(' / ')}）` + (built.dropped.length ? `；丢弃：${built.dropped.slice(0, 8).join(',')}` : '')
           : '标题生成失败：源标题里没有可用特征';
       } catch (error) {
         state.textContent = String((error && error.message) || error);
@@ -551,6 +604,31 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       state.textContent = result.error ? `仓库读取失败：${result.error}` : `仓库：${result.count} 个`;
     });
   });
+  aiSave.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void (async () => {
+      try {
+        const saved = await writeTitleAiConfig({
+          baseUrl: String(aiBase.value || '').trim() || DEFAULT_TITLE_AI.baseUrl,
+          model: String(aiModel.value || '').trim() || DEFAULT_TITLE_AI.model,
+          apiKey: String(aiKey.value || '').trim(),
+        });
+        aiKey.value = '';
+        aiStatus.textContent = saved.hasKey ? `AI 已配置：${saved.model}` : 'AI 未配置：标题用规则生成';
+        state.textContent = saved.hasKey ? `AI 文本已保存（${saved.model}）` : '未填 key：标题走规则生成';
+      } catch (error) {
+        state.textContent = String((error && error.message) || error);
+      }
+    })();
+  });
+  // 打开面板时回填已保存的 AI 配置（key 不回填，只显示模型名）
+  void (async () => {
+    const cfg = await readTitleAiConfig();
+    if (!cfg) return;
+    aiBase.value = cfg.baseUrl;
+    aiModel.value = cfg.model;
+    aiStatus.textContent = `AI 已配置：${cfg.model}`;
+  })();
 
   return { panel, refresh: () => loadWarehouses(), lastPlan: () => lastPlan };
 }
