@@ -2,6 +2,7 @@ import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
+import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -103,7 +104,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let lastPlan = null;
   let warehouses = [];
   let workspaceCache = null;
-  let lastVisionFields = null;   // 视觉描述结果，喂给标题生成
+  let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
   // offerId → { priceInput, oldPriceInput }
   const priceInputs = new Map();
 
@@ -533,16 +534,28 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         if (!context || !context.offerBase) throw new Error('请先采集来源商品');
         const cfg = await readTitleAiConfig();
         if (!cfg) throw new Error('先在上面填 AI key（视觉描述和标题用同一把）');
-        state.textContent = `正在用 ${cfg.model} 看图画描述…`;
+        // 按精铺的入参形态准备：SKU 表（带中文字段）+ 官方属性 + 类目名
+        const skus = (context.skus || []).map((sku) => {
+          const parsed = parseVariantSpecs([{ label: sku.label }]);
+          return { label: sku.label, color: parsed.colorsZh[0] || '', size: parsed.sizes[0] || '' };
+        });
+        let fields = [];
+        try {
+          const workspace = workspaceCache || (context.binding
+            ? await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }) : null);
+          if (workspace) fields = (workspace.fields || []).map((field) => ({ name: field.name, description: field.description || '' }));
+        } catch (_error) { /* 没有字段也能跑，只是不做属性观察 */ }
+        state.textContent = `正在看图（${cfg.model}）…`;
         const result = await describeProductWithAi({
           baseUrl: cfg.baseUrl,
           apiKey: cfg.apiKey,
           model: 'qwen3.8-flash',
           imageUrls: context.images || [],
-          typeName: context.category && context.category.typeName,
-          sourceTitle: context.sourceTitle,
+          product: { title: context.sourceTitle || '', skus },
+          fields,
+          categoryTitle: (context.category && context.category.typeName) || '',
         });
-        lastVisionFields = result.fields && Object.keys(result.fields).length ? result.fields : null;
+        lastVisionReport = result.report || null;
         output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
         state.textContent = `视觉描述：${result.summary.slice(0, 120)}`;
       } catch (error) {
@@ -587,7 +600,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         }
         // 属性（卖家数据）优先于视觉推断：视觉只补属性里没有的项
         const attrPairs = collectAttributePairs(workspace, ozonAttrs);
-        const visionPairs = visionToAttributePairs(lastVisionFields);
+        const visionPairs = visionToAttributePairs(lastVisionReport);
         const merged = new Map(visionPairs.map((one) => [one.name, one.value]));
         for (const one of attrPairs) merged.set(one.name, one.value);
         pairs = [...merged.entries()].map(([name, value]) => ({ name, value }));
