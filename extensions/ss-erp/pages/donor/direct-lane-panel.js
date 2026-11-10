@@ -557,6 +557,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
 
         // 配了文本模型就先用模型；失败再退回规则，界面上说明走的是哪条路
         const aiConfig = await readTitleAiConfig();
+        let aiError = '';
         if (aiConfig) {
           try {
             state.textContent = `正在用 ${aiConfig.model} 生成标题…`;
@@ -570,7 +571,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
             state.textContent = `标题由 ${aiConfig.model} 生成`;
             return;
           } catch (error) {
-            state.textContent = `AI 生成失败，改用规则：${String((error && error.message) || error).slice(0, 120)}`;
+            aiError = String((error && error.message) || error).slice(0, 160);
           }
         }
 
@@ -578,6 +579,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         titleInput.value = built.title;
         state.textContent = built.title
           ? `标题已生成（规则：${built.parts.join(' / ')}）` + (built.dropped.length ? `；丢弃：${built.dropped.slice(0, 8).join(',')}` : '')
+            + (aiError ? `｜AI 失败：${aiError}` : '')
           : '标题生成失败：源标题里没有可用特征';
       } catch (error) {
         state.textContent = String((error && error.message) || error);

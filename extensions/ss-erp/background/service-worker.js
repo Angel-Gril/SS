@@ -4711,6 +4711,7 @@ try {
 }
 try {
   importScripts('../shared/ozon/direct-publish.js');
+importScripts('../shared/ozon/ai-text-client.js');
 } catch (error) {
   console.warn('[SS ERP] direct publish client load failed', error);
 }
@@ -6669,6 +6670,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ss-erp:direct-image-provider-write':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(imageClient.writeImageProvider(payload));
+      // 2026-11：AI 文本（标题/描述）。页面 fetch 会被 CORS 挡住，改由 SW 调用。
+      case 'ss-erp:direct-ai-text': {
+        const aiText = globalThis.SSERP_DIRECT_AI_TEXT;
+        if (!aiText) return reply(Promise.reject(new Error('AI 文本客户端未加载')));
+        return reply(aiText.chatCompletion(payload));
+      }
       case 'ss-erp:direct-publish':
         if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
         // 2026-11：批量上架。多变体必须一次 import 提交全部 item，逐条发会被

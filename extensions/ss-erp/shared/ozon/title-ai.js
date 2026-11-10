@@ -10,8 +10,11 @@
 const CONFIG_KEY = 'ss-erp:title-ai:v1';
 
 export const DEFAULT_TITLE_AI = Object.freeze({
-  baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  model: 'qwen3.8-flash',
+  // 2026-11：默认用团队自己的千问网关（OpenAI 兼容）；DashScope 同一套协议，可替换
+  baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+  // 选型实测：qwen3.8-flash 长提示会顶到 45s 超时；glm-5.3 是推理模型
+  // （reasoning_tokens 579/612，预算不够只回一个字符）；qwen3.6-flash 14s 稳定完整。
+  model: 'qwen3.6-flash',
 });
 
 export async function readTitleAiConfig() {
@@ -35,16 +38,13 @@ export async function writeTitleAiConfig(config) {
   return { baseUrl, model, hasKey: Boolean(apiKey) };
 }
 
+// 提示词刻意压短：实测长系统提示会让部分模型（qwen3.8-flash）卡到 45 秒以上，
+// 短版本 7-13 秒就出结果。规则都写成一行内的约束，模型照样遵守。
 const SYSTEM_PROMPT = [
-  'Ты пишешь название товара для маркетплейса Ozon на русском языке.',
-  'Требования:',
-  '— одна строка, 40-140 символов, без кавычек, без эмодзи, без брендов;',
-  '— структура: <тип товара> <пол/аудитория> <материал> <ключевые признаки> <сезон/сцена>;',
-  '— только те признаки, которые есть во входных данных; ничего не выдумывать;',
-  '— числа и размеры сохранять, знак умножения писать буквой x;',
-  '— не использовать слова: распродажа, оптом, дропшиппинг, новый, хит, тренд;',
-  '— ответ: только само название.',
-].join('\n');
+  'Ты пишешь название товара для Ozon на русском. Одна строка 40-140 символов, без кавычек, эмодзи и брендов.',
+  'Структура: тип, пол, материал, признаки. Только то, что есть во входных данных.',
+  'Не использовать: распродажа, оптом, дропшиппинг, новый, хит, тренд. Ответ — только название.',
+].join(' ');
 
 /**
  * @param {object} input { baseUrl, apiKey, model, sourceTitle, typeName, attributes:[{name,value}] }
@@ -59,38 +59,65 @@ export async function generateTitleWithAi(input) {
     `Заполненные атрибуты: ${(input.attributes || []).map((one) => `${one.name}=${one.value}`).join('; ') || '—'}`,
     'Напиши название товара для Ozon.',
   ].join('\n');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-  try {
-    const response = await fetch(baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + input.apiKey },
-      body: JSON.stringify({
-        model: input.model,
-        temperature: 0.3,
-        max_tokens: 300,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: user },
-        ],
-      }),
-      signal: controller.signal,
+
+  // 走 SW 调用：扩展页 origin 的 fetch 会被 CORS 挡（和 Ozon 直连一样）
+  const reply = await new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({
+        contractVersion: 3,
+        type: 'ss-erp:direct-ai-text',
+        payload: {
+          baseUrl,
+          apiKey: input.apiKey,
+          model: input.model,
+          temperature: 0.3,
+          maxTokens: 600,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: user },
+          ],
+        },
+      }, (response) => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) { reject(new Error(String(lastError.message || lastError).slice(0, 200))); return; }
+        if (!response) { reject(new Error('AI 通道没有返回')); return; }
+        if (response.ok === false) { reject(new Error(String(response.error || 'AI 请求失败').slice(0, 240))); return; }
+        resolve(response.result);
+      });
+    } catch (error) { reject(error); }
+  });
+
+  const raw = String((reply && reply.content) || '').trim();
+  if (!raw) throw new Error('AI 没有返回内容');
+  // 有的模型会把标题按词换行输出，先拼回一行再清洗
+  const joined = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(' ');
+  const title = polishRuTitle(joined.replace(/^["'«»\s]+|["'«»\s]+$/g, '').replace(/[×✕]/g, 'x').slice(0, 500));
+  return { title, raw, model: (reply && reply.model) || input.model };
+}
+
+// 模型常把材质写成裸名词（«полиэстер»），俄文标题里应是 «из полиэстера»。
+// 只做这一条确定性修正，别的风格不动。
+const MATERIAL_FIX = [
+  [/полиэстер(а|ом)?/gi, 'из полиэстера'],
+  [/хлопок|хлопка/gi, 'из хлопка'],
+  [/шёлк|шелк|шелка/gi, 'из шёлка'],
+  [/вискоз(а|ы)/gi, 'из вискозы'],
+  [/кружев(о|а)/gi, 'из кружева'],
+  [/деним(а)?/gi, 'из денима'],
+  [/шерст(ь|и)|шёрст(ь|и)/gi, 'из шерсти'],
+];
+
+function polishRuTitle(title) {
+  let out = String(title || '');
+  for (const [re, replacement] of MATERIAL_FIX) {
+    // 回调参数随正则是否有捕获组变化：统一取「最后一个参数当整串、倒数第二个当偏移」
+    out = out.replace(re, (match, ...rest) => {
+      const whole = String(rest[rest.length - 1] || '');
+      const offset = Number(rest[rest.length - 2]) || 0;
+      const before = whole.slice(0, offset).trimEnd().toLowerCase();
+      if (/(^|\s)из$/.test(before)) return match;   // 已经是 «из …» 就不动
+      return replacement;
     });
-    const text = await response.text().catch(() => '');
-    if (!response.ok) {
-      throw new Error(`AI 返回 ${response.status}：${text.slice(0, 160)}`);
-    }
-    let body = null;
-    try { body = JSON.parse(text); } catch { throw new Error('AI 返回的不是 JSON'); }
-    const raw = String(
-      (body && body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) || '',
-    ).trim();
-    if (!raw) throw new Error('AI 没有返回内容');
-    // 模型有时会带解释或引号，取第一行并清掉包裹
-    const first = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] || raw;
-    const title = first.replace(/^["'«»\s]+|["'«»\s]+$/g, '').replace(/[×✕]/g, 'x').slice(0, 500);
-    return { title, raw };
-  } finally {
-    clearTimeout(timer);
   }
+  return out.replace(/\s+/g, ' ').trim();
 }
