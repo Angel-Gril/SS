@@ -1,5 +1,9 @@
 # Donor Workbench Migration Overview
 
+> **2026-11-11 方向变更**：本目录记录的是“保留 donor 界面、把基础设施全部换成 ERP 托管”的迁移方案。
+> 该方案已被产品裁决取代：扩展改为精铺式直连，ERP 只做设备授权与最终数据同步。
+> 当前真源见 [`../extension-direction.md`](../extension-direction.md)；下文保留为历史记录，其中“禁止直连 Ozon/Provider”的条款不再适用于扩展。
+
 ## Confirmed Intent
 
 Build the next SS ERP browser extension from the user-owned `jp20260803` workbench donor. Preserve its mature in-page workspace interaction while replacing its unsafe/local infrastructure with SS ERP device authority, hosted/BYOK contracts, draft ownership, billing, review, idempotency, and controlled publish.
