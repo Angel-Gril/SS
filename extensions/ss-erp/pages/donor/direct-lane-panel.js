@@ -62,13 +62,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const generateTitle = make('button', 'ghost', '生成标题');
   const describeBtn = make('button', 'ghost', '视觉描述');
   const promptPlanBtn = make('button', 'ghost', '生成图片提示词');
+  const genImageBtn = make('button', 'primary', '按计划生一张主图');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
   descInput.placeholder = '（可留空）';
   descInput.style.minWidth = '360px';
   descWrap.append(descInput);
-  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, descWrap);
+  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, genImageBtn, descWrap);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
   // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
@@ -604,6 +605,39 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         state.textContent = `图片提示词：${slots.length} 个详情槽位 + ${(result.plan.skuHeroPlans || []).length} 个主图`;
       } catch (error) {
         state.textContent = `提示词规划失败：${String((error && error.message) || error).slice(0, 180)}`;
+        report?.(error);
+      }
+    })();
+  });
+
+  genImageBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void (async () => {
+      try {
+        if (!lastPromptPlan) throw new Error('先点「生成图片提示词」');
+        const context = getContext();
+        const hero = (lastPromptPlan.skuHeroPlans || [])[0];
+        const gallery = (lastPromptPlan.sharedGalleryPlans || [])[0];
+        const prompt = String((hero && hero.prompt) || (gallery && gallery.prompt) || '').trim();
+        if (!prompt) throw new Error('计划里没有可用提示词');
+        state.textContent = '直连生图中（约 35–90 秒）…';
+        output.textContent = JSON.stringify({ prompt: prompt.slice(0, 400) }, null, 2);
+        const result = await send('ss-erp:direct-image-generate', {
+          prompt,
+          // 用采集到的原图做参考，保持同款同色（精铺的 referenceSelection 思路）
+          inputImageUrls: (context.images || []).slice(0, 3),
+          timeoutMs: 180000,
+        });
+        const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
+        state.textContent = url ? `主图已生成（${Math.round((result.elapsedMs || 0) / 1000)}s）` : '生图返回里没有 URL';
+        output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
+        if (url) {
+          const link = make('div', '', '');
+          link.textContent = url;
+          table.append(link);
+        }
+      } catch (error) {
+        state.textContent = `生图失败：${String((error && error.message) || error).slice(0, 200)}`;
         report?.(error);
       }
     })();
