@@ -475,20 +475,6 @@
     // 直连通道（Ozon / 生图 / 上架）只允许从工作台 iframe 发起，
     // 与 product-analysis 同一套来源约束：必须嵌在来源商品页里、frameId > 0。
     if (DIRECT_API_TYPES.has(messageType)) {
-      // 临时诊断：把最近一次 direct-* 消息的 sender 快照留在 globalThis，
-      // 便于确认是哪一项校验不过（无痕时这类问题只能靠猜）。
-      try {
-        globalThis.__SSERP_DIRECT_SENDER_DIAG = {
-          type: messageType,
-          id: sender?.id || null,
-          url: sender?.url || null,
-          origin: sender?.origin || null,
-          tabId: sender?.tab?.id == null ? null : sender.tab.id,
-          frameId: sender?.frameId == null ? null : sender.frameId,
-          documentId: sender?.documentId ? String(sender.documentId).slice(0, 20) : null,
-          at: Date.now(),
-        };
-      } catch (_e) {}
       return __trace('direct-api', sender?.id === runtimeId && sender?.url === 'chrome-extension://' + runtimeId + '/pages/precision-workbench.html'
         && sender?.origin === 'chrome-extension://' + runtimeId && Number.isSafeInteger(sender?.tab?.id)
         && Number.isSafeInteger(sender?.frameId) && sender.frameId > 0 && typeof sender?.documentId === 'string' && Boolean(sender.documentId));

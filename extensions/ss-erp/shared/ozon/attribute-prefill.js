@@ -20,58 +20,78 @@
 // 其余字段（Бренд 品牌、Аннотация 等）没有可靠来源，不预填 —— 留空让用户
 // 自己决定，比填错强。
 
-// 1688 材质 → Ozon 俄文材质（查询词）
+// 1688 材质 → Ozon 材质（查询词）
+// 2026-11：字典语言是 ZH_HANS，返回**中文**值，所以每条规则同时给中文候选
+// （首选）和俄文（兜底，部分字典仍返回俄文）。顺序不能反 —— 反了就对不上。
 const MATERIAL_MAP = [
-  [/(树脂|滴胶|环氧)/, 'смола'],
-  [/(木|实木|松木|橡木|竹)/, 'дерево'],
-  [/(陶|瓷)/, 'керамика'],
-  [/(玻璃|水晶)/, 'стекло'],
-  [/(铁|钢|不锈钢|金属|合金)/, 'металл'],
-  [/(塑料|亚克力|PVC|ABS)/i, 'пластик'],
-  [/(布|棉|麻|涤纶|绒)/, 'текстиль'],
-  [/(纸|卡纸)/, 'бумага'],
-  [/(硅胶|橡胶)/, 'силикон'],
-  [/(石|大理石|花岗岩)/, 'камень'],
-  [/(蜡)/, 'воск'],
+  [/(树脂|滴胶|环氧)/, 'смола', ['树脂']],
+  [/(木|实木|松木|橡木|竹)/, 'дерево', ['木', '木质', '木材']],
+  [/(陶|瓷)/, 'керамика', ['陶瓷', '瓷']],
+  [/(玻璃|水晶)/, 'стекло', ['玻璃']],
+  [/(铁|钢|不锈钢|金属|合金)/, 'металл', ['金属', '铁', '钢']],
+  [/(塑料|亚克力|PVC|ABS)/i, 'пластик', ['塑料', '亚克力']],
+  [/(布|棉|麻|涤纶|绒)/, 'текстиль', ['纺织品', '布', '棉']],
+  [/(纸|卡纸)/, 'бумага', ['纸', '纸质']],
+  [/(硅胶|橡胶)/, 'силикон', ['硅胶', '橡胶']],
+  [/(石|大理石|花岗岩)/, 'камень', ['石', '石材', '大理石']],
+  [/(蜡)/, 'воск', ['蜡']],
 ];
 
-// 标题受众 → Ozon Для кого / 性别 查询词
+// 标题受众 → Ozon Для кого / 性别 查询词。
 // 2026-11：1688 女装标题常用「女装」「男装」而不是「女士/男士」，
 // 缺这两个词时「性别」这类必填字段会漏掉（连衣裙实测漏了 9163）。
+// 性别字典在 ZH_HANS 下只有「女士 / 女童」这类中文值，所以中文优先。
 const AUDIENCE_MAP = [
-  [/(婴儿|宝宝|新生儿)/, 'новорожденные'],
-  [/(儿童|孩子|小孩|幼儿|学生)/, 'дети'],
-  [/(男士|男款|男式|男装|boy|men)/i, 'мужчины'],
-  [/(女士|女款|女式|女装|girl|women)/i, 'женщины'],
-  [/(中性|情侣|男女同款|unisex)/i, 'унисекс'],
+  [/(婴儿|宝宝|新生儿)/, 'новорожденные', ['婴儿', '新生儿', '婴儿用品']],
+  [/(儿童|孩子|小孩|幼儿|学生)/, 'дети', ['儿童', '儿童用品']],
+  [/(男士|男款|男式|男装|boy|men)/i, 'мужчины', ['男士', '男']],
+  [/(女士|女款|女式|女装|girl|women)/i, 'женщины', ['女士', '女']],
+  [/(中性|情侣|男女同款|unisex)/i, 'унисекс', ['中性', '男女通用']],
 ];
 
-// 1688 颜色 → Ozon 俄文颜色（查询词）。
+// 1688 颜色 → Ozon 颜色（查询词）。
 // 服装/鞋类类目把「商品颜色」列为必填，1688 侧一般有「颜色」或「颜色分类」属性。
-// 2026-11：三元组 [中文正则, 俄文, 中文]。
-// 字典查询用 language=ZH_HANS，返回的是**中文**值（实测「商品颜色」返回
-// 白色/黑色/粉色）。只给俄文会一个都匹配不上，所以两个都给：
-//   ru   写进 Ozon 时的可读值 / 兜底
-//   zh   查字典用的 query
+// 2026-11：三元组 [中文正则, 俄文, 中文候选]。
+// 字典查询用 language=ZH_HANS，返回的是**中文**值（实测「商品颜色」651 个值，
+// 粉色对应的官方值是「粉红色」而不是「粉色），所以候选按字典真实值给，
+// 俄文只用来写界面/兜底。
 const COLOR_MAP = [
-  [/(黑)/, 'черный', '黑色'],
-  [/(白)/, 'белый', '白色'],
-  [/(红)/, 'красный', '红色'],
-  [/(蓝)/, 'синий', '蓝色'],
-  [/(绿)/, 'зеленый', '绿色'],
-  [/(黄)/, 'желтый', '黄色'],
-  [/(粉)/, 'розовый', '粉色'],
-  [/(紫)/, 'фиолетовый', '紫色'],
-  [/(灰)/, 'серый', '灰色'],
-  [/(棕|咖|褐)/, 'коричневый', '棕色'],
-  [/(米|杏|卡其|驼)/, 'бежевый', '米色'],
-  [/(橙|橘)/, 'оранжевый', '橙色'],
-  [/(金)/, 'золотой', '金色'],
-  [/(银)/, 'серебряный', '银色'],
+  [/(黑)/, 'черный', ['黑色']],
+  [/(白)/, 'белый', ['白色']],
+  [/(红)/, 'красный', ['红色']],
+  [/(蓝)/, 'синий', ['蓝色']],
+  [/(绿)/, 'зеленый', ['绿色']],
+  [/(黄)/, 'желтый', ['黄色']],
+  [/(粉)/, 'розовый', ['粉红色', '粉色', '浅粉色']],
+  [/(紫)/, 'фиолетовый', ['紫色']],
+  [/(灰)/, 'серый', ['灰色']],
+  [/(棕|咖|褐)/, 'коричневый', ['棕色', '咖色', '褐色']],
+  [/(米|杏|卡其|驼)/, 'бежевый', ['米色', '杏色', '卡其色']],
+  [/(橙|橘)/, 'оранжевый', ['橙色', '橘色']],
+  [/(金)/, 'золотой', ['金色']],
+  [/(银)/, 'серебряный', ['银色']],
 ];
 
-const COUNTRY_QUERY = 'Китай';
-const COUNTRY_MATCH = /^китай$/i;
+const COUNTRY_QUERY = '中国';
+const COUNTRY_QUERIES = ['中国', 'Китай'];
+const COUNTRY_MATCH = /^(китай|中国)$/i;
+
+// 字母码 → 俄罗斯尺码。4295（Российский размер）字典在 ZH_HANS 下**只有数字**
+// （44/46/48…通用），没有 S/M/L，所以字母码必须换算成数字才能匹配上。
+// 这是女装惯例换算（S≈44、M≈46、L≈48），属于约定而非官方数据 —— 所以界面
+// 里的依据会写明「字母码按女装惯例换算」，用户可以逐个取消勾选。
+const RU_SIZE_BY_LETTER = {
+  XXS: 40, XS: 42, S: 44, M: 46, L: 48, XL: 50, XXL: 52, '2XL': 52,
+  XXXL: 54, '3XL': 54, XXXXL: 56, '4XL': 56, '5XL': 58, '6XL': 60,
+};
+
+/** SKU 规格里的尺码 → 查 4295 字典用的查询词（数字码原样，字母码换算） */
+export function russianSizeQuery(token) {
+  const text = String(token == null ? '' : token).trim().toUpperCase();
+  if (!text) return '';
+  if (/^\d{2,3}$/.test(text)) return text;
+  return String(RU_SIZE_BY_LETTER[text] || '');
+}
 
 // 2026-11：不能只按 attributeId 硬编码规则。
 // 实测两个类目的必填字段 ID 完全不同：
@@ -139,12 +159,17 @@ export function parseVariantSpecs(skus) {
   const list = Array.isArray(skus) ? skus : [];
   const colors = [];
   const colorsZh = [];
+  const colorsQueries = [];
   const sizes = [];
   for (const sku of list) {
     const text = String(sku && (sku.label || sku.spec || sku.name) || '');
     if (!text) continue;
     for (const [re, ru, zh] of COLOR_MAP) {
-      if (re.test(text) && !colors.includes(ru)) { colors.push(ru); colorsZh.push(zh); }
+      if (!re.test(text) || colors.includes(ru)) continue;
+      colors.push(ru);
+      const aliases = (Array.isArray(zh) ? zh : [zh]).map((v) => String(v || '')).filter(Boolean);
+      colorsZh.push(aliases[0] || '');
+      colorsQueries.push(aliases);
     }
     const tokens = text.match(SIZE_TOKEN) || [];
     for (const t of tokens) {
@@ -152,7 +177,7 @@ export function parseVariantSpecs(skus) {
       if (!sizes.includes(up)) sizes.push(up);
     }
   }
-  return { colors, colorsZh, sizes };
+  return { colors, colorsZh, colorsQueries, sizes };
 }
 
 /** 按线索在 fields 里找目标字段；找不到返回 null */
@@ -235,13 +260,17 @@ export function planPrefill(product, fields) {
   // 0b. 品牌：必填。1688 白牌商品在 Ozon 侧没有品牌，官方允许「Нет бренда」占位。
   //     这个值不在字典前 100 条（要翻 7 页），且 `value` 搜索参数无效，
   //     所以先用 query 查，查不到就用实测确认过的 id 兜底。
+  //     fullScan 关掉：品牌字典 7000+ 条，整表取没有意义。
   pushResolved('brand', {
     kind: 'dictionary', query: 'Нет бренда', pick: 'exact', reason: '1688 白牌无品牌',
-    fallbackValueId: 126745801, fallbackValue: 'Нет бренда',
+    fallbackValueId: 126745801, fallbackValue: 'Нет бренда', fullScan: false,
   });
 
   // 1. 制造国：1688 货源基本为中国
-  pushResolved('country', { kind: 'dictionary', query: COUNTRY_QUERY, pick: 'exact', reason: '1688 货源默认中国' });
+  pushResolved('country', {
+    kind: 'dictionary', query: COUNTRY_QUERY, queries: COUNTRY_QUERIES,
+    pick: 'exact', reason: '1688 货源默认中国',
+  });
 
   // 2. 类型：类目唯一选项时直接选；否则不猜
   // 类型：类目只有 1 个选项时直接用；多个候选时必须按 typeId 反查，
@@ -252,14 +281,22 @@ export function planPrefill(product, fields) {
   // 3. 适用人群 / 性别
   const audience = AUDIENCE_MAP.find(([re]) => re.test(title));
   if (audience) {
-    pushResolved('audience', { kind: 'dictionary', query: audience[1], pick: 'fuzzy', reason: `标题受众「${audience[1]}」` });
+    const aliases = (Array.isArray(audience[2]) ? audience[2] : [audience[2]]).filter(Boolean);
+    pushResolved('audience', {
+      kind: 'dictionary', query: aliases[0] || audience[1], queries: [...aliases, audience[1]],
+      pick: 'fuzzy', reason: `标题受众「${aliases[0] || audience[1]}」`,
+    });
   }
 
   // 4. 材质：优先 1688 材质属性，其次标题
   const materialText = attributeValue(attributes, [/材质/, /материал/i]) || title;
   const material = MATERIAL_MAP.find(([re]) => re.test(materialText));
   if (material) {
-    pushResolved('material', { kind: 'dictionary', query: material[1], pick: 'fuzzy', reason: `材质「${material[1]}」` });
+    const aliases = (Array.isArray(material[2]) ? material[2] : [material[2]]).filter(Boolean);
+    pushResolved('material', {
+      kind: 'dictionary', query: aliases[0] || material[1], queries: [...aliases, material[1]],
+      pick: 'fuzzy', reason: `材质「${aliases[0] || material[1]}」`,
+    });
   }
 
   // 5. 包装内容：FREE_TEXT 直填
@@ -278,22 +315,28 @@ export function planPrefill(product, fields) {
   const variant = parseVariantSpecs(product && product.skus);
   // variant.colors 已经是俄文（parseVariantSpecs 内部走 COLOR_MAP），
   // 不能再用它去匹配中文正则 —— 那会永远落空（实测「商品颜色」就是这么漏的）。
-  // 字典是 ZH_HANS，查询用中文；colorsZh 与 colors 一一对应。
-  let colorQuery = variant.colorsZh[0] || '';
-  if (!colorQuery) {
+  // 字典是 ZH_HANS，查询用中文；colorsQueries 给出该颜色的全部中文别名。
+  let colorQueries = Array.isArray(variant.colorsQueries[0]) ? variant.colorsQueries[0].slice() : [];
+  if (!colorQueries.length) {
     const colorText = attributeValue(attributes, [/^颜色/, /颜色分类/, /^цвет/i]) || title;
     const color = COLOR_MAP.find(([re]) => re.test(colorText));
-    if (color) colorQuery = color[2];
+    if (color) colorQueries = (Array.isArray(color[2]) ? color[2] : [color[2]]).filter(Boolean);
   }
-  if (colorQuery) {
-    pushResolved('color', { kind: 'dictionary', query: colorQuery, pick: 'fuzzy', reason: `颜色「${colorQuery}」` });
+  if (colorQueries.length) {
+    pushResolved('color', {
+      kind: 'dictionary', query: colorQueries[0], queries: colorQueries,
+      pick: 'fuzzy', reason: `颜色「${colorQueries[0]}」`,
+    });
   }
 
   if (variant.sizes.length) {
     // 多尺码时先取第一个（其余由变体表格逐行填），单尺码直接就是它
+    // 字母码（S/M/L）在 4295 字典里不存在，必须换算成俄码数字再查，
+    // 否则「S」会被当成模糊搜索，落到 44 之类完全无关的候选上。
+    const sizeQuery = russianSizeQuery(variant.sizes[0]) || variant.sizes[0];
     pushResolved('size', {
-      kind: 'dictionary', query: variant.sizes[0], pick: 'fuzzy',
-      reason: `SKU 尺码「${variant.sizes.slice(0, 4).join('/')}」查 4295 字典`,
+      kind: 'dictionary', query: sizeQuery, pick: 'fuzzy',
+      reason: `SKU 尺码「${variant.sizes.slice(0, 4).join('/')}」→ 俄码 ${sizeQuery}`,
     });
   }
 
@@ -327,22 +370,26 @@ export function planVariantPrefill(product, fields) {
     if (!key) continue;
     const parsed = parseVariantSpecs([sku]);
     if (colorField && parsed.colors.length) {
+      const aliases = Array.isArray(parsed.colorsQueries[0]) && parsed.colorsQueries[0].length
+        ? parsed.colorsQueries[0].slice() : [parsed.colorsZh[0] || parsed.colors[0]];
       out.push({
         skuKey: key,
         attributeId: Number(colorField.attributeId),
         name: String(colorField.name || ''),
-        // 字典是 ZH_HANS，查询用中文（colorsZh），可读值用俄文
-        kind: 'dictionary', query: parsed.colorsZh[0] || parsed.colors[0], pick: 'fuzzy',
-        reason: `SKU 颜色「${parsed.colorsZh[0] || parsed.colors[0]}」`,
+        // 字典是 ZH_HANS，查询用中文别名（粉红色/粉色），可读值用俄文
+        kind: 'dictionary', query: aliases[0], queries: aliases, pick: 'fuzzy',
+        reason: `SKU 颜色「${aliases[0]}」`,
       });
     }
     if (sizeField && parsed.sizes.length) {
+      // 字母码换算成俄码数字（4295 字典只有 44/46/48…，没有 S/M/L）
+      const sizeQuery = russianSizeQuery(parsed.sizes[0]) || parsed.sizes[0];
       out.push({
         skuKey: key,
         attributeId: Number(sizeField.attributeId),
         name: String(sizeField.name || ''),
-        kind: 'dictionary', query: parsed.sizes[0], pick: 'fuzzy',
-        reason: `SKU 尺码「${parsed.sizes[0]}」`,
+        kind: 'dictionary', query: sizeQuery, pick: 'fuzzy',
+        reason: `SKU 尺码「${parsed.sizes[0]}」→ 俄码 ${sizeQuery}`,
       });
     }
   }
@@ -463,7 +510,14 @@ export async function runPrefill({ product, fields, schemaRevision, queryDiction
         limit,
       });
       const values = response?.dictionary?.values || response?.values || [];
-      const chosen = pickDictionaryValue(values, item.pick, item.query, { id: item.fallbackValueId, typeId: item.byTypeId });
+      // 2026-11：一个色/一个尺码可能有多个官方叫法（粉色 → 粉红色），
+      // 逐个别名匹配，命中即止；都歧义就返回 null（填错比不填危险）。
+      const queries = Array.isArray(item.queries) && item.queries.length ? item.queries : [item.query];
+      let chosen = null;
+      for (const q of queries) {
+        chosen = pickDictionaryValue(values, item.pick, q, { id: item.fallbackValueId, typeId: item.byTypeId });
+        if (chosen) break;
+      }
       if (!chosen) {
         // 兜底：某些字典值（例如「Нет бренда」）不在前 N 条，且 `value` 搜索
         // 参数对它们无效。这类值如果已经实测确认过 id，就直接用。

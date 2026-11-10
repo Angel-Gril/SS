@@ -89,7 +89,20 @@ function allowedOrigin(value) {
   } catch {}
   return '';
 }
-let parentOrigin = allowedOrigin(document.referrer);
+let parentOrigin = allowedOrigin(document.referrer) || allowedAncestorOrigin();
+
+// 2026-11：Chrome 现在对 https 页面 → chrome-extension:// iframe 不带 referrer
+// （跨 scheme，直接剥掉而不是只留 origin）。实测 detail.1688.com 里的工作台
+// document.referrer === ''，于是 parentOrigin 为空，所有 command 立刻被
+// 「请从来源商品页打开工作台」挡回去 —— 采集/类目/属性全都不发。
+// location.ancestorOrigins 对跨源 iframe 仍然可读，作为兜底来源。
+function allowedAncestorOrigin() {
+  try {
+    const ancestors = location.ancestorOrigins;
+    if (ancestors && ancestors.length) return allowedOrigin(String(ancestors[0]));
+  } catch (_e) { /* 非 Chrome 或权限受限 */ }
+  return '';
+}
 
 // 2026-11 诊断：把每次 command 的发出/回执写进 DOM，主 world 可读。
 // 用于定位 iframe → bridge 的 postMessage 是否真正送达。
@@ -684,10 +697,40 @@ const attributes = createOfficialAttributeEditor({
 });
 let attributeSuggestionReviewed='';
 const attributeSuggestionContext=()=>JSON.stringify([editorIdentity(editor),editorSkuKeys(),editor?.category]);
-const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,getCategory:()=>(editor&&editor.category)||null,directSend:(msg)=>directSend(msg),getProduct:()=>({title:projection.source.title||'',offerId:projection.source.sourceProductId||'',sourceProductId:projection.source.sourceProductId||'',typeId:(editor&&editor.category&&editor.category.typeId)||0,skus:projection.skus.map(s=>({key:s.key,label:s.label}))}),
+const attributeSuggestions=createAttributeSuggestions({root:element('ui-scale-root'),command,getBinding:currentEditorBinding,getEditor:currentEditorForPublish,getCategory:()=>(editor&&editor.category)||null,
+// 2026-11：这里必须收 (type, payload) 两个参数再打包成消息。
+// 之前写成 (msg)=>directSend(msg)，而 attribute-suggestions.js 按
+// direct('ss-erp:direct-ozon-attributes', {...}) 调用 —— 第二个参数被丢掉，
+// 发给 SW 的是一个**裸字符串**，消息策略判定「未知类型」直接拒收，
+// 浏览器随即关闭端口，界面看到的却是
+// 「The message port closed before a response was received」。
+// 这就是「属性预填」卡了一整晚的真正原因，跟 SW 冷启动/时序无关。
+directSend:(type, fields)=>directSend({type:String(type||''),payload:fields&&typeof fields==='object'?fields:{}}),getProduct:()=>{
+  // 2026-11：SKU key 必须用**编辑器/服务端**那一套（`sku:<id>|规格=<spec>|<spec>`），
+  // 不能用 projection 的来源 key —— 手写属性的 skuKey 校验只认 selectedSkuKeys，
+  // 提交来源 key 会得到「… is not selected」。label 仍然给规格原文，规则靠它解析颜色/尺码。
+  const editorKeys = (editor && Array.isArray(editor.selectedSkuKeys)) ? editor.selectedSkuKeys : [];
+  const skus = editorKeys.length
+    ? editorKeys.map((key) => {
+        const parts = String(key).split('|');
+        const spec = parts.length > 1 ? parts[parts.length - 1].trim() : String(key);
+        const hit = projection.skus.find((sku) => String(sku.label || '').trim() === spec);
+        return { key, label: hit ? hit.label : spec };
+      })
+    : projection.skus.map((sku) => ({ key: sku.key, label: sku.label }));
+  return {title:projection.source.title||'',offerId:projection.source.sourceProductId||'',sourceProductId:projection.source.sourceProductId||'',typeId:(editor&&editor.category&&editor.category.typeId)||0,skus};
+},
  hasUnsavedAttributes:()=>[...unsavedListingFields].some(key=>key.startsWith('official-')),
- getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),getSkuLabel:key=>projection.skus.find(sku=>sku.key===key)?.label||key,
- onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},
+ getBusy:()=>projection.busy||saveBusy||Boolean(lastSave),
+// 服务端 skuKey 形如 sku:<id>|规格=<spec>|<spec>，标签取最后一段规格原文
+getSkuLabel:key=>{const hit=projection.skus.find(sku=>sku.key===key);if(hit)return hit.label;const parts=String(key||'').split('|');return parts.length>1?parts[parts.length-1]:String(key||'');},
+ onApply:value=>saveEditor('ATTRIBUTE_SUGGESTIONS',value),
+// 规则候选写入：走「手动属性」通道。保存前必须先刷新一次 ——
+// ERP 生成 suggestions 时会把候选冻结进草稿，draftRevision/draftVersion 随之推进，
+// 本地 editor 与 listing 都过期了；直接 saveEditor 会被守卫拦成
+// 「草稿版本已变化，请重新读取后保存」。
+onApplyRules:async value=>{await command('REFRESH').catch(()=>{});await loadEditor();return saveEditor('ATTRIBUTES',value);},
+onSaved:()=>{attributeSuggestionReviewed=attributeSuggestionContext();resumeAfterConfirmedStep('ATTRIBUTE_SUGGESTIONS');},
  onManual:()=>{attributeSuggestionReviewed=attributeSuggestionContext();element('product-editor').scrollIntoView({block:'start'});status('请手工补充官方必填属性；保存后点继续处理，上架前仍会校验完整性。');},report});
 const suggestionsOpen=make('button','ghost','自动匹配属性');suggestionsOpen.id='precision-attribute-suggestions-open';attributes.bar.append(suggestionsOpen);
 suggestionsOpen.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target) &&!suggestionsOpen.disabled)void attributeSuggestions.open().catch(report);});
@@ -1953,7 +1996,20 @@ trusted('precision-assign', () => runMediaMutation(async () => {
 let directImageBusy = false;
 let directImageResults = [];
 
-async function directSend(message, attempt) {
+// 2026-11：直连消息一律串行。
+// 工作台里同时会有两条直连在飞（属性编辑器 load 读 schema + 弹窗读字典），
+// 同一 frame 并发 ask 同一个 SW 时，Chrome 会把其中一条的端口关掉，报
+// 「The message port closed before a response was received」—— 看起来像 SW
+// 没起来，其实是两条消息互相踩。排队发，一条一条来。
+let directQueue = Promise.resolve();
+function directSend(message, attempt) {
+  const run = () => directSendOnce(message, attempt);
+  const queued = directQueue.then(run, run);
+  directQueue = queued.then(() => {}, () => {});
+  return queued;
+}
+
+async function directSendOnce(message, attempt) {
   const tries = Number(attempt) || 0;
   return new Promise((resolve, reject) => {
     const payload = { contractVersion: Contract.CONTRACT_VERSION, ...message };
@@ -1973,10 +2029,15 @@ async function directSend(message, attempt) {
           const text = String(lastError.message || lastError);
           // 2026-11：「The message port closed before a response was received」
           // 是 MV3 service worker 被这次消息唤醒时发生的断开 —— 不是业务失败。
-          // 实测同一类消息在 SW 已经醒着时 100% 成功（ozon-attributes 23ms），
-          // 只有在 SW 休眠期间首发会撞上。重试一次即可，SW 此时已经起来了。
-          if (tries < 1 && /port closed|message port closed|Could not establish/i.test(text)) {
-            directSend(message, tries + 1).then(resolve, reject);
+          // 旧实现只重试 1 次，实测仍然会撞上：SW 正在启动时连发的两条都会丢。
+          // 现在改成有上限的指数退避（总共 5 次，250/500/1000/2000ms）——
+          // 这个 SW 有 389KB、一堆 importScripts，冷启动要 1~3 秒，
+          // 150ms 的窗口根本不够。规则侧另有 schema 会话缓存兜底。
+          if (tries < 4 && /port closed|message port closed|Could not establish|Receiving end does not exist/i.test(text)) {
+            const delay = 250 * Math.pow(2, tries);
+            // 重试直接在当前队列槽里做（不要再走 directSend 排队），
+            // 否则当前这一槽要等自己的重试出结果，两条互相等 = 死锁。
+            setTimeout(() => { directSendOnce(message, tries + 1).then(resolve, reject); }, delay);
             return;
           }
           reject(new Error(text.slice(0, 200)));

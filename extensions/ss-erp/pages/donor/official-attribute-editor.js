@@ -340,7 +340,12 @@ export function createOfficialAttributeEditor({ root, send, getEditor, getBindin
           const field = fieldById(Number(item.attributeId));
           if (!field) { skipped++; details.push({ id: item.attributeId, why: '该类目无此字段' }); continue; }
           if (!editable(field)) { skipped++; details.push({ id: item.attributeId, why: '字段只读' }); continue; }
-          change(field, item.skuKey == null ? null : item.skuKey, item.value,
+          // 2026-11：多选字段（如「原产国」）必须传数组。规则/预填给的是标量，
+          // 直接提交会被服务端判成 dictionary selections do not match its values。
+          // 直连 schema 的枚举是 MULTIPLE，ERP workspace 的是 MULTI，两个都认。
+          const multiple = field.cardinality === 'MULTI' || field.cardinality === 'MULTIPLE';
+          const value = multiple && !Array.isArray(item.value) ? [item.value] : item.value;
+          change(field, item.skuKey == null ? null : item.skuKey, value,
             Array.isArray(item.dictionaryValueIds) ? item.dictionaryValueIds : [], false);
           applied++;
           details.push({ id: item.attributeId, name: field.name, value: item.value, source: item.source || '' });

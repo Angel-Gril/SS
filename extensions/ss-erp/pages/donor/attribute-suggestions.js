@@ -30,32 +30,116 @@ import { planPrefill, planVariantPrefill, pickDictionaryValue } from '../../shar
  * 规则负责「必填但 ERP 推不出的」。合并方式是把两者放进同一个弹窗，
  * 而不是删掉任一边。
  */
-async function buildRuleSuggestions(ctx) {
-  const { categoryId, typeId, direct, product } = ctx || {};
-  const diag = { at: Date.now(), categoryId: categoryId == null ? null : String(categoryId),
-    typeId: typeId == null ? null : String(typeId), hasDirect: typeof direct === 'function',
-    productKeys: product ? Object.keys(product) : null, skuCount: product && product.skus ? product.skus.length : null };
-  try { globalThis.__SSERP_RULE_DIAG = diag; } catch (_e) {}
-  const cid = Number(categoryId), tid = Number(typeId);
-  if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) {
-    diag.reason = 'bad ids'; return [];
-  }
+// 2026-11（方案 B）：规则建议先算、再缓存 —— 不要等到 ERP 往返之后才去问 SW。
+//
+// 症状：点「自动匹配属性」后弹窗只有 ERP 给的 3 组，规则算出的必填项一组都没进来，
+// 诊断是 `schema failed: The message port closed before a response was received.`。
+// 同一条消息在同一个 iframe 里手动发，23ms 成功 —— 不是权限、不是 wiring、不是
+// schema 问题，是时序：弹窗在 ERP 的 ATTRIBUTE_SUGGESTIONS 往返之后立刻发直连读，
+// 而 SW 刚被那次请求唤醒，Chrome 在应答第二条消息前丢了端口（加重试也无效）。
+//
+// 规则计划的输入（category + SKU 规格 + 标题）在弹窗打开前就全部已知，所以：
+//   1) 弹窗先算规则建议（直连），算完再发 ERP 请求 —— 直连落在 SW 醒着的时候；
+//   2) 结果按「类目:类型 + 商品指纹」写进 chrome.storage.session，TTL 与 schema
+//      缓存一致（6 小时）；同类的第二个商品、反复点开弹窗都不再重算。
+const RULE_CACHE_PREFIX = 'ss-erp:rule-suggestions:v1:';
+const RULE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-  let fields = [];
+/** 规则计划只依赖这些输入；指纹一变（换商品 / 改 SKU），缓存立即作废。 */
+function ruleInputFingerprint(product) {
+  const p = product || {};
+  const skus = Array.isArray(p.skus) ? p.skus : [];
+  const seed = [
+    String(p.title || ''),
+    String(p.offerId || p.sourceProductId || ''),
+    String(p.typeId || ''),
+    ...skus.map((sku) => String((sku && sku.key) || '') + '=' + String((sku && sku.label) || '')),
+  ].join('\u0001');
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < seed.length; i++) {
+    const code = seed.charCodeAt(i);
+    h1 = ((h1 ^ code) * 0x01000193) >>> 0;
+    h2 = ((h2 ^ (code + i)) * 0x85ebca6b) >>> 0;
+  }
+  const part = (n) => ('00000000' + (n >>> 0).toString(16)).slice(-8);
+  return part(h1) + part(h2);
+}
+
+function ruleCacheStore() {
+  try {
+    const session = globalThis.chrome && globalThis.chrome.storage && globalThis.chrome.storage.session;
+    return session && typeof session.get === 'function' && typeof session.set === 'function' ? session : null;
+  } catch { return null; }
+}
+
+// 同一类目的 schema 只读一次；resolveUnresolved 复用它，不再在竞态窗口里多发消息。
+const schemaMemo = new Map();
+
+async function readCachedRuleSuggestions(cid, tid, fingerprint) {
+  const store = ruleCacheStore();
+  if (!store) return null;
+  const key = RULE_CACHE_PREFIX + cid + ':' + tid;
+  try {
+    const got = await store.get(key);
+    const hit = got && got[key];
+    if (!hit || !Array.isArray(hit.suggestions) || !hit.suggestions.length) return null;
+    if (Date.now() - Number(hit.at || 0) >= RULE_CACHE_TTL_MS) return null;
+    if (String(hit.fingerprint || '') !== fingerprint) return null;
+    return hit.suggestions;
+  } catch { return null; }
+}
+
+async function writeCachedRuleSuggestions(cid, tid, fingerprint, suggestions) {
+  const store = ruleCacheStore();
+  if (!store) return;
+  const key = RULE_CACHE_PREFIX + cid + ':' + tid;
+  try {
+    await store.set({ [key]: { at: Date.now(), fingerprint, suggestions } });
+  } catch { /* 配额/权限问题忽略：缓存只是加速，不是正确性依赖 */ }
+}
+
+// schema 已经在 SW 侧按「类目:类型」缓存 6 小时（shared/ozon/direct-ozon-client.js）。
+// 那个缓存本身就在 chrome.storage.session，扩展页可以直接读 —— 于是这条路完全不
+// 经过 service worker，也就不会被「SW 冷启动、端口先被丢」打到。只有缓存缺失时
+// 才回落直连（那时 SW 需要被叫醒，见 precision-workbench.js 的 directSend 退避）。
+const SCHEMA_CACHE_PREFIX = 'ss-erp:direct:schema:';
+const SCHEMA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function readSchemaFields(cid, tid, direct) {
+  const store = ruleCacheStore();
+  if (store) {
+    try {
+      const key = SCHEMA_CACHE_PREFIX + cid + ':' + tid;
+      const got = await store.get(key);
+      const hit = got && got[key];
+      if (hit && Array.isArray(hit.fields) && hit.fields.length
+        && Date.now() - Number(hit.at || 0) < SCHEMA_CACHE_TTL_MS) return hit.fields;
+    } catch { /* 读不到就走直连 */ }
+  }
   try {
     const schema = await direct('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
-    fields = (schema && schema.fields) || [];
-  } catch (e) { diag.reason = 'schema failed: ' + String(e && e.message || e).slice(0, 120); return []; }
-  diag.fieldCount = fields.length;
-  if (!fields.length) { diag.reason = 'no fields'; return []; }
+    return (schema && schema.fields) || [];
+  } catch (error) {
+    // 失败要说出来，不要像上一轮那样吞掉：这正是「规则一组都没进来」查了一夜的原因。
+    throw Error('官方属性读取失败：' + String((error && error.message) || error).slice(0, 120));
+  }
+}
+
+/** 真正干活的版本：读 schema、生成计划、解析字典，返回 ERP 同形状的候选。 */
+async function computeRuleSuggestions({ cid, tid, direct, product }) {
+  if (typeof direct !== 'function') throw Error('直连通道不可用');
+
+  const fields = await readSchemaFields(cid, tid, direct);
+  if (!fields.length) throw Error('官方属性为空');
+  schemaMemo.set(cid + ':' + tid, fields);
 
   const plan = planPrefill(product || {}, fields).concat(planVariantPrefill(product || {}, fields));
-  diag.planCount = plan.length;
-  diag.planIds = plan.map(p => p.attributeId + ':' + (p.kind || '') + ':' + String(p.query || p.value || '').slice(0, 12));
-  if (!plan.length) { diag.reason = 'plan empty'; return []; }
+  if (!plan.length) throw Error(`规则没有命中可填字段（${fields.length} 个官方字段）`);
 
   // fieldId → 已解析的 { attributeName, rows }
   const byAttribute = new Map();
+  // 同一次计算内复用字典结果（变体计划按 SKU 展开，同一属性会被查很多次）
+  const dictionaryMemo = new Map();
   for (const item of plan) {
     const field = fields.find((f) => Number(f.attributeId) === Number(item.attributeId));
     if (!field) continue;
@@ -79,26 +163,79 @@ async function buildRuleSuggestions(ctx) {
       continue;
     }
 
-    // 字典字段：直连查，用 pickDictionaryValue 的严格策略（歧义返回 null）
-    let values = [];
-    try {
-      const found = await direct('ss-erp:direct-ozon-attribute-values', {
-        categoryId: cid, typeId: tid, attributeId: item.attributeId,
-        query: item.query || '', limit: 50,
-      });
-      values = (found && found.values) || [];
-    } catch (_e) { values = []; }
-
-    const chosen = pickDictionaryValue(values, item.pick, item.query, {
+    // 字典字段：直连查，用 pickDictionaryValue 的严格策略（歧义返回 null）。
+    // 2026-11 实测（连衣裙）：ZH_HANS 字典返回中文值（中国 / 女士 / 粉红色 / 44），
+    // 而 Ozon 的 `value` 参数只是模糊搜索、排序完全不可控（查「粉色」第一条是
+    // 白色，抄近路就会填错）。所以先整表取（≤1000）在本地精确匹配，再逐候选词兜底。
+    const queries = (Array.isArray(item.queries) && item.queries.length ? item.queries : [item.query || ''])
+      .map((q) => String(q == null ? '' : q).trim())
+      .filter(Boolean);
+    // 「类型」这类字段没有查询词，靠 pick='single' / typeId 反查 ——
+    // 空查询词必须保留一个位置，否则整段匹配循环一次都不跑。
+    if (!queries.length) queries.push('');
+    const fetchValues = async (query, limit) => {
+      // 100 个 SKU 会生成 200 条变体计划，而每个 SKU 的颜色/尺码用的是同一份
+      // 字典 —— 不去重就是 200 次整表请求，直接撞 Ozon 的 80 次/分钟限流，
+      // 弹窗会一直转圈。按「属性 + 查询词 + 上限」记一份就够。
+      const memoKey = item.attributeId + '|' + query + '|' + limit;
+      if (dictionaryMemo.has(memoKey)) return dictionaryMemo.get(memoKey);
+      let result = { values: [], error: '' };
+      try {
+        const found = await direct('ss-erp:direct-ozon-attribute-values', {
+          categoryId: cid, typeId: tid, attributeId: item.attributeId, query, limit,
+        });
+        result = { values: (found && found.values) || [], error: '' };
+      } catch (error) {
+        // 直连失败要留证据：是端口丢了、还是参数被拒，界面必须能区分
+        result = { values: [], error: String((error && error.message) || error).slice(0, 140) };
+      }
+      dictionaryMemo.set(memoKey, result);
+      return result;
+    };
+    const pickExtra = {
       id: item.fallbackValueId,
       typeId: item.attributeId === 8229 ? tid : undefined,
-    });
+    };
+    let values = [];
+    let chosen = null;
+    let dictionaryError = '';
+    if (item.fullScan !== false) {
+      const scan = await fetchValues('', 1000);
+      values = scan.values;
+      dictionaryError = scan.error;
+      for (const q of queries) {
+        chosen = pickDictionaryValue(values, item.pick, q, pickExtra);
+        if (chosen) break;
+      }
+    }
+    if (!chosen) {
+      for (const q of queries) {
+        const hit = await fetchValues(q, 100);
+        values = hit.values;
+        if (hit.error) dictionaryError = hit.error;
+        chosen = pickDictionaryValue(values, item.pick, q, pickExtra);
+        if (chosen) break;
+      }
+    }
+    // 兜底 id 是「实测确认过」的官方值（例如品牌「Нет бренда」= 126745801，
+    // Ozon 的 value 参数对它无效，字典前 100 条里也没有）。有兜底 id 就是有答案，
+    // 不能因为搜索没命中就把它标成 unresolved —— 否则这一行会被应用环节跳过，
+    // 必填品牌又会空着上架。
+    const fallbackId = Number(item.fallbackValueId);
+    const hasFallback = Number.isSafeInteger(fallbackId) && fallbackId > 0;
+    const pinned = chosen ? null : (hasFallback ? values.find((v) => Number(v.id) === fallbackId) : null);
     entry.rows.push({
       skuKey: item.skuKey || null,
-      value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
+      value: chosen
+        ? String(chosen.value || '')
+        : String(item.fallbackValue || (pinned && pinned.value) || item.query || ''),
       evidence: [{ path: '规则', value: item.reason || '本地规则' }],
-      unresolvedValues: chosen ? [] : [String(item.query || '')],
-      dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
+      unresolvedValues: chosen || hasFallback ? [] : [String(item.query || '')],
+      dictionaryValueIds: chosen ? [chosen.id] : (hasFallback ? [fallbackId] : []),
+      // 候选数写在界面上：「未匹配」是字典里真没有，还是请求根本没回来，
+      // 一眼能分清 —— 上一轮就是在这上面耗了一夜。
+      dictionaryCandidates: values.length,
+      dictionaryError,
     });
   }
 
@@ -115,6 +252,95 @@ async function buildRuleSuggestions(ctx) {
 }
 
 /**
+ * 有缓存读缓存，没缓存才算 —— 这条路径永远在 ERP 请求之前跑（见 open()）。
+ */
+async function buildRuleSuggestions(ctx) {
+  const { categoryId, typeId, direct, product } = ctx || {};
+  const cid = Number(categoryId), tid = Number(typeId);
+  if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) {
+    throw Error('没有官方类目/类型 ID，无法套用规则');
+  }
+  const fingerprint = ruleInputFingerprint(product);
+  const cached = await readCachedRuleSuggestions(cid, tid, fingerprint);
+  if (cached) return cached;
+  const suggestions = await computeRuleSuggestions({ cid, tid, direct, product });
+  // 只有「每一行都落到官方值」才写缓存：留着半成品缓存会让下一次打开看起来
+  // 很快，但实际上少了几个必填值 —— 快不是目的，填进去才是。
+  const complete = suggestions.length && suggestions.every((candidate) =>
+    (candidate.rows || []).every((row) => !Array.isArray(row.unresolvedValues) || !row.unresolvedValues.length));
+  if (complete) await writeCachedRuleSuggestions(cid, tid, fingerprint, suggestions);
+  return suggestions;
+}
+
+/**
+ * 把一条规则候选转成 ERP「手动属性变更」的形状。
+ *
+ * 为什么不能走 ATTRIBUTE_SUGGESTIONS 的 candidates：那套引用是服务端签发的冻结
+ * 快照（candidateId + 64 位 candidateHash + schemaRevision 三重校验），本地规则
+ * 算出来的候选根本不在服务端的 suggestions 表里，提交必然被 400 拒。
+ * 而「手动编辑属性」通道只要求 {attributeId, skuKey?, action, value,
+ * dictionaryValueIds, evidence}，服务端会用官方字典核验我们带过去的 id ——
+ * 这些 id 恰好就是 Ozon 直连字典返回的权威值。
+ */
+function ruleChangesFor(candidate, workspaceFields) {
+  const changes = [];
+  const attributeId = Number(candidate && candidate.attributeId);
+  if (!Number.isSafeInteger(attributeId) || attributeId <= 0) return changes;
+  // 可写性以**服务端 workspace 的 ownership / editorMode** 为准：
+  // 直连 Ozon 的 schema 没有这个信息（那边一律给 SKU）。实测「合并至一张卡片」
+  // (8292) 在服务端是 SYSTEM，提交它会被 422 挡回
+  // 「... is managed by the system」，而 ERP 自己会关联该字段。
+  const field = workspaceFields && workspaceFields.get(attributeId);
+  if (field && (field.ownership === 'SYSTEM' || field.ownership === 'MEDIA'
+    || field.editorMode === 'READ_ONLY' || field.editorMode === 'MEDIA_WORKBENCH')) return changes;
+  const skuOwned = !field || field.ownership === 'SKU';
+  for (const row of (candidate && candidate.rows) || []) {
+    if (!row) continue;
+    // 没解析出官方选项的行不提交 —— 填错比不填危险（见 pickDictionaryValue）
+    if (Array.isArray(row.unresolvedValues) && row.unresolvedValues.length) continue;
+    // SKU 专属字段（颜色/尺码）只接受带 skuKey 的行；类目级那条「默认值」
+    // 由每个 SKU 各自的行覆盖，单独提交会被判「requires a selected SKU key」。
+    if (skuOwned && !row.skuKey) continue;
+    const value = row.value;
+    if (value === undefined || value === null || value === '') continue;
+    const ids = Array.isArray(row.dictionaryValueIds)
+      ? row.dictionaryValueIds.filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 100)
+      : [];
+    // 服务端的 cardinality 用 SINGLE / MULTI（直连 schema 写 MULTIPLE）：
+    // 多选字段必须是数组，传标量会被判「dictionary selections do not match its values」。
+    const multiple = field && (field.cardinality === 'MULTI' || field.cardinality === 'MULTIPLE');
+    const shaped = multiple && !Array.isArray(value) ? [value] : value;
+    const evidence = [];
+    for (const item of Array.isArray(row.evidence) ? row.evidence : []) {
+      const text = String((item && item.value) || '').trim();
+      if (text) evidence.push(('规则预填：' + text).slice(0, 500));
+    }
+    if (!evidence.length) evidence.push('规则预填：本地规则');
+    if (!skuOwned) {
+      // 产品级字段只提交一条（SKU 行只是同一值的展开）
+      if (changes.length) break;
+      changes.push({
+        attributeId,
+        action: 'SET',
+        value: shaped,
+        ...(ids.length ? { dictionaryValueIds: ids } : {}),
+        evidence: evidence.slice(0, 20),
+      });
+      continue;
+    }
+    changes.push({
+      attributeId,
+      ...(row.skuKey ? { skuKey: String(row.skuKey) } : {}),
+      action: 'SET',
+      value: shaped,
+      ...(ids.length ? { dictionaryValueIds: ids } : {}),
+      evidence: evidence.slice(0, 20),
+    });
+  }
+  return changes;
+}
+
+/**
  * 用直连把 ERP 报的 unresolvedValues 解析成官方 dictionary_value_id。
  *
  * ERP 的 attribute-suggestions 只做文本匹配，遇到 STRICT_DICTIONARY 字段就
@@ -128,18 +354,6 @@ async function buildRuleSuggestions(ctx) {
 async function resolveUnresolved(suggestions, ctx) {
   if (!suggestions || !Array.isArray(suggestions.suggestions)) return;
   const { categoryId, typeId, send, direct } = ctx || {};
-  // 诊断：把入参留在全局，便于确认是哪一步没拿到 id
-  try {
-    globalThis.__SSERP_RESOLVE_DIAG = {
-      hasSuggestions: Boolean(suggestions),
-      count: suggestions && Array.isArray(suggestions.suggestions) ? suggestions.suggestions.length : null,
-      categoryId: categoryId == null ? null : String(categoryId),
-      typeId: typeId == null ? null : String(typeId),
-      hasSend: typeof send === 'function',
-      names: suggestions && Array.isArray(suggestions.suggestions) ? suggestions.suggestions.map(c => c.attributeName) : null,
-      at: Date.now(),
-    };
-  } catch (_e) {}
   const cid = Number(categoryId), tid = Number(typeId);
   if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid) || cid <= 0 || tid <= 0) return;
 
@@ -150,8 +364,15 @@ async function resolveUnresolved(suggestions, ctx) {
     // 注入的 send 是 workbench 的 command → postMessage → bridge，
     // 而 bridge 的 waitForAuthority 会挂起所有非 mutation 命令，
     // 所以直连消息用 command 发出去也是永远不回的。
-    const schema = await direct('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
-    const fields = (schema && schema.fields) || [];
+    // schema 复用规则侧刚读过的那份（同一类目），避免再往 SW 发一条消息 ——
+    // 这里已经在 ERP 往返之后的竞态窗口里，消息越少越好。
+    const memoKey = cid + ':' + tid;
+    let fields = schemaMemo.get(memoKey) || [];
+    if (!fields.length) {
+      const schema = await direct('ss-erp:direct-ozon-attributes', { categoryId: cid, typeId: tid });
+      fields = (schema && schema.fields) || [];
+      if (fields.length) schemaMemo.set(memoKey, fields);
+    }
     for (const f of fields) nameToId.set(String(f.name || '').trim(), Number(f.attributeId));
   } catch (_e) { return; }
 
@@ -221,6 +442,10 @@ export function createAttributeSuggestions({
   hasUnsavedAttributes = () => false,
   getSkuLabel,
   onApply,
+  // 规则候选的写入通道：ERP 的 ATTRIBUTE_SUGGESTIONS 只认服务端签发的冻结引用
+  // （candidateHash），本地规则算不出这个哈希，所以规则值改走「手动编辑属性」——
+  // 由调用方以 ATTRIBUTES 动作提交 {schemaRevision, changes}。
+  onApplyRules,
   onSaved,
   onManual,
   report,
@@ -325,15 +550,52 @@ export function createAttributeSuggestions({
         if (attempt !== epoch || context() !== basis) throw Error('草稿已变化，请重新读取候选');
         if (hasUnsavedAttributes()) throw Error(unsavedMessage);
         if (getBusy()) throw Error('请等待当前操作完成后再应用属性');
-        const candidates = selected().map(
-          ({ attributeId, candidateId, candidateHash, schemaRevision }) => ({
-            attributeId,
-            candidateId,
-            candidateHash,
-            schemaRevision,
-          }),
+        const chosen = selected();
+        const ruleCandidates = chosen.filter((candidate) => candidate
+          && (candidate.source === 'rule' || String(candidate.candidateId || '').startsWith('rule:')));
+        const erpCandidates = chosen.filter((candidate) => !ruleCandidates.includes(candidate));
+        const changes = [];
+        const workspaceFields = new Map(
+          ((data.workspace && data.workspace.fields) || []).map((field) => [Number(field.attributeId), field]),
         );
-        await onApply({ schemaRevision: data.workspace.schemaRevision, candidates });
+        const skippedRuleNames = [];
+        for (const candidate of ruleCandidates) {
+          const rows = ruleChangesFor(candidate, workspaceFields);
+          if (!rows.length) {
+            // 系统托管/只读字段：ERP 自己会关联，跳过而不是整单失败
+            skippedRuleNames.push(candidate.attributeName);
+            continue;
+          }
+          changes.push(...rows);
+        }
+        if (!changes.length && !erpCandidates.length) {
+          throw Error(skippedRuleNames.length
+            ? `选中的规则属性由系统托管，无需手工写入：${skippedRuleNames.join(' / ')}`
+            : '请选择要应用的属性');
+        }
+        const schemaRevision = data.workspace && data.workspace.schemaRevision;
+        // 规则候选先写：走手动属性通道（服务端用官方字典核验我们带的 id）。
+        // ERP 的冻结引用应用会回读整份编辑器并覆盖本地状态，放在最后顺序更稳。
+        if (changes.length) {
+          if (typeof onApplyRules !== 'function') throw Error('当前工作台不支持写入规则属性，请刷新后重试');
+          if (!/^[a-f0-9]{64}$/u.test(String(schemaRevision || ''))) {
+            throw Error('官方属性版本缺失，请重新读取候选');
+          }
+          await onApplyRules({ schemaRevision, changes });
+        }
+        if (erpCandidates.length) {
+          await onApply({
+            schemaRevision,
+            candidates: erpCandidates.map(
+              ({ attributeId, candidateId, candidateHash, schemaRevision: candidateRevision }) => ({
+                attributeId,
+                candidateId,
+                candidateHash,
+                schemaRevision: candidateRevision,
+              }),
+            ),
+          });
+        }
         if (attempt !== epoch || identity(context()) !== identity(basis)) return;
         modal.hidden = true;
         onSaved?.();
@@ -365,6 +627,34 @@ export function createAttributeSuggestions({
       state.textContent = '正在匹配采集资料与官方属性…';
       sync();
       try {
+        // 2026-11（方案 B）：类目 id 不能从 currentEditorForPublish() 取 —— 它要求
+        // binding 完全相等，草稿刚建/刚刷新时返回 null。getCategory 直接读编辑器
+        // 原始 category，不做 binding 校验。
+        const category = (typeof getCategory === 'function' ? getCategory() : null)
+          || (typeof getEditor === 'function' ? ((getEditor() || {}).category) : null)
+          || null;
+        const direct = typeof directSend === 'function' ? directSend : command;
+
+        // ★ 顺序是修复的核心：规则建议先算完，再发 ERP 请求。
+        // 反过来（ERP 往返之后再直连读）会撞上 SW 刚被唤醒、端口在第二条消息应答前
+        // 被 Chrome 丢掉的窗口，而且加重试也救不回来。规则输入在弹窗打开前就全部
+        // 已知，没有理由排到 ERP 后面；结果另有 6 小时会话缓存（见 buildRuleSuggestions）。
+        // 规则侧彻底失败也不阻塞 ERP 结果。
+        let ruleSuggestions = [];
+        let ruleError = '';
+        try {
+          ruleSuggestions = await buildRuleSuggestions({
+            categoryId: category && category.categoryId,
+            typeId: category && category.typeId,
+            direct,
+            product: typeof getProduct === 'function' ? getProduct() : null,
+          });
+        } catch (error) {
+          ruleSuggestions = [];
+          ruleError = String((error && error.message) || error).slice(0, 160);
+        }
+        if (attempt !== epoch || modal.hidden) return;
+
         const binding = getBinding(),
           reply = await command('EDITOR_ATTRIBUTE_SUGGESTIONS', {
             binding,
@@ -374,26 +664,35 @@ export function createAttributeSuggestions({
         if (basis !== context()) { invalidate(); return; }
         data = reply.data?.suggestions;
         if (!data || data.state !== 'ready') throw Error('属性匹配响应不完整');
+        // 兜底：规则侧在 ERP 之前跑，如果那次撞上 SW 冷启动失败（schema 还没进
+        // 会话缓存），现在 ERP 往返已经把这个 SW 叫醒了 —— 再试一次几乎必然成功。
+        // 顺序仍然是「先直连、后 ERP」，这里只是不把一次冷启动当成终局。
+        if (!ruleSuggestions.length && ruleError) {
+          try {
+            ruleSuggestions = await buildRuleSuggestions({
+              categoryId: category && category.categoryId,
+              typeId: category && category.typeId,
+              direct,
+              product: typeof getProduct === 'function' ? getProduct() : null,
+            });
+            ruleError = '';
+          } catch (error) {
+            ruleError = String((error && error.message) || error).slice(0, 160);
+          }
+        }
         // 2026-11：ERP 只做「从商品文本推候选属性」，遇到严格字典字段时它自己
         // 不解析，直接回 unresolvedValues，界面上就成了
         // "Strict dictionary values must be resolved by the server before they
         //  can be suggested" —— 用户点了也填不进任何东西。
         // 字典解析我们自己能用直连做（Ozon 的 attribute/values 接口），
         // 所以拿到 ERP 的候选后，在渲染前把未解析的值补成 dictionary_value_id。
-        // 2026-11：类目 id 不能从 currentEditorForPublish() 取 —— 它要求
-        // binding 完全相等，草稿刚建/刚刷新时返回 null，于是这里拿不到 id、
-        // resolveUnresolved 直接早退（实测 0 条直连消息）。getCategory 直接读
-        // 编辑器原始 category，不做 binding 校验。
-        const __category = (typeof getCategory === 'function' ? getCategory() : null)
-          || (typeof getEditor === 'function' ? ((getEditor() || {}).category) : null)
-          || null;
         await resolveUnresolved(data, {
-          categoryId: __category && __category.categoryId,
-          typeId: __category && __category.typeId,
+          categoryId: category && category.categoryId,
+          typeId: category && category.typeId,
           send: command,
           // 直连消息必须用 chrome.runtime.sendMessage（workbench 注入的 directSend），
           // 用 command 会经 bridge 被 waitForAuthority 挂住。
-          direct: typeof directSend === 'function' ? directSend : command,
+          direct,
         });
         if (attempt !== epoch || modal.hidden) return;
 
@@ -401,18 +700,9 @@ export function createAttributeSuggestions({
         // ERP 的 blockedSuggestions 只是「这个字段我没东西可推」，而那些字段
         // （品牌 / 性别 / 尺码 / 颜色 / 型号）恰好都能由规则给出。
         // 规则建议排前面 —— 它们是必填项，ERP 反而给不了。
-        try {
-          const ruleSuggestions = await buildRuleSuggestions({
-            categoryId: __category && __category.categoryId,
-            typeId: __category && __category.typeId,
-            direct: typeof directSend === 'function' ? directSend : command,
-            product: typeof getProduct === 'function' ? getProduct() : null,
-          });
-          if (attempt !== epoch || modal.hidden) return;
-          if (ruleSuggestions.length) {
-            data.suggestions = ruleSuggestions.concat(data.suggestions || []);
-          }
-        } catch (_e) { /* 规则侧失败不影响 ERP 结果 */ }
+        if (ruleSuggestions.length) {
+          data.suggestions = ruleSuggestions.concat(data.suggestions || []);
+        }
         if (attempt !== epoch || modal.hidden) return;
         data.suggestions.forEach((candidate, index) => {
           const card = make('section', 'precision-attribute-suggestion');
@@ -424,6 +714,11 @@ export function createAttributeSuggestions({
           checkbox.dataset.attributeCandidate = candidate.candidateId;
           checkbox.addEventListener('change', sync);
           label.append(checkbox, make('strong', '', candidate.attributeName));
+          if (candidate.source === 'rule') {
+            const badge = make('span', '', ' 规则');
+            badge.title = '由本地规则 + Ozon 官方字典得出，应用时走手动属性通道';
+            label.append(badge);
+          }
           card.append(label);
           for (const row of candidate.rows) {
             card.append(
@@ -446,7 +741,12 @@ export function createAttributeSuggestions({
                 make(
                   'p',
                   'precision-attribute-warning',
-                  '部分值未匹配官方选项，应用后仍需补齐：' + JSON.stringify(row.unresolvedValues),
+                  '部分值未匹配官方选项，应用后仍需补齐：' + JSON.stringify(row.unresolvedValues)
+                    + (row.dictionaryError
+                      ? `（直连字典失败：${row.dictionaryError}）`
+                      : row.dictionaryCandidates === 0
+                        ? '（字典请求没有返回候选，检查直连通道）'
+                        : `（字典返回 ${row.dictionaryCandidates} 个候选，无唯一命中）`),
                 ),
               );
           }
@@ -460,8 +760,21 @@ export function createAttributeSuggestions({
               `${blocked.attributeName}：${blocked.message}`,
             ),
           );
+        if (ruleError) {
+          list.append(
+            make('p', 'precision-attribute-warning', '规则预填未完成：' + ruleError),
+          );
+        } else {
+          list.append(
+            make('p', '', ruleSuggestions.length
+              ? `规则补充 ${ruleSuggestions.length} 组：` + ruleSuggestions.map((c) => c.attributeName).join(' / ')
+              : '规则没有可补的字段。'),
+          );
+        }
         state.textContent = data.suggestions.length
-          ? `已匹配 ${data.suggestions.length} 组属性，请确认后应用。`
+          ? `已匹配 ${data.suggestions.length} 组属性`
+            + (ruleSuggestions.length ? `（其中规则 ${ruleSuggestions.length} 组）` : '')
+            + '，请确认后应用。'
           : '没有可安全匹配的属性，请在当前表格补充。';
       } catch (error) {
         if (attempt !== epoch || modal.hidden) return;
