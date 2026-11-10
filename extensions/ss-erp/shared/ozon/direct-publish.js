@@ -266,6 +266,108 @@ async function publishProduct(input, options = {}) {
   };
 }
 
+/**
+ * 批量上架：一次 import 提交多条 item（多变体必须这样发，单独发会被判成不同商品）。
+ *
+ * 与 publishProduct 的差别：
+ *   - 图片只提交一次（所有 offer 一起），只等一次 settle
+ *   - 一次 /v3/product/import 带上全部 items，拿一个 task_id
+ *   - 导入成功后按 offer_id 分别 verify，并把 model_id / 变体数带回来
+ *
+ * @returns { ok, taskId, status, items:[{offerId, productId, sku, modelId, variantCount, errors, images}], errors, timeline }
+ */
+async function publishProducts(inputs, options = {}) {
+  const timeline = [];
+  const mark = (step, extra) => timeline.push({ step, at: Date.now(), ...(extra || {}) });
+  const list = (Array.isArray(inputs) ? inputs : []).map((input) => buildItem(input));
+  if (!list.length) throw new Error('没有可上架的 item');
+  const offers = list.map((item) => item.offer_id);
+  mark('validated', { count: list.length, offers });
+
+  // 1. 图片：一次提交所有 offer
+  await importPicturesBatch(list.map((item) => ({ offerId: item.offer_id, imageUrls: item.images })));
+  mark('pictures_submitted', { count: list.length });
+  const settleMs = Number(options.pictureSettleMs) >= 0 ? Number(options.pictureSettleMs) : PICTURE_SETTLE_MS;
+  if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
+  mark('pictures_settled', { waitedMs: settleMs });
+
+  // 2. 一次导入
+  const imported = await ozon().ozonPost(PRODUCT_IMPORT_PATH, { items: list });
+  const taskId = imported && imported.result && imported.result.task_id;
+  if (!taskId) {
+    throw Object.assign(new Error(`Ozon 未返回 task_id：${JSON.stringify(imported).slice(0, 300)}`), {
+      phase: 'import', timeline,
+    });
+  }
+  mark('import_submitted', { taskId });
+
+  // 3. 轮询
+  const waited = await waitImport(taskId, {
+    max: options.maxPolls, intervalMs: options.pollIntervalMs, onTick: options.onTick,
+  });
+  mark('import_finished', { status: waited.status });
+
+  const rawItems = (waited.result && Array.isArray(waited.result.items)) ? waited.result.items : [];
+  const byOffer = new Map(rawItems.map((one) => [String(one && one.offer_id || ''), one]));
+
+  // 4. 逐条验证（补图 + model_info）
+  const items = [];
+  for (const item of list) {
+    const one = byOffer.get(item.offer_id) || {};
+    const errors = (Array.isArray(one.errors) ? one.errors : []).map((e) => ({
+      code: String((e && e.code) || '').slice(0, 80),
+      message: String((e && e.message) || '').slice(0, 300),
+      field: String((e && e.field) || '').slice(0, 80),
+    }));
+    let snapshot = { found: false };
+    try { snapshot = await verifyProduct(item.offer_id); } catch (_e) { /* 保留 found:false */ }
+    if (snapshot.found && Number(snapshot.images) === 0) {
+      try {
+        await importPicturesBatch([{ offerId: item.offer_id, imageUrls: item.images }]);
+        await new Promise((r) => setTimeout(r, 25000));
+        snapshot = await verifyProduct(item.offer_id);
+        mark('pictures_retried', { offerId: item.offer_id });
+      } catch (_e) { mark('pictures_retry_failed', { offerId: item.offer_id }); }
+    }
+    items.push({
+      offerId: item.offer_id,
+      productId: one.product_id || snapshot.productId || null,
+      sku: snapshot.sku || null,
+      modelId: snapshot.modelId || null,
+      variantCount: snapshot.variantCount || null,
+      images: snapshot.images != null ? snapshot.images : 0,
+      status: snapshot.status || null,
+      errors,
+    });
+  }
+
+  const accepted = waited.status === 'imported' || waited.status === 'partial_success';
+  const processing = waited.status === 'processing';
+  return {
+    ok: accepted,
+    processing,
+    taskId,
+    status: waited.status,
+    items,
+    errors: items.flatMap((one) => one.errors.map((e) => ({ offerId: one.offerId, ...e }))),
+    recheckHint: processing
+      ? 'Ozon 已受理导入，仍在处理。请稍后用 /v1/product/import/info 以 task_id 复查，不要重复提交。'
+      : null,
+    timeline,
+  };
+}
+
+/** 多条 item 一次性挂图 */
+async function importPicturesBatch(entries) {
+  const items = (Array.isArray(entries) ? entries : []).map((entry) => ({
+    offer_id: String(entry.offerId),
+    images: (Array.isArray(entry.imageUrls) ? entry.imageUrls : []).filter((u) => /^https:\/\//.test(String(u))).slice(0, 15),
+  })).filter((entry) => entry.images.length);
+  if (!items.length) throw new Error('没有可用的 https 图片地址');
+  const response = await ozon().ozonPost(PICTURE_IMPORT_PATH, { items });
+  return { taskId: response && response.task_id, count: items.length };
+}
+
 /** 验证商品是否真的创建了 */
 async function verifyProduct(offerId) {
   try {
@@ -277,10 +379,15 @@ async function verifyProduct(offerId) {
       found: true,
       productId: found.id || null,
       offerId: found.offer_id || offerId,
+      sku: found.sku || null,
+      // 2026-11：多变体合并的证据在这里 —— 同一 model_id 下的变体共用一个卡片
+      modelId: (found.model_info && found.model_info.model_id) || null,
+      variantCount: (found.model_info && found.model_info.count) || null,
       name: String(found.name || '').slice(0, 200),
       price: found.price || null,
       images: Array.isArray(found.images) ? found.images.length : 0,
-      status: found.status || null,
+      primaryImage: found.primary_image ? String(found.primary_image).slice(-60) : '',
+      status: (found.statuses && found.statuses.status_name) || found.status || null,
       visibility: found.visibility_details || null,
     };
   } catch (error) {
@@ -291,7 +398,9 @@ async function verifyProduct(offerId) {
 globalThis.SSERP_DIRECT_PUBLISH = Object.freeze({
   buildItem,
   importPictures,
+  importPicturesBatch,
   publishProduct,
+  publishProducts,
   waitImport,
   verifyProduct,
   PATHS: Object.freeze({

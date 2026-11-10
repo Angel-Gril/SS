@@ -6671,7 +6671,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return reply(imageClient.writeImageProvider(payload));
       case 'ss-erp:direct-publish':
         if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
+        // 2026-11：批量上架。多变体必须一次 import 提交全部 item，逐条发会被
+        // Ozon 判成不同商品（合并要等异步，而且不保证）。items 为空时退回单条。
+        if (Array.isArray(payload.items) && payload.items.length) {
+          return reply(publishClient.publishProducts(payload.items, payload.options));
+        }
         return reply(publishClient.publishProduct(payload.item, payload.options));
+      // 2026-11：直连车道的 ERP 读。走 SW 的 HTTP 客户端，不走 bridge ——
+      // bridge 的 waitForAuthority 一挂，EDITOR_ATTRIBUTES 就永远不返回。
+      case 'ss-erp:direct-erp-editor': {
+        const client = typeof getSourceListingWorkflowClient === 'function' ? getSourceListingWorkflowClient() : null;
+        if (!client) return reply(Promise.reject(new Error('ERP 客户端未加载')));
+        const binding = payload.binding;
+        if (!binding || typeof binding !== 'object') return reply(Promise.reject(new Error('缺少 binding')));
+        const kind = String(payload.kind || 'editor');
+        const call = kind === 'attributes' ? client.readDraftAttributes(binding) : client.readDraftEditor(binding);
+        return reply(Promise.resolve(call).then((result) => {
+          if (!result || result.state !== 'ready') {
+            throw new Error((result && (result.error || result.state)) || 'ERP 读取失败');
+          }
+          return kind === 'attributes' ? result.workspace : result.editor;
+        }));
+      }
       case 'ss-erp:direct-publish-verify':
         if (!publishClient) return reply(Promise.reject(new Error('上架客户端未加载')));
         return reply(publishClient.verifyProduct(payload.offerId));

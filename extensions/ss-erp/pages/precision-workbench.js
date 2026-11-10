@@ -7,6 +7,7 @@ import { createCopyEditor } from './donor/copy-editor.js';
 import { createPricingTool } from './donor/pricing-tool.js';
 import { createVisionTool } from './donor/vision-tool.js';
 import { createAttributeSuggestions } from './donor/attribute-suggestions.js';
+import { createDirectLanePanel } from './donor/direct-lane-panel.js';
 import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime.js';
 import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
@@ -737,6 +738,34 @@ suggestionsOpen.addEventListener('click',event=>{if(SS_ERP_TRUST_GATE.ok(event, 
 const fieldsSection = make('div');
 localNotice.replaceWith(fieldsSection);
 fieldsSection.append(localNotice, attributes.bar);
+// 直连上架车道（不写 ERP）：价格/库存/仓库 + 预检 + 上架 + 结果。
+// 属性与文案走本地或 SW 直读，发布走 api-seller.ozon.ru。
+const directLane = createDirectLanePanel({
+  root: fieldsSection, make,
+  send: (type, payload) => directSend({ type, payload: payload || {} }),
+  getContext: () => {
+    if (!editor || !editor.category) return null;
+    let binding = null;
+    try { binding = currentEditorBinding(); } catch (_e) { return null; }
+    const keys = Array.isArray(editor.selectedSkuKeys) ? editor.selectedSkuKeys : [];
+    const skus = keys.map((key) => {
+      const parts = String(key).split('|');
+      const spec = parts.length > 1 ? parts[parts.length - 1].trim() : String(key);
+      const hit = projection.skus.find((sku) => String(sku.label || '').trim() === spec);
+      return { key, label: hit ? hit.label : spec, cost: hit ? hit.priceCny : null };
+    });
+    const images = (projection.media || []).map((item) => {
+      const tail = String(item.key || '').split('|').pop();
+      return /^https:\/\//.test(tail) ? tail : '';
+    }).filter(Boolean).slice(0, 10);
+    return {
+      binding, category: editor.category,
+      offerBase: projection.source.sourceProductId || '',
+      skus, images,
+    };
+  },
+  status, report,
+});
 const copyEditor = createCopyEditor({ root: element('ui-scale-root'), getEditor: currentEditorForPublish,
   getBinding: currentEditorBinding, getSourceTitle: () => projection.source.title,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), reloadEditor: loadEditor, saveEditor,

@@ -319,6 +319,7 @@
     'ss-erp:direct-publish',
     'ss-erp:direct-publish-verify',
     'ss-erp:direct-publish-build',
+    'ss-erp:direct-erp-editor',
   ]);
 
   var KNOWN_TYPES = union(

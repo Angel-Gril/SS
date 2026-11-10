@@ -50,6 +50,9 @@
     'ss-erp:direct-image-probe', 'ss-erp:direct-image-generate',
     'ss-erp:direct-image-provider-read', 'ss-erp:direct-image-provider-write',
     'ss-erp:direct-publish', 'ss-erp:direct-publish-verify', 'ss-erp:direct-publish-build',
+  // 2026-11：直连车道的 ERP 读。属性/文案/包装要读服务端权威值，但绝不能走
+  // bridge（waitForAuthority 一挂就永远不返回），所以由 SW 直接 HTTP 读。
+  'ss-erp:direct-erp-editor',
   ]);
 
   var MESSAGE_TYPES = Object.freeze({
