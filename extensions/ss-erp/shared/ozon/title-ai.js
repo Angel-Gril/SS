@@ -43,6 +43,7 @@ export async function writeTitleAiConfig(config) {
 const SYSTEM_PROMPT = [
   'Ты пишешь название товара для Ozon на русском. Одна строка 40-140 символов, без кавычек, эмодзи и брендов.',
   'Структура: тип, пол, материал, признаки. Только то, что есть во входных данных.',
+  'Атрибуты из входных данных важнее визуальной оценки: не противоречь им по материалу, цвету и полу.',
   'Не использовать: распродажа, оптом, дропшиппинг, новый, хит, тренд. Ответ — только название.',
 ].join(' ');
 
@@ -91,8 +92,17 @@ export async function generateTitleWithAi(input) {
   if (!raw) throw new Error('AI 没有返回内容');
   // 有的模型会把标题按词换行输出，先拼回一行再清洗
   const joined = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(' ');
-  const title = polishRuTitle(joined.replace(/^["'«»\s]+|["'«»\s]+$/g, '').replace(/[×✕]/g, 'x').slice(0, 500));
+  const title = clampTitle(polishRuTitle(joined.replace(/^["'«»\s]+|["'«»\s]+$/g, '').replace(/[×✕]/g, 'x')));
   return { title, raw, model: (reply && reply.model) || input.model };
+}
+
+/** Ozon 上限 500，但过长会稀释关键词；超过 140 按词边界截断（类型在最前，不会被切掉） */
+function clampTitle(title) {
+  const text = String(title || '').trim();
+  if (text.length <= 140) return text;
+  const cut = text.slice(0, 140);
+  const space = cut.lastIndexOf(' ');
+  return (space > 60 ? cut.slice(0, space) : cut).trim();
 }
 
 // 模型常把材质写成裸名词（«полиэстер»），俄文标题里应是 «из полиэстера»。

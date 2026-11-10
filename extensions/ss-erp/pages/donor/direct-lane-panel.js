@@ -1,6 +1,7 @@
 import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js';
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
+import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -57,13 +58,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   titleInput.style.minWidth = '520px';
   titleWrap.append(titleInput);
   const generateTitle = make('button', 'ghost', '生成标题');
+  const describeBtn = make('button', 'ghost', '视觉描述');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
   descInput.placeholder = '（可留空）';
   descInput.style.minWidth = '360px';
   descWrap.append(descInput);
-  copyRow.append(titleWrap, generateTitle, descWrap);
+  copyRow.append(titleWrap, generateTitle, describeBtn, descWrap);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
   // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
@@ -101,6 +103,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let lastPlan = null;
   let warehouses = [];
   let workspaceCache = null;
+  let lastVisionFields = null;   // 视觉描述结果，喂给标题生成
   // offerId → { priceInput, oldPriceInput }
   const priceInputs = new Map();
 
@@ -209,7 +212,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       return Array.isArray(row.value) ? row.value.join(' ') : String(row.value || '');
     };
     const pairs = [];
-    for (const [id, name] of [[9163, 'Пол'], [6383, 'Материал'], [8229, 'Тип']]) {
+    // 颜色也要取：否则视觉推断的「米色」会盖过卖家数据（实测踩过）
+    for (const [id, name] of [[9163, 'Пол'], [6383, 'Материал'], [8229, 'Тип'], [10096, 'Цвет']]) {
       const field = byId.get(id);
       const value = attrValue(id);
       if (value) pairs.push({ name: (field && field.name) || name, value });
@@ -221,7 +225,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   function generateTitleFor(context, workspace, ozonAttrs) {
     const pairs = collectAttributePairs(workspace, ozonAttrs);
     const attrValue = (id) => {
-      const pair = pairs.find((one) => one.name === (id === 9163 ? 'Пол' : id === 6383 ? 'Материал' : 'Тип'));
+      const label = id === 9163 ? 'Пол' : id === 6383 ? 'Материал' : id === 10096 ? 'Цвет' : 'Тип';
+      const pair = pairs.find((one) => one.name === label);
       return pair ? pair.value : '';
     };
     return buildRuTitle({
@@ -520,6 +525,33 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     }
   }
 
+  describeBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void (async () => {
+      try {
+        const context = getContext();
+        if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+        const cfg = await readTitleAiConfig();
+        if (!cfg) throw new Error('先在上面填 AI key（视觉描述和标题用同一把）');
+        state.textContent = `正在用 ${cfg.model} 看图画描述…`;
+        const result = await describeProductWithAi({
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+          model: 'qwen3.8-flash',
+          imageUrls: context.images || [],
+          typeName: context.category && context.category.typeName,
+          sourceTitle: context.sourceTitle,
+        });
+        lastVisionFields = result.fields && Object.keys(result.fields).length ? result.fields : null;
+        output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
+        state.textContent = `视觉描述：${result.summary.slice(0, 120)}`;
+      } catch (error) {
+        state.textContent = `视觉描述失败：${String((error && error.message) || error).slice(0, 160)}`;
+        report?.(error);
+      }
+    })();
+  });
+
   precheck.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void runPrecheck();
@@ -553,7 +585,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
             value: (attribute.values || []).map((value) => String(value.value || '')).filter(Boolean).join(' '),
           }));
         }
-        pairs = collectAttributePairs(workspace, ozonAttrs);
+        // 属性（卖家数据）优先于视觉推断：视觉只补属性里没有的项
+        const attrPairs = collectAttributePairs(workspace, ozonAttrs);
+        const visionPairs = visionToAttributePairs(lastVisionFields);
+        const merged = new Map(visionPairs.map((one) => [one.name, one.value]));
+        for (const one of attrPairs) merged.set(one.name, one.value);
+        pairs = [...merged.entries()].map(([name, value]) => ({ name, value }));
 
         // 配了文本模型就先用模型；失败再退回规则，界面上说明走的是哪条路
         const aiConfig = await readTitleAiConfig();
