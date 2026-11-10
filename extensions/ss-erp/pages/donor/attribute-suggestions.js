@@ -777,13 +777,10 @@ export function createAttributeSuggestions({
               `${blocked.attributeName}：${blocked.message}`,
             ),
           );
-        const filledRows = ((data.workspace && data.workspace.values) || [])
-          .filter((row) => row && ((row.value !== null && row.value !== undefined && row.value !== '')
-            || (Array.isArray(row.dictionaryValueIds) && row.dictionaryValueIds.length)));
-        const filledCount = filledRows.length;
-        const fieldNameById = new Map(((data.workspace && data.workspace.fields) || [])
-          .map((field) => [Number(field.attributeId), String(field.name || '')]));
-        const filledNames = [...new Set(filledRows.map((row) => fieldNameById.get(Number(row.attributeId)) || String(row.attributeId)))];
+        // 注意：**不要**在这里统计「草稿已填了多少项」。
+        // data.workspace 是候选快照，SKU 专属字段（颜色/尺码）在里面恒为 null，
+        // 统计出来会少报，看起来像「写了但没写进去」。权威值只有
+        // /source-workbench/editor/attributes 那一份，界面上不猜。
         if (ruleError) {
           list.append(
             make('p', 'precision-attribute-warning', '规则预填未完成：' + ruleError),
@@ -798,10 +795,8 @@ export function createAttributeSuggestions({
         state.textContent = data.suggestions.length
           ? `已匹配 ${data.suggestions.length} 组属性`
             + (ruleSuggestions.length ? `（其中规则 ${ruleSuggestions.length} 组）` : '')
-            + `，草稿已有 ${filledCount} 项官方属性值`
-            + (filledNames.length ? `（${filledNames.slice(0, 12).join(' / ')}）` : '')
             + '，请确认后应用。'
-          : `没有可安全匹配的属性，请在当前表格补充（草稿已有 ${filledCount} 项官方属性值）。`;
+          : '没有可安全匹配的属性，请在当前表格补充。';
       } catch (error) {
         if (attempt !== epoch || modal.hidden) return;
         state.textContent = error.message;
