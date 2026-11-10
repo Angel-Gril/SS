@@ -81,18 +81,28 @@ export function describeSuite(billing, history) {
   return `${price} · ${suite ? (suite.status === 'SUCCEEDED' ? '生成完成，请审核图片' : taskLabels[suite.status] || '状态待核对') : '待确认生成'}`;
 }
 
-export function buildSkuImageRows({ skus, media, history, billing, title = '' }) {
+export function buildSkuImageRows({ skus, media, history, billing, title = '', directResults = [] }) {
   return skus.map((sku, index) => {
     const sources = media.filter(item => !item.skuKeys.length || item.skuKeys.includes(sku.key));
     sources.sort((a, b) => Number((b.displayUrl || b.url) === sku.imageUrl) - Number((a.displayUrl || a.url) === sku.imageUrl)
       || Number(b.skuKeys.includes(sku.key)) - Number(a.skuKeys.includes(sku.key)));
     const tasks = (history?.items || []).filter(item => !item.contextSkuKey || item.contextSkuKey === sku.key);
+    const direct = directResults.filter(item => item.skuKey === null || item.skuKey === undefined || String(item.skuKey) === String(sku.key));
     const images = [...sources.map(item => ({ ...item, kind: 'SOURCE' })),
-      ...tasks.flatMap(item => item.outputs.map(output => ({ ...output, key: `candidate:${output.id}`, kind: 'CANDIDATE' })))];
+      ...tasks.flatMap(item => item.outputs.map(output => ({ ...output, key: `candidate:${output.id}`, kind: 'CANDIDATE' }))),
+      // 直连生图结果：对象存储链接不保证带 CORS 头，所以不标成 CANDIDATE（那会加 crossOrigin）
+      ...direct.filter(item => item.status === 'done' && (item.url || item.dataUrl))
+        .map(item => ({ key: `direct:${item.id}`, url: item.url || item.dataUrl, kind: 'DIRECT' }))];
     const seen = new Set();
     const uniqueImages = images.filter(image => !seen.has(image.url) && seen.add(image.url));
     const partition = partitionImageTasks({ items: tasks }, billing);
     const lines = partition.current.map(item => ({ key: item.id, ...describeImageTask(item) }));
+    if (direct.length) {
+      const done = direct.filter(item => item.status === 'done').length, failed = direct.filter(item => item.status === 'failed').length;
+      const running = direct.some(item => item.status === 'running');
+      lines.unshift({ key: 'direct', text: `生图 · 已完成 ${done}/${direct.length}${failed ? ` · ${failed} 张失败` : ''}`,
+        status: running ? 'running' : failed ? 'error' : done === direct.length ? 'done' : 'warning' });
+    }
     if (billing?.suite) lines.unshift({ key: 'suite', text: `本次套图 · ${buildImageProcess({ billing, history }).message}`,
       status: ['FAILED', 'PARTIAL_FAILURE', 'UNKNOWN_OUTCOME'].includes(billing.suite.status) ? 'error' : billing.suite.status === 'SUCCEEDED' ? 'warning' : 'running' });
     return { skuRowKey: sku.key, index: index + 1, name: [title, sku.label].filter(Boolean).join(' · '),
@@ -121,7 +131,7 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
   head.append(heading, previous, next, close);
   const body = make('div', 'precision-image-body');
   const modes = make('nav', 'precision-image-modes'); modes.setAttribute('aria-label', '图片处理方式');
-  for (const [mode, label] of [['translate', '仅翻译'], ['ai-main-translate', 'AI主图＋翻译'], ['ai-suite', 'AI套图'], ['byok', '自带 API']]) {
+  for (const [mode, label] of [['translate', '仅翻译'], ['ai-main-translate', 'AI主图＋翻译'], ['ai-suite', 'AI套图']]) {
     const button = make('button', 'ghost', label); button.dataset.imageMode = mode;
     button.addEventListener('click', () => onModeChange(mode)); modes.append(button);
   }
@@ -150,7 +160,7 @@ export function createSkuImageWorkspace({ container, root, onSelect, onChange, o
     sources.setAttribute('aria-pressed', String(tab === 'sources')); results.setAttribute('aria-pressed', String(tab === 'results'));
     scope.textContent = all ? '只看当前 SKU' : '查看整个草稿的素材'; scope.setAttribute('aria-pressed', String(all));
     if (resetNotice || !hint.textContent) {
-      hint.textContent = tab === 'results' ? '先预览图片，再审核并应用到草稿。' : '点击图片可预览；勾选需要处理的素材。';
+      hint.textContent = tab === 'results' ? '生成的图片在这里；勾选的图片会用于上架。' : '点击图片可预览；勾选需要处理的素材。';
       hint.className = 'image-manager-global-status';
     }
     summary.querySelectorAll('[data-image-sku-key]').forEach(row => {

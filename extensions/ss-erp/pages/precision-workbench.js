@@ -12,18 +12,17 @@ import { createPrecisionPrivateRuntime } from './donor/precision-private-runtime
 import { createPrecisionErpEntry } from './donor/erp-entry.js';
 import { createByokEditor } from './donor/byok-editor.js';
 import { createCategoryDialog } from './donor/category-dialog.js';
-import { searchLocalCategories, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
+import { searchLocalCategories, findLocalCategory, LOCAL_CATALOG_REVISION } from './donor/ozon-category-search.js';
 import { planPrefill, planVariantPrefill, runPrefill, pickDictionaryValue } from '../shared/ozon/attribute-prefill.js';
 import { createDirectHealthPanel } from '../shared/ozon/direct-health-panel.js';
-import { buildDirectPromptPlan, SLOT_BLUEPRINTS } from '../shared/ozon/direct-prompt-plan.js';
-import { selectReferences, referenceSelectionInfo } from '../shared/ozon/reference-selector.js';
+import { buildDirectImageJobs, createDirectImageRunner, createDirectImageStore, publishImageEntries, summarizeDirectImages } from './donor/direct-image-flow.js';
+import { createDirectImagePanel } from './donor/direct-image-panel.js';
+import { buildDirectListingSyncPayload, createDirectCategoryStore } from '../shared/publish/direct-workspace.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
-import { resolveSuitePrimaryAction } from './donor/suite-primary-action.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
 import { buildSkuImageRows, buildImageProcess, partitionImageTasks, createSkuImageWorkspace, describeSuite } from './donor/sku-image-workspace.js';
 import { createImageProcessPoller, createImageProcessContext } from './donor/image-process-poller.js';
 import { createSourceVideoView } from './donor/source-video-view.js';
-import { resolveCombinedImageAction } from './donor/combined-image-flow.js';
 import { createWatermarkEditor } from './donor/watermark-editor.js';
 import { createVideoPublishEditor } from './donor/video-publish-editor.js';
 import { createPreparationAnalysisView, renderPreparationProcess } from './donor/preparation-analysis-view.js';
@@ -39,6 +38,11 @@ const workbenchConfirmation = createInlineConfirmation({ container: document.que
 let projection = Contract.createProjection({});
 let selectedShopId = '';
 let selectedSkuKey = '';
+// 直连通道的本机状态：生图执行器与本机记住的 Ozon 类目（均按来源商品分键）
+let directImages = null;
+let directImagesSource = '';
+let directCategory = null;
+let directCategorySource = '';
 let editorSignature = '';
 let editorRenderOwner = '';
 let mediaSignature = '';
@@ -269,7 +273,7 @@ const imageWorkspace = createSkuImageWorkspace({ container: element('image-queue
     document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.checked = input.value === mode; });
     byok.setMode(mode); renderMedia(); } });
 const mediaToolbar = make('div', 'precision-media-toolbar');
-mediaToolbar.append(make('span', '', '套图参考图用于整个草稿；可切换 SKU 或查看整个草稿的素材。'));
+mediaToolbar.append(make('span', '', '勾选参考图或待翻译的图片；可切换 SKU 或查看全部素材。'));
 const mediaSelectionCount = make('span'); mediaToolbar.append(mediaSelectionCount);
 function watermarkItems() {
   const selected = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
@@ -351,6 +355,11 @@ const creativeOptions = make('details', 'precision-creative-options');
 creativeOptions.append(make('summary', '', '创作方向与视觉 JSON（可选）'), promptArea);
 imageWorkspace.sourcePanel.append(mediaToolbar, library, creativeOptions);
 trusted('precision-watermark-settings', () => watermark.open());
+const directImagePanel = createDirectImagePanel({ container: imageWorkspace.resultPanel, make,
+  onToggle: (id, selected) => { directImageRunner()?.toggle(id, selected); },
+  onRetry: id => { void runDirectImages({ only: [id] }).catch(report).finally(render); },
+  onRetryFailed: () => { void runDirectImages({ failedOnly: true }).catch(report).finally(render); },
+  onClear: () => { void directImageRunner()?.clear().catch(report).finally(render); } });
 imageWorkspace.resultPanel.append(candidates);
 const imageProcess = make('section', 'precision-image-process'); imageProcess.id = 'precision-image-process';
 const imageProcessStatus = make('strong'); imageProcessStatus.id = 'precision-image-process-status'; imageProcessStatus.setAttribute('role', 'status');
@@ -398,49 +407,28 @@ const byok = createByokEditor({ root: element('ui-scale-root'), container: image
   getBusy: () => projection.busy || saveBusy || mediaMutationBusy || publishBusy,
   onBound: async () => { await command('REFRESH'); }, report,
   onModeChange: () => renderImageMode() });
-const byokMode = make('label');
-const byokRadio = make('input'); byokRadio.type = 'radio'; byokRadio.name = 'image-workflow-mode'; byokRadio.value = 'byok';
-byokMode.append(byokRadio, make('span', '', '自带 API')); element('image-workflow-mode').append(byokMode);
 document.querySelectorAll('input[name="image-workflow-mode"]').forEach((input) => input.addEventListener('change', () => {
   if (input.checked) { imageMode = input.value; byok.setMode(imageMode); renderMedia(); }
 }));
 function renderImageMode() {
-  const hostedMode = ['ai-suite', 'ai-main-translate'].includes(imageMode);
-  const translationMode = ['translate', 'ai-main-translate'].includes(imageMode);
-  suiteActions.hidden = promptArea.hidden = !hostedMode;
-  creativeOptions.hidden = !hostedMode;
-  candidates.hidden = imageMode === 'byok';
-  translationPanel.hidden = !translationMode;
-  translateImage.hidden = imageMode !== 'translate';
+  // 生图只有直连一条路径（见 dev-docs/extension-direction.md）。托管套图的计划/审核/计费控件
+  // 不再作为入口出现；已有托管结果的旧草稿仍可在「处理结果」里查看。
+  const hostedHistory = Boolean(projection.billing?.suite) || Boolean(currentMediaContext().history?.items?.length);
+  suiteActions.hidden = promptArea.hidden = creativeOptions.hidden = true;
+  translationPanel.hidden = translateImage.hidden = mediaRefresh.hidden = visionOpen.hidden = true;
+  imageProcess.hidden = candidates.hidden = !hostedHistory;
+  const runner = directImageRunner();
+  const directState = runner ? runner.state() : { busy: false, results: [] };
+  const ready = Boolean(projection.source.sourceProductId) && !projection.busy;
+  const label = ({ translate: '翻译所选图片', 'ai-main-translate': '生成主图并翻译', 'ai-suite': '生成套图' })[imageMode] || '开始处理图片';
   const button = element('image-workflow-start-btn');
-  const suiteAction = currentImageAction();
-  button.textContent = imageMode === 'translate' ? (translation.state().busy ? '提交翻译中…' : '开始翻译所选图片')
-    : imageMode === 'byok' ? '打开图片工作台' : suiteAction.action === 'PREPARE' ? '点击开始处理图片' : suiteAction.label;
-  button.disabled = !listing() || projection.busy || mediaMutationBusy || translation.state().busy || translation.state().unknown
-    || (imageMode === 'translate' && !translationAvailability.available) || (hostedMode && suiteAction.disabled);
-  translateImage.disabled = button.disabled;
-  imagePrimary.textContent = hostedMode ? suiteAction.label : imageMode === 'byok' ? '连接自带 API' : button.textContent;
-  imagePrimary.disabled = button.disabled;
-  imagePrimary.hidden = hostedMode && suiteAction.action === 'REVIEW' && imageWorkspace.state().tab === 'results';
-  mediaRefresh.disabled = projection.busy || mediaMutationBusy;
-  imageWorkspace.setMode(imageMode, projection.busy || mediaMutationBusy || translation.state().busy);
-  translationRefresh.disabled = translationAvailability.state === 'loading' || translation.state().busy;
-  if (translationMode) {
-    if (listing() && projection.handoff) {
-      const identity = JSON.stringify(currentEditorBinding());
-      if (identity !== translationAvailability.binding) void readTranslationAvailability();
-    }
-    if (!translation.state().busy && !translation.state().error && !translationAvailability.available) translationState.textContent = translationAvailability.state === 'loading'
-      ? '正在核对当前草稿的图片翻译状态…' : translationAvailability.reason || '请先创建当前店铺草稿';
-  }
-  document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.disabled = translation.state().busy; });
-}
-function currentImageAction() {
-  const context = currentMediaContext();
-  const input = { draftId: listing()?.id, busy: projection.busy || mediaMutationBusy || planSubmissionBusy,
-    billing: projection.billing, history: context.history, lock: promptLockState() };
-  return imageMode === 'ai-main-translate' ? resolveCombinedImageAction({ ...input,
-    availability: translationAvailability, translation: translation.state() }) : resolveSuitePrimaryAction(input);
+  button.textContent = directState.busy ? '停止生成' : '点击开始处理图片';
+  button.disabled = !ready;
+  imagePrimary.textContent = directState.busy ? '停止生成' : label;
+  imagePrimary.disabled = !ready;
+  imagePrimary.hidden = false;
+  imageWorkspace.setMode(imageMode, projection.busy || directState.busy);
+  document.querySelectorAll('input[name="image-workflow-mode"]').forEach(input => { input.disabled = directState.busy; });
 }
 async function readTranslationAvailability(force = false) {
   const draft = listing(); if (!draft) return;
@@ -628,11 +616,18 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
     // 使「选类目 → 建草稿 → 保存类目」的顺序成立（与精铺/知了一致）。
     // 原实现一开始就比对 binding，无草稿时 currentEditorBinding() 直接抛错，
     // 让整个选类目流程无法闭环。
+    await rememberDirectCategory(selection);
     if(!listing()){
-      if(!selectedShopId)throw new Error('请先选择 Ozon 店铺（当前未选择）');
+      if(!selectedShopId){
+        status('类目已保存在本机。未连接 ERP 店铺，可继续直连生图与上架。','ok');
+        return null;
+      }
       status('正在创建 ERP 草稿…');
-      const created=await ensureCurrentDraft();
-      if(!created)throw new Error('ERP 草稿创建未完成，请打开「查看过程」确认失败原因');
+      const created=await ensureCurrentDraft().catch(error=>{log('ERP 草稿创建失败：'+(error&&error.message||error),true);return false;});
+      if(!created){
+        status('类目已保存在本机；ERP 草稿未创建，可继续直连生图与上架。','warn');
+        return null;
+      }
     }
     // 2026-11：selection 是在 category-dialog 的 confirm() 开头构造的，
     // 那一刻 value.catalogRevision 还是**本地快照**标识（ozon-official-snapshot-7341）。
@@ -758,21 +753,62 @@ const directLane = createDirectLanePanel({
         return { key, label: hit ? hit.label : spec, cost: hit ? hit.priceCny : null };
       })
       : projection.skus.map((sku) => ({ key: sku.key, label: sku.label, cost: sku.priceCny }));
-    const images = (projection.media || []).map((item) => {
-      const tail = String(item.key || '').split('|').pop();
-      return /^https:\/\//.test(tail) ? tail : '';
-    }).filter(Boolean).slice(0, 10);
+    const sourceImages = (projection.media || []).map(mediaHttpsUrl).filter(Boolean).slice(0, 10);
     return {
       binding,
-      category: (editor && editor.category) || null,
+      // ERP 草稿里有类目就用它，否则用本机记住的类目：ERP 不可用时上架仍可继续
+      category: (editor && editor.category) || directCategory,
       offerBase: projection.source.sourceProductId || '',
       // 规则标题要拿源商品标题里的特征词（无袖/雪纺/夏季…）
       sourceTitle: projection.source.title || '',
-      skus, images,
+      skus,
+      // 上架用图：勾选的生成图在前（SKU 主图归各自 SKU），没有生成图时退回来源图
+      images: publishImageEntries(directImageRunner()?.state().results || [], { sourceUrls: sourceImages }),
+      sourceImages,
+      product: {
+        title: projection.source.title || '', sourceCategory: projection.source.categoryName || '',
+        sourceProductId: projection.source.sourceProductId || '', offerId: projection.source.sourceProductId || '',
+        skus: skus.map(sku => ({ key: sku.key, label: sku.label })), attributes: [],
+      },
     };
   },
+  onPublished: (result, published) => { void syncDirectListingToErp(result, published).catch(report); },
   status, report,
 });
+// 上架完成后的最终数据同步：ERP 只记录结果。未连接 ERP 时明确提示，不影响已完成的上架。
+async function syncDirectListingToErp(result, published) {
+  if (!result || !(result.ok || result.processing)) return;
+  const payload = buildDirectListingSyncPayload({
+    source: projection.source, shopId: selectedShopId, category: published.category, items: published.items, result,
+  });
+  if (!payload) { status('上架完成；缺少来源货号或标题，未同步到 ERP。', 'warn'); return; }
+  try {
+    const data = await directSend({ type: 'ss-erp:direct-erp-sync', payload });
+    log(`已同步到 ERP：${data.itemCount} 条（${data.created ? '新建' : '更新'}货源商品记录）`);
+    status('上架完成，结果已同步到 ERP。', 'ok');
+  } catch (error) {
+    log('ERP 同步失败：' + (error && error.message || error), true);
+    status(`上架已完成，但未同步到 ERP：${String(error && error.message || error).slice(0, 80)}`, 'warn');
+  }
+}
+// 本机记住的 Ozon 类目（按来源商品）：选类目不再要求先有 ERP 草稿。
+function directCategoryStore() {
+  return createDirectCategoryStore({ storage: chrome.storage.local,
+    sourceKey: `${projection.source.platform}:${projection.source.sourceProductId}` });
+}
+async function loadDirectCategory() {
+  const sourceKey = `${projection.source.platform}:${projection.source.sourceProductId}`;
+  if (!projection.source.sourceProductId || directCategorySource === sourceKey) return;
+  directCategorySource = sourceKey; directCategory = null;
+  const stored = await directCategoryStore().load();
+  if (directCategorySource === sourceKey) directCategory = stored;
+}
+async function rememberDirectCategory(selection) {
+  const local = findLocalCategory(selection.categoryId, selection.typeId);
+  directCategory = { categoryId: Number(selection.categoryId), typeId: Number(selection.typeId), typeName: local ? local.typeName : '' };
+  directCategorySource = `${projection.source.platform}:${projection.source.sourceProductId}`;
+  await directCategoryStore().save(directCategory);
+}
 const copyEditor = createCopyEditor({ root: element('ui-scale-root'), getEditor: currentEditorForPublish,
   getBinding: currentEditorBinding, getSourceTitle: () => projection.source.title,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), reloadEditor: loadEditor, saveEditor,
@@ -1517,7 +1553,7 @@ function renderMedia() {
   const eligible = new Set(media.map((item) => item.key));
   for (const key of referenceKeys) if (!eligible.has(key)) referenceKeys.delete(key);
   for (const key of translationKeys) if (!eligible.has(key)) translationKeys.delete(key);
-  const translationTarget = listing() ? `${projection.handoff?.snapshotId}:${listing().shopId}:${listing().id}` : '';
+  const translationTarget = projection.source.sourceProductId ? `${projection.source.sourceProductId}:${listing()?.id || ''}` : '';
   if (['translate', 'ai-main-translate'].includes(imageMode) && translationTarget && translationTarget !== translationSelectionContext) {
     translationSelectionContext = translationTarget;
     translationKeys.clear(); media.slice(0, 5).forEach(item => translationKeys.add(item.key));
@@ -1546,17 +1582,16 @@ function renderMedia() {
       check.setAttribute('aria-label', `选择${roleLabel(item.role)}`);
       check.addEventListener('change', () => {
         const selectedKeys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
-        if (check.disabled || (!['translate', 'ai-main-translate'].includes(imageMode) && promptLockState()) || planSubmissionBusy) {
+        if (check.disabled) {
           check.checked = selectedKeys.has(item.key);
           return;
         }
         if (check.checked && selectedKeys.size >= 5) {
-          check.checked = false; status(imageMode === 'translate' ? '每次最多选择 5 张翻译图片' : '最多选择 5 张参考图', 'warn'); return;
+          check.checked = false; status(['translate', 'ai-main-translate'].includes(imageMode) ? '每次最多选择 5 张翻译图片' : '最多选择 5 张参考图', 'warn'); return;
         }
         if (check.checked) selectedKeys.add(item.key); else selectedKeys.delete(item.key);
         tile.classList.toggle('is-selected', check.checked);
         renderSelectionCount();
-        if (imageMode !== 'translate') compilePrompt();
         renderImageMode();
       });
       const open = make('button', 'ghost preview-button', '预览');
@@ -1569,7 +1604,7 @@ function renderMedia() {
     const keys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
     check.checked = keys.has(check.closest('.precision-source-tile').dataset.referenceKey);
     check.closest('.precision-source-tile').classList.toggle('is-selected', check.checked);
-    check.disabled = (!['translate', 'ai-main-translate'].includes(imageMode) && Boolean(promptLockState())) || planSubmissionBusy || projection.busy || translation.state().busy;
+    check.disabled = projection.busy || Boolean(directImageRunner()?.state().busy);
   });
   renderSelectionCount();
   const context = currentMediaContext();
@@ -1589,7 +1624,10 @@ function renderMedia() {
     row.append(make('strong', '', slot.label), make('span', '', slot.text)); return row;
   }));
   imageProcessHint.textContent = imageProcessReadWarning || '根据 ERP 当前任务更新。关闭此窗口不会取消任务；图片仍需预览、审核并应用。';
-  imageWorkspace.render(buildSkuImageRows({ skus, media, history: displayContext.history, billing, title: projection.source.title }), selectedSkuKey);
+  const directState = directImageRunner()?.state() || { busy: false, currentId: '', cancelRequested: false, results: [] };
+  imageWorkspace.render(buildSkuImageRows({ skus, media, history: displayContext.history, billing, title: projection.source.title,
+    directResults: directState.results }), selectedSkuKey);
+  directImagePanel.render(directState, { skuKey: selectedSkuKey, all: workspaceState.all });
   const nextCandidateSignature = JSON.stringify([context.draft?.id, selectedSkuKey, workspaceState.all, visibleHistory, billing?.suite?.slots]);
   if (candidateSignature !== nextCandidateSignature) {
   candidateSignature = nextCandidateSignature;
@@ -1651,7 +1689,7 @@ function renderMedia() {
 }
 function renderSelectionCount() {
   const keys = ['translate', 'ai-main-translate'].includes(imageMode) ? translationKeys : referenceKeys;
-  mediaSelectionCount.textContent = `整个草稿已勾选 ${keys.size}/5 张${imageMode === 'translate' ? '翻译图片' : '参考图'}`;
+  mediaSelectionCount.textContent = `已勾选 ${keys.size}/5 张${['translate', 'ai-main-translate'].includes(imageMode) ? '待翻译图片' : '参考图'}`;
 }
 function renderSourceDiagnostics() {
   if (element('process-modal').hidden || sourceDiagnosticsProjection === projection) return;
@@ -2029,9 +2067,6 @@ trusted('precision-assign', () => runMediaMutation(async () => {
 // 请求由 service worker 直发 provider —— 全程不经过 ERP 的 operation 状态机。
 // 这条路径存在的理由：ERP 的 EXECUTE_HOSTED_SUITE 一旦 operation 卡在未确认，
 // 整条链停摆且 recover() 清不掉（实测）。直连路径失败就是失败，能立刻看到原因。
-let directImageBusy = false;
-let directImageResults = [];
-
 // 2026-11：直连消息一律串行。
 // 工作台里同时会有两条直连在飞（属性编辑器 load 读 schema + 弹窗读字典），
 // 同一 frame 并发 ask 同一个 SW 时，Chrome 会把其中一条的端口关掉，报
@@ -2053,8 +2088,8 @@ async function directSendOnce(message, attempt) {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error('直连请求超时（240 秒）'));
-    }, 240000);
+      reject(new Error('直连请求超时（7 分钟）'));
+    }, 420000);   // 生图最长 180 秒 + 下载与托管
     try {
       chrome.runtime.sendMessage(payload, (response) => {
         if (settled) return;
@@ -2101,92 +2136,82 @@ function directProductProfile() {
   };
 }
 
-/**
- * 直连生图：选参考图 → 生成提示词 → 逐张调 provider。
- * @param {object} options { limit, onlySlot, timeoutMs }
- */
-async function directGenerateImage(options = {}) {
-  if (directImageBusy) throw new Error('直连生图正在进行中');
-  directImageBusy = true;
-  const startedAt = Date.now();
-  try {
-    const health = directHealth.last() || await directHealth.check();
-    if (!health || !health.image || health.image.ok !== true) {
-      throw new Error('生图 Provider 不可用：' + (health && health.image ? health.image.message : '未检查'));
-    }
-
-    const references = selectReferences(projection.media, referenceSelectionInfo().selectedLimit);
-    if (!references.length) throw new Error('没有可用的参考图（需要至少有主图）');
-    status(`直连生图：已按索引选出 ${references.length} 张参考图`);
-
-    const plan = buildDirectPromptPlan({
-      product: directProductProfile(),
-      media: projection.media,
-      skus: projection.skus.map((sku) => ({ key: sku.key, label: sku.label, imageUrl: sku.imageUrl })),
-    });
-
-    const slots = options.onlySlot
-      ? plan.sharedGallery.filter((slot) => slot.slotId === options.onlySlot)
-      : plan.sharedGallery.slice(0, Number(options.limit) > 0 ? Number(options.limit) : 1);
-    if (!slots.length) throw new Error('提示词计划为空');
-
-    directImageResults = [];
-    for (const slot of slots) {
-      status(`直连生图：${slot.goalType} 生成中（约 35 秒）…`);
-      const result = await directSend({
-        type: 'ss-erp:direct-image-generate',
-        payload: {
-          prompt: slot.prompt,
-          inputImageUrls: slot.inputImageUrls,
-          timeoutMs: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 180000,
-        },
-      });
-      directImageResults.push({ slot, ...result });
-      log(`直连生图完成：${slot.goalType} ${(result.elapsedMs / 1000).toFixed(1)}s`);
-    }
-
-    const ok = directImageResults.filter((item) => item.url);
-    status(`直连生图完成：${ok.length}/${slots.length} 张，共 ${((Date.now() - startedAt) / 1000).toFixed(0)} 秒`, 'ok');
-    renderDirectImageResults();
-    return directImageResults;
-  } finally {
-    directImageBusy = false;
-  }
+// 直连生图的唯一入口：三种模式共用同一份任务清单与执行器（pages/donor/direct-image-flow.js）。
+// 结果逐张托管、逐张落盘，显示在「处理结果」里并用于上架。
+function directImageRunner() {
+  if (!projection.source.sourceProductId) return null;
+  const sourceKey = `${projection.source.platform}:${projection.source.sourceProductId}`;
+  if (directImages && directImagesSource === sourceKey) return directImages;
+  directImagesSource = sourceKey;
+  directImages = createDirectImageRunner({
+    send: directSend,
+    store: createDirectImageStore({ storage: chrome.storage.local, sourceKey }),
+    getShopId: () => selectedShopId,
+    onChange: () => { renderMedia(); },
+  });
+  void directImages.load().catch(report);
+  return directImages;
 }
-
-/** 把直连生图的结果渲染到图片工作台的候选区（复用现有 DOM） */
-function renderDirectImageResults() {
-  const host = element('precision-image-candidates') || element('image-queue');
-  if (!host || !directImageResults.length) return;
-  const wrap = make('section', 'precision-direct-results');
-  wrap.append(make('h4', '', `直连生图结果（${directImageResults.length} 张）`));
-  for (const item of directImageResults) {
-    const card = make('article', 'precision-direct-result');
-    if (item.url) {
-      const img = make('img');
-      img.src = item.url; img.alt = item.slot.goalType; img.crossOrigin = 'anonymous';
-      img.referrerPolicy = 'no-referrer';
-      img.loading = 'lazy';
-      card.append(img);
-    }
-    card.append(make('p', '', `${item.slot.goalType} · ${(item.elapsedMs / 1000).toFixed(1)}s`));
-    if (item.url) {
-      const a = make('a', 'ghost', '打开原图');
-      a.href = item.url; a.target = '_blank'; a.rel = 'noreferrer';
-      card.append(a);
-    }
-    wrap.append(card);
-  }
-  host.append(wrap);
+function mediaHttpsUrl(item) {
+  const url = String(item.url || '');
+  if (/^https:\/\//.test(url)) return url;
+  const tail = String(item.key || '').split('|').pop();
+  return /^https:\/\//.test(tail) ? tail : '';
 }
-
-// 直连生图按钮接线。用 trusted() 保持与其他入口一致的 isTrusted 语义。
-trusted('precision-direct-generate-btn', async () => {
-  await directGenerateImage({ limit: 1 });
-});
-trusted('precision-direct-generate-all-btn', async () => {
-  await directGenerateImage({ limit: 7 });
-});
+function currentDirectImageJobs() {
+  const skus = draftSkuChoices();
+  const media = eligibleReferenceMedia(skus).map(item => ({ ...item, url: mediaHttpsUrl(item) })).filter(item => item.url);
+  const picked = media.filter(item => referenceKeys.has(item.key));
+  return buildDirectImageJobs({
+    mode: imageMode,
+    product: directProductProfile(),
+    media: picked.length ? picked : media,
+    skus: skus.map(sku => ({ key: sku.key, label: sku.label, imageUrl: sku.imageUrl })),
+    translationUrls: media.filter(item => translationKeys.has(item.key)).map(item => item.url),
+  });
+}
+function directImageToken() {
+  return JSON.stringify([projection.source.sourceProductId, imageMode, [...referenceKeys], [...translationKeys],
+    draftSkuChoices().map(sku => sku.key)]);
+}
+async function runDirectImages({ only = null, failedOnly = false } = {}) {
+  const runner = directImageRunner();
+  if (!runner) throw new Error('请先采集来源商品');
+  if (runner.state().busy) { runner.cancel(); status('正在停止：当前这张完成后不再继续。', 'warn'); return; }
+  const done = new Set(runner.state().results.filter(item => item.status === 'done').map(item => item.id));
+  const failed = new Set(runner.state().results.filter(item => item.status === 'failed').map(item => item.id));
+  let jobs = currentDirectImageJobs();
+  if (only) jobs = jobs.filter(job => only.includes(job.id));
+  if (failedOnly) jobs = jobs.filter(job => failed.has(job.id));
+  if (!jobs.length) {
+    throw new Error(only || failedOnly ? '这张图片对应的任务已不在当前处理方式里，请重新开始处理'
+      : imageMode === 'translate' && !translationKeys.size
+        ? '请先在「来源图片」里勾选需要翻译的图片' : '没有可用的来源图片（需要至少一张 https 图片）');
+  }
+  const pending = jobs.filter(job => !done.has(job.id));
+  if (!pending.length) {
+    imageWorkspace.open(selectedSkuKey, { tab: 'results', all: true });
+    status('当前处理方式的图片都已生成；要重新生成请先在结果里清空。');
+    return;
+  }
+  // 上次自检没通过就重新检查一次：用户可能刚在设置里填好 Key
+  let health = directHealth.last();
+  if (!health || !health.image || health.image.ok !== true) health = await directHealth.check();
+  if (!health || !health.image || health.image.ok !== true) {
+    throw new Error('生图 Provider 不可用：' + (health && health.image ? health.image.message : '请先在设置里填写生图 Key'));
+  }
+  const token = directImageToken();
+  if (!await imageConfirmation.request({
+    message: `将生成 ${pending.length} 张图片（每张约 30–60 秒），费用由你的生图服务商按张收取。`,
+    detail: '逐张生成并保存；中途失败或停止不影响已完成的图片，之后只需补未完成的。',
+    token, getToken: directImageToken })) return;
+  imageWorkspace.open(selectedSkuKey, { tab: 'results', all: true });
+  const results = await runner.run(jobs);
+  const info = summarizeDirectImages({ ...runner.state(), busy: false }, jobs);
+  log(`直连生图：${info.text}`);
+  status(info.text, info.failed || info.unhosted ? 'warn' : 'ok');
+  return results;
+}
 
 // 完整设置以内联 iframe 打开。src 懒加载：只有用户真的点开才加载 settings.html，
 // 避免 workbench 一打开就多拉 24KB + 6 个脚本。
@@ -2211,30 +2236,12 @@ element('settings-iframe-close')?.addEventListener('click', (event) => {
 });
 
 async function startImageWorkflow() {
-  if (!imageWorkspace.state().open) {
-    imageWorkspace.open(selectedSkuKey, { tab: imageMode === 'ai-suite'
-      && (projection.billing.suite || currentImageAction().action === 'REVIEW') ? 'results' : 'sources', all: true });
+  const runner = directImageRunner();
+  if (!imageWorkspace.state().open && !runner?.state().busy) {
+    imageWorkspace.open(selectedSkuKey, { tab: runner?.state().results.length ? 'results' : 'sources', all: true });
     return;
   }
-  if (imageMode === 'translate') { await startTranslation(); return; }
-  if (byokRadio.checked) { await byok.readMediaState(); return; }
-  const next = currentImageAction();
-  if(next.disabled)return;
-  if(next.action==='CHECK'){await readTranslationAvailability(true);return;}
-  if(next.action==='EXISTING_SUITE'){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});status('已有套图计划，请继续该计划；AI 主图＋翻译需在新草稿准备。','warn');return;}
-  if(next.action==='TRANSLATE'){
-    if(translation.state().queuedCount){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});return;}
-    await startTranslation();return;
-  }
-  if(next.action==='READ'){await refreshMediaState();status('已读取当前草稿图片任务，请继续当前步骤');return;}
-  if(next.action==='PREPARE')return suiteCommand('CREATE_AND_REVIEW_PLAN');
-  if(next.action==='CONTINUE')return suiteCommand('CONTINUE');
-  if(next.action==='REVIEW'){imageWorkspace.open(selectedSkuKey,{tab:'results',all:true});status('预览并审核当前草稿的图片结果');return;}
-  currentQuoteWitness();
-  const quote = projection.billing.quote;
-  const getToken = () => JSON.stringify([currentEditorBinding(), selectedSkuKey, imageMode, [...referenceKeys], currentQuoteWitness()]);
-  const token = getToken();
-  if (await imageConfirmation.request({ message: `生成 ${quote.itemCount} 张图片，最高费用 ${quote.currency} ${(quote.maximumCostMinor / 100).toFixed(2)}。`, detail: '确认后开始当前冻结计划；结果先审核，再应用到草稿。', token, getToken })) await suiteCommand('START', true);
+  await runDirectImages();
 }
 trusted('image-workflow-start-btn', startImageWorkflow);
 trusted('precision-image-primary', startImageWorkflow);
@@ -2285,7 +2292,7 @@ const STEPPER_DEFS = [
   },
   {
     id: 'category', label: '类目',
-    done: () => Boolean(listing() && editor?.category),
+    done: () => Boolean((listing() && editor?.category) || directCategory),
     hint: '点此选择 Ozon 官方类目',
   },
   {
@@ -2298,10 +2305,9 @@ const STEPPER_DEFS = [
     // 只有来源图不算这一步完成；必须真的存在图片处理任务或候选结果。
     // 之前用 projection.media.length 判定，导致刚采集完就把「图片」标成 ✓，
     // 用户以为已经可以上架 —— 与精铺的语义不符（他们这一步是「生成/审核结果」）。
-    done: () => Boolean(listing() && (
-      (projection.history && Array.isArray(projection.history.items) && projection.history.items.length > 0)
-      || (projection.billing && projection.billing.suite && Array.isArray(projection.billing.suite.slots) && projection.billing.suite.slots.length > 0)
-    )),
+    done: () => Boolean(directImageRunner()?.state().results.some(item => item.status === 'done')
+      || (listing() && ((projection.history && Array.isArray(projection.history.items) && projection.history.items.length > 0)
+        || (projection.billing && projection.billing.suite && Array.isArray(projection.billing.suite.slots) && projection.billing.suite.slots.length > 0)))),
     hint: '点此选择图片处理方式并生成',
   },
   {
@@ -2389,6 +2395,7 @@ window.addEventListener('message', (event) => {
     }
     projection = Contract.parseProjection(event.data.projection);
     sourceReady = Boolean(projection.source.sourceProductId && projection.skus.length);
+    void loadDirectCategory().catch(() => {});
     void erpEntry.accept(event.data.entryContext);
     render();
   } else if (event.data.type === 'COMMAND_RESULT') {

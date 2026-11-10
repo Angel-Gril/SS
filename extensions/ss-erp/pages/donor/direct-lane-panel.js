@@ -3,6 +3,7 @@ import { buildRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
+import { buildDirectWorkspace } from '../../shared/publish/direct-workspace.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -20,8 +21,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const panel = make('section', 'precision-direct-lane');
   panel.setAttribute('data-direct-lane', '1');
   const head = make('div', 'precision-local-fields');
-  head.append(make('strong', '', '直连上架（不写 ERP）'),
-    make('span', '', '按 SKU 一条商品，同款靠合并字段自动成多变体。'));
+  head.append(make('strong', '', '上架到 Ozon'),
+    make('span', '', '按 SKU 一条商品，同款靠合并字段自动成多变体；完成后结果同步到 ERP。'));
 
   const mkNumber = (label, value, attrs = {}) => {
     const wrap = make('label', '', label + ' ');
@@ -90,7 +91,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
 
   const actions = make('div', 'precision-local-fields');
   const precheck = make('button', 'ghost', '预检载荷');
-  const publishBtn = make('button', 'primary', '直连上架');
+  const publishBtn = make('button', 'primary', '上架到 Ozon');
   const state = make('span', '', '');
   actions.append(precheck, publishBtn, state);
 
@@ -196,6 +197,22 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       row.append(priceWrap, oldWrap, badge, source);
       table.append(row);
     }
+  }
+
+  /**
+   * 属性工作区：有 ERP 草稿就读它（保留属性编辑器里的手工修改）；
+   * 没有草稿或 ERP 读不到时，直接向 Ozon 取官方字段并按本地规则预填。
+   */
+  async function loadWorkspace(context) {
+    if (workspaceCache) return workspaceCache;
+    let workspace = null;
+    if (context.binding) {
+      try { workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
+      catch (_error) { workspace = null; }
+    }
+    if (!workspace) workspace = await buildDirectWorkspace({ category: context.category, product: context.product, send });
+    workspaceCache = workspace;
+    return workspace;
   }
 
   /** 从 ERP 工作区或 Ozon 商品属性里取「Пол / Материал / Тип」三个值 */
@@ -341,10 +358,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       return { plan, context, workspace: null };
     }
 
-    // 新商品：必须有 ERP 草稿（要拿属性工作区）
-    if (!context.binding) throw new Error('新商品需要先读取 ERP 草稿（当前草稿不可用）');
-    const workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding });
-    workspaceCache = workspace;
+    // 新商品：属性工作区来自 ERP 草稿或 Ozon 直读，二者都不要求先有草稿
+    if (!context.category || !context.category.categoryId) throw new Error('请先选择 Ozon 类目');
+    const workspace = await loadWorkspace(context);
 
     // 标题为空时自动用规则生成一次
     if (!String(titleInput.value || '').trim()) {
@@ -372,7 +388,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       editor: editorStub,
       workspace,
       offerBase: context.offerBase,
-      images: (context.images || []).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
+      images: context.images || [],
       defaults: { currency: 'CNY', vat: '0' },
     });
     plan.items.forEach((item, index) => {
@@ -398,6 +414,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         item.priceSource = '线上现有';
       }
     } catch (_error) { /* 读不到就保留成本×倍率 */ }
+    if (workspace.source === 'OZON_DIRECT') {
+      plan.notes.push('属性由 Ozon 官方字段 + 本地规则预填（未使用 ERP 草稿），上架前请核对必填项');
+    }
     return { plan, context, workspace };
   }
 
@@ -466,7 +485,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     busy = true;
     precheck.disabled = publishBtn.disabled = true;
     try {
-      const { plan } = await buildPlan();
+      const { plan, context } = await buildPlan();
       const merged = applyPriceInputs(plan);
       // 表格里的输入就是最终价格
       for (const item of merged.items) {
@@ -516,7 +535,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       } else if (Number.isFinite(stockCount) && stockCount > 0) {
         output.textContent += '\n\n库存未提交：没有可用仓库（店铺需先开通 FBS 仓库）';
       }
-      onPublished?.(result);
+      onPublished?.(result, { items, category: merged.category, context });
     } catch (error) {
       state.textContent = String((error && error.message) || error);
       report?.(error);
@@ -541,8 +560,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         });
         let fields = [];
         try {
-          const workspace = workspaceCache || (context.binding
-            ? await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }) : null);
+          const workspace = await loadWorkspace(context);
           if (workspace) fields = (workspace.fields || []).map((field) => ({ name: field.name, description: field.description || '' }));
         } catch (_error) { /* 没有字段也能跑，只是不做属性观察 */ }
         state.textContent = `正在看图（${cfg.model}）…`;
@@ -550,7 +568,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           baseUrl: cfg.baseUrl,
           apiKey: cfg.apiKey,
           model: 'qwen3.8-flash',
-          imageUrls: context.images || [],
+          imageUrls: context.sourceImages || [],
           product: { title: context.sourceTitle || '', skus },
           fields,
           categoryTitle: (context.category && context.category.typeName) || '',
@@ -578,14 +596,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     void (async () => {
       try {
         const context = getContext();
-        if (!context || !context.binding) throw new Error('请先读取 ERP 草稿');
-        // ERP 读到就用它；读不到（catalog_stale 等）就用 Ozon 已上架商品的属性兜底
-        let workspace = workspaceCache;
-        if (!workspace) {
-          try { workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
-          catch (_error) { workspace = null; }
-          if (workspace) workspaceCache = workspace;
-        }
+        if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+        // 属性工作区读得到就用它；读不到就用 Ozon 已上架商品的属性兜底
+        let workspace = null;
+        try { workspace = await loadWorkspace(context); } catch (_error) { workspace = null; }
         let ozonAttrs = null;
         let pairs = [];
         if (!workspace) {

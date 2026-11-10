@@ -85,7 +85,7 @@ export function createDirectImageStore({ storage, sourceKey }) {
     },
     async save(results) {
       const persisted = results.filter(item => item.status === 'done' || item.status === 'failed').slice(-STORE_LIMIT)
-        .map(({ dataUrl: _dataUrl, ...rest }) => rest);
+        .map((item) => { const rest = { ...item }; delete rest.dataUrl; return rest; });
       await storage.set({ [key]: { savedAt: Date.now(), results: persisted } });
     },
   };
@@ -172,17 +172,23 @@ export function createDirectImageRunner({ send, store, getShopId = () => '', onC
 }
 
 /**
- * 上架用图：当前 SKU 的主图在最前，其后是共享详情图、翻译图；
+ * 上架用图条目，直接交给 planDirectItems（它按「本 SKU 图在前、商品级图在后」拼装）。
+ * SKU 主图标成 SKU 级，详情图与翻译图标成商品级并按顺序排好；
  * 没有任何可上架的生成图时退回来源图，保证上架不因为没生图而卡住。
+ *
+ * @returns [{ scope: 'SKU' | 'PRODUCT', skuKey, url }]
  */
-export function selectPublishImages(results, { skuKey, sourceUrls = [], limit = 15 } = {}) {
+export function publishImageEntries(results, { sourceUrls = [] } = {}) {
   const usable = (Array.isArray(results) ? results : []).filter(item => item.status === 'done'
-    && item.publishable && item.selected && /^https:\/\//u.test(String(item.url || ''))
-    && (item.skuKey === null || item.skuKey === undefined || String(item.skuKey) === String(skuKey)));
+    && item.publishable && item.selected && /^https:\/\//u.test(String(item.url || '')));
   const rank = (item) => (item.kind === 'hero' ? 0 : item.kind === 'gallery' ? 1 : 2);
   usable.sort((a, b) => rank(a) - rank(b) || (Number(a.order) || 0) - (Number(b.order) || 0));
-  const generated = httpsOnly(usable.map(item => item.url));
-  return (generated.length ? generated : httpsOnly(sourceUrls)).slice(0, limit);
+  const seen = new Set();
+  const entries = usable.filter(item => !seen.has(item.url) && seen.add(item.url)).map(item => (
+    item.kind === 'hero' && item.skuKey !== null && item.skuKey !== undefined
+      ? { scope: 'SKU', skuKey: String(item.skuKey), url: item.url }
+      : { scope: 'PRODUCT', skuKey: null, url: item.url }));
+  return entries.length ? entries : httpsOnly(sourceUrls).map(url => ({ scope: 'PRODUCT', skuKey: null, url }));
 }
 
 /** 进度摘要，供界面显示一句话状态。 */

@@ -499,30 +499,26 @@
   font-size: 11px;
 }
 
-.precision-direct-results {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.precision-direct-result {
-  width: 150px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.precision-direct-result img {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #fff;
-}
-
-.precision-direct-result a { font-size: 11px; }
+/* 直连生图结果（pages/donor/direct-image-panel.js） */
+.ss-direct-images { display: grid; gap: 10px; padding: 12px 14px; }
+.ss-direct-images-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ss-direct-images-head strong { margin-right: auto; font-size: 13px; color: var(--text); }
+.ss-direct-images-notice { margin: 0; padding: 8px 10px; border-radius: 9px; font-size: 12px;
+  color: var(--warn); background: rgba(183, 121, 31, .1); }
+.ss-direct-images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.ss-direct-image { display: grid; gap: 6px; align-content: start; padding: 8px; border: 1px solid var(--line);
+  border-radius: 12px; background: rgba(255, 255, 255, .94); }
+.ss-direct-image.is-failed { border-color: rgba(201, 61, 75, .45); }
+.ss-direct-image.is-running { border-color: var(--brand); }
+.ss-direct-image img,
+.ss-direct-image-placeholder { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; background: #f1f3f8; }
+.ss-direct-image-placeholder { display: grid; place-items: center; font-size: 12px; color: var(--muted); }
+.ss-direct-image p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.ss-direct-image .ss-direct-image-error { color: var(--err); }
+.ss-direct-image .ss-direct-image-warn { color: var(--warn); }
+.ss-direct-image .ss-direct-image-state { color: var(--muted); }
+.ss-direct-image-use { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+.ss-direct-image button { justify-self: start; min-height: 30px; padding: 4px 12px; font-size: 12px; }
 /* ===================================================================
    2026-11 完整设置的内联 iframe
    -------------------------------------------------------------------

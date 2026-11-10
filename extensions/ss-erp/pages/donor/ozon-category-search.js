@@ -396,6 +396,13 @@ export function recommendCategories(product, limit = 5) {
   return scored.slice(0, limit);
 }
 
+/** 按 id 找本地快照里的类目叶子（名称为中文）。找不到返回 null。 */
+export function findLocalCategory(categoryId, typeId) {
+  const cid = Number(categoryId), tid = Number(typeId);
+  const hit = ensureIndex().find(entry => entry.row[0] === cid && entry.row[1] === tid);
+  return hit ? { categoryId: cid, typeId: tid, typeName: hit.typeName, pathTitles: [hit.topName, hit.midName] } : null;
+}
+
 export function localCatalogInfo() {
   const { tree, truncated } = buildTree();
   return Object.freeze({

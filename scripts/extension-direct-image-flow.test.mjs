@@ -4,7 +4,7 @@ import {
   buildDirectImageJobs,
   createDirectImageRunner,
   createDirectImageStore,
-  selectPublishImages,
+  publishImageEntries,
 } from '../extensions/ss-erp/pages/donor/direct-image-flow.js';
 
 const media = [
@@ -109,16 +109,22 @@ test('cancel stops before the next image and reports the remainder as not starte
   assert.deepEqual(results.map(item => item.status), ['done', 'pending', 'pending']);
 });
 
-test('publish images put the SKU hero first, then gallery, then translations, and fall back to source images', () => {
+test('publish entries scope heroes to their SKU, order the shared images, and fall back to source images', () => {
   const results = [
+    { id: 'translate:1', kind: 'translate', skuKey: null, order: 100, status: 'done', publishable: true, selected: true, url: 'https://cdn.example.test/t1.png' },
+    { id: 'gallery:shared_gallery_2', kind: 'gallery', skuKey: null, order: 2, status: 'done', publishable: true, selected: true, url: 'https://cdn.example.test/g2.png' },
     { id: 'gallery:shared_gallery_1', kind: 'gallery', skuKey: null, order: 1, status: 'done', publishable: true, selected: true, url: 'https://cdn.example.test/g1.png' },
     { id: 'hero:sku-a', kind: 'hero', skuKey: 'sku-a', order: 0, status: 'done', publishable: true, selected: true, url: 'https://cdn.example.test/hero-a.png' },
-    { id: 'hero:sku-b', kind: 'hero', skuKey: 'sku-b', order: 0, status: 'done', publishable: true, selected: true, url: 'https://cdn.example.test/hero-b.png' },
-    { id: 'translate:1', kind: 'translate', skuKey: null, order: 100, status: 'done', publishable: true, selected: false, url: 'https://cdn.example.test/t1.png' },
-    { id: 'gallery:shared_gallery_2', kind: 'gallery', skuKey: null, order: 2, status: 'failed', publishable: false, selected: true, url: '' },
+    { id: 'hero:sku-b', kind: 'hero', skuKey: 'sku-b', order: 0, status: 'done', publishable: true, selected: false, url: 'https://cdn.example.test/hero-b.png' },
+    { id: 'gallery:shared_gallery_3', kind: 'gallery', skuKey: null, order: 3, status: 'failed', publishable: false, selected: true, url: '' },
+    { id: 'gallery:shared_gallery_4', kind: 'gallery', skuKey: null, order: 4, status: 'done', publishable: false, selected: true, url: '' },
   ];
-  assert.deepEqual(selectPublishImages(results, { skuKey: 'sku-a', sourceUrls: ['https://img.example.test/main-1.jpg'] }),
-    ['https://cdn.example.test/hero-a.png', 'https://cdn.example.test/g1.png']);
-  assert.deepEqual(selectPublishImages([], { skuKey: 'sku-a', sourceUrls: ['https://img.example.test/main-1.jpg', 'http://x.test/a.jpg'] }),
-    ['https://img.example.test/main-1.jpg']);
+  assert.deepEqual(publishImageEntries(results, { sourceUrls: ['https://img.example.test/main-1.jpg'] }), [
+    { scope: 'SKU', skuKey: 'sku-a', url: 'https://cdn.example.test/hero-a.png' },
+    { scope: 'PRODUCT', skuKey: null, url: 'https://cdn.example.test/g1.png' },
+    { scope: 'PRODUCT', skuKey: null, url: 'https://cdn.example.test/g2.png' },
+    { scope: 'PRODUCT', skuKey: null, url: 'https://cdn.example.test/t1.png' },
+  ]);
+  assert.deepEqual(publishImageEntries([], { sourceUrls: ['https://img.example.test/main-1.jpg', 'http://x.test/a.jpg'] }),
+    [{ scope: 'PRODUCT', skuKey: null, url: 'https://img.example.test/main-1.jpg' }]);
 });

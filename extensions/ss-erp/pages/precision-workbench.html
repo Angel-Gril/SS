@@ -36,14 +36,9 @@
             <!-- 直连通道自检：开跑前把「凭据 / Ozon 直连 / 生图 Provider」三件事说清楚。
                  实跑教训：代理把 *.ozon.ru 送进代理但转发坏了，界面只会显示 "Failed to fetch"。 -->
             <div id="precision-direct-health-mount"></div>
-            <!-- 直连生图：走索引选图 + 规则提示词 + SW 直发 provider，不经过 ERP operation。
-                 与工具栏的「点击开始处理图片」（ERP EXECUTE_HOSTED_SUITE）并存，
-                 后者失败时这条能独立跑通。 -->
             <div id="precision-direct-generate-bar" class="precision-direct-generate-bar">
-              <button id="precision-direct-generate-btn" class="primary" type="button">直连生图 1 张</button>
-              <button id="precision-direct-generate-all-btn" class="ghost" type="button">直连生图 7 张</button>
               <button id="precision-prefill-attributes" class="ghost" type="button">属性预填</button>
-              <span id="precision-direct-generate-hint" class="precision-direct-generate-hint">索引选图 + 规则提示词，不经过 ERP</span>
+              <span id="precision-direct-generate-hint" class="precision-direct-generate-hint">类目确定后会自动预填官方属性；需要时可手动重跑</span>
             </div>
             <nav id="precision-stepper" class="precision-stepper" aria-label="上架流程">
                 <button type="button" class="stepper-step" data-step="collect" data-state="current">
