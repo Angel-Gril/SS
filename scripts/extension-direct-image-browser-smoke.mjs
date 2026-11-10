@@ -267,7 +267,9 @@ async function run() {
     assert.equal(await workspace('document.querySelectorAll(".ss-direct-image.is-failed").length'), 1);
     assert.match(await workspace('document.querySelector("#precision-direct-images header strong").textContent'), /已完成 8\/9 张，1 张失败可重试/u);
     assert.match(await workspace('document.querySelector(".ss-direct-image.is-failed .ss-direct-image-error").textContent'), /429/u);
-    assert.equal(await workspace('[...document.querySelectorAll(".ss-direct-image.is-done img")].every(image=>image.complete&&image.naturalWidth>0)'), true);
+    // 结果图是懒加载的：首屏以外的图片此刻可能尚未解码，所以只要求每张都指向托管链接、首张已解码
+    assert.equal(await workspace('[...document.querySelectorAll(".ss-direct-image.is-done img")].every(image=>image.src.startsWith(' + JSON.stringify(IMAGE_ORIGIN + '/generated-') + '))'), true);
+    await until(() => workspace('(()=>{const image=document.querySelector(".ss-direct-image.is-done img");return image.complete&&image.naturalWidth>0;})()'), 'first result image decoded');
     await shot('-3-results');
 
     // 5. 只重试失败项：不重复生成（也就不重复付费）已完成的 8 张
