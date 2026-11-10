@@ -164,8 +164,13 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     });
     plan.items.forEach((item, index) => { item.__cost = skus[index] && skus[index].cost; item.categoryId = plan.category.categoryId; item.typeId = plan.category.typeId; item.priceSource = '成本×倍率'; });
 
-    // 默认沿用线上现有价格：只有勾选「覆盖线上价」才用成本×倍率。
-    if (!overridePrice.checked && plan.items.length) {
+    // 价格策略：先查线上现有价。
+    //   - 没勾「覆盖线上价」→ 直接用现有价（重复上架不会产生任何改价）
+    //   - 勾了 → 允许改价，但幅度超过 20% 直接拦下来，并说明后果
+    // 2026-11 实测：上架时写 84、随后改回 1990，两次大幅改价让 Ozon 把三张卡
+    // 全部丢进了「价格隔离」（availabilities.reasons = "Товар в карантине цен"），
+    // 商品从在售变 Не продается。价格只能在上架前定一次，上架后改价是危险动作。
+    if (plan.items.length) {
       try {
         const info = await send('ss-erp:direct-ozon-post', {
           path: '/v3/product/info/list',
@@ -174,10 +179,25 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         const byOffer = new Map((info && Array.isArray(info.items) ? info.items : []).map((it) => [String(it.offer_id), it]));
         for (const item of plan.items) {
           const hit = byOffer.get(item.offerId);
-          if (hit && Number(hit.price) > 0) {
-            item.price = Number(hit.price).toFixed(2);
+          const existing = hit && Number(hit.price) > 0 ? Number(hit.price) : 0;
+          if (!existing) { item.priceSource = '首次上架'; continue; }
+          if (!overridePrice.checked) {
+            item.price = existing.toFixed(2);
             if (Number(hit.old_price) > 0) item.oldPrice = Number(hit.old_price).toFixed(2);
             item.priceSource = '线上现有';
+            continue;
+          }
+          const next = Number(item.price);
+          const ratio = existing > 0 && Number.isFinite(next) ? Math.abs(next - existing) / existing : 0;
+          item.priceSource = `改价 ${existing.toFixed(2)} → ${Number(item.price).toFixed(2)}`;
+          if (ratio > 0.2) {
+            item.blockers.push('PRICE_JUMP');
+            plan.blockers.push({
+              scope: item.offerId,
+              code: 'PRICE_JUMP',
+              detail: `线上 ${existing.toFixed(2)} → ${Number(item.price).toFixed(2)}（${(ratio * 100).toFixed(0)}%），Ozon 会触发价格隔离、商品下架`,
+            });
+            plan.ready = false;
           }
         }
       } catch (_error) { /* 读不到就保留成本×倍率，预检里能看到价格 */ }
