@@ -50,12 +50,15 @@ async function browser(t) {
     '--disable-background-networking', '--disable-component-update', '--user-data-dir=' + profile, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
   let cdp;
   t.after(async () => {
+    // 被启动的 chrome.exe 只是启动器，真正的浏览器进程由它拉起后启动器即以 0 退出：
+    // 只结束 child 结束不了浏览器，必须经调试连接让浏览器自己退出。
+    await cdp?.send('Browser.close').catch(() => {});
     cdp?.socket.close();
     if (child.exitCode === null) {
       const exited = new Promise(resolve => child.once('exit', resolve));
       child.kill(); await Promise.race([exited, pause(2000)]);
     }
-    await rm(profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
   let port;
   await until(async () => { try { port = Number((await readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); return !!port; } catch { return false; } }, 'Chromium launch');

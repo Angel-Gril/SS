@@ -1,7 +1,7 @@
 // 浏览器夹具公用部分：启动独立的无头 Chromium、接管全部网络请求（不联网）、用真实鼠标事件点击。
 // 供 scripts/extension-*-browser-smoke.mjs 使用。
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -32,6 +32,19 @@ function chromeExecutable() {
   return executable;
 }
 
+/**
+ * 兜底：按临时用户目录名结束浏览器进程。只在调试连接没能建立时使用（正常收尾走 Browser.close）。
+ * 启动器退出后，真正的浏览器进程与本进程没有父子关系，只能靠命令行里的用户目录识别。
+ */
+function killBrowserByProfile(profile) {
+  if (process.platform !== 'win32') return;
+  const filter = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*${path.basename(profile)}*' }`;
+  try {
+    execFileSync('powershell', ['-NoProfile', '-Command', `${filter} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+      { stdio: 'ignore', timeout: 20_000 });
+  } catch { /* 尽力而为：没有可结束的进程或查询超时 */ }
+}
+
 /** 读取扩展目录里的文件作为夹具响应；路径越界时抛错。 */
 export async function extensionFile(pathname) {
   const relative = decodeURIComponent(pathname).replace(/^\//u, '');
@@ -59,6 +72,11 @@ class Cdp {
         return;
       }
       for (const listener of this.listeners.get(message.method) || []) listener(message.params, message.sessionId);
+    });
+    // 连接断开（浏览器崩溃或被外部结束）时让挂起的请求失败；否则调用方永远等不到结果，收尾代码也不会执行
+    socket.addEventListener('close', () => {
+      for (const pending of this.pending.values()) pending.reject(new Error('CDP connection closed'));
+      this.pending.clear();
     });
   }
   static async connect(url) {
@@ -143,6 +161,8 @@ async function withBrowser(options, run) {
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     await run({
       send, evaluate, blocked, pageErrors, cdp,
+      /** 本次浏览器的临时用户目录；收尾合同测试用它确认浏览器已退出、目录已删除。 */
+      profileDir: profile,
       navigate: (url) => send('Page.navigate', { url }),
       /** 真实扩展形态下，等扩展的 service worker 出现并返回它的扩展 ID。 */
       async extensionId(timeout = 30_000) {
@@ -165,10 +185,17 @@ async function withBrowser(options, run) {
       },
     });
   } finally {
+    // 被启动的 chrome.exe 只是启动器：它拉起真正的浏览器进程后自己以 0 退出，child.kill() 结束不了浏览器。
+    // 所以先经调试连接让浏览器自己退出（与 extension-ozon-browser-acceptance.mjs 相同），其余都是兜底。
+    await Promise.race([cdp?.send('Browser.close').catch(() => {}), pause(3000)]);
     try { cdp?.socket.close(); } catch {}
-    child.kill();
-    await pause(300);
-    await rm(profile, { recursive: true, force: true }).catch(() => {});
+    if (child.exitCode === null) {
+      child.kill();
+      await Promise.race([new Promise((resolve) => child.once('exit', resolve)), pause(2000)]);
+    }
+    if (!cdp) killBrowserByProfile(profile);
+    // 浏览器退出需要一点时间，期间用户目录里的文件还被占用
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
   }
 }
 
