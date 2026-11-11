@@ -455,6 +455,22 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
    * 与弹窗里那套规则同源，所以「必填 6 项」在直连车道上同样成立。
    */
   async function attributesFromRules(context, category, skus) {
+    // 字典列表按 attributeId 缓存：之前每个属性 × 每个 SKU 各请求一次（limit 1000），
+    // 12 个 SKU 就是上百次往返 + 大 JSON 解析，实测把渲染进程卡死。
+    const dictCache = new Map();
+    const dictionaryOf = async (attributeId) => {
+      const id = Number(attributeId);
+      if (dictCache.has(id)) return dictCache.get(id);
+      let list = [];
+      try {
+        const found = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: category.categoryId, typeId: category.typeId, attributeId: id, query: '', limit: 400,
+        });
+        list = (found && found.values) || [];
+      } catch (_error) { list = []; }
+      dictCache.set(id, list);
+      return list;
+    };
     const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: category.categoryId, typeId: category.typeId });
     const fields = (schema && schema.fields) || [];
     if (!fields.length) return { fields: [], values: [] };
@@ -483,14 +499,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       if (item.kind === 'text') {
         return { attributeId: item.attributeId, value: String(item.value || ''), dictionaryValueIds: [] };
       }
-      let list = [];
-      try {
-        const found = await send('ss-erp:direct-ozon-attribute-values', {
-          categoryId: category.categoryId, typeId: category.typeId,
-          attributeId: item.attributeId, query: '', limit: 1000,
-        });
-        list = (found && found.values) || [];
-      } catch (_error) { list = []; }
+      let list = await dictionaryOf(item.attributeId);
       const queries = Array.isArray(item.queries) && item.queries.length ? item.queries : [item.query || ''];
       let chosen = null;
       for (const query of queries) {

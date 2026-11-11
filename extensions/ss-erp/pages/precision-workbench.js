@@ -624,6 +624,14 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
     return response.data?.catalog?.attributePreview;
   },
   saveSelection:async(binding,selection)=>{
+    // 2026-11：类目确认不再依赖 ERP —— 先写本地缓存，ERP 只是可选同步。
+    // 之前只有 saveEditor 成功后才缓存，ERP 掉线就等于『类目没选』，
+    // 直连车道拿不到 categoryId/typeId，新品类全卡住。
+    try {
+      const srcId0 = projection && projection.source ? projection.source.sourceProductId : '';
+      if (srcId0) await chrome.storage.local.set({ ['ss-erp:direct-lane:category:' + srcId0]: { ...selection, at: Date.now() } });
+    } catch (_e0) { /* 缓存失败不阻断 */ }
+    try {
     // 2026-11：类目现在是本地选的，选完才需要草稿。这里负责补齐草稿再写入，
     // 使「选类目 → 建草稿 → 保存类目」的顺序成立（与精铺/知了一致）。
     // 原实现一开始就比对 binding，无草稿时 currentEditorBinding() 直接抛错，
@@ -670,6 +678,12 @@ const categoryPicker = createCategoryDialog({root:categoryModal,getBinding:()=>l
     // 类目落定 → 自动预填官方属性（异步，失败不影响类目已保存）
     void prefillOfficialAttributes().catch(error=>log('属性预填失败：'+(error&&error.message||error),true));
     return saved;
+    } catch (error) {
+      // ERP 不可用（未配对/草稿创建失败/catalog_stale 重试仍失败）：本地已有类目，继续往下走
+      log('类目已存本地，ERP 同步失败：' + String((error && error.message) || error).slice(0, 120));
+      status('类目已保存到本地（ERP 未同步，不影响直连上架）');
+      return { cachedOnly: true, category: selection };
+    }
   },onError:report,
   onState:value=>{
     if (!value.open || value.previewStatus !== 'ready') return;
