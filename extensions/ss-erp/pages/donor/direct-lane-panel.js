@@ -173,7 +173,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         option.value = String(one.warehouse_id);
         warehouse.append(option);
       }
-      return { count: warehouses.length };
+      // 默认选中第一个仓库：否则补库存那步会因 warehouseId=0 被静默跳过，
+      // 结果就是「上架成功但 Не продается、model 建不出来」（T9 实测）
+      if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
+      return { count: warehouses.length, selected: warehouse.value };
     } catch (error) {
       warehouse.replaceChildren();
       const option = make('option', '', '读取仓库失败');
@@ -726,14 +729,46 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         + (merged2.size ? `；合并到 ${merged2.size} 个 model（变体数 ${[...merged2.values()].join('/')}）` : '');
 
       const stockCount = Number(stockInput.input.value);
-      const warehouseId = Number(warehouse.value);
+      let warehouseId = Number(warehouse.value);
+      // 仓库下拉可能还没加载完（新装/新 profile 常见），发布后补库存前再拉一次并自动选第一个
+      if (stockCount > 0 && !(warehouseId > 0)) {
+        await loadWarehouses();
+        if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
+        warehouseId = Number(warehouse.value);
+      }
       if (Number.isFinite(stockCount) && stockCount > 0 && warehouseId > 0) {
         const offers = items.map((item) => item.offerId);
-        const stocks = await send('ss-erp:direct-ozon-post', {
-          // /v1/product/import/stocks 是 404，现役是 /v2/products/stocks
-          path: '/v2/products/stocks',
-          body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
-        });
+        // import 返回时商品往往还没建好，直接设库存会回 PRODUCT_IS_NOT_CREATED（TA 实测）。
+        // 先轮询等 offer 出现，再提交库存，失败退避重试。
+        let stocks = null;
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+          const info = await send('ss-erp:direct-ozon-post', { path: '/v3/product/info/list', body: { offer_id: offers } })
+            .catch(() => null);
+          const present = new Set(((info && info.items) || []).map((one) => String(one.offer_id)));
+          const ready = offers.every((offer) => present.has(offer));
+          state.textContent = `等待商品创建（${present.size}/${offers.length}）…`;
+          if (!ready) { await new Promise((r) => setTimeout(r, 5000)); continue; }
+          stocks = await send('ss-erp:direct-ozon-post', {
+            // /v1/product/import/stocks 是 404，现役是 /v2/products/stocks
+            path: '/v2/products/stocks',
+            body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
+          }).catch((error) => ({ error: String((error && error.message) || error) }));
+          const failed = ((stocks && stocks.result) || []).some((one) => (one.errors || []).length);
+          if (!failed) break;
+          // 库存接口有频率限制（TOO_MANY_REQUESTS）。这种情况越重试越糟，退避后再试一次。
+          const rateLimited = ((stocks && stocks.result) || [])
+            .some((one) => (one.errors || []).some((e) => String(e.code || '') === 'TOO_MANY_REQUESTS'));
+          if (rateLimited) {
+            state.textContent = '库存被限流，等 60 秒后重试…';
+            await new Promise((r) => setTimeout(r, 60000));
+            stocks = await send('ss-erp:direct-ozon-post', {
+              path: '/v2/products/stocks',
+              body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
+            }).catch((error) => ({ error: String((error && error.message) || error) }));
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+        }
         output.textContent += '\n\n库存提交：' + JSON.stringify(stocks).slice(0, 600);
       } else if (Number.isFinite(stockCount) && stockCount > 0) {
         output.textContent += '\n\n库存未提交：没有可用仓库（店铺需先开通 FBS 仓库）';
