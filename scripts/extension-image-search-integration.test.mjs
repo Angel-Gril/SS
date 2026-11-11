@@ -54,15 +54,12 @@ assert.ok(
   sourceCostingPanel.matches.includes('https://detail.1688.com/*'),
   'source costing panel should run on 1688 detail pages',
 );
-assert.ok(
-  sourceCostingPanel.matches.includes('https://*.pinduoduo.com/*')
-    && sourceCostingPanel.matches.includes('https://*.yangkeduo.com/*'),
-  'source costing panel should run on PDD source pages',
-);
-assert.ok(
-  sourceCostingPanel.matches.includes('https://item.taobao.com/*')
-    && sourceCostingPanel.matches.includes('https://detail.tmall.com/*'),
-  'source costing panel should run on Taobao and Tmall source detail pages',
+// 2026-11-11：1688 以外的货源平台已冻结（dev-docs/extension-direction.md），
+// 核价面板的界面入口只保留在 1688 商品页；采集与网络桥接脚本不受影响。
+assert.deepEqual(
+  sourceCostingPanel.matches,
+  ['https://detail.1688.com/*'],
+  'source costing panel entry is limited to 1688 while other source platforms are frozen',
 );
 assert.ok(
   sourceCostingPanel.css.includes('content/source-costing-panel.css'),

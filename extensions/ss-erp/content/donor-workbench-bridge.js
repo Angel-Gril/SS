@@ -1177,6 +1177,7 @@
         if (frame.contentWindow && frame.contentWindow.location.href === 'about:blank') {
           trigger.textContent = '工作台（加载失败）';
           trigger.title = '来源页未能加载扩展工作台，请刷新页面后重试';
+          if (globalThis.SS_ERP_DOCK) globalThis.SS_ERP_DOCK.update('workbench', { label: '上架工作台（加载失败）', title: trigger.title });
           hideFrame();
         }
       } catch {
@@ -1249,6 +1250,10 @@
     host.appendChild(trigger);
     host.appendChild(frame);
     document.documentElement.appendChild(host);
+    // 入口由统一 dock 接管时，隐藏自己的悬浮按钮（见 content/ss-dock.js）
+    if (globalThis.SS_ERP_DOCK && globalThis.SS_ERP_DOCK.register('workbench', {
+      open: showFrame, isOpen: function () { return open; }, title: '打开 SS ERP 上架工作台',
+    })) trigger.dataset.ssDocked = 'true';
   }
 
   function unmount() {

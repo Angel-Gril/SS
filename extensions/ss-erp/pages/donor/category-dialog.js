@@ -373,14 +373,6 @@ export function createCategoryDialog({ root, getBinding, getProduct = () => null
     return snapshot();
   }
   closeButton.addEventListener('click', close); confirmButton.addEventListener('click', () => void confirm());
-  // E2E 模式下允许脚本触发搜索（生产行为不变）
-  function e2eOk() {
-    try {
-      if (globalThis.__SSERP_E2E__ === true) return true;
-      if (new URLSearchParams(location.search).get('sserp-e2e') === '1') { globalThis.__SSERP_E2E__ = true; return true; }
-    } catch (_e) {}
-    return false;
-  }
   searchButton.addEventListener('click', () => void search());
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer); epoch++; previewEpoch++; value.canSave = false; value.selected = null;

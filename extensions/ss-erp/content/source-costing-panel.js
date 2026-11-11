@@ -113,6 +113,13 @@
     document.documentElement.appendChild(panel);
     restorePanelPosition(panel);
     bindPanelDrag(panel);
+    // 入口由统一 dock 接管时，隐藏自己的悬浮按钮（见 content/ss-dock.js）
+    if (globalThis.SS_ERP_DOCK && globalThis.SS_ERP_DOCK.register('profit', {
+      open: function () { openPanel(panel); },
+      close: function () { closePanel(panel); },
+      isOpen: function () { return panel.classList.contains('open'); },
+      title: fab.title,
+    })) fab.dataset.ssDocked = 'true';
 
     fab.addEventListener('click', function () {
       if (panel.classList.contains('open')) {

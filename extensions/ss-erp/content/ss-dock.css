@@ -1,0 +1,93 @@
+/* SS ERP 统一悬浮入口。颜色、圆角、阴影、模糊只取自 shared/ui/tokens.css（由 manifest 排在本文件之前）。 */
+#ss-erp-dock {
+  all: initial;
+  position: fixed;
+  right: 12px;
+  top: 38vh;
+  z-index: var(--ss-z-top, 2147483000);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  font: 13px/1.4 var(--ss-font, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+  color: var(--ss-text, #1b1a2e);
+}
+#ss-erp-dock.is-covered { display: none; }
+#ss-erp-dock *, #ss-erp-dock *::before, #ss-erp-dock *::after { box-sizing: border-box; font: inherit; }
+
+#ss-erp-dock .ss-dock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--ss-glass-border, rgba(255, 255, 255, .65));
+  border-radius: var(--ss-radius-pill, 999px);
+  background: var(--ss-glass-shell, rgba(255, 255, 255, .82));
+  -webkit-backdrop-filter: var(--ss-glass-blur, blur(18px));
+  backdrop-filter: var(--ss-glass-blur, blur(18px));
+  box-shadow: var(--ss-shadow-md, 0 12px 30px rgba(46, 32, 120, .12));
+  color: var(--ss-brand-strong, #5443d6);
+  font-weight: 700;
+  cursor: pointer;
+}
+#ss-erp-dock .ss-dock-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ss-brand-gradient, linear-gradient(135deg, #6654f5, #9b8cfa));
+  color: var(--ss-on-brand, #fff);
+  font-size: 11px;
+  letter-spacing: .02em;
+}
+#ss-erp-dock .ss-dock-toggle:hover { box-shadow: var(--ss-shadow-lg, 0 26px 90px rgba(46, 32, 120, .22)); }
+#ss-erp-dock button:focus-visible { outline: 2px solid var(--ss-brand, #6654f5); outline-offset: 2px; }
+
+#ss-erp-dock .ss-dock-menu {
+  display: grid;
+  gap: 8px;
+  width: 188px;
+  padding: 10px;
+  border: 1px solid var(--ss-glass-border, rgba(255, 255, 255, .65));
+  border-radius: var(--ss-radius-md, 14px);
+  background: var(--ss-glass-shell, rgba(255, 255, 255, .82));
+  -webkit-backdrop-filter: var(--ss-glass-blur, blur(18px));
+  backdrop-filter: var(--ss-glass-blur, blur(18px));
+  box-shadow: var(--ss-shadow-lg, 0 26px 90px rgba(46, 32, 120, .22));
+}
+#ss-erp-dock .ss-dock-menu[hidden],
+#ss-erp-dock .ss-dock-actions[hidden],
+#ss-erp-dock .ss-dock-status[hidden] { display: none; }
+#ss-erp-dock .ss-dock-tabs, #ss-erp-dock .ss-dock-actions { display: grid; gap: 6px; }
+#ss-erp-dock .ss-dock-actions { padding-top: 8px; border-top: 1px solid var(--ss-line, #e3def5); }
+
+#ss-erp-dock .ss-dock-tab,
+#ss-erp-dock .ss-dock-action {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--ss-line, #e3def5);
+  border-radius: var(--ss-radius-sm, 9px);
+  background: var(--ss-glass-card, rgba(255, 255, 255, .94));
+  color: var(--ss-text, #1b1a2e);
+  text-align: left;
+  cursor: pointer;
+}
+#ss-erp-dock .ss-dock-tab:hover:not(:disabled),
+#ss-erp-dock .ss-dock-action:hover { border-color: var(--ss-brand-line, #d9d2fb); background: var(--ss-brand-soft, #f1eeff); }
+#ss-erp-dock .ss-dock-tab.is-active {
+  border-color: transparent;
+  background: var(--ss-brand-gradient, linear-gradient(135deg, #6654f5, #9b8cfa));
+  color: var(--ss-on-brand, #fff);
+}
+#ss-erp-dock .ss-dock-tab:disabled { color: var(--ss-muted, #6b6a85); background: var(--ss-neutral-soft, #f6f5fb); opacity: .7; cursor: not-allowed; }
+#ss-erp-dock .ss-dock-action { min-height: 30px; font-size: 12px; color: var(--ss-text-2, #3d3b55); }
+#ss-erp-dock .ss-dock-status { margin: 0; font-size: 12px; color: var(--ss-muted, #6b6a85); overflow-wrap: anywhere; }
+
+/* 已由 dock 接管入口的功能：隐藏它们原来的悬浮按钮 */
+[data-ss-docked="true"] { display: none !important; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #ss-erp-dock .ss-dock-toggle, #ss-erp-dock .ss-dock-tab, #ss-erp-dock .ss-dock-action { transition: background-color .15s, border-color .15s, box-shadow .15s; }
+}

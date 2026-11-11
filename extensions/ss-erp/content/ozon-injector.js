@@ -188,6 +188,14 @@
       window.OZON_CALC_OZON_PANEL.renderDrawerContent(body);
     });
 
+    // 入口由统一 dock 接管时，隐藏自己的悬浮按钮（见 content/ss-dock.js）
+    if (globalThis.SS_ERP_DOCK && globalThis.SS_ERP_DOCK.register('profit', {
+      open: function () { openDrawer({ manual: true }); },
+      close: closeDrawer,
+      isOpen: function () { return drawer.classList.contains('open'); },
+      title: '价格核算 · 物流同步',
+    })) fab.dataset.ssDocked = 'true';
+
   }
 
   if (document.readyState === 'loading') {

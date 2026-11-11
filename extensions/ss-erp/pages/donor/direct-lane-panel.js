@@ -4,6 +4,7 @@ import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiC
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
 import { buildDirectWorkspace } from '../../shared/publish/direct-workspace.js';
+import { ensureOriginAccess } from './direct-credentials-form.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -674,8 +675,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
       try {
+        const aiBaseUrl = String(aiBase.value || '').trim() || DEFAULT_TITLE_AI.baseUrl;
+        if (String(aiKey.value || '').trim()) await ensureOriginAccess(aiBaseUrl);
         const saved = await writeTitleAiConfig({
-          baseUrl: String(aiBase.value || '').trim() || DEFAULT_TITLE_AI.baseUrl,
+          baseUrl: aiBaseUrl,
           model: String(aiModel.value || '').trim() || DEFAULT_TITLE_AI.model,
           apiKey: String(aiKey.value || '').trim(),
         });

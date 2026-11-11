@@ -581,12 +581,18 @@ test('removes only the exact canonical origin and rejects unsafe removal shapes 
   assert.deepEqual(permissions.calls, []);
 });
 
-test('cloud manifest declares Provider access only as optional and never as a mandatory arbitrary host', () => {
+// 2026-11-11（dev-docs/extension-direction.md）：解压加载的开发版 manifest 把任意 https 主机
+// 作为安装即授予的权限（精铺式直连，免去逐个地址授权）；打包发布版仍由构建脚本改回“可选权限”，
+// 并由 verify-extension-package 拒绝把它作为强制权限的云端包。两种形态下，保存生图服务时都会在
+// 可信点击内确认访问权限（已授予则不弹窗）。
+test('packaged builds declare Provider access only as optional; the unpacked manifest grants it at install', () => {
   const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
   const buildScript = fs.readFileSync('scripts/build-extension-package.mjs', 'utf8');
-  assert.deepEqual(manifest.optional_host_permissions, ['https://*/*']);
+  assert.equal(manifest.optional_host_permissions, undefined);
   assert.equal((manifest.host_permissions || []).includes('<all_urls>'), false);
-  assert.equal((manifest.host_permissions || []).includes('https://*/*'), false);
+  assert.equal((manifest.host_permissions || []).includes('https://*/*'), true);
+  assert.match(buildScript, /manifest\.optional_host_permissions = \['https:\/\/\*\/\*'\];/u);
+  assert.match(buildScript, /manifest\.host_permissions = CLOUD_HOST_PERMISSIONS;/u);
   assert.equal((manifest.host_permissions || []).includes('file:///*'), false);
   assert.equal(
     (manifest.web_accessible_resources || [])
@@ -625,7 +631,6 @@ test('local package also requires a trusted exact-origin Provider grant', () => 
       .includes('<all_urls>'),
     false,
   );
-  assert.deepEqual(manifest.optional_host_permissions, ['https://*/*']);
 });
 
 test('package verifier rejects arbitrary HTTPS host permissions with wildcard ports', () => {

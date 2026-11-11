@@ -10,40 +10,14 @@
 //
 // 用法：node scripts/extension-direct-image-browser-smoke.mjs [--screenshot <png 路径>]
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { EXTENSION_ROOT, extensionFile, until, withFixtureBrowser } from './extension-browser-fixture.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const EXTENSION_ROOT = path.join(ROOT, 'extensions', 'ss-erp');
 const PAGE_ORIGIN = 'https://detail.1688.com';
 const PAGE_URL = `${PAGE_ORIGIN}/offer/715234567890.html`;
 const IMAGE_ORIGIN = 'https://images.ss-erp-fixture.invalid';
 const SCREENSHOT = process.argv.includes('--screenshot') ? process.argv[process.argv.indexOf('--screenshot') + 1] : '';
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function until(check, label, timeout = 20_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const result = await check();
-    if (result) return result;
-    await pause(80);
-  }
-  throw new Error(`Timed out: ${label}`);
-}
-
-function chromeExecutable() {
-  const base = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright');
-  const candidates = [process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    base && path.join(base, 'chromium-1217/chrome-win64/chrome.exe'),
-    base && path.join(base, 'chromium-1208/chrome-win64/chrome.exe')].filter(Boolean);
-  const executable = candidates.find(existsSync);
-  assert.ok(executable, '需要独立的 Chromium（设置 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH）');
-  return executable;
-}
 
 function fixtureProduct() {
   return {
@@ -96,6 +70,8 @@ const chromeFixtureScript = `(() => {
   if (location.pathname !== '/pages/precision-workbench.html') return;
   const failedOnce = new Set();
   let generated = 0;
+  let ozonSaved = null, imageSaved = null;
+  parent.__smokePermissions = [];
   const area = () => ({
     get: async (key) => (Object.prototype.hasOwnProperty.call(parent.__smokeStorage, key) ? { [key]: structuredClone(parent.__smokeStorage[key]) } : {}),
     set: async (value) => { for (const [key, entry] of Object.entries(value)) parent.__smokeStorage[key] = structuredClone(entry); },
@@ -111,9 +87,21 @@ const chromeFixtureScript = `(() => {
           ? { ok: true, data: { state: 'UI_REGISTERED', registered: true } } : { ok: false, errorCode: 'FIXTURE_OPERATION_NOT_IMPLEMENTED' });
       }
       parent.__smokeDirect.push({ type, jobId: payload.jobId || null, refs: (payload.inputImageUrls || []).length, shopId: payload.shopId || null });
-      if (type === 'ss-erp:direct-ozon-credentials-read') return done({ ok: true, result: null });
-      if (type === 'ss-erp:direct-ozon-probe') return done({ ok: true, result: { ok: false, kind: 'NO_CREDENTIALS', message: '尚未配置 Ozon 直连凭据' } });
-      if (type === 'ss-erp:direct-image-probe') return done({ ok: true, result: { ok: true, kind: 'OK', message: '生图 Provider 正常（夹具）' } });
+      if (type === 'ss-erp:direct-ozon-credentials-read') return done({ ok: true, result: ozonSaved });
+      if (type === 'ss-erp:direct-ozon-credentials-write') {
+        if (!/^[0-9]{4,12}$/.test(String(payload.clientId)) || String(payload.apiKey).length < 20) return done({ ok: false, error: 'Client-Id 应为 4-12 位数字' });
+        ozonSaved = { clientId: String(payload.clientId), label: '' };
+        return done({ ok: true, result: ozonSaved });
+      }
+      if (type === 'ss-erp:direct-ozon-probe') return done({ ok: true, result: ozonSaved
+        ? { ok: true, kind: 'OK', message: 'Ozon 直连正常（夹具）' } : { ok: false, kind: 'NO_CREDENTIALS', message: '尚未配置 Ozon 直连凭据' } });
+      if (type === 'ss-erp:direct-image-provider-read') return done({ ok: true, result: imageSaved });
+      if (type === 'ss-erp:direct-image-provider-write') {
+        imageSaved = { baseUrl: String(payload.baseUrl), model: String(payload.model), size: String(payload.size || '1008x1344'), mode: 'openai-images' };
+        return done({ ok: true, result: imageSaved });
+      }
+      if (type === 'ss-erp:direct-image-probe') return done({ ok: true, result: imageSaved
+        ? { ok: true, kind: 'OK', message: '生图 Provider 正常（夹具）' } : { ok: false, kind: 'NO_CREDENTIALS', message: '尚未配置生图 Provider' } });
       if (type === 'ss-erp:direct-image-generate') {
         if (payload.jobId === 'gallery:shared_gallery_2' && !failedOnce.has(payload.jobId)) {
           failedOnce.add(payload.jobId);
@@ -124,115 +112,31 @@ const chromeFixtureScript = `(() => {
       }
       return done({ ok: false, error: '夹具未实现：' + type });
     } };
-  const patch = { runtime, storage: { local: area(), session: area() }, permissions: { request: (_input, callback) => callback(true) } };
+  const patch = { runtime, storage: { local: area(), session: area() }, permissions: {
+    contains: (input, callback) => callback(false),
+    request: (input, callback) => { parent.__smokePermissions.push({ origins: input.origins, trusted: navigator.userActivation.isActive }); callback(true); } } };
   try { Object.assign(window.chrome, patch); }
   catch { Object.defineProperty(window, 'chrome', { value: Object.assign({}, window.chrome || {}, patch), configurable: true, writable: true }); }
 })();`;
 
-class Cdp {
-  constructor(socket) {
-    this.socket = socket; this.nextId = 1; this.pending = new Map(); this.listeners = new Map();
-    socket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data));
-      if (message.id) {
-        const pending = this.pending.get(message.id); if (!pending) return;
-        this.pending.delete(message.id);
-        if (message.error) pending.reject(new Error(message.error.message)); else pending.resolve(message.result || {});
-        return;
-      }
-      for (const listener of this.listeners.get(message.method) || []) listener(message.params, message.sessionId);
-    });
-  }
-  static async connect(url) {
-    const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', resolve, { once: true });
-      socket.addEventListener('error', () => reject(new Error('CDP connection failed')), { once: true });
-    });
-    return new Cdp(socket);
-  }
-  on(method, listener) { this.listeners.set(method, [...(this.listeners.get(method) || []), listener]); }
-  send(method, params = {}, sessionId) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    });
-  }
+async function route(url) {
+  if (url.href === PAGE_URL) return { body: parentHtml(), type: 'text/html' };
+  if (url.origin === PAGE_ORIGIN) return extensionFile(url.pathname);
+  if (url.origin === IMAGE_ORIGIN) return { body: await readFile(path.join(EXTENSION_ROOT, 'icons', 'icon128.png')), type: 'image/png' };
+  return null;
 }
 
 async function run() {
-  const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-direct-smoke-')));
-  const blocked = [], pageErrors = [];
-  const child = spawn(chromeExecutable(), ['--headless=new', '--window-size=1440,1000', '--user-data-dir=' + profile,
-    '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions',
-    '--host-resolver-rules=MAP * ~NOTFOUND', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
-  let cdp;
-  try {
-    const port = await until(async () => {
-      try { return (await readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).trim().split(/\r?\n/u); } catch { return null; }
-    }, 'browser startup');
-    cdp = await Cdp.connect('ws://127.0.0.1:' + port[0] + port[1]);
-    const target = await cdp.send('Target.createTarget', { url: 'about:blank' });
-    const sessionId = (await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
-    const send = (method, params = {}) => cdp.send(method, params, sessionId);
-    const evaluate = async (expression) => {
-      const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-      if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-      return result.result.value;
-    };
+  await withFixtureBrowser({ route, initScript: chromeFixtureScript }, async (page) => {
+    const { evaluate, blocked, pageErrors } = page;
     const workspace = (expression) => evaluate('(() => {const window=globalThis.document.getElementById("workspace").contentWindow;const document=window.document;return (' + expression + ');})()');
-    cdp.on('Runtime.exceptionThrown', (event) => {
-      pageErrors.push(event.exceptionDetails.exception?.description || event.exceptionDetails.text);
-    });
-    cdp.on('Fetch.requestPaused', (event, observed) => {
-      if (observed !== sessionId) return;
-      void (async () => {
-        const url = new URL(event.request.url);
-        let body, type;
-        if (url.href === PAGE_URL) { body = Buffer.from(parentHtml()); type = 'text/html'; }
-        else if (url.origin === PAGE_ORIGIN && url.pathname === '/favicon.ico') {
-          await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 204 }); return;
-        } else if (url.origin === PAGE_ORIGIN) {
-          const relative = decodeURIComponent(url.pathname).replace(/^\//u, '');
-          const absolute = path.resolve(EXTENSION_ROOT, relative);
-          assert.ok(absolute.startsWith(EXTENSION_ROOT + path.sep) && !relative.includes('..'));
-          body = await readFile(absolute);
-          type = relative.endsWith('.css') ? 'text/css' : relative.endsWith('.html') ? 'text/html'
-            : relative.endsWith('.png') ? 'image/png' : 'text/javascript';
-        } else if (url.origin === IMAGE_ORIGIN) {
-          body = await readFile(path.join(EXTENSION_ROOT, 'icons', 'icon128.png')); type = 'image/png';
-        } else {
-          blocked.push(event.request.url);
-          await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }); return;
-        }
-        await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 200,
-          responseHeaders: [{ name: 'Content-Type', value: type + (type.startsWith('image/') ? '' : '; charset=utf-8') }], body: body.toString('base64') });
-      })().catch(async (error) => {
-        pageErrors.push('fixture: ' + error.message);
-        try { await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }); } catch {}
-      });
-    });
-    await send('Page.enable'); await send('Runtime.enable');
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: chromeFixtureScript });
-    await send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-    await send('Page.navigate', { url: PAGE_URL });
-
-    const click = async (selector) => {
-      const point = await until(() => workspace('(() => {const node=[...document.querySelectorAll(' + JSON.stringify(selector)
-        + ')].find(item=>item.getClientRects().length>0&&!item.disabled);if(!node)return null;node.scrollIntoView({block:"center",inline:"center"});'
-        + 'const rect=node.getBoundingClientRect();return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()'), 'clickable ' + selector);
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
-    };
+    const click = (selector) => page.clickAt('(() => {const document=globalThis.document.getElementById("workspace").contentWindow.document;'
+      + 'const node=[...document.querySelectorAll(' + JSON.stringify(selector) + ')].find(item=>item.getClientRects().length>0&&!item.disabled);'
+      + 'if(!node)return null;node.scrollIntoView({block:"center",inline:"center"});const rect=node.getBoundingClientRect();'
+      + 'return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()', selector);
     const errors = async () => [...pageErrors, ...(await evaluate('window.__smokeErrors'))];
-    const shot = async (suffix) => {
-      if (!SCREENSHOT) return;
-      const image = await send('Page.captureScreenshot', { format: 'png' });
-      await writeFile(SCREENSHOT.replace(/\.png$/u, '') + suffix + '.png', Buffer.from(image.data, 'base64'));
-    };
+    const shot = async (suffix) => { if (SCREENSHOT) await page.screenshot(SCREENSHOT.replace(/\.png$/u, '') + suffix + '.png'); };
+    await page.navigate(PAGE_URL);
 
     // 1. ERP 全部“未连接”的情况下，工作台仍然加载并显示采集到的商品
     await until(() => evaluate('!!document.getElementById("workspace")?.contentDocument?.getElementById("start-btn")'), 'workbench document');
@@ -244,6 +148,27 @@ async function run() {
       ['translate', 'ai-main-translate', 'ai-suite']);
     assert.equal(await workspace('!!document.getElementById("precision-direct-generate-btn")||!!document.getElementById("precision-direct-generate-all-btn")'), false);
     await shot('-1-loaded');
+
+    // 2b. 直连密钥只有一个填写入口（设置 → 直连密钥）；保存后清空 Key 输入框，Key 不回显
+    const type = async (selector, text) => { await click(selector); await page.send('Input.insertText', { text }); };
+    await click('#settings-btn');
+    await until(() => workspace('!!document.getElementById("precision-direct-credentials")&&document.getElementById("basic-modal").hidden===false'), 'credentials form');
+    await until(() => workspace('document.querySelector("#direct-image-save").closest(".ss-direct-credentials-group").querySelector(".ss-direct-credentials-status").textContent==="尚未配置"'), 'unconfigured status');
+    await type('#direct-ozon-client-id', '4980990');
+    await type('#direct-ozon-api-key', 'fixture-ozon-key-0123456789');
+    await click('#direct-ozon-save');
+    await until(() => workspace('document.querySelector("#direct-ozon-save").closest(".ss-direct-credentials-group").querySelector(".ss-direct-credentials-status").textContent.includes("已保存并连接成功")'), 'ozon key saved');
+    await type('#direct-image-base-url', 'https://provider.ss-erp-fixture.invalid/v1');
+    await type('#direct-image-model', 'gpt-image-2');
+    await type('#direct-image-api-key', 'fixture-image-key-0123456789');
+    await click('#direct-image-save');
+    await until(() => workspace('document.querySelector("#direct-image-save").closest(".ss-direct-credentials-group").querySelector(".ss-direct-credentials-status").textContent.includes("已保存并连接成功")'), 'image provider saved');
+    assert.deepEqual(await workspace('[document.getElementById("direct-ozon-api-key").value,document.getElementById("direct-image-api-key").value]'), ['', '']);
+    assert.deepEqual(await evaluate('window.__smokePermissions'), [{ origins: ['https://*/*'], trusted: true }],
+      '保存生图服务时在可信点击内申请一次图片主机访问权限（已授予时不弹窗）');
+    assert.equal(await workspace('document.getElementById("basic-modal").textContent.includes("fixture-")'), false, '设置里不回显任何 Key');
+    await shot('-1b-credentials');
+    await click('#basic-modal [data-close-modal="basic-modal"]');
 
     // 3. 打开图片工作区 → 生成套图 → 工作区内确认
     await click('#image-workflow-start-btn');
@@ -299,12 +224,7 @@ async function run() {
     assert.deepEqual(blocked, [], '不应有任何对外网络请求');
     console.log(JSON.stringify({ ok: true, scope: 'LOCAL_BROWSER_FIXTURE', generateCalls: calls.length,
       erpCommands: [...new Set(await evaluate('window.__smokeCommands'))], providerRequests: 0, ozonRequests: 0 }));
-  } finally {
-    try { cdp?.socket.close(); } catch {}
-    child.kill();
-    await pause(300);
-    await rm(profile, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 }
 
 run().catch((error) => { console.error(error.stack || error); process.exitCode = 1; });

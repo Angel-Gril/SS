@@ -6689,7 +6689,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return reply(ozonClient.ozonPost(String(payload.path || ''), payload.body, { credentials: payload.credentials }));
       case 'ss-erp:direct-ozon-credentials-read':
         if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
-        return reply(ozonClient.readCredentials());
+        // 只回非敏感字段：页面只需要知道“是否已配置”，Key 不离开 service worker
+        return reply(ozonClient.readCredentials().then((value) => value && { clientId: value.clientId, label: value.label }));
       case 'ss-erp:direct-ozon-credentials-write':
         if (!ozonClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(ozonClient.writeCredentials(payload));
@@ -6711,7 +6712,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return reply(generateHostedDirectImage(imageClient, payload));
       case 'ss-erp:direct-image-provider-read':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
-        return reply(imageClient.readImageProvider());
+        return reply(imageClient.readImageProvider().then((value) => value
+          && { baseUrl: value.baseUrl, model: value.model, size: value.size, mode: value.mode }));
       case 'ss-erp:direct-image-provider-write':
         if (!imageClient) return reply(Promise.reject(new Error('直连客户端未加载')));
         return reply(imageClient.writeImageProvider(payload));

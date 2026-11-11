@@ -733,6 +733,22 @@ const requiredUnifiedPublishModules = [
 
 const requiredDonorWorkbenchFiles = [
   'pages/donor/inline-confirmation.js',
+  // 直连通道（dev-docs/extension-direction.md）：生图流程、结果面板、上架面板与本机类目/属性
+  'pages/donor/direct-image-flow.js',
+  'pages/donor/direct-image-panel.js',
+  'pages/donor/direct-lane-panel.js',
+  'pages/donor/ozon-category-search.js',
+  'shared/publish/direct-workspace.js',
+  'shared/publish/direct-lane.js',
+  'shared/ozon/direct-image-client.js',
+  'shared/ozon/direct-image-host.js',
+  'shared/ozon/direct-ozon-client.js',
+  'shared/ozon/direct-publish.js',
+  // 统一入口与皮肤
+  'shared/ui/tokens.css',
+  'shared/ui/trust-gate.js',
+  'content/ss-dock.js',
+  'content/ss-dock.css',
   'shared/donor-workbench/product-preparation-client.js',
   'shared/donor-workbench/preparation-runtime-handler.js',
   'shared/donor-workbench/preparation-image-client.js',
@@ -946,10 +962,18 @@ const precisionText = [precisionPageText,
   readFileSync(relToAbs('shared/donor-workbench/precision-byok-flow.js'), 'utf8'),
   readFileSync(relToAbs('shared/donor-workbench/precision-byok-edit-flow.js'), 'utf8'),
   ...precisionModules.map((file) => readFileSync(relToAbs(file), 'utf8'))].join('\n');
-if (/\bfetch\s*\(|chrome\.runtime|api-seller\.ozon|chrome\.debugger|https:\/\/\*\/\*/iu.test(precisionText)) {
-  fail('precision workbench contains a forbidden direct network path');
+// 2026-11-11 方向变更（dev-docs/extension-direction.md）：工作台改为精铺式直连，
+// 页面通过 chrome.runtime 消息把请求交给 service worker。页面自身仍不得发网络请求、
+// 不得写死 Ozon 主机名、不得使用 debugger 或通配主机权限。
+if (/\bfetch\s*\(|XMLHttpRequest|api-seller\.ozon|chrome\.debugger|https:\/\/\*\/\*/iu.test(precisionText)) {
+  fail('precision workbench page issues network requests itself');
 } else {
-  pass('precision workbench UI remains behind the source bridge');
+  pass('precision workbench page sends direct requests only through the service worker');
+}
+if (/__SSERP_E2E__|sserp-e2e/u.test(precisionText + readFileSync(relToAbs('shared/ui/trust-gate.js'), 'utf8'))) {
+  fail('trusted-event gate contains an automation bypass');
+} else {
+  pass('trusted-event gate has no automation bypass');
 }
 
 const hostedPreviewWired = [

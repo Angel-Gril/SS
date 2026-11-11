@@ -37,7 +37,7 @@ export function describeCheck(check) {
 
   switch (kind) {
     case 'NO_CREDENTIALS':
-      return '未配置凭据。在「基础信息」里填写 Ozon Client-Id / Api-Key，以及生图 Provider 的 baseUrl / apiKey / model。';
+      return '尚未配置。点工具栏的「设置」，在「直连密钥」里填写 Ozon 店铺密钥和生图服务。';
     case 'BAD_CREDENTIALS':
       return '凭据被拒绝。核对 Client-Id 与 Api-Key 是否属于同一个店铺，以及该店铺是否已开通对应 API 权限。';
     case 'NETWORK':

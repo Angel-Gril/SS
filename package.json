@@ -51,6 +51,7 @@
     "canary:donor:live": "node scripts/extension-donor-workbench-live-canary.mjs",
     "test:rel04:dark-canary": "node scripts/rel04-dark-canary.test.mjs",
     "verify:extension": "node scripts/verify-extension-package.mjs",
+    "smoke:extension:direct": "node scripts/extension-direct-image-browser-smoke.mjs && node scripts/extension-dock-browser-smoke.mjs",
     "verify:extension:cloud": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-cloud --target cloud --strict",
     "verify:extension:local": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-local --target local",
     "attest:extension:active-worker": "node scripts/extension-active-worker-attestation.mjs",

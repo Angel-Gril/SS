@@ -26,7 +26,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 canvas:focus-visible {
-  outline: 2px solid #0f766e;
+  outline: 2px solid #6654f5;
   outline-offset: 2px;
 }
 
@@ -124,9 +124,9 @@ h1 {
 }
 
 .tool-button.is-active {
-  border-color: #0f766e;
-  background: #ccfbf1;
-  color: #115e59;
+  border-color: #6654f5;
+  background: #e6e0ff;
+  color: #5443d6;
 }
 
 .brush-control {
@@ -137,7 +137,7 @@ h1 {
 
 .brush-control input {
   width: 120px;
-  accent-color: #0f766e;
+  accent-color: #6654f5;
 }
 
 .brush-control output {

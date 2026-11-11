@@ -1,0 +1,82 @@
+/*
+ * SS ERP 扩展统一设计变量（唯一 owner）。
+ *
+ * 皮肤：磨砂半透明 + 淡紫。所有扩展界面（来源页工作台、Ozon 页利润/商品信息面板、
+ * 统一入口 dock、popup、设置页）只从这里取颜色、圆角、阴影、字体与模糊强度，
+ * 不在各自的样式表里再写一套。
+ *
+ * 用法：
+ *   - 扩展页面（pages/*.css）：在文件顶部 @import url("../shared/ui/tokens.css");
+ *   - 内容脚本样式：由 manifest.json 的 content_scripts[].css 把本文件排在最前面。
+ *
+ * 变量挂在 :root 与 :host 上；内容脚本场景下变量名带 --ss- 前缀，避免与宿主页冲突。
+ */
+:root,
+:host {
+  /* 品牌：淡紫用于底色与选中态，深紫用于按钮与强调文字（淡紫底上白字对比度不够） */
+  --ss-brand: #6654f5;
+  --ss-brand-strong: #5443d6;
+  --ss-brand-2: #9b8cfa;
+  --ss-brand-soft: #f1eeff;
+  --ss-brand-softer: #f8f6ff;
+  --ss-brand-line: #d9d2fb;
+  --ss-brand-ring: rgba(102, 84, 245, 0.28);
+  --ss-brand-gradient: linear-gradient(135deg, #6654f5, #9b8cfa);
+  --ss-brand-wash: linear-gradient(90deg, rgba(102, 84, 245, 0.10), rgba(155, 140, 250, 0.03));
+
+  /* 文字 */
+  --ss-text: #1b1a2e;
+  --ss-text-2: #3d3b55;
+  --ss-muted: #6b6a85;
+  --ss-on-brand: #ffffff;
+
+  /* 线条与中性面 */
+  --ss-line: #e3def5;
+  --ss-line-strong: #cfc8ee;
+  --ss-neutral-soft: #f6f5fb;
+
+  /* 语义色 */
+  --ss-ok: #118a57;
+  --ss-ok-soft: #e8f7ef;
+  --ss-warn: #b7791f;
+  --ss-warn-soft: #fdf4e3;
+  --ss-err: #c93d4b;
+  --ss-err-soft: #fdecee;
+
+  /*
+   * 磨砂面：外壳/工具栏/页脚更透并带模糊；内容卡片保持高不透明度，
+   * 因为来源页背景很花，卡片太透会看不清字。
+   */
+  --ss-glass-shell: rgba(255, 255, 255, 0.82);
+  --ss-glass-bar: rgba(250, 248, 255, 0.72);
+  --ss-glass-card: rgba(255, 255, 255, 0.94);
+  --ss-glass-border: rgba(255, 255, 255, 0.65);
+  --ss-glass-blur: blur(18px) saturate(1.25);
+  --ss-glass-blur-soft: blur(10px) saturate(1.1);
+  --ss-backdrop: rgba(30, 24, 68, 0.28);
+
+  /* 形状与层次 */
+  --ss-radius-lg: 22px;
+  --ss-radius-md: 14px;
+  --ss-radius-sm: 9px;
+  --ss-radius-pill: 999px;
+  --ss-shadow-lg: 0 26px 90px rgba(46, 32, 120, 0.22);
+  --ss-shadow-md: 0 12px 30px rgba(46, 32, 120, 0.12);
+  --ss-shadow-sm: 0 4px 12px rgba(46, 32, 120, 0.08);
+
+  /* 字体 */
+  --ss-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --ss-font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* 最顶层：与宿主页共存时使用 */
+  --ss-z-top: 2147483000;
+}
+
+/* 不支持 backdrop-filter 时，磨砂面退回近不透明，保证可读 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root,
+  :host {
+    --ss-glass-shell: rgba(255, 255, 255, 0.97);
+    --ss-glass-bar: rgba(250, 248, 255, 0.97);
+  }
+}

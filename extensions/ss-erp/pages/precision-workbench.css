@@ -311,7 +311,7 @@
   background: #eaf2ff;
   color: var(--brand);
   font-weight: 600;
-  box-shadow: 0 0 0 3px rgba(0, 104, 255, .08);
+  box-shadow: 0 0 0 3px rgba(102, 84, 245, .08);
 }
 
 .precision-stepper .stepper-step[data-state="current"] .stepper-index {
@@ -548,3 +548,18 @@
   display: block;
   background: #fff;
 }
+/* 直连密钥表单（pages/donor/direct-credentials-form.js） */
+.ss-direct-credentials { grid-column: 1 / -1; display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line);
+  border-radius: 14px; background: rgba(255, 255, 255, .94); }
+.ss-direct-credentials h3 { margin: 0; font-size: 14px; color: var(--text); }
+.ss-direct-credentials-group { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ss-direct-credentials-group > .primary { justify-self: start; }
+.ss-direct-credentials-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.ss-direct-credentials-field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.ss-direct-credentials-field input { min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: #fff; color: var(--text); font: inherit; }
+.ss-direct-credentials-field input:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ss-direct-credentials-status { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ss-direct-credentials-status[data-tone="ok"] { color: var(--ok); }
+.ss-direct-credentials-status[data-tone="warn"] { color: var(--warn); }
+.ss-direct-credentials-status[data-tone="err"] { color: var(--err); }

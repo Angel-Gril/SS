@@ -141,12 +141,12 @@
     ].join(";");
 
     dialog.innerHTML =
-      '<h2 style="color:#0f766e;margin:0 0 12px;font-size:18px">SS ERP · Premium 数据助手</h2>' +
+      '<h2 style="color:#6654f5;margin:0 0 12px;font-size:18px">SS ERP · Premium 数据助手</h2>' +
       '<p style="margin:0 0 20px;color:#555;font-size:14px;line-height:1.6">已为您激活 Ozon Premium 数据访问，<br>点击确定即可查看完整分析图表。' +
       '<div style="font-size:12px;color:#999;margin-top:8px">（本功能完全在浏览器本地运行，不依赖后端）</div>' +
       '</p>' +
       '<button id="spb-ozon-premium-confirm" style="' +
-      'background:#0f766e;color:#fff;border:0;padding:10px 28px;' +
+      'background:#6654f5;color:#fff;border:0;padding:10px 28px;' +
       'border-radius:6px;cursor:pointer;font-size:14px">' +
       '确定</button>';
 

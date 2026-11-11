@@ -17,6 +17,7 @@ import { planPrefill, planVariantPrefill, runPrefill, pickDictionaryValue } from
 import { createDirectHealthPanel } from '../shared/ozon/direct-health-panel.js';
 import { buildDirectImageJobs, createDirectImageRunner, createDirectImageStore, publishImageEntries, summarizeDirectImages } from './donor/direct-image-flow.js';
 import { createDirectImagePanel } from './donor/direct-image-panel.js';
+import { createDirectCredentialsForm } from './donor/direct-credentials-form.js';
 import { buildDirectListingSyncPayload, createDirectCategoryStore } from '../shared/publish/direct-workspace.js';
 import { createTranslationFlow, normalizeTranslationPrice } from './donor/translation-flow.js';
 import { compileHostedReferenceSelection } from './donor/hosted-reference-selection.js';
@@ -43,6 +44,7 @@ let directImages = null;
 let directImagesSource = '';
 let directCategory = null;
 let directCategorySource = '';
+let directCredentials = null;
 let editorSignature = '';
 let editorRenderOwner = '';
 let mediaSignature = '';
@@ -184,7 +186,7 @@ function log(message, error = false) {
 function report(error) { status(error.message || String(error), 'err'); log(error.message || String(error), true); }
 // 2026-11：isTrusted 判断已统一收敛到 shared/ui/trust-gate.js。
 // 这里只是薄封装，保持既有 trustOk(event, target) 调用点不变。
-// 行为契约（生产严格、E2E 可放行、拦下留痕）全部由 gate 承担。
+// 行为契约（严格等价于 isTrusted、拦下留痕）全部由 gate 承担。
 // 之前批量替换误改了这个函数体，导致它调用gate时又传了 gate 自己的 target，
 // 逻辑上重复且让 disabled 检查失效。
 function trustOk(event, target) {
@@ -734,7 +736,7 @@ const fieldsSection = make('div');
 localNotice.replaceWith(fieldsSection);
 fieldsSection.append(localNotice, attributes.bar);
 // 直连上架车道（不写 ERP）：价格/库存/仓库 + 预检 + 上架 + 结果。
-// 属性与文案走本地或 SW 直读，发布走 api-seller.ozon.ru。
+// 属性与文案走本地或 SW 直读，发布由 SW 直连 Ozon Seller API。
 const directLane = createDirectLanePanel({
   root: fieldsSection, make,
   send: (type, payload) => directSend({ type, payload: payload || {} }),
@@ -1936,6 +1938,12 @@ trusted('settings-btn', () => {
   const values = [['商品标题', projection.source.title], ['来源平台', projection.source.platform], ['来源类目', projection.source.categoryName || '未提供'],
     ['当前店铺', projection.shops.find(shop => shop.id === selectedShopId)?.name || '未选择'], ['已选 SKU', String(draftSkuChoices().length)], ['来源图片', String(projection.media.length)], ['店铺草稿', draft ? '已创建' : '尚未创建']];
   info.replaceChildren(...values.map(([label, value]) => { const row = make('div', 'field'); row.append(make('label', '', label), make('div', '', value)); return row; }));
+  // 直连密钥的唯一填写入口；保存后刷新顶部自检
+  directCredentials ||= createDirectCredentialsForm({ make,
+    send: (type, payload) => directSend({ type, payload: payload || {} }),
+    onSaved: () => { void directHealth.check().catch(report); } });
+  info.append(directCredentials.panel);
+  void directCredentials.refresh();
   // 2026-11：草稿 revision / draftVersion / policyRevision 是内部状态，
   // 不该以「高级诊断」这种含糊标题摆在设置里让用户点开就看到一串版本号。
   // 这类信息只在排查时有用，因此：
@@ -1963,7 +1971,7 @@ trusted('settings-btn', () => {
   openFullSettings.id = 'precision-open-full-settings';
   openFullSettings.type = 'button';
   openFullSettings.addEventListener('click', (event) => {
-    if (!event.isTrusted && !globalThis.__SSERP_E2E__) return;
+    if (!event.isTrusted) return;
     openSettingsIframe();
   });
   info.append(openFullSettings);
@@ -2231,7 +2239,7 @@ function closeSettingsIframe() {
   if (modal) modal.hidden = true;
 }
 element('settings-iframe-close')?.addEventListener('click', (event) => {
-  if (!event.isTrusted && !globalThis.__SSERP_E2E__) return;
+  if (!event.isTrusted) return;
   closeSettingsIframe();
 });
 

@@ -9,18 +9,18 @@
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
   const OZON_QUICK_ACTIONS_ID = "ss-erp-ozon-quick-actions";
   const SS_ERP_PRODUCT_THEME = {
-    primary: "#0f766e",
-    primaryDark: "#115e59",
-    primaryDarker: "#134e4a",
-    primarySoft: "#f0fdfa",
-    border: "#cce5e2",
-    borderStrong: "#99c9c3",
+    primary: "#6654f5",
+    primaryDark: "#5443d6",
+    primaryDarker: "#4335b8",
+    primarySoft: "#f1eeff",
+    border: "#d9d2fb",
+    borderStrong: "#b9aef7",
     blue: "#2563eb",
     surface: "#f8fafc",
     surfaceAlt: "#f1f5f9",
     text: "#172326",
     muted: "#5f6f73",
-    headerGradient: "#0f766e",
+    headerGradient: "#6654f5",
   };
   const SourceProductCore = globalThis.SS_ERP_SOURCE_PRODUCT_CORE || {};
   const detectPlatform = SourceProductCore.detectPlatform;
@@ -1127,6 +1127,33 @@
       openExtensionSettingsPage("selection");
       setOzonQuickStatus(panel, "设置已打开");
     });
+    dockOzonQuickActions(panel);
+  }
+
+  // 入口由统一 dock 接管时，快捷面板不再单独悬浮：采集、商品信息、Cookie 同步都挂到 dock 下
+  //（见 content/ss-dock.js）。按钮与状态仍由本面板持有，dock 只转发点击并镜像状态文字。
+  function dockOzonQuickActions(panel) {
+    const dock = globalThis.SS_ERP_DOCK;
+    if (!dock || typeof dock.register !== "function") return;
+    const quick = (role) => panel.querySelector("[data-role='" + role + "']");
+    const collect = quick("quick-collect");
+    if (!dock.register("collect", {
+      open: () => collect.click(),
+      isBusy: () => collect.disabled,
+      title: collect.title,
+    })) return;
+    dock.register("product", {
+      open: () => { const info = document.getElementById(OZON_PANEL_ID); if (info) info.hidden = false; else void renderOzonPanel(); },
+      close: () => { const info = document.getElementById(OZON_PANEL_ID); if (info) info.hidden = true; },
+      isOpen: () => { const info = document.getElementById(OZON_PANEL_ID); return Boolean(info && !info.hidden); },
+      title: "查看当前 Ozon 商品的采集信息",
+    });
+    dock.addAction("ozon-cookie", { label: "同步 Ozon Cookie", run: () => quick("quick-bind-cookie").click() });
+    panel.dataset.ssDocked = "true";
+    const status = quick("quick-status");
+    if (status && typeof MutationObserver === "function") {
+      new MutationObserver(() => dock.setStatus(status.textContent)).observe(status, { childList: true, characterData: true, subtree: true });
+    }
   }
 
   function updateOzonQuickCollection(productId, state) {

@@ -6,7 +6,7 @@
 //   且该接口响应体 712KB，会撑爆 chrome.runtime.sendMessage 的回执通道。
 //
 //   参考精铺 modules/ozon/api.js（ozon_category_tree_cache_v1 本地缓存 +
-//   直连 api-seller.ozon.ru）与 modules/ozon/category-recommender.js（537 行
+//   直连 Ozon Seller API）与 modules/ozon/category-recommender.js（537 行
 //   本地同义词匹配），我们改为内置官方快照 + 纯本地计算：
 //     1) 7341 个叶子直接内置，0 网络
 //     2) 三层层级树从扁平数据现算，左侧目录可用

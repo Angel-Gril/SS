@@ -5,12 +5,12 @@
   --line: #d7e0e1;
   --ink: #172326;
   --muted: #5f6f73;
-  --brand: #0f766e;
+  --brand: #6654f5;
   --brand-strong: #0b5d57;
   --blue: #2563eb;
   --amber: #b45309;
   --danger: #b42318;
-  --teal-soft: #ecf8f6;
+  --teal-soft: #f3f0ff;
   --blue-soft: #eff6ff;
   --surface-lift: #f8fafa;
   --shadow-soft: 0 6px 18px rgba(23, 35, 38, 0.06);
@@ -300,7 +300,7 @@ h1 {
 .btn-primary {
   background: var(--brand);
   color: #fff;
-  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.2);
+  box-shadow: 0 8px 18px rgba(102, 84, 245, 0.2);
 }
 
 .btn-secondary {
@@ -314,7 +314,7 @@ h1 {
 }
 
 .btn-success {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   background: var(--teal-soft);
   color: var(--brand-strong);
 }
@@ -348,7 +348,7 @@ h1 {
   display: grid;
   gap: 10px;
   margin-top: 12px;
-  border: 1px solid #cce5e2;
+  border: 1px solid #d9d2fb;
   border-radius: 8px;
   background: var(--teal-soft);
   padding: 12px;
@@ -428,7 +428,7 @@ h1 {
 
 .status-card:hover,
 .surface-panel:hover {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
 }
 
 .card-head,
@@ -526,7 +526,7 @@ h1 {
 }
 
 .choice-row:has(input:checked) {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   background: var(--teal-soft);
   color: var(--brand-strong);
 }
@@ -576,7 +576,7 @@ h1 {
   min-height: 34px;
   align-items: center;
   justify-content: center;
-  border: 1px solid #cce5e2;
+  border: 1px solid #d9d2fb;
   border-radius: 999px;
   background: var(--teal-soft);
   color: var(--brand-strong);
@@ -834,7 +834,7 @@ h1 {
   align-items: center;
   gap: 8px;
   width: fit-content;
-  border: 1px solid #cce5e2;
+  border: 1px solid #d9d2fb;
   border-radius: 999px;
   background: var(--teal-soft);
   color: var(--brand-strong);
@@ -915,13 +915,13 @@ h1 {
 }
 
 .service-item:hover {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
   transform: translateY(-1px);
 }
 
 .service-item.is-selected {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   background: var(--teal-soft);
   box-shadow: var(--shadow-tight);
 }
@@ -1028,7 +1028,7 @@ h1 {
 }
 
 .selected-service:hover {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
   transform: translateY(-1px);
 }
@@ -1311,7 +1311,7 @@ h1 {
 .btn-secondary,
 .btn-success,
 .btn-warning {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   background: var(--teal-soft);
   color: var(--brand-strong);
 }

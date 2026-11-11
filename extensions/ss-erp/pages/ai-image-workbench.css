@@ -7,9 +7,9 @@
   --line-strong: #c5ced8;
   --ink: #17202a;
   --muted: #5f6b7a;
-  --brand: #0f766e;
+  --brand: #6654f5;
   --brand-strong: #0b5d57;
-  --brand-soft: #ecf8f6;
+  --brand-soft: #f3f0ff;
   --success: #13714a;
   --success-soft: #eaf7f0;
   --warning: #8a6200;
@@ -417,7 +417,7 @@ h2 {
 
 .media-operation-button.is-selected,
 .media-operation-button[aria-pressed="true"] {
-  border-color: #99c9c3;
+  border-color: #b9aef7;
   background: var(--brand-soft);
   color: var(--brand-strong);
   box-shadow: 0 1px 3px rgba(23, 32, 42, 0.08);
@@ -1295,7 +1295,7 @@ body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-err
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--workspace-progress, 0%);
-  background: rgba(15, 118, 110, 0.16);
+  background: rgba(102, 84, 245, 0.16);
   content: '';
   pointer-events: none;
 }
@@ -2963,7 +2963,7 @@ body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-err
 
 .workspace-library-select:hover:not(:disabled) {
   border-color: #48a69b;
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+  box-shadow: 0 0 0 2px rgba(102, 84, 245, 0.12);
 }
 
 .workspace-library-select > img,
@@ -3016,7 +3016,7 @@ body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-err
 .workspace-source-stage {
   overflow: hidden;
   margin-top: 10px;
-  border: 1px solid #9dcfc8;
+  border: 1px solid #c4bbf8;
   border-radius: 5px;
   background: #f4fbfa;
 }
@@ -3426,7 +3426,7 @@ body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-err
 
 .media-operation-button.is-selected,
 .media-operation-button[aria-pressed="true"] {
-  border-color: #9dcfc8;
+  border-color: #c4bbf8;
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(23, 32, 42, 0.08);
 }
@@ -3628,7 +3628,7 @@ body.is-context-unavailable #refreshButton {
 }
 
 .workspace-recovery-sku-chip.is-active {
-  border-color: #9dcfc8;
+  border-color: #c4bbf8;
   background: var(--brand-soft);
   color: var(--brand-strong);
 }
@@ -3670,7 +3670,7 @@ body.is-context-unavailable #refreshButton {
 
 .workspace-recovery-tabs span.is-active,
 .workspace-recovery-footer span.is-active {
-  border-color: #9dcfc8;
+  border-color: #c4bbf8;
   background: var(--brand-soft);
   color: var(--brand-strong);
 }
@@ -4812,7 +4812,7 @@ body.is-context-unavailable #refreshButton {
   }
 
   .workspace-mobile-switcher button[aria-selected="true"] {
-    border-color: #9dcfc8;
+    border-color: #c4bbf8;
     background: var(--brand-soft);
     color: var(--brand-strong);
   }
