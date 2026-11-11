@@ -403,7 +403,14 @@ async function verifyAttributes(offerId) {
     const first = rows[0];
     if (!first) return { found: false, filled: 0, total: 0 };
     const list = Array.isArray(first.attributes) ? first.attributes : [];
-    const filled = list.filter((attribute) => Array.isArray(attribute.values) && attribute.values.length > 0).length;
+    // 注意：Ozon 对字典字段会返回 values:[{value:""}] —— 数组非空但值是空串。
+    // 只数 values.length 会把「有字段无值」误判成已填（T7 就这么被骗过）。
+    const hasRealValue = (value) => {
+      if (!value) return false;
+      if (String(value.value || '').trim()) return true;
+      return Number(value.dictionary_value_id) > 0;
+    };
+    const filled = list.filter((attribute) => (attribute.values || []).some(hasRealValue)).length;
     return { found: true, filled, total: list.length };
   } catch (error) {
     return { found: false, filled: 0, total: 0, error: String((error && error.message) || error).slice(0, 200) };

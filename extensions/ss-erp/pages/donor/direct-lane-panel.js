@@ -497,7 +497,11 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         attributeId: item.attributeId,
         value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
         dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
-        __unresolved: !chosen && !item.fallbackValueId && Boolean(queries.some(Boolean)),
+        // 「查到了但值是空」也算未解析：Ozon 的字典字段收到空串会存成有字段无值
+        __unresolved: !(
+          (chosen && (Number(chosen.id) > 0 || String(chosen.value || '').trim()))
+          || item.fallbackValueId
+        ) && Boolean(queries.some(Boolean)),
       };
     };
 
