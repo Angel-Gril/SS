@@ -47,6 +47,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   offerBaseInput.type = 'text';
   offerBaseInput.style.width = '150px';
   offerBaseWrap.append(offerBaseInput);
+  // SKU 上限：0 = 全部；测试或分批上架时用它，避免一次发上百条
+  const skuLimitWrap = make('label', '', 'SKU 上限 ');
+  const skuLimitInput = make('input');
+  skuLimitInput.type = 'number';
+  skuLimitInput.min = '0';
+  skuLimitInput.value = '0';
+  skuLimitInput.style.width = '70px';
+  skuLimitWrap.append(skuLimitInput);
   const weightInput = mkNumber('重量 g', '250', { step: '10', min: '1' });
   const widthInput = mkNumber('宽 mm', '200', { step: '10', min: '1' });
   const heightInput = mkNumber('高 mm', '40', { step: '1', min: '1' });
@@ -57,7 +65,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
   const autoPricing = make('button', 'ghost', '按成本自动定价');
-  toolbar.append(offerBaseWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
 
   const copyRow = make('div', 'precision-local-fields');
@@ -110,9 +118,20 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const output = make('pre');
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
   panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
+  // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules }; } catch (_e) {}
   root.append(panel);
 
   let busy = false;
+  // busy 卡死自愈：异常路径没走到 busy=false 时（实测踩过），10 分钟后自动放行
+  let busySince = 0;
+  const claimBusy = () => {
+    if (busy && Date.now() - busySince > 600000) busy = false;
+    if (busy) return false;
+    busy = true;
+    busySince = Date.now();
+    return true;
+  };
   let lastPlan = null;
   let warehouses = [];
   let workspaceCache = null;
@@ -339,6 +358,41 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     };
   }
 
+  /**
+   * listing 用哪些图：生图结果优先（按 hero → 7 个详情槽位顺序），源图补位。
+   * Ozon import 会自己去下载 URL，所以生成图不用先上传。
+   */
+  function imagesForPlan(context) {
+    const generated = (lastImageResults || []).map((one) => one.url).filter((url) => /^https:\/\//.test(String(url)));
+    const source = (context.images || []).filter((url) => /^https:\/\//.test(String(url)));
+    const seen = new Set();
+    return generated.concat(source).filter((url) => {
+      if (seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    }).slice(0, 15);
+  }
+
+  /** 生成图落本地：重开面板/重载扩展都不丢，listing 直接复用 */
+  async function saveGeneratedImages(results) {
+    try {
+      const sourceId = (getContext() && getContext().sourceProductId) || '';
+      if (!sourceId) return;
+      const urls = (results || []).filter((one) => one && one.url).map((one) => ({ goalType: one.goalType, url: one.url, at: Date.now() }));
+      await chrome.storage.local.set({ ['ss-erp:direct-lane:generated:' + sourceId]: urls });
+    } catch (_error) { /* 存不下不影响本轮 */ }
+  }
+
+  async function loadGeneratedImages(sourceId) {
+    if (!sourceId) return [];
+    try {
+      const key = 'ss-erp:direct-lane:generated:' + sourceId;
+      const got = await chrome.storage.local.get(key);
+      const list = got && got[key];
+      return Array.isArray(list) ? list : [];
+    } catch (_error) { return []; }
+  }
+
   /** 类目缓存：类目确认时由工作台写入，ERP 草稿读不到时靠它继续 */
   async function readCachedCategory(sourceId) {
     if (!sourceId) return null;
@@ -370,8 +424,15 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       attributes: [],
     };
     const items = planPrefill(product, fields).concat(planVariantPrefill(product, fields));
+    // ownership=SKU 的字段只能有 SKU 级行：产品级 + SKU 级同时存在会互相覆盖，
+    // 结果 Ozon 侧存成「有字段无值」，建不出 model（T3/T4 实测踩过）。
+    const skuOwned = new Set(
+      fields.filter((field) => String(field && field.ownership || '').toUpperCase() === 'SKU')
+        .map((field) => Number(field.attributeId || field.id)),
+    );
     const values = [];
     for (const item of items) {
+      if (skuOwned.has(Number(item.attributeId)) && (item.skuKey === null || item.skuKey === undefined)) continue;
       if (item.kind === 'text') {
         values.push({ attributeId: item.attributeId, skuKey: item.skuKey || null, value: String(item.value || ''), dictionaryValueIds: [] });
         continue;
@@ -393,11 +454,27 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         });
         if (chosen) break;
       }
+      // 字典没查到时不能只写文本：Ozon 会把该属性存成「有字段、无值」，
+      // 建不出 model，商品就永远 Не продается（T3 实测踩过）。
+      if (!chosen && !item.fallbackValueId && list.length === 0 && queries.some(Boolean)) {
+        try {
+          const retry = await send('ss-erp:direct-ozon-attribute-values', {
+            categoryId: category.categoryId, typeId: category.typeId,
+            attributeId: item.attributeId, query: String(queries[0] || ''), limit: 50,
+          });
+          const retryList = (retry && retry.values) || [];
+          for (const query of queries) {
+            chosen = pickDictionaryValue(retryList, item.pick, query, { id: item.fallbackValueId });
+            if (chosen) break;
+          }
+        } catch (_error) { /* 仍然失败就记未解析 */ }
+      }
       values.push({
         attributeId: item.attributeId,
         skuKey: item.skuKey || null,
         value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
         dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
+        __unresolved: !chosen && !item.fallbackValueId && Boolean(queries.some(Boolean)),
       });
     }
     return { fields, values };
@@ -410,7 +487,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     const prefixed = String(offerBaseInput.value || '').trim();
     if (!prefixed) offerBaseInput.value = context.offerBase;
     else context.offerBase = prefixed;
-    const skus = context.skus || [];
+    const allSkus = context.skus || [];
+    const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
+    const skus = limitValue > 0 ? allSkus.slice(0, limitValue) : allSkus;
     const offers = skus.map((sku, index) => offerIdFor(context.offerBase, sku.key, index));
 
     // 已上架：属性/尺寸/图片从 Ozon 读（不依赖 ERP —— ERP 的 catalogRevision
@@ -440,6 +519,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       context.category = category;
       workspace = await attributesFromRules(context, category, skus);
       if (!workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
+      const unresolved = [...new Set((workspace.values || []).filter((one) => one.__unresolved).map((one) => one.attributeId))];
+      if (unresolved.length) {
+        throw new Error(`字典没解析到属性 ${unresolved.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
+      }
     }
 
     // 标题为空时自动用规则生成一次
@@ -468,7 +551,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       editor: editorStub,
       workspace,
       offerBase: context.offerBase,
-      images: (context.images || []).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
+      // 生成图优先（主图在最前），源图补位 —— 生图链路的结果在这里回灌 listing
+      images: imagesForPlan(context).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
       defaults: { currency: 'CNY', vat: '0' },
     });
     plan.items.forEach((item, index) => {
@@ -517,8 +601,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   }
 
   async function runPrecheck() {
-    if (busy) return;
-    busy = true;
+    if (!claimBusy()) return;
     precheck.disabled = publishBtn.disabled = true;
     try {
       const { plan } = await buildPlan();
@@ -558,8 +641,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   }
 
   async function runPublish() {
-    if (busy) return;
-    busy = true;
+    if (!claimBusy()) return;
     precheck.disabled = publishBtn.disabled = true;
     try {
       const { plan } = await buildPlan();
@@ -715,22 +797,37 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     if (!slots.length) throw new Error('计划里没有可用提示词');
     const chosen = slots.slice(0, Math.max(1, limit));
     const results = [];
+    lastImageResults = results;   // 增量保存：中途失败也能把已成功的图回灌 listing
     for (let index = 0; index < chosen.length; index += 1) {
       const slot = chosen[index];
       state.textContent = `生图 ${index + 1}/${chosen.length}：${slot.goalType}（约 30–60 秒）…`;
-      const result = await send('ss-erp:direct-image-generate', {
-        prompt: slot.prompt,
-        // 采集到的原图作参考，保持同款同色（精铺的 referenceSelection 思路）
-        inputImageUrls: (context.images || []).slice(0, 3),
-        timeoutMs: 180000,
-      });
-      const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
-      results.push({ index: index + 1, goalType: slot.goalType, url: url || null, elapsedMs: result && result.elapsedMs });
+      let record = null;
+      // 单张失败不拖垮整批：503（渠道占满）退 6 秒再试一次，仍失败就记下来继续
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const result = await send('ss-erp:direct-image-generate', {
+            prompt: slot.prompt,
+            // 采集到的原图作参考，保持同款同色（精铺的 referenceSelection 思路）
+            inputImageUrls: (context.images || []).slice(0, 3),
+            timeoutMs: 180000,
+          });
+          const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
+          record = { index: index + 1, goalType: slot.goalType, url: url || null, elapsedMs: result && result.elapsedMs };
+          break;
+        } catch (error) {
+          const message = String((error && error.message) || error).slice(0, 160);
+          const retryable = /503|502|504|timeout|超时/i.test(message);
+          if (attempt === 1 && retryable) { await new Promise((r) => setTimeout(r, 6000)); continue; }
+          record = { index: index + 1, goalType: slot.goalType, url: null, error: message };
+        }
+      }
+      results.push(record);
+      lastImageResults = results.slice();
+      void saveGeneratedImages(results);
       output.textContent = JSON.stringify(results, null, 1).slice(0, 3000);
     }
-    const ok = results.filter((one) => one.url).length;
+    const ok = results.filter((one) => one && one.url).length;
     state.textContent = `生图完成：${ok}/${results.length} 张`;
-    lastImageResults = results;
     return results;
   }
 
@@ -911,6 +1008,20 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     aiBase.value = cfg.baseUrl;
     aiModel.value = cfg.model;
     aiStatus.textContent = `AI 已配置：${cfg.model}`;
+  })();
+  // 生成图回填：之前生成过就直接用于 listing（等上下文就绪，最多 15 秒）
+  void (async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const context = getContext();
+      const sourceId = (context && (context.sourceProductId || context.offerBase)) || '';
+      if (!sourceId) continue;
+      const stored = await loadGeneratedImages(sourceId);
+      if (!stored.length) return;
+      lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
+      state.textContent = `已载入 ${stored.length} 张生成图，listing 会优先用它们`;
+      return;
+    }
   })();
 
   return { panel, refresh: () => loadWarehouses(), lastPlan: () => lastPlan };
