@@ -104,6 +104,8 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
 - 打包版在只有可选权限时的浏览器内流程（构建与包校验已通过，没有在浏览器里加载打包版走一遍）。
 - “仅翻译”与“AI 主图＋翻译”的翻译质量：翻译通过生图服务的图片编辑接口加翻译提示词实现，效果取决于所用模型。
 
+这些项只能由人在真实环境里走一遍，步骤见[真实页面走查清单](extension-real-page-checklist.md)。
+
 已知遗留：
 
 - `scripts/*.test.mjs` 逐个运行：2026-11-12 在 `bc7ac60a` 上共 355 个文件，303 个通过，51 个失败，1 个挂起（`extension-official-attributes-readback`）；

@@ -2,7 +2,7 @@
 
 产品裁决：扩展相对独立，采集/生图/上架直连完成，ERP 只做设备授权、生成图片托管与上架结果同步；界面收敛为一个悬浮入口、一套皮肤。
 实现位于分支 `feat/extension-direct-unified`，未合并、未签名、未部署；真实 Provider 生图、真实 Ozon 上架和真实 ERP 托管均未验证，只有本地夹具证据。
-唯一 owner、边界、冻结范围与验证状态见[扩展产品方向](extension-direction.md)。
+唯一 owner、边界、冻结范围与验证状态见[扩展产品方向](extension-direction.md)；真实页面的人工走查步骤见[真实页面走查清单](extension-real-page-checklist.md)。
 
 ## 2026-11-03 1.0.485 双区官网公开发布完成
 
