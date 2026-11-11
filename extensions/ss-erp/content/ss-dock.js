@@ -110,7 +110,7 @@
 
   function setStatus(text) {
     statusText = String(text || '').slice(0, 120);
-    if (statusText && menu && menu.hidden && toggle) toggle.title = 'SS ERP · ' + statusText;
+    if (menu && menu.hidden && toggle) toggle.title = statusText ? 'SS ERP · ' + statusText : 'SS ERP';
     render();
   }
 
@@ -122,6 +122,10 @@
       mount();
       render();
       return true;
+    },
+    /** 功能离开当前页面时注销标签（例如单页应用里从商品页跳到列表页），标签回到置灰。 */
+    unregister: function (id) {
+      if (handlers.delete(id)) render();
     },
     /** 更新某个标签的文案或提示（例如加载失败）。 */
     update: function (id, patch) {
@@ -136,6 +140,9 @@
       actions.set(String(id), { label: String(action.label || id), run: action.run });
       mount();
       render();
+    },
+    removeAction: function (id) {
+      if (actions.delete(String(id))) render();
     },
     setStatus: setStatus,
     tabs: function () { return TABS.map(function (tab) { return tab.id; }); },

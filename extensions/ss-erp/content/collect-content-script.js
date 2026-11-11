@@ -1067,6 +1067,7 @@
   function removeOzonQuickActions() {
     const panel = document.getElementById(OZON_QUICK_ACTIONS_ID);
     if (panel) {
+      undockOzonQuickActions(panel);
       panel.remove();
     }
   }
@@ -1143,7 +1144,13 @@
       title: collect.title,
     })) return;
     dock.register("product", {
-      open: () => { const info = document.getElementById(OZON_PANEL_ID); if (info) info.hidden = false; else void renderOzonPanel(); },
+      open: () => {
+        const info = document.getElementById(OZON_PANEL_ID);
+        if (info && typeof info._ozonExpand === "function") { info._ozonExpand(); return; }
+        // 页面上残留的面板不是本次注入创建的（例如扩展刚被重新加载）：换成新的再展开
+        if (info) info.remove();
+        void renderOzonPanel({ expand: true });
+      },
       close: () => { const info = document.getElementById(OZON_PANEL_ID); if (info) info.hidden = true; },
       isOpen: () => { const info = document.getElementById(OZON_PANEL_ID); return Boolean(info && !info.hidden); },
       title: "查看当前 Ozon 商品的采集信息",
@@ -1154,6 +1161,21 @@
     if (status && typeof MutationObserver === "function") {
       new MutationObserver(() => dock.setStatus(status.textContent)).observe(status, { childList: true, characterData: true, subtree: true });
     }
+  }
+
+  function ozonQuickActionsDocked() {
+    const quick = document.getElementById(OZON_QUICK_ACTIONS_ID);
+    return Boolean(quick && quick.dataset.ssDocked === "true");
+  }
+
+  // 离开商品页时把接入 dock 的标签与动作一并撤下，标签回到置灰（Ozon 是单页应用，页面不会重新加载）。
+  function undockOzonQuickActions(panel) {
+    const dock = globalThis.SS_ERP_DOCK;
+    if (panel.dataset.ssDocked !== "true" || !dock || typeof dock.unregister !== "function") return;
+    dock.unregister("collect");
+    dock.unregister("product");
+    dock.removeAction("ozon-cookie");
+    dock.setStatus("");
   }
 
   function updateOzonQuickCollection(productId, state) {
@@ -1396,15 +1418,20 @@
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         #${OZON_PANEL_ID}::-webkit-scrollbar { width: 4px; }
         #${OZON_PANEL_ID}::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+        #${OZON_PANEL_ID}[hidden] { display: none !important; }
       </style>
     `;
 
     let expanded = false;
     const tab = panel.querySelector("[data-role='tab']");
     const expandedArea = panel.querySelector("[data-role='expanded']");
+    // 入口由统一 dock 接管时（见 dockOzonQuickActions），面板不再以折叠条常驻页面：默认隐藏，
+    // 从 dock 的「商品信息」标签展开，收起即隐藏。数据仍随页面加载读取（利润计算要用其中的规格）。
+    const docked = ozonQuickActionsDocked();
 
     function expand() {
       expanded = true;
+      panel.hidden = false;
       panel.style.width = "340px";
       panel.style.borderRadius = "0 4px 4px 0";
       tab.style.display = "none";
@@ -1416,7 +1443,9 @@
       panel.style.width = "44px";
       tab.style.display = "flex";
       expandedArea.style.display = "none";
+      if (docked) panel.hidden = true;
     }
+    panel._ozonExpand = expand;
 
     tab.addEventListener("click", expand);
     panel.querySelector("[data-role='collapse']").addEventListener("click", (e) => {
@@ -1426,6 +1455,8 @@
 
     if (options.expand === true) {
       expand();
+    } else if (docked) {
+      panel.hidden = true;
     }
 
     panel.querySelector("[data-role='refresh']").addEventListener("click", (e) => {

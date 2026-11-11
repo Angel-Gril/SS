@@ -42,6 +42,11 @@ export async function extensionFile(pathname) {
   return { body: await readFile(absolute), type };
 }
 
+/** 在页面里求值的表达式：选择器命中元素的可点击中心 {x,y}；元素不存在或不可见时为 null。配合 page.clickAt 使用。 */
+export const centerOf = (selector) => '(() => {const node=document.querySelector(' + JSON.stringify(selector)
+  + ');if(!node||!node.getClientRects().length)return null;const rect=node.getBoundingClientRect();'
+  + 'return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};})()';
+
 class Cdp {
   constructor(socket) {
     this.socket = socket; this.nextId = 1; this.pending = new Map(); this.listeners = new Map();
@@ -75,16 +80,27 @@ class Cdp {
 }
 
 /**
- * @param options.route      async (URL) => { body: Buffer|string, type: string } | null   返回 null 的请求会被拦截并记入 blocked
+ * 启动独立 Chromium 并跑一段用例。
+ *
+ * @param options.route      async (URL) => { body: Buffer|string, type: string, status?: number } | null
+ *                           返回 null 的请求会被拦截并记入 blocked
  * @param options.initScript 每个文档加载前注入的脚本
+ * @param options.loadExtension true 时以真实扩展形态加载 extensions/ss-erp（默认 false：不加载扩展，用内存桩）
+ * @param options.interceptPatterns Fetch 拦截范围；加载真实扩展时应收窄到被测站点，
+ *                           否则扩展自身的页面与资源也会被拦截
  * @param run                async (page) => void
  */
-export async function withFixtureBrowser({ route, initScript = '', width = 1440, height = 1000 }, run) {
+async function withBrowser(options, run) {
+  const { route, initScript = '', width = 1440, height = 1000, loadExtension = false,
+    interceptPatterns = ['*'] } = options;
   const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ss-erp-browser-fixture-')));
   const blocked = [], pageErrors = [];
   const child = spawn(chromeExecutable(), ['--headless=new', `--window-size=${width},${height}`, '--user-data-dir=' + profile,
     '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-extensions',
+    '--disable-background-networking', '--disable-component-update', '--disable-sync',
+    ...(loadExtension
+      ? [`--disable-extensions-except=${EXTENSION_ROOT}`, `--load-extension=${EXTENSION_ROOT}`]
+      : ['--disable-extensions']),
     '--host-resolver-rules=MAP * ~NOTFOUND', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
   let cdp;
   try {
@@ -123,11 +139,20 @@ export async function withFixtureBrowser({ route, initScript = '', width = 1440,
     });
     await send('Page.enable'); await send('Runtime.enable');
     if (initScript) await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript });
-    await send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
+    await send('Fetch.enable', { patterns: interceptPatterns.map((urlPattern) => ({ urlPattern })) });
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     await run({
-      send, evaluate, blocked, pageErrors,
+      send, evaluate, blocked, pageErrors, cdp,
       navigate: (url) => send('Page.navigate', { url }),
+      /** 真实扩展形态下，等扩展的 service worker 出现并返回它的扩展 ID。 */
+      async extensionId(timeout = 30_000) {
+        return until(async () => {
+          const targets = (await cdp.send('Target.getTargets')).targetInfos || [];
+          const worker = targets.find((item) => item.type === 'service_worker'
+            && /^chrome-extension:\/\/[^/]+\/background\/service-worker\.js$/u.test(item.url));
+          return worker ? new URL(worker.url).hostname : null;
+        }, 'extension service worker', timeout);
+      },
       /** 用真实（可信）鼠标事件点击；locate 是在页面里求值、返回 {x,y} 或 null 的表达式 */
       async clickAt(locate, label) {
         const point = await until(() => evaluate(locate), 'clickable ' + label);
@@ -146,3 +171,9 @@ export async function withFixtureBrowser({ route, initScript = '', width = 1440,
     await rm(profile, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/** 不加载扩展，用内存桩替代 chrome.*（既有冒烟脚本用这个）。 */
+export const withFixtureBrowser = (options, run) => withBrowser({ ...options, loadExtension: false }, run);
+
+/** 以真实扩展形态加载 extensions/ss-erp，用于验证内容脚本注入与真实接线。 */
+export const withLoadedExtensionBrowser = (options, run) => withBrowser({ ...options, loadExtension: true }, run);
