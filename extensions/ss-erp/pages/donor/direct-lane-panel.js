@@ -119,7 +119,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
   panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues }; } catch (_e) {}
   root.append(panel);
 
   let busy = false;
@@ -393,6 +393,29 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     } catch (_error) { return []; }
   }
 
+  /**
+   * 合并两份属性工作区：规则打底，override 覆盖同 (attributeId, skuKey) 的行。
+   * fields 取并集（按 attributeId），values 按 key 去重。
+   */
+  function mergeWorkspaceValues(base, override) {
+    if (!base) return override || null;
+    if (!override || !Array.isArray(override.values)) return base;
+    const keyOf = (row) => `${Number(row.attributeId)}|${row.skuKey == null ? '' : String(row.skuKey)}`;
+    const map = new Map();
+    for (const row of base.values || []) map.set(keyOf(row), row);
+    for (const row of override.values || []) {
+      const key = keyOf(row);
+      const hasValue = Array.isArray(row.dictionaryValueIds) ? row.dictionaryValueIds.length : Boolean(String(row.value || '').trim());
+      if (hasValue) map.set(key, row);
+    }
+    const fieldsById = new Map();
+    for (const field of [...(override.fields || []), ...(base.fields || [])]) {
+      const id = Number(field && (field.attributeId || field.id));
+      if (id) fieldsById.set(id, field);
+    }
+    return { fields: [...fieldsById.values()], values: [...map.values()] };
+  }
+
   /** 类目缓存：类目确认时由工作台写入，ERP 草稿读不到时靠它继续 */
   async function readCachedCategory(sourceId) {
     if (!sourceId) return null;
@@ -424,18 +447,21 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       attributes: [],
     };
     const items = planPrefill(product, fields).concat(planVariantPrefill(product, fields));
-    // ownership=SKU 的字段只能有 SKU 级行：产品级 + SKU 级同时存在会互相覆盖，
-    // 结果 Ozon 侧存成「有字段无值」，建不出 model（T3/T4 实测踩过）。
+    // 这个类目（连衣裙 93182）全部字段 ownership=SKU：产品级的品牌/类型/国家/合并字段
+    // 不能丢，要按 SKU 展开；否则 Ozon 收到「有字段无值」，建不出 model。
     const skuOwned = new Set(
       fields.filter((field) => String(field && field.ownership || '').toUpperCase() === 'SKU')
         .map((field) => Number(field.attributeId || field.id)),
     );
-    const values = [];
-    for (const item of items) {
-      if (skuOwned.has(Number(item.attributeId)) && (item.skuKey === null || item.skuKey === undefined)) continue;
+    const skuKeys = skus.map((sku) => sku.key);
+    const collected = new Map();   // `${id}|${skuKey}` → row，先来的优先（variant 先于 prefill）
+    const put = (row, skuKey) => {
+      const key = `${Number(row.attributeId)}|${skuKey == null ? '' : String(skuKey)}`;
+      if (!collected.has(key)) collected.set(key, { ...row, skuKey: skuKey == null ? null : String(skuKey) });
+    };
+    const resolveItem = async (item) => {
       if (item.kind === 'text') {
-        values.push({ attributeId: item.attributeId, skuKey: item.skuKey || null, value: String(item.value || ''), dictionaryValueIds: [] });
-        continue;
+        return { attributeId: item.attributeId, value: String(item.value || ''), dictionaryValueIds: [] };
       }
       let list = [];
       try {
@@ -454,8 +480,6 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         });
         if (chosen) break;
       }
-      // 字典没查到时不能只写文本：Ozon 会把该属性存成「有字段、无值」，
-      // 建不出 model，商品就永远 Не продается（T3 实测踩过）。
       if (!chosen && !item.fallbackValueId && list.length === 0 && queries.some(Boolean)) {
         try {
           const retry = await send('ss-erp:direct-ozon-attribute-values', {
@@ -469,20 +493,37 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           }
         } catch (_error) { /* 仍然失败就记未解析 */ }
       }
-      values.push({
+      return {
         attributeId: item.attributeId,
-        skuKey: item.skuKey || null,
         value: chosen ? String(chosen.value || '') : String(item.fallbackValue || item.query || ''),
         dictionaryValueIds: chosen ? [chosen.id] : (item.fallbackValueId ? [item.fallbackValueId] : []),
         __unresolved: !chosen && !item.fallbackValueId && Boolean(queries.some(Boolean)),
-      });
+      };
+    };
+
+    // 1) 变体行先占位（颜色/尺码按 SKU 精确）
+    for (const item of items.filter((one) => one.skuKey != null)) {
+      const row = await resolveItem(item);
+      put(row, item.skuKey);
     }
+    // 2) 产品级行：SKU 归属的字段按 SKU 展开，其余保持 null
+    for (const item of items.filter((one) => one.skuKey == null)) {
+      const row = await resolveItem(item);
+      if (skuOwned.has(Number(item.attributeId))) {
+        for (const skuKey of skuKeys) put(row, skuKey);
+      } else {
+        put(row, null);
+      }
+    }
+    const values = [...collected.values()];
     return { fields, values };
   }
 
   async function buildPlan() {
     const context = getContext();
     if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+    // 缓存键（类目/生成图）必须用**源商品号**，不能被下面改的货号前缀带跑
+    const sourceKey = String(context.sourceProductId || context.offerBase);
     // 货号前缀可改：用它就能基于同一份采集建一条全新 listing
     const prefixed = String(offerBaseInput.value || '').trim();
     if (!prefixed) offerBaseInput.value = context.offerBase;
@@ -502,27 +543,26 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       return { plan, context, workspace: null };
     }
 
-    // 新商品：优先用 ERP 属性工作区；读不到（catalog_stale / 草稿轮换 / bridge 挂起）
-    // 就用 Ozon schema + 本地规则自己算 —— 直连车道不该被 ERP 拖住。
-    let workspace = null;
+    // 新商品属性：规则打底（确定性、覆盖齐），ERP 有值就覆盖同键。
+    // 只靠 ERP 会缺项（草稿经常只剩 2 个属性 → REQUIRED_ATTRIBUTES），
+    // 只靠规则又会丢掉卖家在 ERP 里手工改过的值。
+    const category = context.category && context.category.categoryId
+      ? context.category
+      : await readCachedCategory(sourceKey);
+    let erpWorkspace = null;
     if (context.binding) {
-      try { workspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
-      catch (_error) { workspace = null; }
+      try { erpWorkspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
+      catch (_error) { erpWorkspace = null; }
     }
-    if (workspace) {
-      workspaceCache = workspace;
-    } else {
-      const category = context.category && context.category.categoryId
-        ? context.category
-        : await readCachedCategory(context.sourceProductId || context.offerBase);
-      if (!category) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
-      context.category = category;
-      workspace = await attributesFromRules(context, category, skus);
-      if (!workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
-      const unresolved = [...new Set((workspace.values || []).filter((one) => one.__unresolved).map((one) => one.attributeId))];
-      if (unresolved.length) {
-        throw new Error(`字典没解析到属性 ${unresolved.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
-      }
+    const rulesWorkspace = category ? await attributesFromRules(context, category, skus) : null;
+    if (rulesWorkspace) context.category = category || context.category;
+    const workspace = mergeWorkspaceValues(rulesWorkspace, erpWorkspace);
+    if (!workspace) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
+    if (workspace.values && workspace.values.length) workspaceCache = workspace;
+    if (!workspace.values || !workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
+    if (workspace.values.some((one) => one.__unresolved)) {
+      const ids = [...new Set(workspace.values.filter((one) => one.__unresolved).map((one) => one.attributeId))];
+      throw new Error(`字典没解析到属性 ${ids.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
     }
 
     // 标题为空时自动用规则生成一次
