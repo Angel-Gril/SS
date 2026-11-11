@@ -16,6 +16,7 @@ const PICTURE_IMPORT_PATH = '/v2/product/pictures/import';
 const PRODUCT_IMPORT_PATH = '/v3/product/import';
 const IMPORT_STATUS_PATH = '/v1/product/import/info';
 const PRODUCT_INFO_PATH = '/v3/product/info/list';
+const PRODUCT_ATTRIBUTES_PATH = '/v4/product/info/attributes';
 
 // 2026-11 实测：20 秒常常不够。pictures/import 提交后 Ozon 会先生成 CDN 副本\n// （/v3/product/info/list 的 primary_image 立刻有值），但 images 数组要更久才填。\n// 用 20 秒时多次出现 images:0 且零错误的「成功但无图」商品（product 6919447399）。\nconst PICTURE_SETTLE_MS = 40000;
 const POLL_INTERVAL_MS = 5000;
@@ -329,6 +330,22 @@ async function publishProducts(inputs, options = {}) {
         mark('pictures_retried', { offerId: item.offer_id });
       } catch (_e) { mark('pictures_retry_failed', { offerId: item.offer_id }); }
     }
+
+    // 5. 属性复查 + 只补发空的那条（import 对同 offer 幂等，实测重发即可修复）
+    let attributeState = { found: false, filled: 0, total: 0 };
+    try { attributeState = await verifyAttributes(item.offer_id); } catch (_e) { /* 忽略 */ }
+    if (attributeState.found && attributeState.filled === 0) {
+      try {
+        await ozon().ozonPost(PRODUCT_IMPORT_PATH, { items: [item] });
+        await new Promise((r) => setTimeout(r, 25000));
+        const after = await verifyAttributes(item.offer_id);
+        mark('attributes_repaired', { offerId: item.offer_id, before: 0, after: after.filled });
+        attributeState = after;
+        try { snapshot = await verifyProduct(item.offer_id); } catch (_e) { /* 保留旧快照 */ }
+      } catch (_e) {
+        mark('attributes_repair_failed', { offerId: item.offer_id });
+      }
+    }
     items.push({
       offerId: item.offer_id,
       productId: one.product_id || snapshot.productId || null,
@@ -336,6 +353,8 @@ async function publishProducts(inputs, options = {}) {
       modelId: snapshot.modelId || null,
       variantCount: snapshot.variantCount || null,
       images: snapshot.images != null ? snapshot.images : 0,
+      attributesFilled: attributeState.filled || 0,
+      attributesTotal: attributeState.total || 0,
       status: snapshot.status || null,
       errors,
     });
@@ -369,8 +388,29 @@ async function importPicturesBatch(entries) {
 }
 
 /** 验证商品是否真的创建了 */
-async function verifyProduct(offerId) {
+/**
+ * 属性落地情况：Ozon 偶尔会把某条 offer 的属性存成「有字段、无值」（实测 T5-S），
+ * 表现为字段存在但 values 为空 —— 这时 model 建不出来，商品不进销售。
+ * 返回 filled = 有值的属性个数，调用方据此决定是否补发。
+ */
+async function verifyAttributes(offerId) {
   try {
+    const response = await ozon().ozonPost(PRODUCT_ATTRIBUTES_PATH, {
+      filter: { offer_id: [String(offerId)], visibility: 'ALL' },
+      limit: 1,
+    });
+    const rows = (response && Array.isArray(response.result)) ? response.result : [];
+    const first = rows[0];
+    if (!first) return { found: false, filled: 0, total: 0 };
+    const list = Array.isArray(first.attributes) ? first.attributes : [];
+    const filled = list.filter((attribute) => Array.isArray(attribute.values) && attribute.values.length > 0).length;
+    return { found: true, filled, total: list.length };
+  } catch (error) {
+    return { found: false, filled: 0, total: 0, error: String((error && error.message) || error).slice(0, 200) };
+  }
+}
+
+async function verifyProduct(offerId) {  try {
     const response = await ozon().ozonPost(PRODUCT_INFO_PATH, { offer_id: [String(offerId)] });
     const items = (response && Array.isArray(response.items)) ? response.items : [];
     const found = items[0];
@@ -403,6 +443,7 @@ globalThis.SSERP_DIRECT_PUBLISH = Object.freeze({
   publishProducts,
   waitImport,
   verifyProduct,
+  verifyAttributes,
   PATHS: Object.freeze({
     PICTURE_IMPORT_PATH, PRODUCT_IMPORT_PATH, IMPORT_STATUS_PATH, PRODUCT_INFO_PATH,
   }),
