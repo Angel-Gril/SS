@@ -25,6 +25,10 @@
 - ERP 新增 `POST /api/extension-device/images`：扩展把生成的图片交给 ERP 存到对象存储（按配置回退 Ozon 登录态上传），换取可用于上架的长期链接。
 - ERP 新增 `POST /api/extension-device/direct-listings`：记录扩展直连上架的结果（货号、Ozon 商品号、最终图片、标题、类目），不触发 Ozon 写入。
 
+### Fixed
+
+- Ozon 站内从一个商品直接跳到另一个商品后，“数据一览”与入口上的状态提示不再停留在上一个商品：面板换成新商品的（原来展开着的保持展开），状态提示清空。
+
 ### Security
 
 - 移除可信点击闸门的自动化放行开关（URL 参数 `sserp-e2e` 与全局变量）；包校验新增对应检查。

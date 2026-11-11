@@ -35,7 +35,7 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
    颜色、圆角、阴影、字体、模糊强度只取自 `extensions/ss-erp/shared/ui/tokens.css`。
    接入入口的功能遵守三点：隐藏自己原来的悬浮按钮；页面加载时会自动出现的面板（例如 Ozon 商品页的数据一览）
    默认不显示，从对应标签打开，`isOpen` 只在面板真正展开时为真（否则入口会被当作“有面板展开”而收起）；
-   功能离开当前页面时注销标签（Ozon 是单页应用，页面不会重新加载）。
+   功能离开当前页面时注销标签；站内直接切换到另一个商品时，上一个商品的面板与入口上的状态不沿用（Ozon 是单页应用，页面不会重新加载）。
 6. **不暴露内部概念。** 草稿版本、执行模式、设备配对细节、内部闸门错误不出现在用户界面上。
 
 ## 冻结范围
@@ -73,7 +73,7 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
 | ERP 图片托管服务 | `apps/server/src/services/image-upload-ingest.ts` |
 | ERP 上架结果同步服务 | `apps/server/src/services/direct-listing-sync.ts` |
 
-## 验证状态（2026-11-11）
+## 验证状态（2026-11-12）
 
 已有证据（均为本地，不联网、不产生费用、不写 Ozon）：
 
@@ -85,9 +85,12 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
 - 真实扩展形态，Chromium 按 manifest 加载 `extensions/ss-erp`，来源页与 Ozon 页是拦截的夹具页面：
   - `node scripts/extension-dock-loaded-browser-smoke.mjs`：1688 与 Ozon 商品页上各功能的内容脚本接入统一入口、原悬浮按钮被接管、
     页面加载稳定后入口可见、皮肤变量注入到页面、从入口打开核价 / 利润 / 商品信息面板并在收起后回到入口、
+    Ozon 站内直接切换到另一个商品后商品信息面板与入口状态属于新商品（面板展开着切换时保持展开）、
     Ozon 站内离开商品页后“采集 / 跟卖”“商品信息”置灰。
   - `node scripts/extension-donor-workbench-mv3-acceptance.mjs`：经弹窗和经统一入口打开工作台、工作台内投影出商品与 SKU、
     伪造的页面消息与非商品地址被拒绝。
+- 浏览器夹具收尾合同：`node --test scripts/extension-browser-fixture-cleanup.test.mjs`（用例正常结束、抛错、真实扩展形态三种情况下，
+  不遗留浏览器进程与临时用户目录）。
 - `pnpm verify:extension`（674 项通过，0 失败）；`cloud` 与 `local` 两个构建产物通过包校验（`cloud` 为严格模式）；
   `scripts/extension-package-auto-bump.test.mjs`（升版、打包、归档校验、暂存的端到端流程）通过。
 
@@ -103,13 +106,19 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
 
 已知遗留：
 
-- `scripts/*.test.mjs` 逐个运行共 355 个文件：303 个通过，51 个失败，1 个挂起（`extension-official-attributes-readback`）。
+- `scripts/*.test.mjs` 逐个运行：2026-11-12 在 `bc7ac60a` 上共 355 个文件，303 个通过，51 个失败，1 个挂起（`extension-official-attributes-readback`）；
+  此后新增的 `extension-browser-fixture-cleanup.test.mjs` 通过。
   与基点 `2eb94768` 在同一环境下对照，没有基点通过而现在不通过的测试；这 52 个在基点上同样不通过，主要两类：
   测试沙箱没有加载 `shared/ui/trust-gate.js`；测试仍读取已改名的 `SS_ERP_RUNTIME_MESSAGE_POLICY`。其余多是已冻结功能
   （独立生图工作台、Ozon 列表选品）的文本断言。
 - 做这类对照时有两个容易得出错误结论的地方：基点检出目录要补上 `node_modules`，否则三十多个测试会因缺依赖假失败；
   `extension-package-auto-bump`（5 到 11 分钟）、`extension-byok-workbench-package-verifier`（约 3 分钟）、
   `qa04-final-acceptance`（约 2.5 分钟）是通过的，只是慢，按 120 秒超时会被误判。
+- 浏览器测试的进程清理（2026-11-12 修复）：启动的 `chrome.exe` 只是启动器，真正的浏览器进程由它拉起后启动器即以 0 退出，
+  只对启动器调用 `kill()` 结束不了浏览器——夹具与两个 precision UI 测试曾因此每跑一次遗留一个无头浏览器（约十个进程、几百 MB），
+  一天积累几十个后把机器的提交内存耗尽，表现为 `VirtualAlloc failed`、随机的 js 语法检查失败和浏览器起不来。
+  现在三处都改为经调试连接发 `Browser.close`，由 `extension-browser-fixture-cleanup.test.mjs` 守卫；
+  跑长测试若出现上述症状，先查是否有遗留的 `ms-playwright` chrome 进程。
 - `scripts/extension-donor-workbench-browser-acceptance.mjs` 与 `extension-precision-browser-acceptance.mjs` 的默认场景在基点上同样失败，原因未变。
 - 工作台里托管流程的代码（套图计划、审核、计费、自带 API 编辑器）仍在文件中，只是不再作为入口显示；其中 `suiteCommand` 已没有调用点。
 - 包没有变轻：service worker 启动时仍加载 `shared/byok/`（43 个脚本）与 `shared/hosted/`（5 个脚本），包校验仍把它们列为必须项，
