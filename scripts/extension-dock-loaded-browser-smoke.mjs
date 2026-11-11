@@ -6,6 +6,7 @@
 //   - 各功能原来的悬浮按钮确实被接管隐藏，页面加载稳定后入口仍然可见；
 //   - 皮肤变量（shared/ui/tokens.css）确实注入到了来源页与 Ozon 页；
 //   - 从入口能打开真实的功能面板，面板展开期间入口收起、关闭后回来；
+//   - Ozon 单页应用里站内切换到另一个商品后，商品信息面板与入口上的状态属于新商品；
 //   - Ozon 单页应用里离开商品页后，不再适用的标签回到置灰。
 // 「上架工作台」标签打开后的工作台投影由 extension-donor-workbench-mv3-acceptance.mjs 覆盖，这里不重复。
 //
@@ -53,6 +54,12 @@ const legacyState = (ids) => `Object.fromEntries(${JSON.stringify(ids)}.map(id =
 const DOCK_VISIBLE = 'getComputedStyle(document.getElementById("ss-erp-dock")).display !== "none"';
 const MENU_HIDDEN = 'document.getElementById("ss-erp-dock-menu").hidden';
 const INFO_PANEL = 'document.getElementById("spb-self-hosted-ozon-panel")';
+const INFO_EXPANDED = `${INFO_PANEL}.getBoundingClientRect().width > 300`;
+// 商品信息面板标题里的商品编号（“SKU 123456789”）；面板不存在时为 null
+const INFO_SKU = `((${INFO_PANEL}?.textContent.match(/SKU\\s*(\\d+)/u) || [])[1] ?? null)`;
+// 当前页面上属于哪个商品：快捷面板、商品信息面板、入口上镜像的状态文字
+const PRODUCT_STATE = `({ quick: document.getElementById("ss-erp-ozon-quick-actions")?.dataset.productId ?? null,
+  info: ${INFO_SKU}, status: document.querySelector("#ss-erp-dock .ss-dock-status").textContent })`;
 
 await withLoadedExtensionBrowser({ route, interceptPatterns: SCENES.map(scene => new URL(scene.url).origin + '/*') }, async (page) => {
   const { evaluate } = page;
@@ -100,14 +107,33 @@ await withLoadedExtensionBrowser({ route, interceptPatterns: SCENES.map(scene =>
   // 从「商品信息」标签打开，收起后不留悬浮条。
   await until(() => evaluate(`!!${INFO_PANEL}`), 'ozon: 商品信息面板已随页面加载渲染');
   assert.equal(await evaluate(`${INFO_PANEL}.getClientRects().length`), 0, 'ozon: 商品信息面板默认不常驻');
-  await openAndClose('ozon', 'product', `${INFO_PANEL}.getBoundingClientRect().width > 300`,
+  await openAndClose('ozon', 'product', INFO_EXPANDED,
     '#spb-self-hosted-ozon-panel [data-role="collapse"]');
   assert.equal(await evaluate(`${INFO_PANEL}.getClientRects().length`), 0, 'ozon: 商品信息面板收起后不留悬浮条');
 
   // 页面上残留着不是本次注入创建的面板时（例如扩展刚被重新加载），从入口仍能打开
   await evaluate(`${INFO_PANEL}.replaceWith(Object.assign(document.createElement('section'), { id: 'spb-self-hosted-ozon-panel', hidden: true }))`);
-  await openAndClose('ozon', 'product', `${INFO_PANEL}.getBoundingClientRect().width > 300`,
+  await openAndClose('ozon', 'product', INFO_EXPANDED,
     '#spb-self-hosted-ozon-panel [data-role="collapse"]');
+
+  // 单页应用里直接跳到另一个商品（页面不重新加载）：商品信息面板与入口上的状态换成新商品的，不沿用上一个商品的
+  const ozon = SCENES.find(scene => scene.name === 'ozon');
+  await evaluate(`document.querySelector('#ss-erp-ozon-quick-actions [data-role="quick-status"]').textContent = '上一个商品的操作结果'`);
+  await settle(PRODUCT_STATE, { quick: '123456789', info: '123456789', status: '上一个商品的操作结果' }, 'ozon: 操作结果镜像到入口');
+  await evaluate('history.pushState({}, "", "/product/fixture-lamp-987654321/")');
+  await settle(PRODUCT_STATE, { quick: '987654321', info: '987654321', status: '' }, 'ozon: 站内切换商品后面板与状态属于新商品');
+  await settle(DOCK_STATE, { docks: 1, tabs: ozon.tabs, actions: ozon.actions }, 'ozon: 站内切换商品后标签保持可用');
+  assert.equal(await evaluate(`${INFO_PANEL}.getClientRects().length`), 0, 'ozon: 新商品的信息面板同样默认不常驻');
+
+  // 商品信息面板展开着切换商品：面板保持展开并换成新商品的，收起后入口回来
+  await ensureMenu('ozon');
+  await click('#ss-erp-dock [data-dock-tab=product]', 'ozon product tab before switching product');
+  await until(() => evaluate(INFO_EXPANDED), 'ozon: 切换商品前展开商品信息面板');
+  await evaluate('history.pushState({}, "", "/product/fixture-shelf-555000111/")');
+  await settle(`({ info: ${INFO_SKU}, expanded: !!${INFO_PANEL} && ${INFO_EXPANDED} })`, { info: '555000111', expanded: true },
+    'ozon: 面板展开着切换商品后保持展开并属于新商品');
+  await click('#spb-self-hosted-ozon-panel [data-role="collapse"]', 'ozon product collapse after switching product');
+  await until(() => evaluate(DOCK_VISIBLE), 'ozon: 切换商品后收起面板，入口回来');
 
   // 单页应用里离开商品页：采集与商品信息不再适用，标签回到置灰；利润计算仍可用
   await evaluate('history.pushState({}, "", "/category/fixture-7000/")');

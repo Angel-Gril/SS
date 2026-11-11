@@ -1076,7 +1076,8 @@
     if (!productId) return;
     const existing = document.getElementById(OZON_QUICK_ACTIONS_ID);
     if (existing && existing.dataset.productId === productId) return;
-    if (existing) existing.remove();
+    // 单页应用里直接跳到另一个商品：与离开商品页走同一条清理路径，上一个商品接入入口的标签与状态不沿用
+    if (existing) removeOzonQuickActions();
 
     const panel = document.createElement("aside");
     panel.id = OZON_QUICK_ACTIONS_ID;
@@ -1306,11 +1307,21 @@
 
   async function renderOzonPanel(options = {}) {
     const productId = parseOzonProductIdFromUrl(location.href);
-    if (!productId || document.getElementById(OZON_PANEL_ID)) {
+    if (!productId) {
       return;
     }
+    const existing = document.getElementById(OZON_PANEL_ID);
+    let expand = options.expand === true;
+    if (existing) {
+      if (existing.dataset.productId === productId) {
+        return;
+      }
+      // 单页应用里直接跳到另一个商品：换成新商品的面板，不沿用上一个商品的数据；原来展开着的保持展开
+      expand = expand || (typeof existing._ozonIsExpanded === "function" && existing._ozonIsExpanded());
+      existing.remove();
+    }
 
-    const panel = createOzonPanelShell(productId, options);
+    const panel = createOzonPanelShell(productId, { ...options, expand });
     document.body.appendChild(panel);
 
     try {
@@ -1370,6 +1381,7 @@
   function createOzonPanelShell(productId, options = {}) {
     const panel = document.createElement("section");
     panel.id = OZON_PANEL_ID;
+    panel.dataset.productId = productId;
     panel.style.cssText = [
       "position:fixed",
       "left:0",
@@ -1446,6 +1458,7 @@
       if (docked) panel.hidden = true;
     }
     panel._ozonExpand = expand;
+    panel._ozonIsExpanded = () => expanded && !panel.hidden;
 
     tab.addEventListener("click", expand);
     panel.querySelector("[data-role='collapse']").addEventListener("click", (e) => {
