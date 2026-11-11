@@ -41,6 +41,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const markup = mkNumber('加价 CNY', '0', { step: '1', min: '0' });
   const strike = mkNumber('折扣前倍率', '1.5', { step: '0.1', min: '1' });
   const stockInput = mkNumber('库存', '10', { step: '1', min: '0' });
+  // 成本：采集不到 1688 价格时（有些页面解析不出）用它兜底，0 = 用采集值
+  const costInput = mkNumber('成本 CNY', '0', { step: '0.01', min: '0' });
   // 货号前缀：默认取来源商品号；改它就能用同一份采集结果建一条全新 listing
   const offerBaseWrap = make('label', '', '货号前缀 ');
   const offerBaseInput = make('input');
@@ -76,7 +78,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
   const autoPricing = make('button', 'ghost', '按成本自动定价');
-  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
 
   const copyRow = make('div', 'precision-local-fields');
@@ -151,6 +153,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
   let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
   let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
+  // 类目 ID → 俄文类型名（标题规则需要它；context.category 在无草稿时为空）
+  const TYPE_NAME_BY_ID = { 93182: 'Платье', 93283: 'Юбка', 93211: 'Платье', 608042980: 'Фартук' };
   // offerId → { priceInput, oldPriceInput }
   const priceInputs = new Map();
 
@@ -280,7 +284,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       return pair ? pair.value : '';
     };
     return buildRuTitle({
-      typeName: context.category && context.category.typeName,
+      typeName: (context.category && context.category.typeName) || TYPE_NAME_BY_ID[Number(typeIdInput.value)] || '',
       sourceTitle: context.sourceTitle,
       gender: attrValue(9163),
       material: attrValue(6383),
@@ -536,6 +540,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       }
     }
     const values = [...collected.values()];
+    // 服装类目性别兜底：标题里常没写性别（裙/衣），但 9163 是必填。
+    // 默认女装，标题出现「男」才用男装 —— 与弹窗那套规则互补。
+    if (Number(category.categoryId) === 200000933 && !values.some((one) => Number(one.attributeId) === 9163)) {
+      try {
+        const found = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: category.categoryId, typeId: category.typeId, attributeId: 9163, query: '', limit: 200,
+        });
+        const list = (found && found.values) || [];
+        const wanted = /男/.test(String(context.sourceTitle || '')) ? ['Мужской', 'мужской'] : ['Женский', 'женский'];
+        let chosen = null;
+        for (const query of wanted) { chosen = pickDictionaryValue(list, 'fuzzy', query, {}); if (chosen) break; }
+        if (chosen) {
+          for (const skuKey of skuKeys) {
+            values.push({ attributeId: 9163, skuKey, value: String(chosen.value || ''), dictionaryValueIds: [chosen.id], __unresolved: false });
+          }
+        }
+      } catch (_error) { /* 兜底失败就让预检报缺项 */ }
+    }
     return { fields, values };
   }
 
@@ -551,6 +573,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     const allSkus = context.skus || [];
     const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
     const skus = limitValue > 0 ? allSkus.slice(0, limitValue) : allSkus;
+    // 成本覆盖：采集值缺失或被人工改价时用面板输入
+    const costOverride = Number(costInput.input.value) || 0;
+    if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
     const offers = skus.map((sku, index) => offerIdFor(context.offerBase, sku.key, index));
 
     // 已上架：属性/尺寸/图片从 Ozon 读（不依赖 ERP —— ERP 的 catalogRevision
@@ -1005,6 +1030,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         const allSkus = context.skus || [];
         const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
         const skus = limitValue > 0 ? allSkus.slice(0, limitValue) : allSkus;
+    // 成本覆盖：采集值缺失或被人工改价时用面板输入
+    const costOverride = Number(costInput.input.value) || 0;
+    if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
         const offers = skus.map((sku, index) => offerIdFor(prefixed, sku.key, index));
         const stockCount = Number(stockInput.input.value);
         if (!(stockCount > 0)) throw new Error('库存要大于 0');
@@ -1049,7 +1077,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     void (async () => {
       try {
         const context = getContext();
-        if (!context || !context.binding) throw new Error('请先读取 ERP 草稿');
+        // 标题不需要 ERP：有草稿就读，没有就用 Ozon 已上架商品的属性/规则兜底
+        if (!context || !context.offerBase) throw new Error('请先采集来源商品');
         // ERP 读到就用它；读不到（catalog_stale 等）就用 Ozon 已上架商品的属性兜底
         let workspace = workspaceCache;
         if (!workspace) {
@@ -1085,7 +1114,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
             const ai = await generateTitleWithAi({
               ...aiConfig,
               sourceTitle: context.sourceTitle,
-              typeName: context.category && context.category.typeName,
+              typeName: (context.category && context.category.typeName) || TYPE_NAME_BY_ID[Number(typeIdInput.value)] || '',
               attributes: pairs,
             });
             titleInput.value = ai.title;
