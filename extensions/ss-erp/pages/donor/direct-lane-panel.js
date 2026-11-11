@@ -468,6 +468,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         });
         list = (found && found.values) || [];
       } catch (_error) { list = []; }
+      // 网关可能无视 limit 返回上千条；大列表上的模糊匹配会把渲染线程堵死（实测 180s+）
+      if (list.length > 400) list = list.slice(0, 400);
       dictCache.set(id, list);
       return list;
     };
@@ -503,7 +505,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       const queries = Array.isArray(item.queries) && item.queries.length ? item.queries : [item.query || ''];
       let chosen = null;
       for (const query of queries) {
-        chosen = pickDictionaryValue(list, item.pick, query, {
+        // 先按关键词预筛，避免在上千条上跑模糊匹配
+        const needle = String(query || '').trim().toLowerCase();
+        const pool = needle
+          ? (list.filter((one) => String(one && one.value || '').toLowerCase().includes(needle)).slice(0, 200))
+          : list;
+        chosen = pickDictionaryValue(pool.length ? pool : list, item.pick, query, {
           id: item.fallbackValueId,
           typeId: item.attributeId === 8229 ? category.typeId : undefined,
         });
@@ -534,6 +541,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       };
     };
 
+    // 0) 字典预热：把所有要用的 attributeId 一次性并发取回（每批 6 个）。
+    //    之前是解析到一个才取一个，串行下来 40+ 个属性要几分钟。
+    {
+      const need = [...new Set(items.filter((one) => one.kind !== 'text').map((one) => Number(one.attributeId)))].filter((id) => id > 0);
+      for (let i = 0; i < need.length; i += 6) {
+        await Promise.all(need.slice(i, i + 6).map((id) => dictionaryOf(id)));
+      }
+    }
     // 1) 变体行先占位（颜色/尺码按 SKU 精确）
     for (const item of items.filter((one) => one.skuKey != null)) {
       const row = await resolveItem(item);
