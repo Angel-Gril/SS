@@ -21,7 +21,12 @@ export function offerSuffix(label, index) {
   const token = text.match(/\b(?:XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|\d{2,3}(?:\/\d{2})?)\b/i);
   if (token) return String(token[0]).toUpperCase().replace(/\//g, '-');
   const tail = text.split(/[\/|]/).pop().trim();
-  if (tail && tail.length <= 12 && /^[\w\u4e00-\u9fa5-]+$/u.test(tail)) return tail;
+  // Ozon 的 offer_id 只接受 ASCII：中文规格名（例如「发光诞生场景壁饰」）必须落成数字，
+  // 否则导入会被拒（precheck 不校验这一点）。
+  const ascii = tail.replace(/[^A-Za-z0-9_-]+/g, '').slice(0, 12);
+  if (ascii) return ascii.toUpperCase();
+  const latinToken = (text.match(/[A-Za-z0-9]{1,12}/g) || []).map((one) => one.replace(/[^A-Za-z0-9]/g, '')).filter(Boolean);
+  if (latinToken.length) return latinToken[latinToken.length - 1].toUpperCase();
   return String(index + 1);
 }
 

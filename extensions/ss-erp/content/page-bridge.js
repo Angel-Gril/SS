@@ -714,6 +714,132 @@
     return safeClone(data);
   }
 
+  /**
+   * 从 1688 的 `window.context` 提取结构化商品数据。
+   *
+   * 背景（2026-11 实测）：
+   *   1688 详情页把真实数据放在 `window.context`（约 55KB），结构为
+   *     context.result.data.gallery.fields.subject        商品标题
+   *     context.result.data.gallery.fields.offerImgList   主图数组
+   *     context.result.global.globalData.model.offerDetail.featureAttributes  属性
+   *     context.result.data.Root.fields.dataJson.skuModel SKU 模型
+   *     context.result.data.productTitle.fields.shopInfo.companyName 店铺名
+   *
+   *   现有采集只读 DOM 与 `__INIT_DATA__`/`__GLOBAL_DATA__` 等全局变量，
+   *   这些在现版页面上大多为空，导致标题抓到公司名、主图抓到 SVG 图标、
+   *   属性丢失键值结构。这里补一条结构化来源。
+   *
+   * 本函数纯读取，不修改页面、不发请求。
+   */
+  function readContextPathProduct() {
+    let ctx = null;
+    try {
+      ctx = window.context;
+    } catch (_e) {
+      return null;
+    }
+    if (!ctx || typeof ctx !== "object" || !ctx.result) return null;
+
+    const dig = (obj, path) => {
+      let cur = obj;
+      for (const k of path) {
+        if (cur == null || typeof cur !== "object") return undefined;
+        cur = cur[k];
+      }
+      return cur;
+    };
+    const asText = (v, max = 500) => (typeof v === "string" ? v.normalize("NFKC").trim().slice(0, max) : "");
+    const asArray = (v) => (Array.isArray(v) ? v : []);
+
+    const normalizeUrl = (raw) => {
+      let s = asText(raw, 2000);
+      if (!s) return "";
+      if (s.startsWith("//")) s = "https:" + s;
+      if (!/^https?:\/\//i.test(s)) return "";
+      // 排除 22x22 这类界面图标与 SVG
+      if (/tps-\d+-\d+/.test(s)) return "";
+      if (/\.svg(\?|$)/i.test(s)) return "";
+      if (/(placeholder|default|icon|sprite|logo_|avatar)/i.test(s)) return "";
+      // 去掉 _q50 / _sum 缩放后缀
+      s = s.replace(/\.(jpg|jpeg|png|webp)_[^/?#]*$/i, ".$1");
+      s = s.replace(/\.sum\.(jpg|png)$/i, ".$1");
+      return s.split("?")[0].split("#")[0];
+    };
+    const uniqueImages = (list) => {
+      const seen = new Set();
+      const out = [];
+      for (const raw of list) {
+        const u = normalizeUrl(raw);
+        if (!u || seen.has(u)) continue;
+        seen.add(u);
+        out.push(u);
+      }
+      return out;
+    };
+
+    const data = dig(ctx, ["result", "data"]) || {};
+    const galleryFields = dig(data, ["gallery", "fields"]) || {};
+    const titleFields = dig(data, ["productTitle", "fields"]) || {};
+    const dataJson = dig(data, ["Root", "fields", "dataJson"]) || {};
+    const offerDetail = dig(ctx, ["result", "global", "globalData", "model", "offerDetail"]) || {};
+
+    const title = asText(galleryFields.subject)
+      || asText(offerDetail.subject)
+      || asText(dataJson.subject);
+
+    const shopName = asText(dig(titleFields, ["shopInfo", "companyName"]), 200)
+      || asText(offerDetail.companyName, 200);
+
+    const mainImages = uniqueImages(
+      asArray(galleryFields.offerImgList)
+        .concat(asArray(offerDetail.mainImageList))
+        .concat(asArray(offerDetail.imageList))
+    ).slice(0, 40);
+
+    const attributes = asArray(offerDetail.featureAttributes)
+      .map((item) => {
+        if (!item) return null;
+        const name = asText(item.name, 200);
+        const value = asText(item.value, 500);
+        if (!name || !value) return null;
+        return { name, value };
+      })
+      .filter(Boolean);
+
+    const skuInfoMap = dig(dataJson, ["skuModel", "skuInfoMap"]) || {};
+    const skuItems = Object.keys(skuInfoMap).map((key) => {
+      const row = skuInfoMap[key] || {};
+      return {
+        specText: asText(key, 300),
+        skuId: row.skuId != null ? String(row.skuId) : "",
+        price: row.priceAmount != null && Number.isFinite(Number(row.priceAmount)) ? Number(row.priceAmount) : null,
+        stock: row.canBookCount != null && Number.isFinite(Number(row.canBookCount)) ? Number(row.canBookCount) : null
+      };
+    });
+
+    const leafCategoryName = asText(offerDetail.leafCategoryName, 200) || asText(dataJson.leafCategoryName, 200);
+    const descriptionFields = dig(data, ["description", "fields"]) || {};
+
+    if (!title && !attributes.length && !mainImages.length) return null;
+
+    return {
+      source: "window.context",
+      title,
+      shopName,
+      offerId: offerDetail.offerId != null ? String(offerDetail.offerId) : (dataJson.offerId != null ? String(dataJson.offerId) : ""),
+      leafCategoryName,
+      categoryIds: {
+        top: offerDetail.topCategoryId != null ? Number(offerDetail.topCategoryId) : null,
+        second: offerDetail.secondCategoryId != null ? Number(offerDetail.secondCategoryId) : null,
+        leaf: offerDetail.leafCategoryId != null ? Number(offerDetail.leafCategoryId) : null
+      },
+      mainImages,
+      attributes,
+      skuItems,
+      detailUrl: asText(descriptionFields.detailUrl, 500)
+    };
+  }
+
   async function getPayload() {
     const truncations = [];
     return {
@@ -724,6 +850,9 @@
       knownGlobals: readKnownGlobals(truncations),
       targetedInlineEvidenceSources: readTargetedInlineEvidenceSources(truncations),
       aliExpressData: await getAliExpressData().catch(() => null),
+      // 2026-11：该分支读 window.context（实测 372KB，深结构）后序列化，疑似把页面主线程压住，
+    // 与「新商品工作台卡死」同时出现。先关掉，等卡死排查清楚再启用。
+    contextPathProduct: null,
       truncations
     };
   }
