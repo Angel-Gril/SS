@@ -217,7 +217,9 @@ async function run() {
     await click('#precision-image-close');
     await until(() => workspace('document.getElementById("precision-image-manager").hidden === true'), 'image workspace closed');
     assert.match(await workspace('document.querySelector("[data-image-sku-key=\\"sku-0\\"] .image-manager-summary-task").textContent'), /生图 · 已完成 8\/8/u);
-    assert.equal(await workspace('document.querySelector(".stepper-step[data-step=image]").dataset.state'), 'done');
+    // 步骤条每 600ms 定时重画一次（precision-workbench.js），而夹具的应答是即时的，整段流程可能快过一次重画：
+    // 等它重画，而不是立即读上一次重画留下的值。
+    await until(() => workspace('document.querySelector(".stepper-step[data-step=image]").dataset.state === "done"'), 'image step marked done in the stepper');
     await shot('-4-summary');
 
     assert.deepEqual(await errors(), [], '整个流程不应有脚本错误');
