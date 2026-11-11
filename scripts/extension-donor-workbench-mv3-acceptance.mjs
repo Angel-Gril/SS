@@ -489,7 +489,7 @@ async function run() {
     sourceFixture: `synthetic-${SOURCE_PLATFORM}-product-served-by-CDP`,
     workspacePage: WORKSPACE_PAGE, precisionDefault: true, previewStorage: null,
     defaultUiOpenVerified: false, ordinaryProductOpenVerified: false,
-    popupEntryVerified: false,
+    popupEntryVerified: false, dockEntryVerified: false,
     forgedPageCommandRejected: false, rejectedSources: [],
     retiredFrameInterceptions: [],
     ...(MEDIA_CHANNEL_ONLY ? { acceptanceScope: 'opened-precision-ui-and-transport' } : {}),
@@ -789,13 +789,33 @@ async function run() {
     await send('Page.navigate', { url: ORDINARY_PRODUCT_URL });
     await until(() => evaluate('document.readyState === "complete"'), 'ordinary source product load');
     await until(() => evaluate('!!document.querySelector("#ss-erp-donor-workbench-trigger")'), 'ordinary product precision trigger');
-    const ordinaryPoint = await evaluate(`(() => {
-      const rect=document.querySelector('#ss-erp-donor-workbench-trigger').getBoundingClientRect();
-      return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
-    })()`);
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...ordinaryPoint, button: 'left', clickCount: 1 });
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...ordinaryPoint, button: 'left', clickCount: 1 });
+    // 入口由统一 dock 接管（dev-docs/extension-direction.md 规则 5）：旧的悬浮按钮不再显示，
+    // 工作台从 dock 的「上架工作台」标签打开。
+    const dockEntry = await until(() => evaluate(`(() => {
+      const dock = document.getElementById('ss-erp-dock'), trigger = document.getElementById('ss-erp-donor-workbench-trigger');
+      if (!dock || !trigger) return null;
+      return { dockCount: document.querySelectorAll('#ss-erp-dock').length, dockVisible: dock.getClientRects().length > 0,
+        legacyTriggerDocked: trigger.dataset.ssDocked === 'true', legacyTriggerVisible: trigger.getClientRects().length > 0 };
+    })()`), 'unified dock entry');
+    assert.deepEqual(dockEntry, { dockCount: 1, dockVisible: true, legacyTriggerDocked: true, legacyTriggerVisible: false },
+      'the unified dock must take over the source-page entry and hide the legacy floating button');
+    const clickCenter = async (selector, label) => {
+      const point = await until(() => evaluate(`(() => {
+        const node = document.querySelector(${JSON.stringify(selector)});
+        if (!node || !node.getClientRects().length) return null;
+        const rect = node.getBoundingClientRect();
+        return {x: rect.left + rect.width/2, y: rect.top + rect.height/2};
+      })()`), 'clickable ' + label);
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+    };
+    await clickCenter('#ss-erp-dock .ss-dock-toggle', 'dock toggle');
+    await until(() => evaluate('document.getElementById("ss-erp-dock-menu")?.hidden === false'), 'dock menu open');
+    assert.equal(await evaluate('document.querySelector("[data-dock-tab=workbench]").disabled'), false,
+      'the workbench tab must be enabled on a source product page');
+    await clickCenter('#ss-erp-dock [data-dock-tab=workbench]', 'dock workbench tab');
     await until(() => evaluate('document.querySelector("#ss-erp-donor-workbench-frame")?.hidden === false'), 'ordinary product precision open');
+    summary.dockEntryVerified = true;
     summary.ordinaryProductFrame = await frameObservation();
     assertPrecisionFrameObservation(summary.ordinaryProductFrame, { extensionId: summary.extensionId, sourceUrl: ORDINARY_PRODUCT_URL });
     const ordinaryIframeTarget = await until(async () => {

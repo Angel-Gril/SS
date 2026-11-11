@@ -111,7 +111,9 @@ try {
   assert.match(output, /donor workbench web-accessible boundary is not exact/u);
   assert.match(output, /donor workbench entrypoint is not the default precision workbench/u);
   assert.match(output, /donor workbench contains a forbidden direct network or broad-permission path/u);
-  assert.match(output, /precision workbench contains a forbidden direct network path/u);
+  // 2026-11-11 方向变更：工作台经 chrome.runtime 把直连请求交给 service worker 是允许的，
+  // 页面自己发网络请求（上面追加的 fetch）仍必须被拒绝。
+  assert.match(output, /precision workbench page issues network requests itself/u);
   assert.match(output, /retired workbench UI is still loaded by the manifest/u);
   for (const file of retiredFiles) {
     assert.ok(output.includes(`retired workbench UI is included in the installable package: ${file}`));
