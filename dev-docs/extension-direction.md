@@ -48,3 +48,47 @@ Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览�
 
 `AGENTS.md` 中关于服务端身份、租户、金额、状态机、配额与审计的红线，继续适用于 ERP 服务端和 Web。
 新增的两个设备接口遵守这些红线：设备令牌 + `capture:write`、店铺归属校验、大小与类型上限、不接受客户端传入的归属字段。
+
+## 权限说明
+
+- 解压加载的开发版 `manifest.json` 把任意 https 主机作为安装即授予的权限；打包发布版由 `scripts/build-extension-package.mjs` 改回“可选权限”。
+- 生图需要下载来源商品图（货源平台图片域名）和生图服务返回的结果图（地址由服务商决定），这些主机无法事先列举。
+  因此在“设置 → 直连密钥”保存生图服务时，扩展会在用户点击内确认一次“访问所有 https 网站”的权限；已授予时不弹窗。
+- 扩展页面自身不发网络请求，全部经 service worker；`verify-extension-package` 对此有检查。
+
+## 实现入口
+
+| 事项 | 文件 |
+| --- | --- |
+| 生图任务清单、执行器、落盘、上架用图 | `extensions/ss-erp/pages/donor/direct-image-flow.js` |
+| 生图结果面板 | `extensions/ss-erp/pages/donor/direct-image-panel.js` |
+| 生成图片托管（含降级规则） | `extensions/ss-erp/shared/ozon/direct-image-host.js` |
+| 本机类目、无草稿属性工作区、ERP 同步载荷 | `extensions/ss-erp/shared/publish/direct-workspace.js` |
+| 直连密钥表单 | `extensions/ss-erp/pages/donor/direct-credentials-form.js` |
+| 统一悬浮入口 | `extensions/ss-erp/content/ss-dock.js`、`ss-dock.css` |
+| 设计变量 | `extensions/ss-erp/shared/ui/tokens.css` |
+| ERP 图片托管服务 | `apps/server/src/services/image-upload-ingest.ts` |
+| ERP 上架结果同步服务 | `apps/server/src/services/direct-listing-sync.ts` |
+
+## 验证状态（2026-11-11）
+
+已有证据（均为本地，不联网、不产生费用、不写 Ozon）：
+
+- 服务端 Vitest：设备路由、图片托管服务、上架结果同步服务。
+- 扩展 Node 测试：`scripts/extension-direct-image-flow.test.mjs`、`extension-direct-image-host.test.mjs`、`extension-direct-workspace.test.mjs`、`extension-unified-ui-theme.test.mjs`。
+- 无头浏览器夹具：`node scripts/extension-direct-image-browser-smoke.mjs`（工作台在 ERP 未连接时加载、填写密钥、生成套图、单张失败重试、结果落盘）与
+  `node scripts/extension-dock-browser-smoke.mjs`（统一入口）。夹具用内存桩替代 `chrome.*`，不加载真实扩展。
+- `pnpm verify:extension`。
+
+未验证：
+
+- 真实生图服务的出图与费用；真实 Ozon 上架、改库存；真实 ERP 对象存储托管与结果同步。
+- 在真实 Chrome 中以扩展形态加载后的行为：统一入口与各功能面板的实际接线、`backdrop-filter` 在 1688/Ozon 页面上的观感、权限弹窗。
+- 打包版（`pnpm build:extension:cloud` / `local`）在只有可选权限时的完整流程。
+- “仅翻译”与“AI 主图＋翻译”的翻译质量：翻译通过生图服务的图片编辑接口加翻译提示词实现，效果取决于所用模型。
+
+已知遗留（接手分支 `feat/local-category-ux-slim` 时已存在，本次未处理）：
+
+- `scripts/*.test.mjs` 中有一批测试在该分支上已经失败，主要两类：测试沙箱没有加载 `shared/ui/trust-gate.js`；
+  测试仍读取已改名的 `SS_ERP_RUNTIME_MESSAGE_POLICY`。这些测试覆盖的多为已冻结的独立生图工作台。
+- 工作台里托管流程的代码（套图计划、审核、计费、自带 API 编辑器）仍在文件中，只是不再作为入口显示。
