@@ -55,6 +55,17 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   skuLimitInput.value = '0';
   skuLimitInput.style.width = '70px';
   skuLimitWrap.append(skuLimitInput);
+  // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
+  const catWrap = make('label', '', '类目 ');
+  const catIdInput = make('input');
+  catIdInput.type = 'number';
+  catIdInput.placeholder = 'categoryId';
+  catIdInput.style.width = '110px';
+  const typeIdInput = make('input');
+  typeIdInput.type = 'number';
+  typeIdInput.placeholder = 'typeId';
+  typeIdInput.style.width = '100px';
+  catWrap.append(catIdInput, typeIdInput);
   const weightInput = mkNumber('重量 g', '250', { step: '10', min: '1' });
   const widthInput = mkNumber('宽 mm', '200', { step: '10', min: '1' });
   const heightInput = mkNumber('高 mm', '40', { step: '1', min: '1' });
@@ -65,7 +76,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
   const autoPricing = make('button', 'ghost', '按成本自动定价');
-  toolbar.append(offerBaseWrap, skuLimitWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
 
   const copyRow = make('div', 'precision-local-fields');
@@ -111,8 +122,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const actions = make('div', 'precision-local-fields');
   const precheck = make('button', 'ghost', '预检载荷');
   const publishBtn = make('button', 'primary', '直连上架');
+  // 已存在的 offer 只想补库存/修属性时用这个，不重新 import
+  const restockBtn = make('button', 'ghost', '补库存');
   const state = make('span', '', '');
-  actions.append(precheck, publishBtn, state);
+  actions.append(precheck, publishBtn, restockBtn, state);
 
   const table = make('div');
   const output = make('pre');
@@ -546,6 +559,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     if (existing && offers.every((offer) => existing.has(offer))) {
       const priceMap = await fetchOzonPrices(offers);
       const plan = planFromOzon(context, skus, offers, existing, priceMap);
+      plan.__fromExisting = true;   // 这些 offer 已在 Ozon 存在：不能当新商品再发一次
       if (!String(titleInput.value || '').trim()) titleInput.value = plan.items[0] && plan.items[0].name || '';
       return { plan, context, workspace: null };
     }
@@ -553,9 +567,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     // 新商品属性：规则打底（确定性、覆盖齐），ERP 有值就覆盖同键。
     // 只靠 ERP 会缺项（草稿经常只剩 2 个属性 → REQUIRED_ATTRIBUTES），
     // 只靠规则又会丢掉卖家在 ERP 里手工改过的值。
-    const category = context.category && context.category.categoryId
-      ? context.category
-      : await readCachedCategory(sourceKey);
+    // 类目优先级：面板手填 > 工作区 > 缓存（新商品常常三者只剩手填）
+    const typedCategoryId = Number(catIdInput.value) || 0;
+    const typedTypeId = Number(typeIdInput.value) || 0;
+    const category = typedCategoryId > 0 && typedTypeId > 0
+      ? { categoryId: typedCategoryId, typeId: typedTypeId, typeName: (context.category && context.category.typeName) || '' }
+      : (context.category && context.category.categoryId
+        ? context.category
+        : await readCachedCategory(sourceKey));
     let erpWorkspace = null;
     if (context.binding) {
       try { erpWorkspace = await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }); }
@@ -693,6 +712,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     try {
       const { plan } = await buildPlan();
       const merged = applyPriceInputs(plan);
+    // 同一货号重复发布会撞 Ozon「已上架/归档」，一个前缀只当新商品用一次；补库存走「补库存」按钮
+    if (merged.__fromExisting) {
+      throw new Error('这个货号前缀在 Ozon 已存在（重复发布会判同款/归档）。换一个新前缀；只想补库存请点「补库存」。');
+    }
       // 表格里的输入就是最终价格
       for (const item of merged.items) {
         const inputs = priceInputs.get(item.offerId);
@@ -972,6 +995,47 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     })();
   });
 
+  restockBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void (async () => {
+      try {
+        const context = getContext();
+        if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+        const prefixed = String(offerBaseInput.value || '').trim() || context.offerBase;
+        const allSkus = context.skus || [];
+        const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
+        const skus = limitValue > 0 ? allSkus.slice(0, limitValue) : allSkus;
+        const offers = skus.map((sku, index) => offerIdFor(prefixed, sku.key, index));
+        const stockCount = Number(stockInput.input.value);
+        if (!(stockCount > 0)) throw new Error('库存要大于 0');
+        if (!Number(warehouse.value)) await loadWarehouses();
+        if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
+        const warehouseId = Number(warehouse.value);
+        if (!(warehouseId > 0)) throw new Error('没有可用仓库');
+        state.textContent = '补库存：等商品就绪…';
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+          const info = await send('ss-erp:direct-ozon-post', { path: '/v3/product/info/list', body: { offer_id: offers } }).catch(() => null);
+          const present = new Set(((info && info.items) || []).map((one) => String(one.offer_id)));
+          if (!offers.every((offer) => present.has(offer))) { await new Promise((r) => setTimeout(r, 5000)); continue; }
+          const stocks = await send('ss-erp:direct-ozon-post', {
+            path: '/v2/products/stocks',
+            body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
+          }).catch((error) => ({ error: String((error && error.message) || error) }));
+          output.textContent = JSON.stringify(stocks, null, 2).slice(0, 1500);
+          const rows = (stocks && stocks.result) || [];
+          const okCount = rows.filter((one) => one && one.updated).length;
+          const rateLimited = rows.some((one) => (one.errors || []).some((e) => String(e.code || '') === 'TOO_MANY_REQUESTS'));
+          state.textContent = `补库存：${okCount}/${offers.length} 条成功` + (rateLimited ? '（被限流，等 10 分钟再试）' : '');
+          return;
+        }
+        throw new Error('商品还没建出来，稍后再点一次');
+      } catch (error) {
+        state.textContent = `补库存失败：${String((error && error.message) || error).slice(0, 160)}`;
+        report?.(error);
+      }
+    })();
+  });
+
   precheck.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void runPrecheck();
@@ -1098,7 +1162,13 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       const stored = await loadGeneratedImages(sourceId);
       if (!stored.length) return;
       lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
+      if (Number(catIdInput.value) === 0 && Number(typeIdInput.value) === 0) {
+        const cached = await readCachedCategory(sourceId);
+        if (cached) { catIdInput.value = String(cached.categoryId); typeIdInput.value = String(cached.typeId); }
+      }
       state.textContent = `已载入 ${stored.length} 张生成图，listing 会优先用它们`;
+      const cachedCat = await readCachedCategory(sourceId);
+      if (cachedCat && !Number(catIdInput.value)) { catIdInput.value = String(cachedCat.categoryId); typeIdInput.value = String(cachedCat.typeId); }
       return;
     }
   })();
