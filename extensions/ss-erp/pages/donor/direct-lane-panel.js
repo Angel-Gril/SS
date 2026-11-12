@@ -186,7 +186,17 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         warehouse.append(option);
         return { count: 0 };
       }
-      for (const one of warehouses) {
+      // 2026-11 实测：rets（退货仓）收不了库存 —— /v2/products/stocks 回
+      // PRODUCT_HAS_NOT_BEEN_TAGGED_YET，商品永远不进销售。换成「邮政」仓后
+      // 同一条商品立刻 Продается + 库存 10。所以这里把退货仓和未启用仓过滤掉。
+      const usable = warehouses.filter((one) => {
+        const name = String(one.name || '');
+        if (/rets|возврат|return/i.test(name)) return false;
+        const status = String(one.status || '').toLowerCase();
+        return !status || status === 'created';
+      });
+      const pickList = usable.length ? usable : warehouses;
+      for (const one of pickList) {
         const option = make('option', '', `${one.name || one.warehouse_id} (${one.warehouse_id})`);
         option.value = String(one.warehouse_id);
         warehouse.append(option);
