@@ -5,6 +5,7 @@ import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon
 import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
 import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
+import { variantBlockers } from '../../shared/ozon/variant-key.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -635,6 +636,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     if (!workspace) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
     if (workspace.values && workspace.values.length) workspaceCache = workspace;
     if (!workspace.values || !workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
+    // 该类目能不能把多个 SKU 合成一张卡？判错一次就留一张永远不销售的坏卡。
+    const variant = variantBlockers({ fields: workspace.fields, skuCount: skus.length });
+    if (variant.blockers.length) {
+      throw new Error('类目不支持多变体成组：' + variant.info.reason + '。请每次只发 1 个 SKU（把「SKU 上限」设为 1）。');
+    }
+    if (skus.length === 1 && !variant.info.supported) {
+      state.textContent = '提示：' + variant.info.reason + '；单 SKU 也可能停在 variant_wait';
+    }
     if (workspace.values.some((one) => one.__unresolved)) {
       const ids = [...new Set(workspace.values.filter((one) => one.__unresolved).map((one) => one.attributeId))];
       throw new Error(`字典没解析到属性 ${ids.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
