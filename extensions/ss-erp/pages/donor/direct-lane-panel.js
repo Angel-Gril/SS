@@ -642,7 +642,19 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       throw new Error('类目不支持多变体成组：' + variant.info.reason + '。请每次只发 1 个 SKU（把「SKU 上限」设为 1）。');
     }
     if (skus.length === 1 && !variant.info.supported) {
-      state.textContent = '提示：' + variant.info.reason + '；单 SKU 也可能停在 variant_wait';
+      // 单品卡：Ozon 会忽略单值的集合属性，但带着它反而卡在 variant_wait（实测）。
+      // 所以这里把集合属性整条剔除，只留产品级属性。
+      const collectionIds = new Set(
+        (workspace.fields || []).filter((field) => String((field && (field.ownership || (field.isCollection ? 'SKU' : ''))) || '').toUpperCase() === 'SKU')
+          .map((field) => Number(field.attributeId || field.id)),
+      );
+      workspace.values = (workspace.values || []).filter((row) => !collectionIds.has(Number(row.attributeId)));
+      workspace.__singleCard = true;
+    }
+    if (workspace.__singleCard) {
+      state.textContent = '单品卡：已剔除集合属性（Ozon 会把单值集合属性当成等待变体）';
+    } else if (skus.length === 1) {
+      state.textContent = '提示：' + variant.info.reason;
     }
     if (workspace.values.some((one) => one.__unresolved)) {
       const ids = [...new Set(workspace.values.filter((one) => one.__unresolved).map((one) => one.attributeId))];
