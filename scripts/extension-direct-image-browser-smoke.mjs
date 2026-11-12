@@ -163,9 +163,22 @@ async function run() {
     await type('#direct-image-api-key', 'fixture-image-key-0123456789');
     await click('#direct-image-save');
     await until(() => workspace('document.querySelector("#direct-image-save").closest(".ss-direct-credentials-group").querySelector(".ss-direct-credentials-status").textContent.includes("已保存并连接成功")'), 'image provider saved');
-    assert.deepEqual(await workspace('[document.getElementById("direct-ozon-api-key").value,document.getElementById("direct-image-api-key").value]'), ['', '']);
-    assert.deepEqual(await evaluate('window.__smokePermissions'), [{ origins: ['https://*/*'], trusted: true }],
-      '保存生图服务时在可信点击内申请一次图片主机访问权限（已授予时不弹窗）');
+    // AI 文本（视觉描述 / 生成标题）同样只在这里填写：地址、模型、Key 一组
+    await type('#direct-text-base-url', 'https://text.ss-erp-fixture.invalid/v1');
+    await type('#direct-text-model', 'qwen3.5-plus');
+    await type('#direct-text-api-key', 'fixture-text-key-0123456789');
+    await click('#direct-text-save');
+    await until(() => workspace('document.querySelector("#direct-text-save").closest(".ss-direct-credentials-group").querySelector(".ss-direct-credentials-status").textContent.includes("已保存：qwen3.5-plus")'), 'text service saved');
+    const textConfig = await evaluate('window.__smokeStorage["ss-erp:title-ai:v1"]');
+    assert.deepEqual([textConfig.baseUrl, textConfig.model, textConfig.apiKey],
+      ['https://text.ss-erp-fixture.invalid/v1', 'qwen3.5-plus', 'fixture-text-key-0123456789']);
+    assert.deepEqual(await workspace('["direct-ozon-api-key","direct-image-api-key","direct-text-api-key"].map(id=>document.getElementById(id).value)'), ['', '', '']);
+    assert.deepEqual(await evaluate('window.__smokePermissions'),
+      [{ origins: ['https://*/*'], trusted: true }, { origins: ['https://text.ss-erp-fixture.invalid/*'], trusted: true }],
+      '保存时在可信点击内申请主机访问权限：生图服务一次（图片主机），AI 文本一次（服务地址）');
+    // 上架面板不再有自己的一份 AI 配置：没有 Key 输入框，只显示当前使用的模型
+    assert.equal(await workspace('document.querySelectorAll("[data-direct-lane] input[type=password]").length'), 0, '上架面板不再提供 Key 输入框');
+    await until(() => workspace('document.querySelector("[data-direct-lane] [data-direct-text-ai]").textContent.includes("qwen3.5-plus")'), 'listing panel shows the configured text model');
     assert.equal(await workspace('document.getElementById("basic-modal").textContent.includes("fixture-")'), false, '设置里不回显任何 Key');
     await shot('-1b-credentials');
     await click('#basic-modal [data-close-modal="basic-modal"]');

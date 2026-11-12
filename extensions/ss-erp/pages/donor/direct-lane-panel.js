@@ -1,10 +1,9 @@
 import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js';
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
-import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
+import { generateTitleWithAi, readTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs } from '../../shared/ozon/attribute-prefill.js';
 import { buildDirectWorkspace } from '../../shared/publish/direct-workspace.js';
-import { ensureOriginAccess } from './direct-credentials-form.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -18,6 +17,8 @@ import { ensureOriginAccess } from './direct-credentials-form.js';
  *   3. 库存按仓库批量设置，提交到 /v2/products/stocks；仓库来自 /v2/warehouse/list
  *      （/v1 已废弃）。
  */
+const AI_TEXT_UNCONFIGURED = '未配置，标题按规则生成；在「设置 → 直连密钥」里填写';
+
 export function createDirectLanePanel({ root, make, send, getContext, status, report, onPublished }) {
   const panel = make('section', 'precision-direct-lane');
   panel.setAttribute('data-direct-lane', '1');
@@ -70,25 +71,13 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   descWrap.append(descInput);
   copyRow.append(titleWrap, generateTitle, describeBtn, descWrap);
 
-  // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
-  // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
+  // AI 文本（视觉描述 / 标题）的地址、模型与 Key 只在「设置 → 直连密钥」里填写（direct-credentials-form.js），
+  // 这里只显示当前是否可用；没有配置时标题按规则生成。
   const aiRow = make('div', 'precision-local-fields');
-  const aiBase = make('input');
-  aiBase.type = 'text';
-  aiBase.placeholder = DEFAULT_TITLE_AI.baseUrl;
-  aiBase.style.minWidth = '300px';
-  const aiModel = make('input');
-  aiModel.type = 'text';
-  aiModel.placeholder = DEFAULT_TITLE_AI.model;
-  aiModel.style.width = '170px';
-  const aiKey = make('input');
-  aiKey.type = 'password';
-  aiKey.placeholder = 'API key（留空=用规则生成）';
-  aiKey.style.width = '220px';
-  const aiSave = make('button', 'ghost', '保存 AI 配置');
-  const aiStatus = make('span', '', 'AI 未配置：标题用规则生成');
+  const aiStatus = make('span', '', AI_TEXT_UNCONFIGURED);
+  aiStatus.setAttribute('data-direct-text-ai', '1');
   aiStatus.style.color = '#94a3b8';
-  aiRow.append(make('span', '', 'AI 文本：'), aiBase, aiModel, aiKey, aiSave, aiStatus);
+  aiRow.append(make('span', '', 'AI 文本：'), aiStatus);
 
   const actions = make('div', 'precision-local-fields');
   const precheck = make('button', 'ghost', '预检载荷');
@@ -553,7 +542,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         const context = getContext();
         if (!context || !context.offerBase) throw new Error('请先采集来源商品');
         const cfg = await readTitleAiConfig();
-        if (!cfg) throw new Error('先在上面填 AI key（视觉描述和标题用同一把）');
+        if (!cfg) throw new Error('先在「设置 → 直连密钥」里填写 AI 文本服务（视觉描述和标题共用）');
         // 按精铺的入参形态准备：SKU 表（带中文字段）+ 官方属性 + 类目名
         const skus = (context.skus || []).map((sku) => {
           const parsed = parseVariantSpecs([{ label: sku.label }]);
@@ -564,11 +553,11 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           const workspace = await loadWorkspace(context);
           if (workspace) fields = (workspace.fields || []).map((field) => ({ name: field.name, description: field.description || '' }));
         } catch (_error) { /* 没有字段也能跑，只是不做属性观察 */ }
-        state.textContent = `正在看图（${cfg.model}）…`;
+        // 视觉模型暂不跟随设置里填的模型：用 vision-ai.js 的默认视觉模型（VISION_MODEL_DEFAULT）
+        state.textContent = '正在看图…';
         const result = await describeProductWithAi({
           baseUrl: cfg.baseUrl,
           apiKey: cfg.apiKey,
-          model: 'qwen3.8-flash',
           imageUrls: context.sourceImages || [],
           product: { title: context.sourceTitle || '', skus },
           fields,
@@ -671,33 +660,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       state.textContent = result.error ? `仓库读取失败：${result.error}` : `仓库：${result.count} 个`;
     });
   });
-  aiSave.addEventListener('click', (event) => {
-    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
-    void (async () => {
-      try {
-        const aiBaseUrl = String(aiBase.value || '').trim() || DEFAULT_TITLE_AI.baseUrl;
-        if (String(aiKey.value || '').trim()) await ensureOriginAccess(aiBaseUrl);
-        const saved = await writeTitleAiConfig({
-          baseUrl: aiBaseUrl,
-          model: String(aiModel.value || '').trim() || DEFAULT_TITLE_AI.model,
-          apiKey: String(aiKey.value || '').trim(),
-        });
-        aiKey.value = '';
-        aiStatus.textContent = saved.hasKey ? `AI 已配置：${saved.model}` : 'AI 未配置：标题用规则生成';
-        state.textContent = saved.hasKey ? `AI 文本已保存（${saved.model}）` : '未填 key：标题走规则生成';
-      } catch (error) {
-        state.textContent = String((error && error.message) || error);
-      }
-    })();
-  });
-  // 打开面板时回填已保存的 AI 配置（key 不回填，只显示模型名）
-  void (async () => {
+  /** 只显示已保存的模型名（Key 不显示）。「设置 → 直连密钥」保存 AI 文本服务后由工作台再调用一次。 */
+  async function refreshAi() {
     const cfg = await readTitleAiConfig();
-    if (!cfg) return;
-    aiBase.value = cfg.baseUrl;
-    aiModel.value = cfg.model;
-    aiStatus.textContent = `AI 已配置：${cfg.model}`;
-  })();
+    aiStatus.textContent = cfg ? `已配置：${cfg.model}` : AI_TEXT_UNCONFIGURED;
+  }
+  void refreshAi();
 
-  return { panel, refresh: () => loadWarehouses(), lastPlan: () => lastPlan };
+  return { panel, refresh: () => loadWarehouses(), refreshAi, lastPlan: () => lastPlan };
 }

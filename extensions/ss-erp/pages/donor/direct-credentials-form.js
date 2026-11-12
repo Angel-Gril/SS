@@ -1,9 +1,10 @@
-// 直连凭据表单：Ozon 店铺 Key 与生图服务 Key 的唯一填写入口（工作台「设置」里）。
+// 直连凭据表单：Ozon 店铺 Key、生图服务 Key 与 AI 文本服务 Key 的唯一填写入口（工作台「设置」里）。
 //
 // 见 dev-docs/extension-direction.md：Key 由用户填写，保存在浏览器本地。
 // 表单只显示“是否已配置”与非敏感信息（Client-Id、服务地址、模型名），不回显任何 Key；
 // Key 输入框保存后立即清空。
 import { describeCheck } from '../../shared/ozon/direct-check-presentation.js';
+import { DEFAULT_TITLE_AI, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 
 function serviceOrigin(baseUrl) {
   let origin;
@@ -77,8 +78,15 @@ export function createDirectCredentialsForm({ make, send, onSaved = () => {} }) 
     [field('服务地址', imageBase), field('模型', imageModel), field('API Key', imageKey), field('尺寸（可选）', imageSize)],
     '保存生图服务', 'direct-image-save');
 
+  // AI 文本：看图描述商品（视觉描述）与生成俄文标题共用这一组，走 OpenAI 兼容的 /chat/completions。
+  const textBase = input('direct-text-base-url', 'url', DEFAULT_TITLE_AI.baseUrl);
+  const textModel = input('direct-text-model', 'text', DEFAULT_TITLE_AI.model);
+  const textKey = input('direct-text-api-key', 'password', '留空 = 不用 AI，标题按规则生成');
+  const textAi = group('AI 文本（视觉描述 / 标题）', '兼容 OpenAI 对话接口的多模态模型，例如阿里千问；看图描述商品和生成俄文标题都用它。服务地址与模型留空时使用默认值。',
+    [field('服务地址', textBase), field('模型', textModel), field('API Key', textKey)], '保存 AI 文本服务', 'direct-text-save');
+
   panel.append(make('h3', '', '直连密钥'),
-    make('p', 'settings-tip', '密钥只保存在这台电脑的浏览器里，不会上传到 ERP。多人共用电脑时请勿保存。'), ozon.box, image.box);
+    make('p', 'settings-tip', '密钥只保存在这台电脑的浏览器里，不会上传到 ERP。多人共用电脑时请勿保存。'), ozon.box, image.box, textAi.box);
 
   async function refresh() {
     try {
@@ -95,11 +103,17 @@ export function createDirectCredentialsForm({ make, send, onSaved = () => {} }) 
         if (!imageSize.value) imageSize.value = saved.size || '';
       }
     } catch (error) { setStatus(image.status, String(error && error.message || error), 'err'); }
+    const savedText = await readTitleAiConfig();
+    setStatus(textAi.status, savedText ? `已配置：${savedText.model}` : '尚未配置：标题按规则生成', savedText ? 'ok' : '');
+    if (savedText) {
+      if (!textBase.value) textBase.value = savedText.baseUrl;
+      if (!textModel.value) textModel.value = savedText.model;
+    }
   }
 
-  async function run(target, task) {
+  async function run(target, task, pending = '正在保存并检查连接…') {
     target.save.disabled = true;
-    setStatus(target.status, '正在保存并检查连接…');
+    setStatus(target.status, pending);
     try { await task(); } catch (error) { setStatus(target.status, String(error && error.message || error).slice(0, 200), 'err'); }
     finally { target.save.disabled = false; }
   }
@@ -129,6 +143,19 @@ export function createDirectCredentialsForm({ make, send, onSaved = () => {} }) 
         : `已保存，但连接检查未通过：${describeCheck(probe)}`, probe && probe.ok && probe.kind === 'OK' ? 'ok' : 'warn');
       onSaved('image');
     });
+  });
+  textAi.save.addEventListener('click', (event) => {
+    if (!event.isTrusted || textAi.save.disabled) return;
+    void run(textAi, async () => {
+      const baseUrl = (String(textBase.value || '').trim() || DEFAULT_TITLE_AI.baseUrl).replace(/\/+$/u, '');
+      const apiKey = String(textKey.value || '').trim();
+      // 清空 Key（留空保存）不需要访问权限；填了 Key 才申请服务地址的访问权限
+      if (apiKey) await ensureOriginAccess(baseUrl); else serviceOrigin(baseUrl);
+      const saved = await writeTitleAiConfig({ baseUrl, model: String(textModel.value || '').trim() || DEFAULT_TITLE_AI.model, apiKey });
+      textKey.value = '';
+      setStatus(textAi.status, saved.hasKey ? `已保存：${saved.model}` : '已清空 Key：标题按规则生成', saved.hasKey ? 'ok' : '');
+      onSaved('text');
+    }, '正在保存…');
   });
 
   return { panel, refresh };

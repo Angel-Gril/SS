@@ -1941,7 +1941,7 @@ trusted('settings-btn', () => {
   // 直连密钥的唯一填写入口；保存后刷新顶部自检
   directCredentials ||= createDirectCredentialsForm({ make,
     send: (type, payload) => directSend({ type, payload: payload || {} }),
-    onSaved: () => { void directHealth.check().catch(report); } });
+    onSaved: (kind) => { void directHealth.check().catch(report); if (kind === 'text') void directLane.refreshAi(); } });
   info.append(directCredentials.panel);
   void directCredentials.refresh();
   // 2026-11：草稿 revision / draftVersion / policyRevision 是内部状态，

@@ -20,7 +20,8 @@
 | 生成图片托管 | ERP | `POST /api/extension-device/images`，对象存储优先，按配置回退 Ozon 登录态上传 |
 | 最终数据同步 | ERP | `POST /api/extension-device/direct-listings`，只记录结果，不触发 Ozon 写入 |
 
-Ozon Client-Id/Api-Key 与生图 Provider Key 由用户填写，保存在浏览器本地（`chrome.storage.local`）。
+Ozon Client-Id/Api-Key、生图 Provider Key 与 AI 文本服务 Key（视觉描述 / 标题）由用户填写，保存在浏览器本地（`chrome.storage.local`）；
+三者只有一个填写处：工作台“设置 → 直连密钥”，其它面板只显示是否已配置，不再各自保留一份配置。
 这是已接受的取舍：自用场景下换取零配置成本；多人共用电脑时不适用。
 
 ## 规则
