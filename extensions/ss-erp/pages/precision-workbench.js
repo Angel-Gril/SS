@@ -768,7 +768,6 @@ fieldsSection.append(localNotice, attributes.bar);
 // renderEditor() 在签名变化时会重建这一整段 DOM（保存属性、刷新状态、ERP 回执都会触发），
 // 之前每次都重新 createDirectLanePanel —— 货号前缀、标题、价格、已载入的生成图全被清空，
 // 表现就是「刚填完就没了、预检跑不完」。现在面板只创建一次，重渲染时只搬运同一个节点。
-function mountDirectLane() {}
 // 面板实例挂在函数对象上：这段代码在 renderEditor() 里会被反复执行，
 // 但实例只创建一次（见下方注释）。
 if (!mountDirectLane.panel) {
@@ -1693,6 +1692,9 @@ function renderSourceDiagnostics() {
   element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
   sourceDiagnosticsProjection = projection;
 }
+// 直连面板的持有者：必须在渲染函数**外面**，否则每次 render 都是新对象，
+// 面板照样被重建（这个坑我刚踩过：holder 写在 renderEditor 里，等于没修）。
+const mountDirectLane = { panel: null, root: null };
 function render() {
   let confirmationToken = '';
   try { confirmationToken = editorConfirmationToken(); } catch {}

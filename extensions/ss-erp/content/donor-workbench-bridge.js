@@ -1,12 +1,17 @@
-(function () {
+(function initDonorBridge(attempt) {
   'use strict';
 
   var HOST_ID = 'ss-erp-donor-workbench-host';
   var TRIGGER_ID = 'ss-erp-donor-workbench-trigger';
   var FRAME_ID = 'ss-erp-donor-workbench-frame';
   var Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
-  if (!Contract || !isExactSourceProductUrl(location.href)) return;
-
+  // 浏览器启动时页面可能先于扩展就绪，Contract 还不存在；直接 return 会让这个标签页
+  // 永远没有采集入口（实测：重启浏览器后第一次打开的页面点不到「工作台」）。
+  // 缺依赖时重试，最多 30 次 × 2 秒。
+  if (!Contract || !isExactSourceProductUrl(location.href)) {
+    if (attempt > 0) setTimeout(function () { initDonorBridge(attempt - 1); }, 2000);
+    return;
+  }
   var frame = null;
   var trigger = null;
   var host = null;
@@ -1489,4 +1494,4 @@
   }, 4000);
 
   mount();
-}());
+}(30));
