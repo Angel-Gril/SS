@@ -1224,6 +1224,7 @@
     if (!hidden) legacySurfaceStyles.clear();
   }
 
+  try { sessionStorage.removeItem('ss-erp:runtime-reload'); } catch (_e) {}
   function mount() {
     if (host || document.getElementById(HOST_ID)) return;
     host = document.createElement('div');
@@ -1465,5 +1466,27 @@
     event.stopImmediatePropagation();
     showFrame();
   }, true);
+  /**
+   * 运行时自愈：扩展被重载/更新后，已打开页面里的内容脚本会失效——chrome.runtime
+   * 变成 undefined，而页面里的 iframe 仍指向旧实例，于是任何调用都没有响应。
+   * 之前的表现是「装完新版必须重启浏览器」，对用户不可接受。
+   *
+   * 这里做一次自愈：发现运行时失效就整页重载一次，让新实例的 content script 重新注入。
+   * 用 sessionStorage 记一次，避免和用户自己的刷新互相打架导致循环。
+   */
+  function runtimeAlive() {
+    try { return Boolean(chrome && chrome.runtime && chrome.runtime.id); } catch (_e) { return false; }
+  }
+  var healTried = false;
+  setInterval(function () {
+    if (healTried || runtimeAlive()) return;
+    healTried = true;
+    var already = false;
+    try { already = sessionStorage.getItem('ss-erp:runtime-reload') === '1'; } catch (_e) { already = false; }
+    if (already) { return; }
+    try { sessionStorage.setItem('ss-erp:runtime-reload', '1'); } catch (_e) {}
+    try { location.reload(); } catch (_e) {}
+  }, 4000);
+
   mount();
 }());
