@@ -764,8 +764,17 @@ localNotice.replaceWith(fieldsSection);
 fieldsSection.append(localNotice, attributes.bar);
 // 直连上架车道（不写 ERP）：价格/库存/仓库 + 预检 + 上架 + 结果。
 // 属性与文案走本地或 SW 直读，发布走 api-seller.ozon.ru。
-const directLane = createDirectLanePanel({
-  root: fieldsSection, make,
+// 2026-11：直连面板必须跨重渲染存活。
+// renderEditor() 在签名变化时会重建这一整段 DOM（保存属性、刷新状态、ERP 回执都会触发），
+// 之前每次都重新 createDirectLanePanel —— 货号前缀、标题、价格、已载入的生成图全被清空，
+// 表现就是「刚填完就没了、预检跑不完」。现在面板只创建一次，重渲染时只搬运同一个节点。
+function mountDirectLane() {}
+// 面板实例挂在函数对象上：这段代码在 renderEditor() 里会被反复执行，
+// 但实例只创建一次（见下方注释）。
+if (!mountDirectLane.panel) {
+  mountDirectLane.root = make('div');
+  mountDirectLane.panel = createDirectLanePanel({
+  root: mountDirectLane.root, make,
   send: (type, payload) => directSend({ type, payload: payload || {} }),
   getContext: () => {
     // 2026-11：这里**不再**要求 editor/category 已加载。已上架商品的直连上架
@@ -796,7 +805,9 @@ const directLane = createDirectLanePanel({
     };
   },
   status, report,
-});
+  });
+}
+if (mountDirectLane.root.parentElement !== fieldsSection) fieldsSection.append(mountDirectLane.root);
 const copyEditor = createCopyEditor({ root: element('ui-scale-root'), getEditor: currentEditorForPublish,
   getBinding: currentEditorBinding, getSourceTitle: () => projection.source.title,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), reloadEditor: loadEditor, saveEditor,

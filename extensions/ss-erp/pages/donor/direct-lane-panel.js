@@ -460,6 +460,27 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
    * 新商品的属性：Ozon schema + 本地规则（planPrefill / planVariantPrefill）+ 官方字典。
    * 与弹窗里那套规则同源，所以「必填 6 项」在直连车道上同样成立。
    */
+  /**
+   * 通用字典匹配：视觉/标题给出的自由文本 → Ozon 字典值。
+   * 逐级放宽，避免「女性」vs「女士」这类一字之差直接放弃：
+   *   1) 归一化全等  2) 互相包含  3) 首字相同  4) 前两字相同
+   * 与商品无关，任何类目都能用。
+   */
+  function matchDictionaryValue(list, text) {
+    const rows = Array.isArray(list) ? list : [];
+    const norm = (value) => String(value || '').toLowerCase().replace(/[\s\-_,.()]/g, '');
+    const needle = norm(text);
+    if (!needle) return null;
+    const byExact = rows.find((one) => norm(one.value) === needle);
+    if (byExact) return byExact;
+    const byIncludes = rows.find((one) => norm(one.value).includes(needle) || needle.includes(norm(one.value)));
+    if (byIncludes) return byIncludes;
+    const byFirst = rows.find((one) => norm(one.value).slice(0, 1) === needle.slice(0, 1));
+    if (byFirst) return byFirst;
+    const byTwo = rows.find((one) => norm(one.value).slice(0, 2) === needle.slice(0, 2));
+    return byTwo || null;
+  }
+
   async function attributesFromRules(context, category, skus) {
     // 字典列表按 attributeId 缓存：之前每个属性 × 每个 SKU 各请求一次（limit 1000），
     // 12 个 SKU 就是上百次往返 + 大 JSON 解析，实测把渲染进程卡死。
@@ -638,6 +659,36 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     const rulesWorkspace = category ? await attributesFromRules(context, category, skus) : null;
     if (rulesWorkspace) context.category = category || context.category;
     const workspace = mergeWorkspaceValues(rulesWorkspace, erpWorkspace);
+    // 视觉观察回填（通用）：视觉报告里的「属性观察」按字段名匹配类目 schema；
+    // 规则没算出来的必填项（性别、颜色、材质…）用它补。已有值不覆盖。
+    try {
+      const observed = lastVisionReport && lastVisionReport['属性观察'];
+      if (observed && typeof observed === 'object' && workspace && Array.isArray(workspace.fields)) {
+        for (const [obsName, obsRaw] of Object.entries(observed)) {
+          const obsText = Array.isArray(obsRaw) ? obsRaw.join(' ') : String(obsRaw || '');
+          if (!obsText.trim()) continue;
+          const field = workspace.fields.find((f) => String((f && f.name) || '') === obsName)
+            || workspace.fields.find((f) => obsName && String((f && f.name) || '').includes(obsName));
+          const attributeId = field ? Number(field.attributeId || field.id) : 0;
+          if (!attributeId) continue;
+          const hasValue = (workspace.values || []).some((row) => Number(row.attributeId) === attributeId
+            && (((row.dictionaryValueIds || []).length) || String(row.value || '').trim()));
+          if (hasValue) continue;
+          const found = await send('ss-erp:direct-ozon-attribute-values', {
+            categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400,
+          }).catch(() => null);
+          const list = (found && found.values) || [];
+          const chosen = matchDictionaryValue(list, obsText)
+            || pickDictionaryValue(list, 'fuzzy', obsText, {});
+          if (!chosen) continue;
+          const skuOwned = String((field && field.ownership) || '').toUpperCase() === 'SKU';
+          const targets = skuOwned ? skus.map((sku) => sku.key) : [null];
+          for (const key of targets) {
+            workspace.values.push({ attributeId, skuKey: key, value: String(chosen.value || ''), dictionaryValueIds: [chosen.id] });
+          }
+        }
+      }
+    } catch (_error) { /* 回填失败不影响主流程 */ }
     if (!workspace) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
     if (workspace.values && workspace.values.length) workspaceCache = workspace;
     if (!workspace.values || !workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
@@ -881,11 +932,19 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           const parsed = parseVariantSpecs([{ label: sku.label }]);
           return { label: sku.label, color: parsed.colorsZh[0] || '', size: parsed.sizes[0] || '' };
         });
+        // 把类目 schema 的属性清单交给视觉模型：报告里才会有「属性观察」，
+        // 之后可以用它填补规则没覆盖到的必填项（例如性别）。与具体商品无关。
         let fields = [];
         try {
-          const workspace = workspaceCache || (context.binding
-            ? await send('ss-erp:direct-erp-editor', { kind: 'attributes', binding: context.binding }) : null);
-          if (workspace) fields = (workspace.fields || []).map((field) => ({ name: field.name, description: field.description || '' }));
+          const vCategory = (context.category && context.category.categoryId)
+            ? context.category
+            : await readCachedCategory(String(context.sourceProductId || context.offerBase));
+          if (vCategory) {
+            const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: vCategory.categoryId, typeId: vCategory.typeId });
+            fields = (schema && schema.fields ? schema.fields : [])
+              .filter((field) => field && field.name)
+              .map((field) => ({ name: field.name, description: field.description || '', options: field.options || [] }));
+          }
         } catch (_error) { /* 没有字段也能跑，只是不做属性观察 */ }
         state.textContent = `正在看图（${cfg.model}）…`;
         const result = await describeProductWithAi({
