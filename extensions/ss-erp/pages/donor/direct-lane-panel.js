@@ -136,7 +136,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
   panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, matchDictionaryValue }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
   let busy = false;
@@ -793,13 +793,15 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   }
 
   async function runPrecheck() {
-    if (!claimBusy()) return;
+    globalThis.__SSERP_ENTER__ = 'precheck@' + Date.now();
+    if (!claimBusy()) { globalThis.__SSERP_BUSY_BLOCKED__ = (globalThis.__SSERP_BUSY_BLOCKED__ || 0) + 1; return; }
     precheck.disabled = publishBtn.disabled = true;
     try {
       const { plan } = await buildPlan();
       const merged = applyPriceInputs(plan);
       lastPlan = merged;
       renderTable(merged);
+      globalThis.__SSERP_PROGRESS__ = 'rendered';
       if (merged.items.length) fillPricesManualGuard(merged);
       if (warehouses.length === 0) await loadWarehouses();
       output.textContent = JSON.stringify({
@@ -833,7 +835,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   }
 
   async function runPublish() {
-    if (!claimBusy()) return;
+    globalThis.__SSERP_ENTER__ = 'publish@' + Date.now();
+    if (!claimBusy()) { globalThis.__SSERP_BUSY_BLOCKED__ = (globalThis.__SSERP_BUSY_BLOCKED__ || 0) + 1; return; }
     precheck.disabled = publishBtn.disabled = true;
     try {
       const { plan } = await buildPlan();
@@ -852,6 +855,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         if (Number.isFinite(oldPrice) && oldPrice > 0) item.oldPrice = oldPrice.toFixed(2);
       }
       renderTable(merged);
+      globalThis.__SSERP_PROGRESS__ = 'ready=' + merged.ready + ' blockers=' + JSON.stringify((merged.blockers || []).map((b) => b.code || b));
       if (!merged.ready) throw new Error('预检未通过，先补齐：' + merged.blockers.map((one) => one.code).join(' / '));
       const items = merged.items.map((item) => ({
         offerId: item.offerId,
@@ -872,6 +876,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       const offers = items.map((one) => one.offerId);
       output.textContent = '';
       // 1) 图片（单步）
+      globalThis.__SSERP_PROGRESS__ = 'pictures-start';
       state.textContent = `提交图片（${items.length} 条）…`;
       await step('pictures', { entries: items.map((one) => ({ offerId: one.offerId, imageUrls: one.images })) });
       await new Promise((resolve) => setTimeout(resolve, 40000));
