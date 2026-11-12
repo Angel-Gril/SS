@@ -936,16 +936,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         // 之后可以用它填补规则没覆盖到的必填项（例如性别）。与具体商品无关。
         let fields = [];
         try {
-          const vCategory = (context.category && context.category.categoryId)
-            ? context.category
-            : await readCachedCategory(String(context.sourceProductId || context.offerBase));
+          const typedCatId = Number(catIdInput.value) || 0;
+          const typedTypeId = Number(typeIdInput.value) || 0;
+          const vCategory = (typedCatId > 0 && typedTypeId > 0)
+            ? { categoryId: typedCatId, typeId: typedTypeId, typeName: (context.category && context.category.typeName) || '' }
+            : ((context.category && context.category.categoryId)
+              ? context.category
+              : await readCachedCategory(String(context.sourceProductId || context.offerBase)));
           if (vCategory) {
             const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: vCategory.categoryId, typeId: vCategory.typeId });
-            fields = (schema && schema.fields ? schema.fields : [])
-              .filter((field) => field && field.name)
+            // 必填字段优先：视觉一次只看十来项，排在后面的必填项（例如性别）会被截掉。与商品无关。
+            const allFields = (schema && schema.fields ? schema.fields : []).filter((field) => field && field.name);
+            const isRequired = (field) => Boolean(field.required || field.isRequired || field.is_required);
+            const orderedFields = allFields.filter(isRequired).concat(allFields.filter((field) => !isRequired(field)));
+            fields = orderedFields.slice(0, 12)
               .map((field) => ({ name: field.name, description: field.description || '', options: field.options || [] }));
           }
         } catch (_error) { /* 没有字段也能跑，只是不做属性观察 */ }
+        try { globalThis.__SSERP_VISION_DEBUG__ = { typedCatId: Number(catIdInput.value) || 0, typedTypeId: Number(typeIdInput.value) || 0, fieldCount: fields.length, names: fields.slice(0, 5).map((f) => f.name) }; } catch (_e) {}
         state.textContent = `正在看图（${cfg.model}）…`;
         const result = await describeProductWithAi({
           baseUrl: cfg.baseUrl,
