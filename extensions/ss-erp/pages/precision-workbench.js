@@ -29,6 +29,11 @@ import { createVideoPublishEditor } from './donor/video-publish-editor.js';
 import { createPreparationAnalysisView, renderPreparationProcess } from './donor/preparation-analysis-view.js';
 import { createInlineConfirmation } from './donor/inline-confirmation.js';
 
+// 直连面板实例的持有者：声明必须早于任何使用点。
+// 之前放在 render() 前面，而 773 行的编辑器构建代码在模块初始化阶段就引用了它，
+// 结果是 ReferenceError（TDZ）→ 整个页面脚本中断 → 面板始终不出现。
+const mountDirectLane = { panel: null, root: null };
+
 const Contract = globalThis.SS_ERP_DONOR_WORKBENCH_CONTRACT;
 const Workflow = globalThis.SS_ERP_PRECISION_WORKFLOW;
 const Prompt = globalThis.SS_ERP_DONOR_PROMPT_ADAPTER;
@@ -1694,7 +1699,6 @@ function renderSourceDiagnostics() {
 }
 // 直连面板的持有者：必须在渲染函数**外面**，否则每次 render 都是新对象，
 // 面板照样被重建（这个坑我刚踩过：holder 写在 renderEditor 里，等于没修）。
-const mountDirectLane = { panel: null, root: null };
 function render() {
   let confirmationToken = '';
   try { confirmationToken = editorConfirmationToken(); } catch {}
