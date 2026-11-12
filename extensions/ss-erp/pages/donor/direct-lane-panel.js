@@ -868,47 +868,60 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         images: item.images,
         attributes: item.attributes,
       }));
-      state.textContent = `提交中：${items.length} 条，图片落定需要 40 秒…`;
+      const step = (action, payload) => send('ss-erp:direct-publish-step', Object.assign({ action }, payload || {}));
+      const offers = items.map((one) => one.offerId);
       output.textContent = '';
-      const result = await send('ss-erp:direct-publish', { items, options: { pictureSettleMs: 40000, maxPolls: 24 } });
-      output.textContent = JSON.stringify(result, null, 2);
-      const merged2 = new Map();
-      for (const one of (result.items || [])) if (one.modelId) merged2.set(one.modelId, (merged2.get(one.modelId) || 0) + 1);
-      state.textContent = `上架完成：${(result.items || []).length} 条，状态 ${result.status}`
-        + (merged2.size ? `；合并到 ${merged2.size} 个 model（变体数 ${[...merged2.values()].join('/')}）` : '');
-
-      const stockCount = Number(stockInput.input.value);
-      let warehouseId = Number(warehouse.value);
-      // 仓库下拉可能还没加载完（新装/新 profile 常见），发布后补库存前再拉一次并自动选第一个
-      if (stockCount > 0 && !(warehouseId > 0)) {
-        await loadWarehouses();
-        if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
-        warehouseId = Number(warehouse.value);
+      // 1) 图片（单步）
+      state.textContent = `提交图片（${items.length} 条）…`;
+      await step('pictures', { entries: items.map((one) => ({ offerId: one.offerId, imageUrls: one.images })) });
+      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // 2) 导入（单步，拿到 taskId）
+      state.textContent = `导入商品（${items.length} 条）…`;
+      const imported = await step('import', { items });
+      if (!imported || !imported.taskId) throw new Error('Ozon 没有返回 task_id');
+      // 3) 轮询导入结果（面板驱动，SW 只做单次查询）
+      let poll = { done: false, items: [] };
+      for (let i = 0; i < 30 && !poll.done; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        poll = await step('poll', { taskId: imported.taskId });
+        const okCount = (poll.items || []).filter((one) => one.status === 'imported').length;
+        state.textContent = `导入中 ${i + 1}：${okCount}/${(poll.items || []).length}（task ${imported.taskId}）`;
       }
-      if (Number.isFinite(stockCount) && stockCount > 0 && warehouseId > 0) {
-        const offers = items.map((item) => item.offerId);
-        // 通用流程（shared/ozon/publish-flow.js）：等创建 → 设库存（内置退避）。
-        // 面板与 Node 脚本共用同一份实现，避免两边行为不一致。
-        state.textContent = `等待商品创建（0/${offers.length}）…`;
-        const created = await waitForProducts({
-          post: (path, body) => send('ss-erp:direct-ozon-post', { path, body }),
-          offers,
-          onTick: ({ ready, total }) => { state.textContent = `等待商品创建（${ready}/${total}）…`; },
-        });
-        const stocks = await setStocks({
-          post: (path, body) => send('ss-erp:direct-ozon-post', { path, body }),
-          offers: created.ready,
-          stock: stockCount,
-          warehouseId,
-          onTick: ({ attempt, pending }) => { state.textContent = `设置库存（第 ${attempt} 轮，剩 ${pending}）…`; },
-        });
-        output.textContent += '\n\n库存：成功 ' + stocks.ok.length + ' / 失败 ' + stocks.failed.length
-          + (stocks.failed.length ? '\n' + JSON.stringify(stocks.failed).slice(0, 400) : '')
-          + (created.pending.length ? '\n未创建：' + created.pending.slice(0, 5).join(', ') : '');
-        output.textContent += '\n\n库存提交：' + JSON.stringify(stocks).slice(0, 600);
-      } else if (Number.isFinite(stockCount) && stockCount > 0) {
-        output.textContent += '\n\n库存未提交：没有可用仓库（店铺需先开通 FBS 仓库）';
+      // 4) 等商品真正创建（单步查询 + 面板循环）
+      let pending = offers.slice();
+      let products = { ready: [], pending, rows: [] };
+      for (let i = 0; i < 30 && pending.length; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 6000));
+        products = await step('products', { offers });
+        pending = products.pending || [];
+        state.textContent = `等待创建 ${products.ready.length}/${offers.length}…`;
       }
+      // 5) 价格 + 库存（单步，各自一次）
+      const first = items[0] || {};
+      if (products.ready.length) {
+        state.textContent = '提交价格…';
+        await step('price', { offers: products.ready, price: first.price, oldPrice: first.oldPrice, currency: first.currency, vat: first.vat });
+        const stockCount = Number(stockInput.input.value);
+        let warehouseId = Number(warehouse.value);
+        if (stockCount > 0 && !(warehouseId > 0)) {
+          await loadWarehouses();
+          if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
+          warehouseId = Number(warehouse.value);
+        }
+        if (stockCount > 0 && warehouseId > 0) {
+          state.textContent = '提交库存…';
+          const stocked = await step('stock', { offers: products.ready, stock: stockCount, warehouseId });
+          output.textContent = JSON.stringify({ imported, products, stocked }, null, 2).slice(0, 2500);
+          state.textContent = `上架完成：创建 ${products.ready.length}/${offers.length}，库存 ${stocked.ok.length}/${products.ready.length}`;
+        } else {
+          output.textContent = JSON.stringify({ imported, products }, null, 2).slice(0, 2000);
+          state.textContent = `上架完成：创建 ${products.ready.length}/${offers.length}（未设库存：仓库不可用）`;
+        }
+      } else {
+        output.textContent = JSON.stringify({ imported, poll }, null, 2).slice(0, 2000);
+        throw new Error('商品没有创建出来：看「导入中」的错误码');
+      }
+      const result = { taskId: imported.taskId, items: products.rows || [], poll };
       onPublished?.(result);
     } catch (error) {
       state.textContent = String((error && error.message) || error);

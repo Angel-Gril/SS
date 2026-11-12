@@ -321,6 +321,7 @@
     'ss-erp:direct-publish-build',
     'ss-erp:direct-erp-editor',
     'ss-erp:direct-ai-text',
+    'ss-erp:direct-publish-step',
   ]);
 
   var KNOWN_TYPES = union(
