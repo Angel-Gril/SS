@@ -6,6 +6,7 @@ import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
 import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
 import { variantBlockers } from '../../shared/ozon/variant-key.js';
+import { pickUsableWarehouse, setStocks, waitForProducts } from '../../shared/ozon/publish-flow.js';
 
 /**
  * 直连上架面板（Lane A）：标题 / 价格 / 库存 / 仓库 / 预检 / 上架 / 结果。
@@ -186,15 +187,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         warehouse.append(option);
         return { count: 0 };
       }
-      // 2026-11 实测：rets（退货仓）收不了库存 —— /v2/products/stocks 回
-      // PRODUCT_HAS_NOT_BEEN_TAGGED_YET，商品永远不进销售。换成「邮政」仓后
-      // 同一条商品立刻 Продается + 库存 10。所以这里把退货仓和未启用仓过滤掉。
-      const usable = warehouses.filter((one) => {
-        const name = String(one.name || '');
-        if (/rets|возврат|return/i.test(name)) return false;
-        const status = String(one.status || '').toLowerCase();
-        return !status || status === 'created';
-      });
+      // 退货仓收不了库存（rets → PRODUCT_HAS_NOT_BEEN_TAGGED_YET），
+      // 过滤规则放在共享层，面板与脚本用同一份。
+      const { usable, warehouse: bestWarehouse } = pickUsableWarehouse(warehouses);
       const pickList = usable.length ? usable : warehouses;
       for (const one of pickList) {
         const option = make('option', '', `${one.name || one.warehouse_id} (${one.warehouse_id})`);
@@ -841,37 +836,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       }
       if (Number.isFinite(stockCount) && stockCount > 0 && warehouseId > 0) {
         const offers = items.map((item) => item.offerId);
-        // import 返回时商品往往还没建好，直接设库存会回 PRODUCT_IS_NOT_CREATED（TA 实测）。
-        // 先轮询等 offer 出现，再提交库存，失败退避重试。
-        let stocks = null;
-        for (let attempt = 1; attempt <= 12; attempt += 1) {
-          const info = await send('ss-erp:direct-ozon-post', { path: '/v3/product/info/list', body: { offer_id: offers } })
-            .catch(() => null);
-          const present = new Set(((info && info.items) || []).map((one) => String(one.offer_id)));
-          const ready = offers.every((offer) => present.has(offer));
-          state.textContent = `等待商品创建（${present.size}/${offers.length}）…`;
-          if (!ready) { await new Promise((r) => setTimeout(r, 5000)); continue; }
-          stocks = await send('ss-erp:direct-ozon-post', {
-            // /v1/product/import/stocks 是 404，现役是 /v2/products/stocks
-            path: '/v2/products/stocks',
-            body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
-          }).catch((error) => ({ error: String((error && error.message) || error) }));
-          const failed = ((stocks && stocks.result) || []).some((one) => (one.errors || []).length);
-          if (!failed) break;
-          // 库存接口有频率限制（TOO_MANY_REQUESTS）。这种情况越重试越糟，退避后再试一次。
-          const rateLimited = ((stocks && stocks.result) || [])
-            .some((one) => (one.errors || []).some((e) => String(e.code || '') === 'TOO_MANY_REQUESTS'));
-          if (rateLimited) {
-            state.textContent = '库存被限流，等 60 秒后重试…';
-            await new Promise((r) => setTimeout(r, 60000));
-            stocks = await send('ss-erp:direct-ozon-post', {
-              path: '/v2/products/stocks',
-              body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
-            }).catch((error) => ({ error: String((error && error.message) || error) }));
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 5000));
-        }
+        // 通用流程（shared/ozon/publish-flow.js）：等创建 → 设库存（内置退避）。
+        // 面板与 Node 脚本共用同一份实现，避免两边行为不一致。
+        state.textContent = `等待商品创建（0/${offers.length}）…`;
+        const created = await waitForProducts({
+          post: (path, body) => send('ss-erp:direct-ozon-post', { path, body }),
+          offers,
+          onTick: ({ ready, total }) => { state.textContent = `等待商品创建（${ready}/${total}）…`; },
+        });
+        const stocks = await setStocks({
+          post: (path, body) => send('ss-erp:direct-ozon-post', { path, body }),
+          offers: created.ready,
+          stock: stockCount,
+          warehouseId,
+          onTick: ({ attempt, pending }) => { state.textContent = `设置库存（第 ${attempt} 轮，剩 ${pending}）…`; },
+        });
+        output.textContent += '\n\n库存：成功 ' + stocks.ok.length + ' / 失败 ' + stocks.failed.length
+          + (stocks.failed.length ? '\n' + JSON.stringify(stocks.failed).slice(0, 400) : '')
+          + (created.pending.length ? '\n未创建：' + created.pending.slice(0, 5).join(', ') : '');
         output.textContent += '\n\n库存提交：' + JSON.stringify(stocks).slice(0, 600);
       } else if (Number.isFinite(stockCount) && stockCount > 0) {
         output.textContent += '\n\n库存未提交：没有可用仓库（店铺需先开通 FBS 仓库）';
@@ -1096,22 +1078,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         const warehouseId = Number(warehouse.value);
         if (!(warehouseId > 0)) throw new Error('没有可用仓库');
         state.textContent = '补库存：等商品就绪…';
-        for (let attempt = 1; attempt <= 12; attempt += 1) {
-          const info = await send('ss-erp:direct-ozon-post', { path: '/v3/product/info/list', body: { offer_id: offers } }).catch(() => null);
-          const present = new Set(((info && info.items) || []).map((one) => String(one.offer_id)));
-          if (!offers.every((offer) => present.has(offer))) { await new Promise((r) => setTimeout(r, 5000)); continue; }
-          const stocks = await send('ss-erp:direct-ozon-post', {
-            path: '/v2/products/stocks',
-            body: { stocks: offers.map((offerId) => ({ offer_id: offerId, stock: stockCount, warehouse_id: warehouseId })) },
-          }).catch((error) => ({ error: String((error && error.message) || error) }));
-          output.textContent = JSON.stringify(stocks, null, 2).slice(0, 1500);
-          const rows = (stocks && stocks.result) || [];
-          const okCount = rows.filter((one) => one && one.updated).length;
-          const rateLimited = rows.some((one) => (one.errors || []).some((e) => String(e.code || '') === 'TOO_MANY_REQUESTS'));
-          state.textContent = `补库存：${okCount}/${offers.length} 条成功` + (rateLimited ? '（被限流，等 10 分钟再试）' : '');
-          return;
-        }
-        throw new Error('商品还没建出来，稍后再点一次');
+        const post = (path, body) => send('ss-erp:direct-ozon-post', { path, body });
+        const created = await waitForProducts({ post, offers, onTick: ({ ready, total }) => { state.textContent = `补库存：等创建 ${ready}/${total}`; } });
+        if (!created.ready.length) throw new Error('商品还没创建，稍后再点一次');
+        const stocks = await setStocks({ post, offers: created.ready, stock: stockCount, warehouseId });
+        output.textContent = JSON.stringify({ ok: stocks.ok, failed: stocks.failed, pending: created.pending }, null, 2).slice(0, 1500);
+        state.textContent = `补库存：成功 ${stocks.ok.length} / 失败 ${stocks.failed.length}`;
       } catch (error) {
         state.textContent = `补库存失败：${String((error && error.message) || error).slice(0, 160)}`;
         report?.(error);
