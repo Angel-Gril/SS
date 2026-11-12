@@ -94,13 +94,24 @@ export const VISION_REPORT_KEYS = Object.freeze([
 /** 宽松解析：模型可能带 ```json 包裹或解释文字 */
 export function parseVisionReport(raw) {
   const text = String(raw || '');
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
+  // 两种形状都要接受：
+  //   1) 模板要求的对象 {视觉总结: "...", 属性观察: {...}}
+  //   2) 模型偶尔返回的数组 [{name:"视觉总结", value:"..."}, ...]（实测出现过）
+  const arrayStart = text.indexOf('[');
+  const objectStart = text.indexOf('{');
+  const start = arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart) ? arrayStart : objectStart;
+  const end = text.lastIndexOf(start === arrayStart && arrayStart >= 0 ? ']' : '}');
   if (start < 0 || end <= start) return null;
-  try {
-    const value = JSON.parse(text.slice(start, end + 1));
-    return value && typeof value === 'object' ? value : null;
-  } catch { return null; }
+  let value = null;
+  try { value = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  if (Array.isArray(value)) {
+    const obj = {};
+    for (const row of value) {
+      if (row && typeof row === 'object' && row.name) obj[String(row.name)] = row.value;
+    }
+    return Object.keys(obj).length ? obj : null;
+  }
+  return value && typeof value === 'object' ? value : null;
 }
 
 /** 报告 → 标题生成用的属性对（优先用属性观察，其次视觉判断） */

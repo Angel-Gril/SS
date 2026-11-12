@@ -136,7 +136,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
   panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
   let busy = false;

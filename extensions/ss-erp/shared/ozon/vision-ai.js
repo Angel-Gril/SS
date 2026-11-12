@@ -27,7 +27,7 @@ function normalizeBase(url) {
 export async function describeProductWithAi(input) {
   const baseUrl = normalizeBase(input.baseUrl);
   const images = (Array.isArray(input.imageUrls) ? input.imageUrls : [])
-    .filter((url) => /^https:\/\//.test(String(url))).slice(0, 4);
+    .filter((url) => /^https:\/\//.test(String(url))).slice(0, 3);
   if (!images.length) throw new Error('没有可用的 https 图片地址');
   const model = String(input.model || VISION_MODEL_DEFAULT);
 
@@ -52,6 +52,8 @@ export async function describeProductWithAi(input) {
           model,
           temperature: 0.2,
           maxTokens: 1200,
+          // 视觉比纯文本慢：给 150 秒预算（SW 默认 60 秒实测会超时）
+          timeoutMs: 150000,
           messages: [{
             role: 'user',
             content: [
