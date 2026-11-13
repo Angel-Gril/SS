@@ -140,6 +140,30 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
+  // 面板输入持久化：类目/类型/前缀/成本/上限以前只活在 DOM 里，
+  // 一旦面板重建或页面重载就清空，流程随后报「没有类目」，非常难排查。
+  // 这里把它们存到 localStorage，重建后自动恢复。
+  try {
+    const PERSIST_KEY = 'ss-erp:direct-lane:inputs';
+    const tracked = () => [...root.querySelectorAll('input[placeholder="categoryId"], input[placeholder="typeId"], input[type="text"], input[type="number"]')];
+    const saveInputs = () => {
+      const data = {};
+      tracked().forEach((el, index) => { data[index] = String(el.value || ""); });
+      try { localStorage.setItem(PERSIST_KEY, JSON.stringify(data)); } catch (_e) {}
+    };
+    const restoreInputs = () => {
+      let data = null;
+      try { data = JSON.parse(localStorage.getItem(PERSIST_KEY) || "null"); } catch (_e) { data = null; }
+      if (!data) return;
+      tracked().forEach((el, index) => {
+        if (data[index] != null && !String(el.value || "").trim()) el.value = data[index];
+      });
+    };
+    restoreInputs();
+    root.addEventListener('input', saveInputs);
+    root.addEventListener('change', saveInputs);
+  } catch (_e) { /* 持久化失败不影响使用 */ }
+
   let busy = false;
   // busy 卡死自愈：异常路径没走到 busy=false 时（实测踩过），10 分钟后自动放行
   let busySince = 0;
@@ -154,6 +178,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let warehouses = [];
   let workspaceCache = null;
   let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
+let lastVisionText = "";
   let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
   let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
   // 类目 ID → 俄文类型名（标题规则需要它；context.category 在无草稿时为空）
@@ -694,14 +719,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     // 颜色兜底（与商品无关）：视觉报告解析失败时，从采集到的标题/描述里取颜色。
     // 之前颜色只能来自视觉，模型一次输出格式不对，整条商品就缺颜色、预检不过。
     {
-      const colorField = (workspace.fields || []).find((field) => field &&
+      const colorField = ((workspace && workspace.fields) || []).find((field) => field &&
         /颜色|色彩/.test(String(field.name || "")) && String(field.ownership || "").toUpperCase() === "SKU");
       const colorId = colorField ? Number(colorField.attributeId || colorField.id) : 0;
       if (colorId) {
-        const hasColor = (workspace.values || []).some((row) => Number(row.attributeId) === colorId
+        const hasColor = ((workspace && workspace.values) || []).some((row) => Number(row.attributeId) === colorId
           && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
         if (!hasColor) {
-          const sourceText = [context.sourceTitle, context.description, ...(skus || []).map((sku) => sku.label)].join(" ");
+      const sourceText = [context.sourceTitle, context.description, lastVisionText, ...(skus || []).map((sku) => sku.label)].join(" ");
           const candidates = colorsFromText(sourceText);
           if (candidates.length) {
             const listed = await send("ss-erp:direct-ozon-attribute-values", {
@@ -972,7 +997,21 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       // 1) 图片（单步）
       globalThis.__SSERP_PROGRESS__ = 'pictures-start';
       state.textContent = `提交图片（${items.length} 条）…`;
-      await step('pictures', { entries: items.map((one) => ({ offerId: one.offerId, imageUrls: one.images })) });
+      // 诊断：图片这一步曾把页面卡死（渲染线程同步占满，evaluate 都超时）。
+      // 记录载荷大小与三个时间点，区分是「序列化过大」还是「调用不返回」。
+      globalThis.__SSERP_PICTURES__ = { start: Date.now() };
+      const picturesPayload = { entries: items.map((one) => ({ offerId: one.offerId, imageUrls: one.images })) };
+      try {
+        const serialized = JSON.stringify(picturesPayload);
+        globalThis.__SSERP_PICTURES__.bytes = serialized.length;
+        globalThis.__SSERP_PICTURES__.offers = picturesPayload.entries.length;
+        globalThis.__SSERP_PICTURES__.images = picturesPayload.entries.reduce((n, one) => n + (one.imageUrls || []).length, 0);
+      } catch (error) {
+        globalThis.__SSERP_PICTURES__.serializeError = String((error && error.message) || error);
+      }
+      globalThis.__SSERP_PICTURES__.serializedAt = Date.now();
+      await step('pictures', picturesPayload);
+      globalThis.__SSERP_PICTURES__.doneAt = Date.now();
       await new Promise((resolve) => setTimeout(resolve, 40000));
       // 2) 导入（单步，拿到 taskId）
       state.textContent = `导入商品（${items.length} 条）…`;
@@ -1087,6 +1126,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
           categoryTitle: (context.category && context.category.typeName) || '',
         });
         lastVisionReport = result.report || null;
+        // 纯文本摘要永远有：JSON 解析失败时它仍能提供颜色等关键信息，
+        // 所以颜色兜底也要看它，而不是只依赖结构化报告。
+        lastVisionText = String(result.summary || "");
         output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
         state.textContent = `视觉描述：${result.summary.slice(0, 120)}`;
       } catch (error) {
