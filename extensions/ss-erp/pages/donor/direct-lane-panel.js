@@ -976,6 +976,14 @@ let lastVisionText = "";
       renderTable(merged);
       globalThis.__SSERP_PROGRESS__ = 'ready=' + merged.ready + ' blockers=' + JSON.stringify((merged.blockers || []).map((b) => b.code || b));
       if (!merged.ready) throw new Error('预检未通过，先补齐：' + merged.blockers.map((one) => one.code).join(' / '));
+      // 上架必须用 AI 生成图。采集原图带中文水印/文字，直接发上去等于绕过生图
+      // （也解释过为什么店铺里出现了带中文的图）。这里做成硬性检查，不再默默兜底。
+      const generatedReady = (lastImageResults || [])
+        .map((one) => String((one && one.url) || ""))
+        .filter((url) => /^https:\/\//.test(url));
+      if (!generatedReady.length) {
+        throw new Error("还没有 AI 生成图：直连上架会退回 1688 原图（带中文水印）。先在「生图」里出图，再发布。");
+      }
       const items = merged.items.map((item) => ({
         offerId: item.offerId,
         name: item.name,

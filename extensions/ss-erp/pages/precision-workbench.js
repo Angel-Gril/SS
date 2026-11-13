@@ -783,7 +783,11 @@ if (!mountDirectLane.panel) {
   // 实测：并发/限流时 sendMessage 可能永不回调，表现为按钮一直灰、状态不动。
   send: (type, payload) => Promise.race([
     directSend({ type, payload: payload || {} }),
-    new Promise((_resolve, reject) => setTimeout(() => reject(new Error('直连通道超时：' + String(type))), 20000)),
+    new Promise((_resolve, reject) => {
+      // 长任务要单独给预算：生图一次 40-60 秒，统一 20 秒会把正常请求掐断。
+      const slow = /image-generate|image-probe|direct-publish|direct-ai-text|direct-ozon-attribute-values/.test(String(type));
+      setTimeout(() => reject(new Error('直连通道超时：' + String(type))), slow ? 200000 : 20000);
+    }),
   ]),
   getContext: () => {
     // 2026-11：这里**不再**要求 editor/category 已加载。已上架商品的直连上架
