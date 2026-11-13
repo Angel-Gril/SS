@@ -59,7 +59,11 @@
           vat: String(item.vat || '0'),
           weight: Number(item.weight) || 0,
           weight_unit: 'g',
-          dimensions: item.dimensions || {},
+          // Ozon 要扁平的 width/height/depth；嵌套 dimensions 会被接受但存成 0，
+          // 而尺寸为 0 的卡片校验不过（is_created=false / 库存 PRODUCT_IS_NOT_CREATED）。
+          width: Number((item.dimensions && item.dimensions.width) || 0),
+          height: Number((item.dimensions && item.dimensions.height) || 0),
+          depth: Number((item.dimensions && item.dimensions.depth) || 0),
           dimension_unit: 'mm',
           images: asArray(item.images),
           attributes: asArray(item.attributes),
