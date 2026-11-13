@@ -29,7 +29,7 @@ async function readImageProvider() {
       model,
       size: String(v.size || '1008x1344').slice(0, 20),
       quality: String(v.quality || 'high').slice(0, 20),
-      mode: v.mode === 'dashscope-async' ? 'dashscope-async' : 'openai-images',
+      mode: (v.mode === 'dashscope-async' || v.mode === 'dashscope') ? 'dashscope-async' : 'openai-images',
       aspectRatio: String(v.aspectRatio || '3:4').slice(0, 8),
     };
   } catch {
@@ -49,7 +49,7 @@ async function writeImageProvider(input) {
       baseUrl, apiKey, model,
       size: String((input && input.size) || '1008x1344').slice(0, 20),
       quality: String((input && input.quality) || 'high').slice(0, 20),
-      mode: input && input.mode === 'dashscope-async' ? 'dashscope-async' : 'openai-images',
+      mode: (input && (input.mode === 'dashscope-async' || input.mode === 'dashscope')) ? 'dashscope-async' : 'openai-images',
       aspectRatio: String((input && input.aspectRatio) || '3:4').slice(0, 8),
       savedAt: Date.now(),
     },
@@ -101,7 +101,9 @@ async function generateImage(input, options = {}) {
   const body = {};
   const startedAt = Date.now();
 
-  if (provider.mode === 'dashscope-async') {
+  // 千问/百炼域名必须走原生异步接口；/images/generations 在该网关上是 404。
+  const dashscopeHost = /qianwenaiapi|dashscope/i.test(String(provider.baseUrl || ''));
+  if (provider.mode === 'dashscope-async' || dashscopeHost) {
     return await generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt });
   }
 
@@ -194,7 +196,7 @@ async function generateImage(input, options = {}) {
 
 /** DashScope 原生异步：提交 → 轮询 /tasks/{id} */
 async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt }) {
-  const submit = await fetchWithTimeout(provider.baseUrl + '/services/aigc/text2image/image-synthesis', {
+  const submit = await fetchWithTimeout(provider.baseUrl + '/api/v1/services/aigc/image-generation/generation', {
     method: 'POST',
     headers: {
       Authorization: 'Bearer ' + provider.apiKey,
@@ -203,7 +205,8 @@ async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, star
     },
     body: JSON.stringify({
       model: provider.model,
-      input: { prompt },
+      // 千问新接口要 messages 结构，旧的 input.prompt 会回 url error
+      input: { messages: [{ role: 'user', content: [{ text: prompt }] }] },
       parameters: { size: String(provider.size || '1024*1024').replace('x', '*'), n: 1, response_format: 'url' },
     }),
   }, 30000);
@@ -224,7 +227,7 @@ async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, star
     await new Promise((r) => setTimeout(r, delay));
     delay = Math.min(10000, Math.round(delay * 1.4));
     const poll = await fetchWithTimeout(
-      'https://dashscope.aliyuncs.com/api/v1/tasks/' + encodeURIComponent(taskId),
+      String(provider.baseUrl || '').replace(/\/api\/v1$/, '') + '/api/v1/tasks/' + encodeURIComponent(taskId),
       { headers: { Authorization: 'Bearer ' + provider.apiKey } },
       30000,
     );
@@ -234,7 +237,11 @@ async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, star
     const status = json && json.output && json.output.task_status;
     if (status === 'SUCCEEDED') {
       const results = (json.output && json.output.results) || [];
-      const url = results[0] && results[0].url;
+      // 新接口把图放在 output.choices[0].message.content[].image
+      const choices = (json.output && json.output.choices) || [];
+      const parts = (choices[0] && choices[0].message && choices[0].message.content) || [];
+      const choiceUrl = (parts.find((one) => one && one.image) || {}).image;
+      const url = choiceUrl || (results[0] && results[0].url);
       if (!url) throw new Error(`DashScope 任务成功但没有图片 URL：${pollText.slice(0, 160)}`);
       return { url: String(url), b64: '', taskId, model: provider.model, elapsedMs: Date.now() - startedAt };
     }
