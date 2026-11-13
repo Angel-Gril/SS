@@ -8,7 +8,7 @@
 
 import { buildVisionPrompt, parseVisionReport, visionReportToPairs } from './vision-prompt.js';
 
-const VISION_MODEL_DEFAULT = 'qwen3.8-flash';
+const VISION_MODEL_DEFAULT = 'qwen3.6-flash';
 
 function normalizeBase(url) {
   const text = String(url || '').trim().replace(/\/+$/, '');

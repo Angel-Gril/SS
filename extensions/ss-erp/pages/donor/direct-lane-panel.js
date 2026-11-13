@@ -764,35 +764,57 @@ let lastVisionText = "";
       }
     }
     try {
-      const observed = lastVisionReport && lastVisionReport['属性观察'];
-      if (observed && typeof observed === 'object' && workspace && Array.isArray(workspace.fields)) {
-        for (const [obsName, obsRaw] of Object.entries(observed)) {
-          const obsText = Array.isArray(obsRaw) ? obsRaw.join(' ') : String(obsRaw || '');
-          if (!obsText.trim()) continue;
-          const field = workspace.fields.find((f) => String((f && f.name) || '') === obsName)
-            || workspace.fields.find((f) => obsName && String((f && f.name) || '').includes(obsName));
-          const attributeId = field ? Number(field.attributeId || field.id) : 0;
-          if (!attributeId) continue;
-          const hasValue = (workspace.values || []).some((row) => Number(row.attributeId) === attributeId
-            && (((row.dictionaryValueIds || []).length) || String(row.value || '').trim()));
-          if (hasValue) continue;
-          const found = await send('ss-erp:direct-ozon-attribute-values', {
-            categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400,
-          }).catch(() => null);
-          const list = (found && found.values) || [];
-          // 视觉可能给多值（"черный;тёмно-зелёный"），按分隔符逐个试，取第一个命中的。
-          const obsCandidates = obsText.split(/[;,、\/|]/).map((one) => one.trim()).filter(Boolean);
-          let chosen = null;
-          for (const candidate of obsCandidates) {
-            chosen = matchDictionaryValue(list, candidate) || pickDictionaryValue(list, 'fuzzy', candidate, {});
-            if (chosen) break;
+      // 属性观察有两种形状：扁平 { 性别: "女性" }，或嵌套 { 类目: "Юбка", "以下字段…": [{label,desc}] }。
+      // 统一拍平成 name -> value，否则嵌套形状一个属性都填不进去（qwen3.6 就爱这么答）。
+      const flattenObserved = (raw) => {
+        const out = {};
+        const take = (name, value) => {
+          const key = String(name == null ? '' : name).trim();
+          if (Array.isArray(value)) { for (const one of value) take(key, one); return; }
+          if (value && typeof value === 'object') {
+            if ('label' in value || 'desc' in value) { take(value.label, value.desc); return; }
+            for (const [k, v] of Object.entries(value)) take(k, v);
+            return;
           }
-          if (!chosen) continue;
-          const skuOwned = String((field && field.ownership) || '').toUpperCase() === 'SKU';
-          const targets = skuOwned ? skus.map((sku) => sku.key) : [null];
-          for (const key of targets) {
-            workspace.values.push({ attributeId, skuKey: key, value: String(chosen.value || ''), dictionaryValueIds: [chosen.id] });
-          }
+          if (!key || key.length > 24) return;
+          const text = String(value == null ? '' : value).trim();
+          if (text) out[key] = text;
+        };
+        take('', raw);
+        return out;
+      };
+      const observed = flattenObserved(lastVisionReport && lastVisionReport['属性观察']);
+      const observedNames = Object.keys(observed);
+      if (observedNames.length && workspace && Array.isArray(workspace.fields)) {
+        for (const obsName of observedNames) {
+          // 每个键单独兜错：之前「类目」先抛异常，后面的性别/颜色就被整段跳过了。
+          try {
+            const obsText = String(observed[obsName] || '');
+            if (!obsText.trim()) continue;
+            const field = workspace.fields.find((f) => String((f && f.name) || '') === obsName)
+              || workspace.fields.find((f) => obsName && String((f && f.name) || '').includes(obsName));
+            const attributeId = field ? Number(field.attributeId || field.id) : 0;
+            if (!attributeId) continue;
+            const hasValue = (workspace.values || []).some((row) => Number(row.attributeId) === attributeId
+              && (((row.dictionaryValueIds || []).length) || String(row.value || '').trim()));
+            if (hasValue) continue;
+            const found = await send('ss-erp:direct-ozon-attribute-values', {
+              categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400,
+            }).catch(() => null);
+            const list = (found && found.values) || [];
+            const obsCandidates = obsText.split(/[;,、\/|]/).map((one) => one.trim()).filter(Boolean);
+            let chosen = null;
+            for (const candidate of obsCandidates) {
+              chosen = matchDictionaryValue(list, candidate) || pickDictionaryValue(list, 'fuzzy', candidate, {});
+              if (chosen) break;
+            }
+            if (!chosen) continue;
+            const skuOwned = String((field && field.ownership) || '').toUpperCase() === 'SKU';
+            const targets = skuOwned ? skus.map((sku) => sku.key) : [null];
+            for (const key of targets) {
+              workspace.values.push({ attributeId, skuKey: key, value: String(chosen.value || ''), dictionaryValueIds: [chosen.id] });
+            }
+          } catch (_oneError) { /* 这个键填不进去就跳过 */ }
         }
       }
     } catch (_error) { /* 回填失败不影响主流程 */ }
