@@ -696,7 +696,17 @@ let lastVisionText = "";
     // 成本覆盖：采集值缺失或被人工改价时用面板输入
     const costOverride = Number(costInput.input.value) || 0;
     if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
-    const offers = skus.map((sku, index) => offerIdFor(context.offerBase, sku.key, index));
+    // 货号必须唯一：offerSuffix 只取尺码，多颜色时不同颜色的同一尺码会撞号，
+    // Ozon 直接回 400 "not allowed to specify several items with the same offer_id"。
+    const offers = (() => {
+      const used = new Map();
+      return skus.map((sku, index) => {
+        const base = offerIdFor(context.offerBase, sku.key, index);
+        const count = (used.get(base) || 0) + 1;
+        used.set(base, count);
+        return count === 1 ? base : base + "-" + count;
+      });
+    })();
 
     // 已上架：属性/尺寸/图片从 Ozon 读（不依赖 ERP —— ERP 的 catalogRevision
     // 一变，editor/attributes 就会回 source_listing_catalog_stale，直连车道不该被它拖住）

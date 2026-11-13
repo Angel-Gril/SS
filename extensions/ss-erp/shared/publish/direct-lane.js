@@ -95,6 +95,9 @@ export function planDirectItems(input) {
   const skuKeys = Array.isArray(editor.selectedSkuKeys) && editor.selectedSkuKeys.length
     ? editor.selectedSkuKeys.map(String)
     : [...new Set(values.map((row) => row.skuKey).filter((key) => key !== null && key !== undefined).map(String))];
+  // 货号必须唯一：suffix 只取尺码，多颜色的同一尺码会撞号，Ozon 回 400
+  // "not allowed to specify several items with the same offer_id"。撞号时追加 -2/-3。
+  const usedOfferIds = new Map();
   const offerBase = String((input && input.offerBase) || '').trim();
   const defaults = (input && input.defaults) || {};
   const images = Array.isArray(input && input.images) ? input.images.filter((img) => img && /^https:\/\//.test(String(img.url || ''))) : [];
@@ -115,7 +118,12 @@ export function planDirectItems(input) {
 
   skuKeys.forEach((skuKey, index) => {
     const suffix = offerSuffix(skuKey, index);
-    const offerId = offerBase ? offerBase + '-' + suffix : '';
+  let offerId = offerBase ? offerBase + '-' + suffix : '';
+  if (offerId) {
+    const seenCount = (usedOfferIds.get(offerId) || 0) + 1;
+    usedOfferIds.set(offerId, seenCount);
+    if (seenCount > 1) offerId = offerId + '-' + seenCount;
+  }
     const attributes = attributeMapFor(values, skuKey);
     const have = new Set(attributes.map((attribute) => attribute.id));
 
