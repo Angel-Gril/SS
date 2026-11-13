@@ -4,6 +4,7 @@ import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiC
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
+import { colorsFromText } from '../../shared/ozon/color-lexicon.js';
 import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
 import { variantBlockers } from '../../shared/ozon/variant-key.js';
 import { pickUsableWarehouse, setStocks, waitForProducts } from '../../shared/ozon/publish-flow.js';
@@ -689,6 +690,39 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     const workspace = mergeWorkspaceValues(rulesWorkspace, erpWorkspace);
     // 视觉观察回填（通用）：视觉报告里的「属性观察」按字段名匹配类目 schema；
     // 规则没算出来的必填项（性别、颜色、材质…）用它补。已有值不覆盖。
+
+    // 颜色兜底（与商品无关）：视觉报告解析失败时，从采集到的标题/描述里取颜色。
+    // 之前颜色只能来自视觉，模型一次输出格式不对，整条商品就缺颜色、预检不过。
+    {
+      const colorField = (workspace.fields || []).find((field) => field &&
+        /颜色|色彩/.test(String(field.name || "")) && String(field.ownership || "").toUpperCase() === "SKU");
+      const colorId = colorField ? Number(colorField.attributeId || colorField.id) : 0;
+      if (colorId) {
+        const hasColor = (workspace.values || []).some((row) => Number(row.attributeId) === colorId
+          && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
+        if (!hasColor) {
+          const sourceText = [context.sourceTitle, context.description, ...(skus || []).map((sku) => sku.label)].join(" ");
+          const candidates = colorsFromText(sourceText);
+          if (candidates.length) {
+            const listed = await send("ss-erp:direct-ozon-attribute-values", {
+              categoryId: category.categoryId, typeId: category.typeId, attributeIds: [colorId], query: "", limit: 400,
+            }).catch(() => null);
+            const list = (listed && listed.values && listed.values[colorId]) || [];
+            let chosen = null;
+            for (const candidate of candidates) {
+              chosen = matchDictionaryValue(list, candidate) || pickDictionaryValue(list, "fuzzy", candidate, {});
+              if (chosen) break;
+            }
+            if (chosen) {
+              for (const sku of skus) {
+                workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
+              }
+              globalThis.__SSERP_COLOR_FALLBACK__ = { from: "text", candidates, value: chosen.value };
+            }
+          }
+        }
+      }
+    }
     try {
       const observed = lastVisionReport && lastVisionReport['属性观察'];
       if (observed && typeof observed === 'object' && workspace && Array.isArray(workspace.fields)) {
