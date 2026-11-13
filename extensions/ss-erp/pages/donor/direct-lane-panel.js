@@ -936,7 +936,17 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         }
         if (stockCount > 0 && warehouseId > 0) {
           state.textContent = '提交库存…';
-          const stocked = await step('stock', { offers: products.ready, stock: stockCount, warehouseId });
+          // 库存会在商品「刚建好但还没标记完成」时回 PRODUCT_IS_NOT_CREATED；
+          // 这是时序，不是失败，必须退避重试（实测创建后还要几秒到几十秒）。
+          let stocked = { ok: [], failed: [] };
+          for (let attempt = 1; attempt <= 6; attempt += 1) {
+            stocked = await step('stock', { offers: products.ready, stock: stockCount, warehouseId });
+            const retryable = (stocked.failed || []).some((one) => (one.codes || []).some((code) =>
+              ['PRODUCT_IS_NOT_CREATED', 'TOO_MANY_REQUESTS', 'NOT_PASS_MODERATION'].includes(code)));
+            if (!(stocked.failed || []).length || !retryable) break;
+            state.textContent = `库存重试 ${attempt}：${(stocked.failed || []).map((one) => (one.codes || [])[0]).join(',')}`;
+            await new Promise((resolve) => setTimeout(resolve, 8000 * attempt));
+          }
           output.textContent = JSON.stringify({ imported, products, stocked }, null, 2).slice(0, 2500);
           state.textContent = `上架完成：创建 ${products.ready.length}/${offers.length}，库存 ${stocked.ok.length}/${products.ready.length}`;
         } else {
