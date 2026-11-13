@@ -116,7 +116,34 @@ export function planDirectItems(input) {
 
   const productImages = images.filter((img) => img.scope === 'PRODUCT').map((img) => img.url);
 
-  skuKeys.forEach((skuKey, index) => {
+  // 可变特性去重：颜色+尺码完全相同的两个 SKU，Ozon 拒绝并入同一张卡
+  // （「无法与其他商品合并…至少更改一个可变特性」），还会留下一张单独的卡。
+  // 1688 常见情形：「XXXL」和「加大XXXL」都被解析成 XXXL。保留先出现的，其余记 note。
+  const variantSignatureOf = (skuKey) => {
+    const parts = [];
+    for (const row of values) {
+      if (row.skuKey != null && String(row.skuKey) !== String(skuKey)) continue;
+      const field = fields.find((f) => Number(f.attributeId || f.id) === Number(row.attributeId));
+      if (!field || String(field.ownership || "").toUpperCase() !== "SKU") continue;
+      const value = (Array.isArray(row.dictionaryValueIds) && row.dictionaryValueIds[0]) || row.value || "";
+      if (String(value).trim()) parts.push(String(row.attributeId) + "=" + String(value).trim());
+    }
+    return parts.sort().join("|");
+  };
+  const seenVariant = new Map();
+  const keptSkuKeys = [];
+  for (const skuKey of skuKeys) {
+    const signature = variantSignatureOf(skuKey);
+    if (signature && seenVariant.has(signature)) {
+      notes.push({ scope: String(skuKey), code: "DUPLICATE_VARIANT",
+        detail: "与 " + seenVariant.get(signature) + " 的颜色/尺码完全相同，已跳过" });
+      continue;
+    }
+    if (signature) seenVariant.set(signature, String(skuKey));
+    keptSkuKeys.push(skuKey);
+  }
+  const effectiveSkuKeys = keptSkuKeys.length ? keptSkuKeys : skuKeys;
+  effectiveSkuKeys.forEach((skuKey, index) => {
     const suffix = offerSuffix(skuKey, index);
   let offerId = offerBase ? offerBase + '-' + suffix : '';
   if (offerId) {
@@ -189,7 +216,7 @@ export function planDirectItems(input) {
   return {
     offerBase,
     category: { categoryId: Number(category.categoryId) || null, typeId: Number(category.typeId) || null },
-    skuCount: skuKeys.length,
+    skuCount: effectiveSkuKeys.length,
     requiredFieldCount: requiredFields.length,
     items,
     blockers,

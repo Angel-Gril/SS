@@ -130,7 +130,28 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 已存在的 offer 只想补库存/修属性时用这个，不重新 import
   const restockBtn = make('button', 'ghost', '补库存');
   const state = make('span', '', '');
-  actions.append(precheck, publishBtn, restockBtn, state);
+  // 按钮和状态分行：以前挤在一行，状态一长就把按钮顶走，也看不清结果。
+  const actionsRow = make('div');
+  actionsRow.style.display = 'flex';
+  actionsRow.style.alignItems = 'center';
+  actionsRow.style.gap = '8px';
+  actionsRow.style.flexWrap = 'wrap';
+  actionsRow.append(precheck, publishBtn, restockBtn);
+  const statusRow = make('div');
+  statusRow.style.marginTop = '6px';
+  statusRow.style.minHeight = '20px';
+  statusRow.style.fontSize = '13px';
+  statusRow.style.lineHeight = '1.5';
+  statusRow.style.whiteSpace = 'normal';
+  statusRow.style.wordBreak = 'break-word';
+  state.id = 'ss-erp-direct-status';
+  state.addEventListener('DOMSubtreeModified', () => { globalThis.__SSERP_STATUS_BEAT__ = Date.now(); });
+  try {
+    const beatObserver = new MutationObserver(() => { globalThis.__SSERP_STATUS_BEAT__ = Date.now(); });
+    beatObserver.observe(state, { childList: true, characterData: true, subtree: true });
+  } catch (_e) { /* 无 MutationObserver 也不影响主流程 */ }
+  statusRow.append(state);
+  actions.append(actionsRow, statusRow);
 
   const table = make('div');
   const output = make('pre');
@@ -178,7 +199,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 表现就是「点什么都没反应」——之前只能靠重启浏览器。这里到点自动解锁并说明原因。
   setInterval(() => {
     if (!busy) return;
-    if (Date.now() - busySince < 180000) return;
+    // 用「状态多久没变化」判断，而不是总时长：14 个 SKU 的发布本来就要 5 分钟以上，
+    // 按总时长会误判成卡死。
+    if (Date.now() - (globalThis.__SSERP_STATUS_BEAT__ || busySince) < 180000) return;
     busy = false;
     try {
       precheck.disabled = false;
@@ -692,7 +715,22 @@ let lastVisionText = "";
     else context.offerBase = prefixed;
     const allSkus = context.skus || [];
     const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
-    const skus = limitValue > 0 ? allSkus.slice(0, limitValue) : allSkus;
+    // 规格去重：1688 有些商品的 SKU 规格名完全重复（同色同码出现两次）。
+    // 直接发会得到 XXXL 和 XXXL-2 两个可变特性一样的变体，Ozon 报
+    // 「无法与其他商品合并…至少更改一个可变特性」。这里按规格名去重，
+    // 重复的那条直接丢掉（它和第一条是同一件商品）。
+    const seenLabels = new Set();
+    const dedupedSkus = allSkus.filter((sku) => {
+      const labelKey = String((sku && sku.label) || '').trim().toLowerCase();
+      if (!labelKey) return true;
+      if (seenLabels.has(labelKey)) return false;
+      seenLabels.add(labelKey);
+      return true;
+    });
+    if (dedupedSkus.length < allSkus.length) {
+      globalThis.__SSERP_DEDUPED_SKUS__ = { total: allSkus.length, kept: dedupedSkus.length };
+    }
+    const skus = limitValue > 0 ? dedupedSkus.slice(0, limitValue) : dedupedSkus;
     // 成本覆盖：采集值缺失或被人工改价时用面板输入
     const costOverride = Number(costInput.input.value) || 0;
     if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
@@ -765,7 +803,15 @@ let lastVisionText = "";
             }
             if (chosen) {
               for (const sku of skus) {
-                workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
+                // 颜色必须按 SKU 各自的规格填：全填同一个颜色会让同尺码两个 SKU 的可变特性
+                // 完全相同，Ozon 拒绝合并（实测 XXXL 单独成卡，报「至少更改一个可变特性」）。
+                const ownColours = colorsFromText(String(sku.label || ''));
+                let perSku = chosen;
+                if (ownColours.length) {
+                  const hit = matchDictionaryValue(list, ownColours[0]) || pickDictionaryValue(list, 'fuzzy', ownColours[0], {});
+                  if (hit) perSku = hit;
+                }
+                workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(perSku.value || ''), dictionaryValueIds: [perSku.id] });
               }
               globalThis.__SSERP_COLOR_FALLBACK__ = { from: "text", candidates, value: chosen.value };
             }
