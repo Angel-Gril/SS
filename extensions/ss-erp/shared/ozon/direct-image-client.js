@@ -122,6 +122,8 @@ async function generateImage(input, options = {}) {
       form.append('model', provider.model);
       form.append('prompt', prompt);
       form.append('n', '1');
+      // 渠道默认返回 base64，而 Ozon 只认公网 URL；显式要 url（实测 200 + img.tuba.ink 链接）。
+      form.append('response_format', 'url');
       if (provider.size) form.append('size', provider.size);
       let appended = 0;
       for (let i = 0; i < refs.length; i++) {
@@ -141,7 +143,7 @@ async function generateImage(input, options = {}) {
         body: form,
       }, timeoutMs);
     } else {
-      const bodyJson = { model: provider.model, prompt, n: 1, size: provider.size };
+      const bodyJson = { model: provider.model, prompt, n: 1, response_format: 'url', size: provider.size };
       if (provider.quality) bodyJson.quality = provider.quality;
       if (provider.aspectRatio) bodyJson.aspect_ratio = provider.aspectRatio;
       response = await fetchWithTimeout(provider.baseUrl + '/images/generations', {
@@ -202,7 +204,7 @@ async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, star
     body: JSON.stringify({
       model: provider.model,
       input: { prompt },
-      parameters: { size: String(provider.size || '1024*1024').replace('x', '*'), n: 1 },
+      parameters: { size: String(provider.size || '1024*1024').replace('x', '*'), n: 1, response_format: 'url' },
     }),
   }, 30000);
 
