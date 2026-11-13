@@ -584,12 +584,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       };
     };
 
-    // 0) 字典预热：把所有要用的 attributeId 一次性并发取回（每批 6 个）。
-    //    之前是解析到一个才取一个，串行下来 40+ 个属性要几分钟。
+    // 字典预热：一次消息批量取回所有需要的 attributeId。
+    // 逐个属性各发一条消息，偶发不回的属性会把整个 buildPlan 拖成几分钟（实测 7.5 分钟）；
+    // 批量后即使失败也只影响这一批，且立即返回。
     {
-      const need = [...new Set(items.filter((one) => one.kind !== 'text').map((one) => Number(one.attributeId)))].filter((id) => id > 0);
-      for (let i = 0; i < need.length; i += 6) {
-        await Promise.all(need.slice(i, i + 6).map((id) => dictionaryOf(id)));
+      const need = [...new Set(items.filter((one) => one.kind !== 'text').map((one) => Number(one.attributeId)))]
+        .filter((id) => id > 0 && !dictCache.has(id));
+      if (need.length) {
+        const started = Date.now();
+        const response = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: category.categoryId, typeId: category.typeId, attributeIds: need, query: '', limit: 400,
+        }).catch(() => null);
+        const map = (response && response.values) || {};
+        for (const id of need) {
+          const list = Array.isArray(map[id]) ? map[id].slice(0, 400) : [];
+          if (!list.length) dictFailures += 1;
+          dictCache.set(Number(id), list);
+        }
+        globalThis.__SSERP_DICT_BATCH__ = { need: need.length, ms: Date.now() - started };
       }
     }
     // 1) 变体行先占位（颜色/尺码按 SKU 精确）
@@ -727,6 +739,33 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
       );
       workspace.values = (workspace.values || []).filter((row) => !collectionIds.has(Number(row.attributeId)));
       workspace.__singleCard = true;
+    }
+    // 集合属性只有一个取值时同样剔除：它分不出任何变体，留着只会让 Ozon 一直「等变体」。
+    // 实测：2 个尺码 + 1 个颜色 → is_created=false / validation pending / variant_wait；
+    // 多色多码时颜色有多个取值，不会被这条规则命中。
+    {
+      const skuOwnedIds = new Set((workspace.fields || [])
+        .filter((field) => String((field && (field.ownership || (field.isCollection ? 'SKU' : ''))) || '').toUpperCase() === 'SKU')
+        .map((field) => Number(field.attributeId || field.id)));
+      const seen = new Map();
+      for (const row of workspace.values || []) {
+        const id = Number(row.attributeId);
+        if (!skuOwnedIds.has(id)) continue;
+        const valueKey = String((row.dictionaryValueIds || [])[0] || row.value || '').trim();
+        if (!seen.has(id)) seen.set(id, new Set());
+        if (valueKey) seen.get(id).add(valueKey);
+      }
+      // 必填属性不能剔除（剔了预检直接不过）；这里只清理非必填的单值集合属性。
+      const requiredIds = new Set((workspace.fields || [])
+        .filter((field) => field && field.required)
+        .map((field) => Number(field.attributeId || field.id)));
+      const singleValued = [...seen.entries()]
+        .filter(([id, set]) => set.size === 1 && !requiredIds.has(id))
+        .map(([id]) => id);
+      if (singleValued.length) {
+        workspace.values = (workspace.values || []).filter((row) => !singleValued.includes(Number(row.attributeId)));
+        globalThis.__SSERP_SINGLE_VALUED__ = singleValued;
+      }
     }
     if (workspace.__singleCard) {
       state.textContent = '单品卡：已剔除集合属性（Ozon 会把单值集合属性当成等待变体）';

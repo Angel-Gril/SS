@@ -258,6 +258,23 @@ async function readCategoryAttributes(categoryId, typeId, options = {}) {
  * 所以调用方仍需准备兜底 id。
  */
 async function readAttributeValues(input, options = {}) {
+  // 批量模式：一次消息取多个 attributeId。
+  // 逐个属性各发一条消息时，某个属性偶发不回就要等满超时；27 个属性能拖成几分钟。
+  const batchIds = Array.isArray(input && input.attributeIds)
+    ? input.attributeIds.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
+    : [];
+  if (batchIds.length) {
+    const startedAt = Date.now();
+    const values = {};
+    for (let i = 0; i < batchIds.length; i += 6) {
+      const chunk = batchIds.slice(i, i + 6);
+      const rows = await Promise.all(chunk.map((id) => readAttributeValues(
+        Object.assign({}, input, { attributeIds: null, attributeId: id }), options,
+      ).catch(() => ({ values: [], hasNext: false }))));
+      chunk.forEach((id, index) => { values[id] = (rows[index] && rows[index].values) || []; });
+    }
+    return { values, batch: true, elapsedMs: Date.now() - startedAt };
+  }
   const cid = Number(input && input.categoryId), tid = Number(input && input.typeId);
   const attributeId = Number(input && input.attributeId);
   if (!Number.isSafeInteger(attributeId) || attributeId <= 0) throw new Error('属性 ID 无效');
