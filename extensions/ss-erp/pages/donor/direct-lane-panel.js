@@ -432,7 +432,10 @@ let lastVisionText = "";
     const generated = (lastImageResults || []).map((one) => one.url).filter((url) => /^https:\/\//.test(String(url)));
     const source = (context.images || []).filter((url) => /^https:\/\//.test(String(url)));
     const seen = new Set();
-    return generated.concat(source).filter((url) => {
+    // 有生成图就只用生成图：混进 1688 原图会把中文水印带回 listing（实测 8 生成 + 6 原图 = 14 张）。
+    // 只有一张生成图都没有时，才退回采集原图。
+    const pool = generated.length ? generated : source;
+    return pool.filter((url) => {
       if (seen.has(url)) return false;
       seen.add(url);
       return true;
@@ -1094,7 +1097,13 @@ let lastVisionText = "";
       try {
         const context = getContext();
         if (!context || !context.offerBase) throw new Error('请先采集来源商品');
-        const cfg = await readTitleAiConfig();
+        // 先给状态反馈：以前拿配置就卡住时，界面连「正在看图」都不显示，像点了没反应。
+        state.textContent = '读取 AI 配置…';
+        // 配置读取也要有上限：storage/SW 异常时不能把整条视觉流程拖死。
+        const cfg = await Promise.race([
+          readTitleAiConfig(),
+          new Promise((_resolve) => setTimeout(() => _resolve(null), 15000)),
+        ]);
         if (!cfg) throw new Error('先在上面填 AI key（视觉描述和标题用同一把）');
         // 按精铺的入参形态准备：SKU 表（带中文字段）+ 官方属性 + 类目名
         const skus = (context.skus || []).map((sku) => {
