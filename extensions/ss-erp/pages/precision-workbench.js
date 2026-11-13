@@ -785,7 +785,7 @@ if (!mountDirectLane.panel) {
     directSend({ type, payload: payload || {} }),
     new Promise((_resolve, reject) => {
       // 长任务要单独给预算：生图一次 40-60 秒，统一 20 秒会把正常请求掐断。
-      const slow = /image-generate|image-probe|direct-publish|direct-ai-text|direct-ozon-attribute-values/.test(String(type));
+      const slow = /image-generate|image-probe|direct-publish|direct-ai-text/.test(String(type));
       setTimeout(() => reject(new Error('直连通道超时：' + String(type))), slow ? 300000 : 20000);
     }),
   ]),

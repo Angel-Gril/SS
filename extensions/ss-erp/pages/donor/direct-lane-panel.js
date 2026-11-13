@@ -174,6 +174,18 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     busySince = Date.now();
     return true;
   };
+  // 看门狗：长任务（生图/发布）超时或被回收时，busy 会一直挂着，按钮永久变灰，
+  // 表现就是「点什么都没反应」——之前只能靠重启浏览器。这里到点自动解锁并说明原因。
+  setInterval(() => {
+    if (!busy) return;
+    if (Date.now() - busySince < 180000) return;
+    busy = false;
+    try {
+      precheck.disabled = false;
+      publishBtn.disabled = false;
+      state.textContent = "上一个操作超过 3 分钟未返回，已解锁；失败请重试";
+    } catch (_e) { /* 面板可能已销毁 */ }
+  }, 5000);
   let lastPlan = null;
   let warehouses = [];
   let workspaceCache = null;
@@ -1094,6 +1106,9 @@ let lastVisionText = "";
   describeBtn.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
+      // 视觉在跑时先锁住下游：提示词/生图都依赖视觉报告，用户连点只会得到「先点视觉描述」。
+      const lockedButtons = [promptPlanBtn, genImageBtn, genAllBtn];
+      for (const button of lockedButtons) button.disabled = true;
       try {
         const context = getContext();
         if (!context || !context.offerBase) throw new Error('请先采集来源商品');
@@ -1147,11 +1162,14 @@ let lastVisionText = "";
         // 所以颜色兜底也要看它，而不是只依赖结构化报告。
         lastVisionText = String(result.summary || "");
         output.textContent = JSON.stringify(result, null, 2).slice(0, 2000);
+            for (const button of lockedButtons) button.disabled = false;
         state.textContent = `视觉描述：${result.summary.slice(0, 120)}`;
       } catch (error) {
         state.textContent = `视觉描述失败：${String((error && error.message) || error).slice(0, 160)}`;
         report?.(error);
       }
+          for (const button of lockedButtons) button.disabled = false;
+          for (const button of [promptPlanBtn, genImageBtn, genAllBtn]) button.disabled = false;
     })();
   });
 
