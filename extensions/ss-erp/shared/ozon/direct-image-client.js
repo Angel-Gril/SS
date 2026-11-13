@@ -96,7 +96,17 @@ async function generateImage(input, options = {}) {
   if (!provider) throw new Error('尚未配置生图 Provider（baseUrl / apiKey / model）');
 
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
-  const prompt = String((input && input.prompt) || '').trim();
+  // 参考图是 1688 原图，里面带中文水印；如果不明确禁止，模型会把中文照抄进成品图。
+  // 实测：之前上架的图里出现中文，就是缺了这段约束。
+  const TEXT_FREE_RULE = [
+    "Absolutely no text of any kind:",
+    "no Chinese characters, no Japanese, no Korean, no letters, no numbers,",
+    "no watermark, no logo, no brand mark, no price tag, no caption.",
+    "Do not copy any text from the reference image. Clean product photography only.",
+  ].join(" ");
+  const prompt = [String((input && input.prompt) || "").trim(), TEXT_FREE_RULE].filter(Boolean).join("\n\n");
+  const negativePrompt = String((input && input.negativePrompt) || "").trim()
+    || "text, letters, chinese characters, watermark, logo, label, caption, numbers";
   if (!prompt) throw new Error('提示词为空');
   const body = {};
   const startedAt = Date.now();
@@ -126,6 +136,7 @@ async function generateImage(input, options = {}) {
       form.append('n', '1');
       // 渠道默认返回 base64，而 Ozon 只认公网 URL；显式要 url（实测 200 + img.tuba.ink 链接）。
       form.append('response_format', 'url');
+      form.append('negative_prompt', negativePrompt);
       if (provider.size) form.append('size', provider.size);
       let appended = 0;
       for (let i = 0; i < refs.length; i++) {
@@ -145,7 +156,7 @@ async function generateImage(input, options = {}) {
         body: form,
       }, timeoutMs);
     } else {
-      const bodyJson = { model: provider.model, prompt, n: 1, response_format: 'url', size: provider.size };
+      const bodyJson = { model: provider.model, prompt, negative_prompt: negativePrompt, n: 1, response_format: 'url', size: provider.size };
       if (provider.quality) bodyJson.quality = provider.quality;
       if (provider.aspectRatio) bodyJson.aspect_ratio = provider.aspectRatio;
       response = await fetchWithTimeout(provider.baseUrl + '/images/generations', {
