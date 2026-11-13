@@ -779,7 +779,12 @@ if (!mountDirectLane.panel) {
   mountDirectLane.root = make('div');
   mountDirectLane.panel = createDirectLanePanel({
   root: mountDirectLane.root, make,
-  send: (type, payload) => directSend({ type, payload: payload || {} }),
+  // 直连通道统一加超时：任何一次 SW 调用卡住都不该把整个面板挂死。
+  // 实测：并发/限流时 sendMessage 可能永不回调，表现为按钮一直灰、状态不动。
+  send: (type, payload) => Promise.race([
+    directSend({ type, payload: payload || {} }),
+    new Promise((_resolve, reject) => setTimeout(() => reject(new Error('直连通道超时：' + String(type))), 20000)),
+  ]),
   getContext: () => {
     // 2026-11：这里**不再**要求 editor/category 已加载。已上架商品的直连上架
     // 只需要来源货号 + SKU 列表，属性/尺寸/图片都从 Ozon 读；ERP 草稿读不到

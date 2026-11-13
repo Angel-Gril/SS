@@ -299,16 +299,30 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   }
 
   /** 已上架商品：直接从 Ozon 读属性/尺寸/图片，完全不碰 ERP */
+  // 已上架查询：必须带超时 + 短缓存。
+  // 实测：预检调一次没问题，紧接着的上架再调同一个接口会撞限流，而 sendMessage 没有
+  // 超时 → buildPlan 永久等，表现就是「点直连上架后按钮一直灰、状态不动」。
+  const existingCache = new Map();   // offers 键 → { at, map }
+  const OZON_QUERY_TIMEOUT_MS = 20000;
+  async function withTimeout(promise, ms, fallback) {
+    let timer = 0;
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+    try { return await Promise.race([promise, timeout]); } finally { clearTimeout(timer); }
+  }
   async function fetchOzonProducts(offers) {
     if (!offers.length) return null;
+    const key = offers.join('|');
+    const hit = existingCache.get(key);
+    if (hit && Date.now() - hit.at < 60000) return hit.map;
     try {
-      const result = await send('ss-erp:direct-ozon-post', {
+      const result = await withTimeout(send('ss-erp:direct-ozon-post', {
         path: '/v4/product/info/attributes',
         body: { filter: { offer_id: offers, visibility: 'ALL' }, limit: Math.max(offers.length, 1) },
-      });
+      }), OZON_QUERY_TIMEOUT_MS, null);
       const rows = Array.isArray(result && result.result) ? result.result : [];
-      if (!rows.length) return null;
-      return new Map(rows.map((row) => [String(row.offer_id), row]));
+      const map = rows.length ? new Map(rows.map((row) => [String(row.offer_id), row])) : null;
+      existingCache.set(key, { at: Date.now(), map });
+      return map;
     } catch (_error) { return null; }
   }
 
@@ -485,7 +499,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     // 字典列表按 attributeId 缓存：之前每个属性 × 每个 SKU 各请求一次（limit 1000），
     // 12 个 SKU 就是上百次往返 + 大 JSON 解析，实测把渲染进程卡死。
     const dictCache = new Map();
+    let dictFailures = 0;   // 熔断计数：SW 挂了的时候别一个属性等 45 秒，十个就是七八分钟
     const dictionaryOf = async (attributeId) => {
+      if (dictFailures >= 2) return [];   // 已判定不可用：本轮直接当空
       const id = Number(attributeId);
       if (dictCache.has(id)) return dictCache.get(id);
       let list = [];
@@ -678,8 +694,13 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
             categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400,
           }).catch(() => null);
           const list = (found && found.values) || [];
-          const chosen = matchDictionaryValue(list, obsText)
-            || pickDictionaryValue(list, 'fuzzy', obsText, {});
+          // 视觉可能给多值（"черный;тёмно-зелёный"），按分隔符逐个试，取第一个命中的。
+          const obsCandidates = obsText.split(/[;,、\/|]/).map((one) => one.trim()).filter(Boolean);
+          let chosen = null;
+          for (const candidate of obsCandidates) {
+            chosen = matchDictionaryValue(list, candidate) || pickDictionaryValue(list, 'fuzzy', candidate, {});
+            if (chosen) break;
+          }
           if (!chosen) continue;
           const skuOwned = String((field && field.ownership) || '').toUpperCase() === 'SKU';
           const targets = skuOwned ? skus.map((sku) => sku.key) : [null];

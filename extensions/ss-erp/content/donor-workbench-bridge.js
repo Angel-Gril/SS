@@ -1483,12 +1483,16 @@
     try { return Boolean(chrome && chrome.runtime && chrome.runtime.id); } catch (_e) { return false; }
   }
   var healTried = false;
+  var healMisses = 0;   // 连续失败计数：单次读取异常不该触发整页重载（会打断正在跑的上架）
   setInterval(function () {
-    if (healTried || runtimeAlive()) return;
+    if (healTried) return;
+    if (runtimeAlive()) { healMisses = 0; return; }
+    healMisses += 1;
+    if (healMisses < 3) return;   // 连续 3 次（约 12 秒）都失效才认定为真的失效
     healTried = true;
     var already = false;
     try { already = sessionStorage.getItem('ss-erp:runtime-reload') === '1'; } catch (_e) { already = false; }
-    if (already) { return; }
+    if (already) return;
     try { sessionStorage.setItem('ss-erp:runtime-reload', '1'); } catch (_e) {}
     try { location.reload(); } catch (_e) {}
   }, 4000);

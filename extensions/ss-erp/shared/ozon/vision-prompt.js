@@ -93,25 +93,32 @@ export const VISION_REPORT_KEYS = Object.freeze([
 
 /** 宽松解析：模型可能带 ```json 包裹或解释文字 */
 export function parseVisionReport(raw) {
-  const text = String(raw || '');
-  // 两种形状都要接受：
-  //   1) 模板要求的对象 {视觉总结: "...", 属性观察: {...}}
-  //   2) 模型偶尔返回的数组 [{name:"视觉总结", value:"..."}, ...]（实测出现过）
-  const arrayStart = text.indexOf('[');
-  const objectStart = text.indexOf('{');
+  const text = String(raw || "");
+  // 接受三种形状：
+  //   1) 对象 {视觉总结: "...", 属性观察: {...}}
+  //   2) 数组 [{name:"视觉总结", value:"..."}, ...]
+  //   3) 包在 md 围栏里、带尾逗号的上面两种（模型常态）
+  const arrayStart = text.indexOf("[");
+  const objectStart = text.indexOf("{");
   const start = arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart) ? arrayStart : objectStart;
-  const end = text.lastIndexOf(start === arrayStart && arrayStart >= 0 ? ']' : '}');
+  const isArray = start === arrayStart && arrayStart >= 0;
+  const end = text.lastIndexOf(isArray ? "]" : "}");
   if (start < 0 || end <= start) return null;
+  const body = text.slice(start, end + 1);
+  const attempts = [body, body.replace(/,\s*([}\]])/g, "$1")];
   let value = null;
-  try { value = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  for (const candidate of attempts) {
+    try { value = JSON.parse(candidate); break; } catch (_e) { value = null; }
+  }
+  if (value === null) return null;
   if (Array.isArray(value)) {
     const obj = {};
     for (const row of value) {
-      if (row && typeof row === 'object' && row.name) obj[String(row.name)] = row.value;
+      if (row && typeof row === "object" && row.name) obj[String(row.name)] = row.value;
     }
     return Object.keys(obj).length ? obj : null;
   }
-  return value && typeof value === 'object' ? value : null;
+  return value && typeof value === "object" ? value : null;
 }
 
 /** 报告 → 标题生成用的属性对（优先用属性观察，其次视觉判断） */
