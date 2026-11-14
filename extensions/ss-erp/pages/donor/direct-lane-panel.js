@@ -4,6 +4,7 @@ import { DEFAULT_TITLE_AI, generateTitleWithAi, generateDescriptionWithAi, readT
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
+import { buildDirectPromptPlan } from '../../shared/ozon/direct-prompt-plan.js';
 import { colorsFromText } from '../../shared/ozon/color-lexicon.js';
 import { calculatePricing } from '../../shared/ozon/pricing-calculator.js';
 import { variantBlockers } from '../../shared/ozon/variant-key.js';
@@ -215,6 +216,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   let lastVisionReport = null;   // 精铺形态的视觉报告（一次），喂标题/属性/生图
 let lastVisionText = "";
   let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
+let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
   // 类目 ID → 俄文类型名（标题规则需要它；context.category 在无草稿时为空）
   const TYPE_NAME_BY_ID = { 93182: 'Платье', 93283: 'Юбка', 93211: 'Платье', 608042980: 'Фартук' };
@@ -875,6 +877,7 @@ let lastVisionText = "";
       }
     } catch (_error) { /* 回填失败不影响主流程 */ }
     if (!workspace) throw new Error('没有类目：先在「类目」步骤确认一次（会缓存到本地）');
+    lastWorkspaceForPlan = workspace;
     if (workspace.values && workspace.values.length) workspaceCache = workspace;
     if (!workspace.values || !workspace.values.length) throw new Error('规则没有算出属性：检查类目与 SKU 规格');
     // 该类目能不能把多个 SKU 合成一张卡？判错一次就留一张永远不销售的坏卡。
@@ -1349,14 +1352,36 @@ let lastVisionText = "";
           images: (context.images || []).length,
         };
         state.textContent = `规划图片提示词（${cfg.model}）…`;
-        const result = await buildImagePromptPlan({
-          baseUrl: cfg.baseUrl,
-          apiKey: cfg.apiKey,
-          model: 'qwen3.6-flash',
-          visionReport: lastVisionReport,
-          rawData,
-          categoryTitle: (context.category && context.category.typeName) || '',
+        // 规则版提示词（与精铺/知了一致）：纯函数、零模型调用，瞬时返回。
+        // 之前用 AI 规划，14 个 SKU 时要 300 秒以上，而参考实现根本不需要模型。
+        const mediaList = (context.images || []).map((url, index) => ({
+          refId: "img" + (index + 1),
+          url: String(url || ""),
+          sourceType: index === 0 ? "main" : "detail",
+          visualRole: index === 0 ? "front" : "",
+        }));
+        const rulePlan = buildDirectPromptPlan({
+          product: {
+            title: String(titleInput.value || context.sourceTitle || "").trim(),
+            attributes: ((lastWorkspaceForPlan && lastWorkspaceForPlan.values) || []).map((row) => {
+              const field = ((lastWorkspaceForPlan && lastWorkspaceForPlan.fields) || []).find((f) => Number(f.attributeId || f.id) === Number(row.attributeId));
+              return { name: field ? String(field.name || "") : "", value: String(row.value || "") };
+            }).filter((one) => one.name && one.value),
+          },
+          media: mediaList,
+          skus: skus.map((sku) => ({ key: sku.key, label: sku.label, imageUrl: sku.imageUrl || "" })),
+          perSkuCount: 8,
         });
+        // 结构映射：规则版是 sharedSlots/perSku，面板消费 sharedGalleryPlans/skuHeroPlans。
+        const result = {
+          plan: {
+            ...rulePlan,
+            // 实测模块导出的是 sharedGallery（不是 sharedSlots），两者都兼容
+    sharedGalleryPlans: rulePlan.sharedGallery || rulePlan.sharedSlots || [],
+            skuHeroPlans: (rulePlan.perSku || []).flatMap((one) => one.slots || []),
+          },
+          parsed: rulePlan,
+        };
         lastPromptPlan = result.plan;
         const slots = (result.plan.sharedGalleryPlans || []).map((slot) => ({
           slotId: slot.slotId, goal: slot.goalType,
