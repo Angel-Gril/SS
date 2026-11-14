@@ -24,7 +24,19 @@ function normalizeBase(url) {
  *   categoryTitle
  *   imageUrls [https]
  */
+// 实测：浏览器刚重启时第一次视觉调用经常卡到超时（冷启动）。
+// 这里超时自动重试一次，避免整条流程因为一次冷启动而失败。
 export async function describeProductWithAi(input) {
+  try {
+    return await describeProductWithAiOnce(input);
+  } catch (error) {
+    const message = String((error && error.message) || error);
+    if (!/超时|timeout/i.test(message)) throw error;
+    return describeProductWithAiOnce(input);
+  }
+}
+
+async function describeProductWithAiOnce(input) {
   const baseUrl = normalizeBase(input.baseUrl);
   const images = (Array.isArray(input.imageUrls) ? input.imageUrls : [])
     .filter((url) => /^https:\/\//.test(String(url))).slice(0, 3);
@@ -53,7 +65,7 @@ export async function describeProductWithAi(input) {
           temperature: 0.2,
           maxTokens: 1200,
           // 视觉比纯文本慢：给 150 秒预算（SW 默认 60 秒实测会超时）
-          timeoutMs: 150000,
+          timeoutMs: 240000,
           messages: [{
             role: 'user',
             content: [

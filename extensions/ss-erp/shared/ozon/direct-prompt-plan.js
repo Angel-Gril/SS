@@ -110,6 +110,9 @@ export function buildSlotPrompt({ product, slot, refs, variant }) {
   const refLines = (refs || []).map((r) => `- ${r.visualRole}: ${r.reason}`).join('\n');
 
   const parts = [
+    // 审核实测：生成图若不能一眼看出商品类型，Ozon 回 DESCRIPTION_DECLINE
+    // 「Фото товара не соответствует его типу」。主图必须完整、正面、类型可辨。
+    category ? `The product type must be unmistakable (${category}): full front view of the garment, clearly showing the neckline/collar, the sleeve length and the hem length; the item occupies 70-80% of the frame; plain light background; shown on an invisible mannequin or as a flat lay; do not crop the garment.` : '',
     `Task: create one Ozon marketplace product image, aspect ratio 3:4.`,
     `Goal type: ${slot.goalType}. ${slot.brief}`,
     category ? `Ozon category: ${category}.` : '',
