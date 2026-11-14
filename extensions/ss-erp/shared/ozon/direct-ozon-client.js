@@ -281,7 +281,7 @@ async function readAttributeValues(input, options = {}) {
   if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(tid)) throw new Error('类目/类型 ID 无效');
   const body = {
     description_category_id: cid, type_id: tid, attribute_id: attributeId,
-    language: 'ZH_HANS', limit: Math.min(Math.max(Number(input && input.limit) || 50, 1), 1000),
+    language: String((input && input.language) || 'ZH_HANS'), limit: Math.min(Math.max(Number(input && input.limit) || 50, 1), 1000),
     last_value_id: Number(input && input.lastValueId) || 0,
   };
   const query = String((input && input.query) || '').trim();

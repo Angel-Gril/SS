@@ -684,7 +684,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (need.length) {
         const started = Date.now();
         const response = await send('ss-erp:direct-ozon-attribute-values', {
-          categoryId: category.categoryId, typeId: category.typeId, attributeIds: need, query: '', limit: 400,
+          categoryId: category.categoryId, typeId: category.typeId, attributeIds: need, query: '', limit: 400, language: 'DEFAULT',
         }).catch(() => null);
         const map = (response && response.values) || {};
         for (const id of need) {
@@ -820,7 +820,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
           const candidates = colorsFromText(sourceText);
           if (candidates.length) {
             const listed = await send("ss-erp:direct-ozon-attribute-values", {
-              categoryId: category.categoryId, typeId: category.typeId, attributeIds: [colorId], query: "", limit: 400,
+              categoryId: category.categoryId, typeId: category.typeId, attributeIds: [colorId], query: "", limit: 400, language: 'DEFAULT',
             }).catch(() => null);
             const list = (listed && listed.values && listed.values[colorId]) || [];
             let chosen = null;
@@ -882,7 +882,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
               && (((row.dictionaryValueIds || []).length) || String(row.value || '').trim()));
             if (hasValue) continue;
             const found = await send('ss-erp:direct-ozon-attribute-values', {
-              categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400,
+              categoryId: category.categoryId, typeId: category.typeId, attributeId, query: '', limit: 400, language: 'DEFAULT',
             }).catch(() => null);
             const list = (found && found.values) || [];
             const obsCandidates = obsText.split(/[;,、\/|]/).map((one) => one.trim()).filter(Boolean);
