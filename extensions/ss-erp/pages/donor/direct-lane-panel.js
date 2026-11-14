@@ -1264,7 +1264,9 @@ let lastVisionText = "";
           return { rowIndex: index + 1, skuLabel: sku.label, specs: { color_name_cn: parsed.colorsZh[0] || '', size_name_cn: parsed.sizes[0] || '' } };
         });
         const rawData = {
-          sku_matrix: skus,
+  // 规划不需要每个 SKU：14 个 SKU 的矩阵会把提示词撑大，模型要 300 秒以上。
+  // 取前 8 个足够表达颜色/尺码维度。
+  sku_matrix: skus.slice(0, 8),
           sourceTitle: context.sourceTitle || '',
           images: (context.images || []).length,
         };

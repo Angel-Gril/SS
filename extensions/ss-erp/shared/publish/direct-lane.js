@@ -149,7 +149,15 @@ export function planDirectItems(input) {
   if (offerId) {
     const seenCount = (usedOfferIds.get(offerId) || 0) + 1;
     usedOfferIds.set(offerId, seenCount);
-    if (seenCount > 1) offerId = offerId + '-' + seenCount;
+    // 撞号时用规格串的短哈希，而不是 -2/-3：-2 与下一个 SKU 的语义无关，
+    // 客服/后台看到会以为是重复商品。哈希只取 4 位 base36，仍然全是 ASCII。
+    if (seenCount > 1) {
+      let hash = 0;
+      const seedText = String(suffix) + "|" + String(skuKey || "");
+      for (let k = 0; k < seedText.length; k += 1) hash = (hash * 31 + seedText.charCodeAt(k)) % 1679616;
+      const tail = hash.toString(36).toUpperCase().padStart(4, "0");
+      offerId = offerId + "-" + tail;
+    }
   }
     const attributes = attributeMapFor(values, skuKey);
     const have = new Set(attributes.map((attribute) => attribute.id));
