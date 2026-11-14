@@ -935,10 +935,24 @@ let lastVisionText = "";
       if (built.title) titleInput.value = built.title;
     }
 
+    // 描述不能留空：Ozon 会回「Не удалось создать описание」并把商品判进 variant_wait，
+    // 库存永远设不上（实测 1091114984558 的 16 条全卡在这里）。没填就用视觉摘要+卖点拼一段。
+    const autoDescription = (() => {
+      const manual = String(descInput.value || "").trim();
+      if (manual) return manual;
+      const report = lastVisionReport || {};
+      const summary = String(report["视觉总结"] || lastVisionText || "").trim();
+      const points = Array.isArray(report["核心卖点"])
+        ? report["核心卖点"].slice(0, 4).map((one) => String(one || "").trim()).filter(Boolean)
+        : [];
+      const titleRu = String(titleInput.value || "").trim();
+      return [summary, points.length ? points.map((one) => "• " + one).join("\n") : "", titleRu]
+        .filter(Boolean).join("\n\n").slice(0, 4000);
+    })();
     const editorStub = {
       category: context.category,
       selectedSkuKeys: skus.map((sku) => sku.key),
-      copy: { titleRu: String(titleInput.value || '').trim(), descriptionRu: String(descInput.value || '').trim() },
+      copy: { titleRu: String(titleInput.value || '').trim(), descriptionRu: autoDescription },
       pricing: { items: skus.map((sku) => {
         const computed = priceFor(sku.cost);
         return { skuKey: sku.key, price: computed ? computed.price : null, oldPrice: computed ? computed.oldPrice : null, currencyCode: 'CNY', vat: '0' };
