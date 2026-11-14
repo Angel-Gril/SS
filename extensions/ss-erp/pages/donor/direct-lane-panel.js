@@ -929,18 +929,43 @@ let lastVisionText = "";
       throw new Error(`字典没解析到属性 ${ids.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
     }
 
-    // 标题为空时自动用规则生成一次
-    if (!String(titleInput.value || '').trim()) {
-      const built = generateTitleFor(context, workspace);
-      if (built.title) titleInput.value = built.title;
+    const reportForText = lastVisionReport || {};
+    const observedForText = reportForText["属性观察"] || {};
+    const typeRu = String(observedForText["类型"] || (context.category && context.category.typeName) || "").trim();
+
+    // 标题：以规则版为准（精铺/知了的做法）。
+    // 规则版固定「品类名词 + 性别 + 材质 + 特征 + 场景」顺序，天然以名词开头；
+    // 而 AI 版实测会输出「Женский с длинным рукавом…」这种形容词碎片，
+    // Ozon 审核判「名称中有无意义的文本」，卡片直接建不出来。
+    {
+      const genderAttr = (workspace.values || []).find((row) => {
+        const field = (workspace.fields || []).find((f) => Number(f.attributeId || f.id) === Number(row.attributeId));
+        return field && /性别|пол/i.test(String(field.name || ""));
+      });
+      const genderText = String((genderAttr && genderAttr.value) || "").trim();
+      const ruleTitle = buildRuTitle({
+        sourceTitle: context.sourceTitle || "",
+        typeName: typeRu || (context.category && context.category.typeName) || "",
+        gender: genderText,
+        attributes: (workspace.values || []).slice(0, 12).map((row) => {
+          const field = (workspace.fields || []).find((f) => Number(f.attributeId || f.id) === Number(row.attributeId));
+          return { name: field ? String(field.name || "") : "", value: String(row.value || "") };
+        }),
+      });
+      const current = String(titleInput.value || "").trim();
+      const noun = String((ruleTitle && ruleTitle.category) || "").toLowerCase();
+      const missingNoun = !current || (noun && !current.toLowerCase().includes(noun.split(/[\s,]/)[0]));
+      if (ruleTitle && ruleTitle.title && missingNoun) {
+        titleInput.value = String(ruleTitle.title).slice(0, 200);
+        globalThis.__SSERP_TITLE_SOURCE__ = "rules";
+      } else {
+        globalThis.__SSERP_TITLE_SOURCE__ = "ai";
+      }
     }
 
     // 描述不能留空：Ozon 会回「Не удалось создать описание」并把商品判进 variant_wait，
     // 库存永远设不上（实测 1091114984558 的 16 条全卡在这里）。没填就用视觉摘要+卖点拼一段。
     // 商品类型（俄文名词）：视觉报告里的「类型」最准，退回类目名。
-    const reportForText = lastVisionReport || {};
-    const observedForText = reportForText["属性观察"] || {};
-    const typeRu = String(observedForText["类型"] || (context.category && context.category.typeName) || "").trim();
     // 标题必须以商品名词开头：实测 AI 给出的是「Женский с длинным рукавом…」这种形容词堆，
     // Ozon 审核判「名称中有无意义的文本」。这里补上名词。
     if (typeRu) {
