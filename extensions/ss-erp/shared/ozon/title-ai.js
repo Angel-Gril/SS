@@ -51,6 +51,49 @@ const SYSTEM_PROMPT = [
  * @param {object} input { baseUrl, apiKey, model, sourceTitle, typeName, attributes:[{name,value}] }
  * @returns {Promise<{title:string, raw:string}>}
  */
+/**
+ * 生成 Ozon 商品描述（俄文）。
+ * 输入可能是中文的视觉摘要，必须翻译+改写，不能直接发中文：
+ * 实测把中文摘要当描述发过去，Ozon 侧存成空字符串（卡片被判「Не удалось создать описание」）。
+ */
+export async function generateDescriptionWithAi(input) {
+  const baseUrl = String(input.baseUrl || "").replace(/\/+$/, "");
+  if (!/^https:\/\//.test(baseUrl)) throw new Error("AI baseUrl 必须是 https 地址");
+  const points = (input.sellingPoints || []).slice(0, 5).join("; ");
+  const user = [
+    `Тип товара (категория Ozon): ${input.typeName || "—"}`,
+    `Название для Ozon: ${input.titleRu || "—"}`,
+    `Исходное описание (может быть на китайском): ${String(input.summary || "").slice(0, 1200)}`,
+    `Ключевые особенности: ${points || "—"}`,
+    "",
+    "Напиши описание товара для Ozon на русском языке, 500–900 символов.",
+    "Только русский текст, без китайских иероглифов, без эмодзи, без Markdown.",
+    "Структура: 1–2 предложения о товаре, затем особенности списком через перевод строки.",
+  ].join("\n");
+  const reply = await new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({
+        contractVersion: 3,
+        type: "ss-erp:direct-ai-text",
+        payload: {
+          baseUrl, apiKey: input.apiKey, model: input.model,
+          temperature: 0.3, maxTokens: 900, timeoutMs: 180000,
+          messages: [{ role: "user", content: user }],
+        },
+      }, (response) => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) { reject(new Error(String(lastError.message || lastError))); return; }
+        if (!response || response.ok === false) { reject(new Error(String((response && response.error) || "描述生成失败"))); return; }
+        // SW 的回复是 { ok, result: { content, model } }，不是在顶层
+        const body = (response && response.result) || response || {};
+        resolve(String(body.content || body.text || ""));
+      });
+    } catch (error) { reject(error); }
+  });
+  const text = String(reply || "").replace(/[\u4e00-\u9fff]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) throw new Error("描述生成返回空");
+  return text.slice(0, 3000);
+}
 export async function generateTitleWithAi(input) {
   const baseUrl = String(input.baseUrl || '').replace(/\/+$/, '');
   if (!/^https:\/\//.test(baseUrl)) throw new Error('AI baseUrl 必须是 https 地址');

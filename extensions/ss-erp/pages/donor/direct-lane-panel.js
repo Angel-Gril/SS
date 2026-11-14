@@ -1,6 +1,6 @@
 import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js';
 import { buildRuTitle } from '../../shared/ozon/title-rules.js';
-import { DEFAULT_TITLE_AI, generateTitleWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
+import { DEFAULT_TITLE_AI, generateTitleWithAi, generateDescriptionWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
 import { buildImagePromptPlan } from '../../shared/ozon/image-prompt-plan.js';
@@ -937,18 +937,57 @@ let lastVisionText = "";
 
     // 描述不能留空：Ozon 会回「Не удалось создать описание」并把商品判进 variant_wait，
     // 库存永远设不上（实测 1091114984558 的 16 条全卡在这里）。没填就用视觉摘要+卖点拼一段。
-    const autoDescription = (() => {
+    // 商品类型（俄文名词）：视觉报告里的「类型」最准，退回类目名。
+    const reportForText = lastVisionReport || {};
+    const observedForText = reportForText["属性观察"] || {};
+    const typeRu = String(observedForText["类型"] || (context.category && context.category.typeName) || "").trim();
+    // 标题必须以商品名词开头：实测 AI 给出的是「Женский с длинным рукавом…」这种形容词堆，
+    // Ozon 审核判「名称中有无意义的文本」。这里补上名词。
+    if (typeRu) {
+      const titleNow = String(titleInput.value || "").trim();
+      const lower = titleNow.toLowerCase();
+      const noun = typeRu.toLowerCase().split(/[;,\/|\s,(]/).filter(Boolean)[0] || '';
+      const head = (typeRu.split(/[;,\/|]/)[0] || '').trim();
+      const headCap = head ? head.charAt(0).toUpperCase() + head.slice(1) : '';
+      // 类型名可能是中文（类目名），中文不能进俄文标题：只在类型是西里尔文时补名词。
+      const cyrillic = /[\u0400-\u04FF]/.test(headCap) && !/[\u4e00-\u9fff]/.test(headCap);
+      if (titleNow && noun && !lower.includes(noun) && headCap && cyrillic) {
+        // 防止「Лонгслив женский Женский с…」这种重复性别词：Ozon 判名称异常，卡片建不出来。
+        const rest = titleNow.replace(/^женск[а-яё]*\s+/i, "").trim();
+        titleInput.value = (headCap + " женский " + rest).slice(0, 200);
+      }
+    }
+    // 描述：不能直接发中文摘要（Ozon 侧会存成空），用 AI 生成俄文；失败退回俄文标题。
+    const autoDescription = await (async () => {
       const manual = String(descInput.value || "").trim();
       if (manual) return manual;
-      const report = lastVisionReport || {};
-      const summary = String(report["视觉总结"] || lastVisionText || "").trim();
-      const points = Array.isArray(report["核心卖点"])
-        ? report["核心卖点"].slice(0, 4).map((one) => String(one || "").trim()).filter(Boolean)
-        : [];
+      const summary = String(reportForText["视觉总结"] || lastVisionText || "").trim();
+      const points = Array.isArray(reportForText["核心卖点"]) ? reportForText["核心卖点"] : [];
       const titleRu = String(titleInput.value || "").trim();
-      return [summary, points.length ? points.map((one) => "• " + one).join("\n") : "", titleRu]
-        .filter(Boolean).join("\n\n").slice(0, 4000);
+      try {
+        const cfg = await readTitleAiConfig();
+        if (cfg && cfg.apiKey) {
+          const generated = await generateDescriptionWithAi({
+            baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model || "qwen3.6-flash",
+            typeName: typeRu, titleRu, summary, sellingPoints: points,
+          });
+          if (generated) return generated;
+        }
+      } catch (_e) { /* 退回下面的兜底 */ }
+      return [titleRu, typeRu].filter(Boolean).join(". ").slice(0, 600);
     })();
+    // 描述必须落在属性 4191「简介」上：实测 item 级 description 会被忽略，
+    // /v1/product/info/description 一直是空，卡片审核被判「Не удалось создать описание」。
+    try {
+      const introField = (workspace.fields || []).find((field) => Number(field.attributeId || field.id) === 4191
+        || /简介|描述|аннотац/i.test(String((field && field.name) || "")));
+      const introId = introField ? Number(introField.attributeId || introField.id) : 4191;
+      const hasIntro = (workspace.values || []).some((row) => Number(row.attributeId) === introId
+        && String(row.value || "").trim().length > 20);
+      if (!hasIntro && autoDescription) {
+        workspace.values.push({ attributeId: introId, skuKey: null, value: String(autoDescription).slice(0, 6000), dictionaryValueIds: [] });
+      }
+    } catch (_e) { /* 没有该属性就不写 */ }
     const editorStub = {
       category: context.category,
       selectedSkuKeys: skus.map((sku) => sku.key),
