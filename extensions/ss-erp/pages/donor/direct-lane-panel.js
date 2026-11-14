@@ -217,6 +217,31 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
 let lastVisionText = "";
   let lastPromptPlan = null;     // PromptPlan v2（主图 + 7 张详情图）
 let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
+
+  // 类目类型名的俄文写法：类目树用中文查（ZH_HANS）拿到的是「T恤」，拼进俄文标题会变成 "T женский…"。
+  // 这里按 type_id 反查俄文名并缓存，标题一律用俄文名词。
+  let russianTypeNameCache = null;
+  async function russianTypeName(typeId) {
+    const target = Number(typeId) || 0;
+    if (!target) return "";
+    try {
+      if (!russianTypeNameCache) {
+        const tree = await send('ss-erp:direct-ozon-post', { path: '/v1/description-category/tree', body: { language: 'DEFAULT' } });
+        const map = new Map();
+        for (const top of (tree && tree.result) || []) {
+          for (const cat of (top.children || [])) {
+            for (const leaf of (cat.children || [])) {
+              const id = Number(leaf.type_id);
+              const name = String(leaf.type_name || "").trim();
+              if (id && name) map.set(id, name);
+            }
+          }
+        }
+        russianTypeNameCache = map;
+      }
+      return String(russianTypeNameCache.get(target) || "");
+    } catch (_e) { return ""; }
+  }
   let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
   // 类目 ID → 俄文类型名（标题规则需要它；context.category 在无草稿时为空）
   const TYPE_NAME_BY_ID = { 93182: 'Платье', 93283: 'Юбка', 93211: 'Платье', 608042980: 'Фартук' };
@@ -934,7 +959,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
     const reportForText = lastVisionReport || {};
     const observedForText = reportForText["属性观察"] || {};
-    const typeRu = String(observedForText["类型"] || (context.category && context.category.typeName) || "").trim();
+    const russianType = await russianTypeName(context.category && context.category.typeId).catch(() => '');
+    const typeRu = String(russianType || observedForText["类型"] || "").trim();
 
     // 标题：以规则版为准（精铺/知了的做法）。
     // 规则版固定「品类名词 + 性别 + 材质 + 特征 + 场景」顺序，天然以名词开头；
