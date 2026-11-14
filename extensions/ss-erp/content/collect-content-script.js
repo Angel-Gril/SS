@@ -2076,10 +2076,6 @@
     const shopName = pick1688ShopName(sources);
     const title = pick1688StructuredTitle(sources, { platform: "1688", productId, shopName });
     const skuProps = pick1688SkuProps(sources);
-  // 诊断：SKU 截断问题排查（页面 44 色 × 8 码 = 352，采集只拿到 100）
-  try {
-    console.log('[SSERP-COLLECT] skuProps=' + JSON.stringify((skuProps || []).map((one) => ({ prop: one && one.name, values: (one && one.values || []).length }))));
-  } catch (_e) {}
     const images = pick1688StructuredImages(sources, skuProps);
     const detailImages = pick1688DetailImages(sources);
     const skuItems = pick1688StructuredSkuItems(sources, skuProps);

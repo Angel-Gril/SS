@@ -16,7 +16,9 @@
     'PUBLISH', 'CREATE_TRANSLATION', 'CHECK_TRANSLATION',
     'WATERMARK_PREVIEW', 'WATERMARK_APPLY', 'WATERMARK_TEMPLATES', 'VIDEO_READ', 'VIDEO_SAVE',
   ]);
-  var MAX_SKUS = 100;
+  // 实测 1095132392645 有 44 色 × 8 码 = 352 个 SKU；原来这里 100，skuRows() 收满 100 就停，
+// 于是直连上架永远只能看到前 100 个（页面 HTML 里 352 个 skuId 是真数据）。
+var MAX_SKUS = 2000;
   var MAX_MEDIA = 120;
 
   function record(value) {
