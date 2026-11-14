@@ -6425,10 +6425,11 @@ function normalizeSourceProductForErpCollect(product) {
     shippingCny: source.shippingCny != null ? source.shippingCny : source.freightCny,
     totalCostCny: source.totalCostCny != null ? source.totalCostCny : source.purchaseCostCny,
     selectedSku: selectedSku || undefined,
-    skuItems: Array.isArray(source.skuItems) ? source.skuItems.slice(0, 100) : undefined,
+    // 实测 1095132392645 有 104 个 SKU（13 色 × 8 码），截到 100 会丢掉第 13 色的后 4 个码。
+    skuItems: Array.isArray(source.skuItems) ? source.skuItems.slice(0, 1000) : undefined,
     variants: Array.isArray(source.variants) && source.variants.length
-      ? source.variants.slice(0, 100)
-      : (Array.isArray(source.skuItems) ? source.skuItems.slice(0, 100) : undefined),
+      ? source.variants.slice(0, 1000)
+      : (Array.isArray(source.skuItems) ? source.skuItems.slice(0, 1000) : undefined),
     priceSourceType: source.priceSourceType,
     currency: firstText([source.currency]) || 'CNY',
   };
@@ -6994,7 +6995,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const selectedSkuKeys = Array.isArray(message.selectedSkuKeys)
         ? message.selectedSkuKeys.map((value) => sourceWorkflowHandoffText(value, 500)).filter(Boolean)
         : [];
-      if (!shopId || !selectedSkuKeys.length || selectedSkuKeys.length > 100) {
+      if (!shopId || !selectedSkuKeys.length || selectedSkuKeys.length > 1000) {
         throw new Error('店铺草稿参数无效');
       }
       const created = await getSourceListingWorkflowClient().createDraft({

@@ -2076,6 +2076,10 @@
     const shopName = pick1688ShopName(sources);
     const title = pick1688StructuredTitle(sources, { platform: "1688", productId, shopName });
     const skuProps = pick1688SkuProps(sources);
+  // 诊断：SKU 截断问题排查（页面 44 色 × 8 码 = 352，采集只拿到 100）
+  try {
+    console.log('[SSERP-COLLECT] skuProps=' + JSON.stringify((skuProps || []).map((one) => ({ prop: one && one.name, values: (one && one.values || []).length }))));
+  } catch (_e) {}
     const images = pick1688StructuredImages(sources, skuProps);
     const detailImages = pick1688DetailImages(sources);
     const skuItems = pick1688StructuredSkuItems(sources, skuProps);
@@ -2431,7 +2435,10 @@
       .slice(0, 3);
     if (!props.length) return [];
     const total = props.reduce((count, prop) => count * prop.values.length, 1);
-    if (total <= 0 || total > 200) return [];
+    // 组合数上限：原来 200，超过就直接放弃，退化到文本推断（只产出 100 个）。
+    // 实测 1095132392645 有 44 色 × 8 码 = 352 个 SKU，页面 HTML 里也确实有 352 个 skuId。
+    // 提到 2000：本地生成组合，代价只是内存，不该在 200 就投降。
+    if (total <= 0 || total > 2000) return [];
 
     const rows = [];
     function walk(index, attrs, images) {
