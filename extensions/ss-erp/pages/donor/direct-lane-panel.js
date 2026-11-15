@@ -1308,7 +1308,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       //   产品级 —— 生成图补位。之前只传产品级，结果所有颜色共用同一套生成图（灰的）。
       images: [
         ...skus
-          .map((sku) => ({ scope: 'SKU', skuKey: sku.key, url: String(sku.imageUrl || '') }))
+    .map((sku) => {
+      // 颜色主图优先：采集没给每 SKU 图时，这是唯一能区分颜色的来源。
+      const colourValue = String(((lastWorkspaceForPlan && lastWorkspaceForPlan.values) || [])
+        .filter((row) => String(row.skuKey) === String(sku.key) && !row.__unresolved)
+        .map((row) => String(row.value || "").trim())
+        .find((value) => colourHeroMap.has(value)) || "");
+      const url = colourHeroMap.get(colourValue) || String(sku.imageUrl || "");
+      return { scope: 'SKU', skuKey: sku.key, url };
+    })
           .filter((one) => /^https:\/\//.test(one.url)),
         ...imagesForPlan(context).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
       ],
@@ -1739,6 +1747,48 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     return results;
   }
 
+  // 按颜色生成主图：1688 未登录时采集拿不到「颜色→图」，只能用生成补。
+  // 每个颜色出一张，作为该颜色所有 SKU 的首图——这样点绿色变体看到的就是绿色。
+  const colourHeroMap = new Map();
+  async function runColourHeroes() {
+    const workspace = lastWorkspaceForPlan;
+    if (!workspace) return { generated: 0 };
+    const colourField = (workspace.fields || []).find((field) => field
+      && /颜色|色彩/i.test(String(field.name || ""))
+      && String(field.ownership || "").toUpperCase() === "SKU");
+    const colourId = colourField ? Number(colourField.attributeId || colourField.id) : 0;
+    if (!colourId) return { generated: 0 };
+    const colours = [...new Set((workspace.values || [])
+      .filter((row) => Number(row.attributeId) === colourId && !row.__unresolved)
+      .map((row) => String(row.value || "").trim())
+      .filter(Boolean))];
+    if (colours.length < 2) return { generated: 0, colours: colours.length };
+    const limit = Math.min(colours.length, 8);
+    const context = getContext();
+    let generated = 0;
+    for (let index = 0; index < limit; index += 1) {
+      const colour = colours[index];
+      if (colourHeroMap.has(colour)) { generated += 1; continue; }
+      state.textContent = `颜色主图 ${index + 1}/${limit}：${colour}…`;
+      const prompt = [
+        "Studio product photograph of a woman wearing a long-sleeve half-turtleneck knit top.",
+        `The garment colour is exactly ${colour} and it must dominate the frame - a viewer must read the colour as ${colour} at a glance.`,
+        "Full front view, plain light background, garment occupying 70-80% of the frame, no text, no watermark, no pattern changes.",
+      ].join(" ");
+      try {
+        const result = await send("ss-erp:direct-image-generate", {
+          prompt,
+          inputImageUrls: (context.images || []).slice(0, 2),
+          timeoutMs: 180000,
+        });
+        const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
+        if (url) { colourHeroMap.set(colour, url); generated += 1; }
+      } catch (_error) { /* 单色失败不拖垮整批 */ }
+    }
+    globalThis.__SSERP_COLOUR_HEROES__ = Object.fromEntries(colourHeroMap);
+    return { generated, colours: colours.length };
+  }
+
   genImageBtn.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void runPlanImages(1).catch((error) => {
@@ -1823,6 +1873,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       await step(describeBtn, /视觉描述：/, /失败/, "1/5 视觉分析…", 300);
       await step(promptPlanBtn, /图片提示词：/, /失败/, "2/5 生成提示词…", 120);
       await step(genAllBtn, /生图完成/, /失败/, "3/5 生成图片…", 900);
+      // 多色商品先补每个颜色的主图，否则所有变体显示同一张（买家看到的都是灰的）。
+      state.textContent = "3.5/5 颜色主图…";
+      try {
+        const colourRun = await runColourHeroes();
+        if (colourRun && colourRun.generated) logLine(`颜色主图：${colourRun.generated}/${colourRun.colours} 个颜色`, "ok");
+      } catch (_error) { /* 颜色主图失败不阻断上架 */ }
       await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
       await step(publishBtn, /上架完成/, /失败|补齐/, "5/5 上架…", 1200);
     } catch (error) {
