@@ -1968,7 +1968,10 @@ if (Array.isArray(skuItems) && skuItems.length) {
     const colourName = colourProp ? String(colourProp.name || "颜色") : "颜色";
     skuItems = skuItems.map((item) => {
       const attrs = (item && item.attrs) || {};
-      const colour = String(attrs[colourName] || attrs["颜色"] || attrs["色彩"] || (item && item.color) || "").trim();
+        // 颜色取值三条路：attrs[颜色] → label 第一段（"藏蓝色 / S"）→ item.color。
+        const attrsColour = attrs[colourName] || attrs["颜色"] || attrs["色彩"] || "";
+        const labelColour = String((item && (item.name || item.label || item.spec)) || "").split("/")[0].trim();
+        const colour = String(attrsColour || labelColour || (item && item.color) || "").trim();
       const url = imageByColour.get(colour);
       if (!url) return item;
       const existing = String((item && (item.imageUrl || item.image)) || "");
@@ -2094,10 +2097,41 @@ if (Array.isArray(skuItems) && skuItems.length) {
           productId: coreResult.productId || "",
           shopName: coreResult.shopName || "",
           title: coreResult.title || "",
-          skuProps: (coreResult.rawSourceProduct && coreResult.rawSourceProduct.skuProps) || [],
+    // 桥接那份 skuProps 常常只剩一个颜色；文档里那份带全部颜色 + 每色图，颜色更多就用它。
+    skuProps: (() => {
+      const bridged = (coreResult.rawSourceProduct && coreResult.rawSourceProduct.skuProps) || [];
+      const fromDocument = parse1688SkuPropsFromDocument();
+      const colourCount = (list) => {
+        const prop = (list || []).find((one) => one && /颜色|色彩/i.test(String(one.name || "")));
+        return prop && Array.isArray(prop.values) ? prop.values.length : 0;
+      };
+      return colourCount(fromDocument) > colourCount(bridged) ? fromDocument : bridged;
+    })(),
           images: Array.isArray(coreResult.images) ? coreResult.images : [],
           detailImages: Array.isArray(coreResult.sourceDetailImages) ? coreResult.sourceDetailImages : [],
-          skuItems: Array.isArray(coreResult.skuItems) ? coreResult.skuItems : [],
+    // 每个 SKU 补上它自己颜色的图片（颜色名可能来自 attrs，也可能只在 label 里）。
+    skuItems: (() => {
+      const items = Array.isArray(coreResult.skuItems) ? coreResult.skuItems : [];
+      const fromDocument = parse1688SkuPropsFromDocument();
+      const colourProp = (fromDocument || []).find((one) => one && /颜色|色彩/i.test(String(one.name || "")));
+      if (!colourProp || !items.length) return items;
+      const imageByColour = new Map();
+      for (const value of colourProp.values || []) {
+        const name = String((value && value.name) || "").trim();
+        const url = String((value && value.imageUrl) || "").trim();
+        if (name && /^https?:\/\//.test(url)) imageByColour.set(name, url);
+      }
+      if (!imageByColour.size) return items;
+      return items.map((item) => {
+        const attrs = (item && item.attrs) || {};
+        const attrsColour = attrs[colourProp.name] || attrs["颜色"] || attrs["色彩"] || "";
+        const labelColour = String((item && (item.name || item.label || item.spec)) || "").split("/")[0].trim();
+        const colour = String(attrsColour || labelColour || "").trim();
+        const url = imageByColour.get(colour);
+        if (!url) return item;
+        return String(item.imageUrl || "") === url ? item : Object.assign({}, item, { imageUrl: url });
+      });
+    })(),
           attributes: Array.isArray(coreResult.attributes) ? coreResult.attributes : [],
           categoryPath: Array.isArray(coreResult.categoryPath) ? coreResult.categoryPath : [],
           dimensions: coreResult.dimensionsMm || { lengthMm: 0, widthMm: 0, heightMm: 0 },
@@ -2126,7 +2160,20 @@ if (Array.isArray(skuItems) && skuItems.length) {
     const productId = pickProductId([/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i], sources);
     const shopName = pick1688ShopName(sources);
     const title = pick1688StructuredTitle(sources, { platform: "1688", productId, shopName });
-    const skuProps = pick1688SkuProps(sources);
+    let skuProps = pick1688SkuProps(sources);
+  // 以「颜色维度更完整」的那份为准：未登录时 DOM 没色块，桥接那份常只剩一个颜色，
+  // 而 HTML 里的 skuProps 带全部颜色 + 每色图。比较后择优。
+  {
+    const fromDocument = parse1688SkuPropsFromDocument();
+    const colourCount = (list) => {
+      const prop = (list || []).find((one) => one && /颜色|色彩/i.test(String(one.name || "")));
+      return prop && Array.isArray(prop.values) ? prop.values.length : 0;
+    };
+    if (fromDocument.length && colourCount(fromDocument) > colourCount(skuProps)) {
+      skuProps = fromDocument;
+      globalThis.__SSERP_SKUPROPS_SOURCE__ = "document";
+    }
+  }
     const images = pick1688StructuredImages(sources, skuProps);
     const detailImages = pick1688DetailImages(sources);
     const skuItems = pick1688StructuredSkuItems(sources, skuProps);
@@ -2471,6 +2518,64 @@ if (Array.isArray(skuItems) && skuItems.length) {
     const price = Number(result && (result.priceCny || result.price));
     return Number.isFinite(price) && price > 0 ? roundMoney(price) : null;
   }
+
+// 1688 详情页把完整规格矩阵放在内嵌 JSON 里：
+//   "skuProps":[{"prop":"颜色","value":[{"name":"白色","imageUrl":"https://cbu01..."},...]}]
+// 未登录时页面不渲染 SKU 面板（DOM 里没有色块），但这份 JSON 仍在 HTML 里。
+// 之前只靠桥接层抓 sources，抓不到就退化成「全是白色」——这里直接扫文档兜底。
+function parse1688SkuPropsFromDocument() {
+  const texts = [];
+  try { texts.push(document.documentElement.innerHTML); } catch (_e) {}
+  try {
+    document.querySelectorAll("script").forEach((el) => {
+      const text = el.textContent || "";
+      if (text.includes("\"skuProps\"")) texts.push(text);
+    });
+  } catch (_e) {}
+  for (const text of texts) {
+    const at = String(text).indexOf("\"skuProps\":");
+    if (at < 0) continue;
+    const start = String(text).indexOf("[", at);
+    if (start < 0) continue;
+    let depth = 0;
+    let end = -1;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === "\"") inString = false;
+        continue;
+      }
+      if (ch === "\"") { inString = true; continue; }
+      if (ch === "[" || ch === "{") depth += 1;
+      else if (ch === "]" || ch === "}") {
+        depth -= 1;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end < 0) continue;
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (!Array.isArray(parsed) || !parsed.length) continue;
+      const props = parsed
+        .map((prop) => ({
+          name: String((prop && (prop.prop || prop.name)) || "").trim(),
+          values: ((prop && prop.value) || [])
+            .map((value) => ({
+              name: String((value && value.name) || "").trim(),
+              imageUrl: String((value && (value.imageUrl || value.image)) || "").trim(),
+            }))
+            .filter((value) => value.name),
+        }))
+        .filter((prop) => prop.name && prop.values.length);
+      if (props.length) return props;
+    } catch (_e) { /* 这段不是合法 JSON，继续找 */ }
+  }
+  return [];
+}
 
   function build1688SkuPropCombinations(skuProps, price) {
     return build1688SkuDimensionCombinations(skuProps, price, "skuPropsMatrix");

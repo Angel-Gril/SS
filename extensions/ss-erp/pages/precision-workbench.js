@@ -801,7 +801,15 @@ if (!mountDirectLane.panel) {
         const parts = String(key).split('|');
         const spec = parts.length > 1 ? parts[parts.length - 1].trim() : String(key);
         const hit = projection.skus.find((sku) => String(sku.label || '').trim() === spec);
-        return { key, label: hit ? hit.label : spec, cost: hit ? hit.priceCny : null };
+          // imageUrl 必须带出来：直连面板按颜色给变体配图就靠它（之前漏了，
+          // 导致 skus[].imageUrl 永远 undefined，所有变体只能共用产品级图）。
+          return {
+            key,
+            label: hit ? hit.label : spec,
+            cost: hit ? hit.priceCny : null,
+            imageUrl: (hit && (hit.imageUrl || hit.sourceImageUrl || hit.skuImageUrl))
+              || (Array.isArray(hit && hit.images) ? hit.images[0] : '') || '',
+          };
       })
       : projection.skus.map((sku) => ({ key: sku.key, label: sku.label, cost: sku.priceCny }));
     const images = (projection.media || []).map((item) => {

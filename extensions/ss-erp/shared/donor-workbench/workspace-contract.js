@@ -121,6 +121,18 @@ var MAX_SKUS = 2000;
   }
 
   function skuRows(product, capture, displayRows) {
+    // collector 的 skuItems 带「每 SKU 颜色图」，但 capture.skus 没有。
+    // 用标签建索引，供下面按 label 兜底取图。
+    var imageByLabel = {};
+    (Array.isArray(product && product.skuItems) ? product.skuItems : []).forEach(function (it) {
+      if (!it) return;
+      var url = it.imageUrl || it.image || (Array.isArray(it.images) ? it.images[0] : '');
+      var label = String(it.name || it.label || it.spec || '').trim();
+      if (url && label && !imageByLabel[label]) imageByLabel[label] = url;
+      // 归一化键："白色 / S" 与 "白色/S" 必须命中同一项
+      var normLabel = String(label).replace(/\\s+/g, '').toLowerCase();
+      if (url && normLabel && !imageByLabel[normLabel]) imageByLabel[normLabel] = url;
+    });
     var source = Array.isArray(capture && capture.skus) && capture.skus.length
       ? capture.skus
       : Array.isArray(product && product.variants) && product.variants.length
@@ -145,7 +157,8 @@ var MAX_SKUS = 2000;
           return media.disposition === 'accepted' && media.role !== 'video'
             && ((Array.isArray(item.mediaKeys) && item.mediaKeys.includes(media.key))
               || (Array.isArray(media.skuKeys) && media.skuKeys.includes(key)));
-        }) || {}).url;
+        }) || {}).url
+      || imageByLabel[String(item.label || item.name || item.spec || '').replace(/\\s+/g, '').toLowerCase()];
       var stored = (displayRows || []).find(function (row) {
         return row.sourceUrl === sourceImageUrl && Array.isArray(capture.media) && capture.media.some(function (media) {
           return media.key === row.key && media.disposition === 'accepted'
