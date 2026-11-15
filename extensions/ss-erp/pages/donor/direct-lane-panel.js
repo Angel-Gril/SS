@@ -725,6 +725,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
    *   1) 归一化全等  2) 互相包含  3) 首字相同  4) 前两字相同
    * 与商品无关，任何类目都能用。
    */
+  // 兜底写入前先清掉该属性上的「未解析占位行」：否则 attributeMapFor 仍会看到那一行，
+  // 预检照样报「字典没解析到属性 10096, 9163」。
+  function replaceUnresolved(workspace, attributeId) {
+    workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === Number(attributeId) && row.__unresolved));
+  }
+
   function matchDictionaryValue(list, text) {
     const rows = Array.isArray(list) ? list : [];
     const norm = (value) => String(value || '').toLowerCase().replace(/[\s\-_,.()]/g, '');
@@ -758,7 +764,10 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       } catch (_error) { list = []; }
       // 网关可能无视 limit 返回上千条；大列表上的模糊匹配会把渲染线程堵死（实测 180s+）
       if (list.length > 400) list = list.slice(0, 400);
-      dictCache.set(id, list);
+  // 只缓存「拿到了值」的结果：空结果缓存 + 熔断组合起来会把字典永久判死，
+  // 表现就是换个类目后报「字典没解析到属性 10096, 9163」。
+  if (list.length) { dictCache.set(id, list); dictFailures = 0; }
+  return list;
       return list;
     };
     const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: category.categoryId, typeId: category.typeId });
@@ -843,8 +852,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         const map = (response && response.values) || {};
         for (const id of need) {
           const list = Array.isArray(map[id]) ? map[id].slice(0, 400) : [];
-          if (!list.length) dictFailures += 1;
-          dictCache.set(Number(id), list);
+        if (!list.length) continue;   // 空结果不缓存、不计熔断（下次还能重试）
+        dictFailures = 0;
+        dictCache.set(Number(id), list);
         }
         globalThis.__SSERP_DICT_BATCH__ = { need: need.length, ms: Date.now() - started };
       }
@@ -983,6 +993,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const genderId = genderField ? Number(genderField.attributeId || genderField.id) : 0;
       if (genderId) {
         const hasGender = (workspace.values || []).some((row) => Number(row.attributeId) === genderId
+          && !row.__unresolved
           && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
         if (!hasGender) {
           const titleText = String(context.sourceTitle || "");
@@ -995,6 +1006,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
             const chosen = matchDictionaryValue(list, guessRu) || pickDictionaryValue(list, "fuzzy", guessRu, {});
             if (chosen) {
               for (const sku of skus) {
+              replaceUnresolved(workspace, genderId);
                 workspace.values.push({ attributeId: genderId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
               }
               globalThis.__SSERP_GENDER_FALLBACK__ = { from: "title", value: chosen.value };
@@ -1009,6 +1021,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const colorId = colorField ? Number(colorField.attributeId || colorField.id) : 0;
       if (colorId) {
         const hasColor = ((workspace && workspace.values) || []).some((row) => Number(row.attributeId) === colorId
+          && !row.__unresolved
           && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
         if (!hasColor) {
       const sourceText = [context.sourceTitle, context.description, lastVisionText, ...(skus || []).map((sku) => sku.label)].join(" ");
@@ -1033,6 +1046,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
                   const hit = matchDictionaryValue(list, ownColours[0]) || pickDictionaryValue(list, 'fuzzy', ownColours[0], {});
                   if (hit) perSku = hit;
                 }
+              replaceUnresolved(workspace, colorId);
                 workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(perSku.value || ''), dictionaryValueIds: [perSku.id] });
               }
               globalThis.__SSERP_COLOR_FALLBACK__ = { from: "text", candidates, value: chosen.value };
@@ -1390,11 +1404,11 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       // 防回归：多颜色变体却共用同一套图 —— 之前就是这样，所有颜色都显示灰的那张。
       // 只要存在 ≥2 个不同颜色，就要求每个 SKU 的首图不同，否则直接拦下。
       {
-        const colourField = (workspace.fields || []).find((f) => /颜色|色彩/i.test(String(f.name || ""))
+        const colourField = ((lastWorkspaceForPlan && lastWorkspaceForPlan.fields) || []).find((f) => /颜色|色彩/i.test(String(f.name || ""))
           && String(f.ownership || "").toUpperCase() === "SKU");
         const colourId = colourField ? Number(colourField.attributeId || colourField.id) : 0;
         if (colourId) {
-          const colours = new Set((workspace.values || [])
+          const colours = new Set(((lastWorkspaceForPlan && lastWorkspaceForPlan.values) || [])
             .filter((row) => Number(row.attributeId) === colourId)
             .map((row) => String((row.dictionaryValueIds || [])[0] || row.value || "").trim())
             .filter(Boolean));
