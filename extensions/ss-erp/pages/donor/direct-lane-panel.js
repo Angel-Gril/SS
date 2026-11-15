@@ -33,6 +33,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         --ssdl-warn: #b7791f; --ssdl-bg: #fff;
         font-size: 13px; color: var(--ssdl-text);
       }
+      [data-direct-lane] .ssdl-scroll {
+        max-height: 62vh; overflow: auto; padding-right: 4px;
+      }
       [data-direct-lane] .ssdl-card {
       display: block !important; width: auto;
         border: 1px solid var(--ssdl-line); border-radius: 12px;
@@ -44,6 +47,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         letter-spacing: .04em; margin-bottom: 8px; text-transform: none;
       }
       [data-direct-lane] .ssdl-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      /* 输入区：label 在上、控件在下，按容器宽度自动分列，避免挤成一条 */
+      [data-direct-lane] .precision-local-fields {
+        display: grid !important; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 10px 14px !important; align-items: end;
+      }
+      [data-direct-lane] .precision-local-fields > label {
+        display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+        color: var(--ssdl-muted); min-width: 0;
+      }
+      [data-direct-lane] .precision-local-fields > label > input,
+      [data-direct-lane] .precision-local-fields > label > select {
+        width: 100% !important; box-sizing: border-box;
+      }
+      /* 按钮行跨满整行，不要占栅格单元（否则会挤成一列） */
+      [data-direct-lane] .precision-local-fields > .ssdl-buttons {
+        grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      }
+      [data-direct-lane] .precision-local-fields > .ssdl-buttons > button { width: auto; }
       [data-direct-lane] .ssdl-pill {
         display: inline-flex; align-items: center; min-height: 22px; padding: 0 10px;
         border-radius: 999px; font-size: 12px; line-height: 1.4;
@@ -104,14 +125,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   skuLimitInput.style.width = '70px';
   skuLimitWrap.append(skuLimitInput);
   // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
-  const catWrap = make('label', '', '类目 ');
+  const catWrap = make('label', '', '类目（自动识别）');
   const catIdInput = make('input');
   catIdInput.type = 'number';
-  catIdInput.placeholder = 'categoryId';
+  catIdInput.placeholder = '自动识别';
   catIdInput.style.width = '110px';
   const typeIdInput = make('input');
   typeIdInput.type = 'number';
-  typeIdInput.placeholder = 'typeId';
+  typeIdInput.placeholder = '自动识别';
   typeIdInput.style.width = '100px';
   catWrap.append(catIdInput, typeIdInput);
   const weightInput = mkNumber('重量 g', '250', { step: '10', min: '1' });
@@ -124,8 +145,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   warehouseWrap.append(warehouse);
   const applyMultiplier = make('button', 'ghost', '按倍率填价');
   const autoPricing = make('button', 'ghost', '按成本自动定价');
-  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, applyMultiplier, autoPricing, stockInput.wrap,
-    weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap, refreshWarehouses);
+  // 输入与动作分开：动作按钮单独一行，别占栅格单元（截图里会把输入挤歪）。
+  const toolbarButtons = make('div', 'ssdl-buttons');
+  toolbarButtons.append(applyMultiplier, autoPricing, refreshWarehouses);
+  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
+    weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap);
+  toolbar.append(toolbarButtons);
 
   const copyRow = make('div', 'precision-local-fields');
   const titleWrap = make('label', '', '俄文标题 ');
@@ -145,7 +170,10 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   descInput.placeholder = '（可留空）';
   descInput.style.minWidth = '360px';
   descWrap.append(descInput);
-  copyRow.append(titleWrap, generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn, descWrap);
+  // 文案按钮单独成行，避免和输入框抢栅格单元（截图里挤在左侧）
+  const copyButtons = make('div', 'ssdl-buttons');
+  copyButtons.append(generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn);
+  copyRow.append(titleWrap, descWrap, copyButtons);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
   // 留空就用规则生成；填了 key 就优先用模型（阿里 DashScope compatible-mode 已预填）。
@@ -293,7 +321,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // busy 卡死自愈：异常路径没走到 busy=false 时（实测踩过），10 分钟后自动放行
   let busySince = 0;
   const claimBusy = () => {
-    if (busy && Date.now() - busySince > 600000) busy = false;
+    if (busy && Date.now() - busySince > 120000) busy = false;
     if (busy) return false;
     busy = true;
     busySince = Date.now();
@@ -310,6 +338,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     try {
       precheck.disabled = false;
       publishBtn.disabled = false;
+      oneClickBtn.disabled = false;
+      restockBtn.disabled = false;
+      globalThis.__SSERP_STATUS_BEAT__ = Date.now();
       state.textContent = "上一个操作超过 3 分钟未返回，已解锁；失败请重试";
     } catch (_e) { /* 面板可能已销毁 */ }
   }, 5000);
