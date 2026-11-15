@@ -1710,7 +1710,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
           prompt: String(slot.prompt || '').slice(0, 120),
         }));
         output.textContent = JSON.stringify({ parsed: result.parsed, heroes: (result.plan.skuHeroPlans || []).length, slots }, null, 2).slice(0, 3000);
-        state.textContent = `图片提示词：${slots.length} 个详情槽位 + ${(result.plan.skuHeroPlans || []).length} 个主图`;
+        const imagePlan = computeImagePlan(getContext());
+      state.textContent = `图片计划：${imagePlan.gallery} 张详情 + ${imagePlan.heroes} 张颜色主图（共 ${imagePlan.total} 张，${imagePlan.colourCount} 个颜色）`;
       } catch (error) {
         state.textContent = `提示词规划失败：${String((error && error.message) || error).slice(0, 180)}`;
         report?.(error);
@@ -1729,7 +1730,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (slot && slot.prompt) slots.push({ goalType: slot.goalType || slot.slotId, prompt: slot.prompt });
     }
     if (!slots.length) throw new Error('计划里没有可用提示词');
-    const chosen = slots.slice(0, Math.max(1, limit));
+  const chosen = slots.slice(0, Math.max(1, limit));
     const results = [];
     lastImageResults = results;   // 增量保存：中途失败也能把已成功的图回灌 listing
     for (let index = 0; index < chosen.length; index += 1) {
@@ -1767,6 +1768,23 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
   // 按颜色生成主图：1688 未登录时采集拿不到「颜色→图」，只能用生成补。
   // 每个颜色出一张，作为该颜色所有 SKU 的首图——这样点绿色变体看到的就是绿色。
+  // 图片数量不是固定 8 张。参考实现的规则：
+  //   精铺 PROMPT_PLAN_SHARED_GALLERY_COUNT = 7（7 张共享详情）+ 每个 SKU 一张 hero
+  //   知了 aiSharedGalleryImageCount 默认 7，且是按参数传的
+  // 我们按「详情 7 张 + 每个颜色 1 张主图」算，总数封顶 Ozon 的 15 张。
+  const OZON_MAX_IMAGES = 15;
+  const SHARED_GALLERY_COUNT = 7;
+  function computeImagePlan(context) {
+    const skus = (context && context.skus) || [];
+    const colours = [...new Set(skus
+      .map((sku) => String(sku.label || "").split("/")[0].trim())
+      .filter(Boolean))];
+    const colourCount = Math.max(1, colours.length);
+    const heroes = Math.min(colourCount, 8, OZON_MAX_IMAGES - 1);
+    const gallery = Math.min(SHARED_GALLERY_COUNT, OZON_MAX_IMAGES - heroes);
+    return { heroes, gallery, total: heroes + gallery, colourCount };
+  }
+
   const colourHeroMap = new Map();
   async function runColourHeroes() {
     const workspace = lastWorkspaceForPlan;
@@ -1781,7 +1799,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       .map((row) => String(row.value || "").trim())
       .filter(Boolean))];
     if (colours.length < 2) return { generated: 0, colours: colours.length };
-    const limit = Math.min(colours.length, 8);
+    const planned = computeImagePlan(getContext());
+    const limit = Math.min(colours.length, planned.heroes);
     const context = getContext();
     let generated = 0;
     for (let index = 0; index < limit; index += 1) {
@@ -1816,7 +1835,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   });
   genAllBtn.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
-    void runPlanImages(8).catch((error) => {
+    void runPlanImages(computeImagePlan(getContext()).gallery + 1).catch((error) => {
       state.textContent = `生图失败：${String((error && error.message) || error).slice(0, 200)}`;
       report?.(error);
     });
@@ -1888,8 +1907,14 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       throw new Error(label + " 超时");
     };
     try {
-      await step(describeBtn, /视觉描述：/, /失败/, "1/5 视觉分析…", 300);
-      await step(promptPlanBtn, /图片提示词：/, /失败/, "2/5 生成提示词…", 120);
+      // 视觉是增强项，不是必须项：模型偶发不返回时不能把整条链卡死，
+      // 属性有颜色/性别/标题兜底，缺了视觉仍然能出单。
+      try {
+        await step(describeBtn, /视觉描述：/, /失败/, "1/5 视觉分析…", 150);
+      } catch (visionError) {
+        logLine("视觉分析未返回，按规则继续：" + String((visionError && visionError.message) || visionError).slice(0, 60), "warn");
+      }
+      await step(promptPlanBtn, /图片计划：|图片提示词：/, /失败/, "2/5 生成提示词…", 120);
       await step(genAllBtn, /生图完成/, /失败/, "3/5 生成图片…", 900);
       // 多色商品先补每个颜色的主图，否则所有变体显示同一张（买家看到的都是灰的）。
       state.textContent = "3.5/5 颜色主图…";
