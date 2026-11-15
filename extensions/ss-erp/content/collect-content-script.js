@@ -1925,6 +1925,57 @@
       skuItems = infer1688SkuItemsFromText(context, result, structured.attributes, structured.skuProps);
     }
     if (!skuItems.length && !structured.fromCore) skuItems = filter1688SkuItems(result.skuItems);
+// 每个 SKU 带上它自己颜色的图片。
+// 参考实现（精铺 jp20260803 adapter_1688.js）的做法：从「颜色色块 DOM」取图，
+// 再做颜色 × 尺码的笛卡尔积，每行 sku_image_url = 该颜色的图。
+// 我们之前只读内嵌 JSON 的 skuProps.value.imageUrl，那个数据经常是空的，
+// 结果所有变体共用一套产品级图（每个颜色看起来都一样）。
+if (Array.isArray(skuItems) && skuItems.length) {
+  const imageByColour = new Map();
+  // 源 1：内嵌 JSON 的 skuProps.value.imageUrl
+  const props = Array.isArray(structured && structured.skuProps) ? structured.skuProps : [];
+  const colourProp = props.find((prop) => prop && /颜色|色彩|color/i.test(String(prop.name || "")));
+  if (colourProp && Array.isArray(colourProp.values)) {
+    for (const value of colourProp.values) {
+      const name = String((value && value.name) || "").trim();
+      const url = String((value && value.imageUrl) || "").trim();
+      if (name && /^https?:\/\//.test(url)) imageByColour.set(name, url);
+    }
+  }
+  // 源 2（兜底）：DOM 色块，选择器与精铺一致
+  if (!imageByColour.size) {
+    const swatchSelectors = [
+      ".sku-prop-module .prop-item-inner-wrapper",
+      ".pc-sku-wrapper .prop-item-inner-wrapper",
+      "[class*=prop-item-inner-wrapper]",
+    ];
+    for (const selector of swatchSelectors) {
+      document.querySelectorAll(selector).forEach((el) => {
+        const nameEl = el.querySelector(".prop-name");
+        const name = String((nameEl && (nameEl.getAttribute("title") || nameEl.textContent)) || "").trim();
+        const imgEl = el.querySelector(".prop-img") || el.querySelector("img");
+        const raw = imgEl
+          ? String((imgEl.style && imgEl.style.backgroundImage) || imgEl.getAttribute("src") || "")
+          : "";
+        const match = raw.match(/url\(["']?([^"')]+)["']?\)/i);
+        const url = String((match && match[1]) || raw || "").replace(/_sum\.jpg$/i, "");
+        if (name && /^https?:\/\//.test(url)) imageByColour.set(name, url);
+      });
+      if (imageByColour.size) break;
+    }
+  }
+  if (imageByColour.size) {
+    const colourName = colourProp ? String(colourProp.name || "颜色") : "颜色";
+    skuItems = skuItems.map((item) => {
+      const attrs = (item && item.attrs) || {};
+      const colour = String(attrs[colourName] || attrs["颜色"] || attrs["色彩"] || (item && item.color) || "").trim();
+      const url = imageByColour.get(colour);
+      if (!url) return item;
+      const existing = String((item && (item.imageUrl || item.image)) || "");
+      return existing === url ? item : { ...item, imageUrl: url };
+    });
+  }
+}
     const selectedSku = skuItems.length || !structured.fromCore || is1688SelectedPriceContext(result)
       ? pick1688SelectedSku(context, skuItems, result.selectedSku)
       : null;

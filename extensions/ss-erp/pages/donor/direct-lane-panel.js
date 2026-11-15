@@ -1213,6 +1213,27 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (!generatedReady.length) {
         throw new Error("还没有 AI 生成图：直连上架会退回 1688 原图（带中文水印）。先在「生图」里出图，再发布。");
       }
+      // 防回归：多颜色变体却共用同一套图 —— 之前就是这样，所有颜色都显示灰的那张。
+      // 只要存在 ≥2 个不同颜色，就要求每个 SKU 的首图不同，否则直接拦下。
+      {
+        const colourField = (workspace.fields || []).find((f) => /颜色|色彩/i.test(String(f.name || ""))
+          && String(f.ownership || "").toUpperCase() === "SKU");
+        const colourId = colourField ? Number(colourField.attributeId || colourField.id) : 0;
+        if (colourId) {
+          const colours = new Set((workspace.values || [])
+            .filter((row) => Number(row.attributeId) === colourId)
+            .map((row) => String((row.dictionaryValueIds || [])[0] || row.value || "").trim())
+            .filter(Boolean));
+          if (colours.size >= 2) {
+            const firsts = (merged.items || []).map((item) => String((item.images || [])[0] || ""));
+            const distinct = new Set(firsts.filter(Boolean));
+            if (distinct.size < colours.size) {
+              throw new Error(`变体图未按颜色区分：${colours.size} 个颜色但只有 ${distinct.size} 张不同的首图。`
+                + "每个 SKU 的首图必须是它自己的颜色图（1688 原图），否则买家看到的全是一个颜色。");
+            }
+          }
+        }
+      }
       const items = merged.items.map((item) => ({
         offerId: item.offerId,
         name: item.name,
