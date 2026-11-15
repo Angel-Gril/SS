@@ -1084,7 +1084,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       workspace,
       offerBase: context.offerBase,
       // 生成图优先（主图在最前），源图补位 —— 生图链路的结果在这里回灌 listing
-      images: imagesForPlan(context).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
+      // 图片分两级：
+      //   SKU 级 —— 该颜色自己在 1688 的原图，放在最前，变体切换时看到的就是这个颜色的商品；
+      //   产品级 —— 生成图补位。之前只传产品级，结果所有颜色共用同一套生成图（灰的）。
+      images: [
+        ...skus
+          .map((sku) => ({ scope: 'SKU', skuKey: sku.key, url: String(sku.imageUrl || '') }))
+          .filter((one) => /^https:\/\//.test(one.url)),
+        ...imagesForPlan(context).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
+      ],
       defaults: { currency: 'CNY', vat: '0' },
     });
     plan.items.forEach((item, index) => {
