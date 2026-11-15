@@ -385,7 +385,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
             const typeId = Number(leaf.type_id);
             const zhName = String(leaf.type_name || "").trim();
             const categoryId = Number(cat.description_category_id || cat.category_id) || 0;
-            if (typeId && zhName) zhList.push({ typeId, zhName, categoryId });
+            const topName = String(top.category_name || "").trim();
+            if (typeId && zhName) zhList.push({ typeId, zhName, categoryId, topName });
           }
         }
       }
@@ -415,12 +416,29 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (exact) return exact;
       const contains = list.find((one) => one.typeName.length >= 3 && needle.includes(one.typeName.toLowerCase()));
       if (contains) return contains;
-      // 中文：选标题里出现、且类型名长度最大的那个（毛衣 > 衣）
-      let best = null;
+      // 中文匹配：标题里出现、类型名最长的优先。
+      // 但必须限定「服装」大类——否则「蝴蝶结」这种配饰词会把类目带到 Бабочка（领结）。
+      const matches = [];
       for (const one of zhList || []) {
         const name = String(one.zhName || "").trim();
         if (name.length < 2 || !raw.includes(name)) continue;
-        if (!best || name.length > best.zhName.length) best = one;
+        matches.push(one);
+      }
+      if (!matches.length) return null;
+      const isApparel = (one) => /服饰|服装|女装|男装|衣着|内衣/.test(String(one.topName || ""));
+      const apparel = matches.filter(isApparel);
+      const pool = apparel.length ? apparel : matches;
+      let best = null;
+      // 同长度时取标题里更靠后的（中文标题中心词通常在末尾），
+      // 并把「蝴蝶 / 蕾丝」这类修饰词压到后面（它们是装饰，不是品类）。
+      const scoreOf = (one) => {
+        const name = String(one.zhName || "");
+        const at = raw.lastIndexOf(name);
+        const modifierPenalty = /蝴蝶|蕾丝|花边|绣花/.test(name) ? -1000 : 0;
+        return name.length * 100 + at + modifierPenalty;
+      };
+      for (const one of pool) {
+        if (!best || scoreOf(one) > scoreOf(best)) best = one;
       }
       if (!best) return null;
       const ru = list.find((one) => one.typeId === best.typeId);
