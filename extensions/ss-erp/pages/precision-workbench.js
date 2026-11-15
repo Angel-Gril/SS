@@ -811,7 +811,13 @@ if (!mountDirectLane.panel) {
               || (Array.isArray(hit && hit.images) ? hit.images[0] : '') || '',
           };
       })
-      : projection.skus.map((sku) => ({ key: sku.key, label: sku.label, cost: sku.priceCny }));
+      // 没有 ERP 选中项时走这里——同样必须带 imageUrl，否则变体又只能共用产品图。
+      : projection.skus.map((sku) => ({
+        key: sku.key,
+        label: sku.label,
+        cost: sku.priceCny,
+        imageUrl: sku.imageUrl || sku.sourceImageUrl || (Array.isArray(sku.images) ? sku.images[0] : '') || '',
+      }));
     const images = (projection.media || []).map((item) => {
       const tail = String(item.key || '').split('|').pop();
       return /^https:\/\//.test(tail) ? tail : '';
@@ -1718,6 +1724,7 @@ function renderSourceDiagnostics() {
   if (element('process-modal').hidden || sourceDiagnosticsProjection === projection) return;
   element('source-output').textContent = JSON.stringify(Workflow.toDonorData(projection), null, 2);
   sourceDiagnosticsProjection = projection;
+  globalThis.__SSERP_PROJECTION__ = projection;
 }
 // 直连面板的持有者：必须在渲染函数**外面**，否则每次 render 都是新对象，
 // 面板照样被重建（这个坑我刚踩过：holder 写在 renderEditor 里，等于没修）。
@@ -2451,6 +2458,7 @@ window.addEventListener('message', (event) => {
       unsavedListingFields.clear(); publishEditRevision += 1; invalidatePublishPreview('来源商品已变化，请重新预览上传。');
     }
     projection = Contract.parseProjection(event.data.projection);
+  globalThis.__SSERP_PROJECTION__ = projection;   // 诊断用：临时暴露
     sourceReady = Boolean(projection.source.sourceProductId && projection.skus.length);
     void erpEntry.accept(event.data.entryContext);
     render();
