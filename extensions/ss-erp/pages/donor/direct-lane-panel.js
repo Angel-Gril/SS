@@ -324,26 +324,77 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   // 类目类型名的俄文写法：类目树用中文查（ZH_HANS）拿到的是「T恤」，拼进俄文标题会变成 "T женский…"。
   // 这里按 type_id 反查俄文名并缓存，标题一律用俄文名词。
   let russianTypeNameCache = null;
+  let ozonTypeListCache = null;
+  let ozonTypeZhCache = null;
+  // 拉一次类目树（俄文名），缓存 typeId → 名称 与完整类型表。
+  async function loadOzonTypes() {
+    if (russianTypeNameCache && ozonTypeListCache) return { byId: russianTypeNameCache, list: ozonTypeListCache };
+    const byId = new Map();
+    const list = [];
+    const zhList = [];
+    const ruTree = await send('ss-erp:direct-ozon-post', { path: '/v1/description-category/tree', body: { language: 'DEFAULT' } });
+    for (const top of (ruTree && ruTree.result) || []) {
+      for (const cat of (top.children || [])) {
+        for (const leaf of (cat.children || [])) {
+          const typeId = Number(leaf.type_id);
+          const typeName = String(leaf.type_name || "").trim();
+          const categoryId = Number(cat.description_category_id || cat.category_id) || 0;
+          if (!typeId || !typeName) continue;
+          byId.set(typeId, typeName);
+          list.push({ typeId, typeName, categoryId });
+        }
+      }
+    }
+    // 中文树：用来匹配中文商品标题（俄文树匹配不到中文）
+    try {
+      const zhTree = await send('ss-erp:direct-ozon-post', { path: '/v1/description-category/tree', body: { language: 'ZH_HANS' } });
+      for (const top of (zhTree && zhTree.result) || []) {
+        for (const cat of (top.children || [])) {
+          for (const leaf of (cat.children || [])) {
+            const typeId = Number(leaf.type_id);
+            const zhName = String(leaf.type_name || "").trim();
+            const categoryId = Number(cat.description_category_id || cat.category_id) || 0;
+            if (typeId && zhName) zhList.push({ typeId, zhName, categoryId });
+          }
+        }
+      }
+    } catch (_e) { /* 中文树拿不到就只用俄文 */ }
+    russianTypeNameCache = byId;
+    ozonTypeListCache = list;
+    ozonTypeZhCache = zhList;
+    return { byId, list, zhList };
+  }
   async function russianTypeName(typeId) {
     const target = Number(typeId) || 0;
     if (!target) return "";
     try {
-      if (!russianTypeNameCache) {
-        const tree = await send('ss-erp:direct-ozon-post', { path: '/v1/description-category/tree', body: { language: 'DEFAULT' } });
-        const map = new Map();
-        for (const top of (tree && tree.result) || []) {
-          for (const cat of (top.children || [])) {
-            for (const leaf of (cat.children || [])) {
-              const id = Number(leaf.type_id);
-              const name = String(leaf.type_name || "").trim();
-              if (id && name) map.set(id, name);
-            }
-          }
-        }
-        russianTypeNameCache = map;
-      }
-      return String(russianTypeNameCache.get(target) || "");
+      const { byId } = await loadOzonTypes();
+      return String(byId.get(target) || "");
     } catch (_e) { return ""; }
+  }
+  // 从文本（视觉报告的类型名 / 商品标题）猜类目：优先俄文类型名精确/包含匹配。
+  // 从文本猜类目：俄文类型名精确/包含优先；中文标题按「类型名覆盖度」打分。
+  async function resolveCategoryFromText(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    const needle = raw.toLowerCase();
+    try {
+      const { list, zhList } = await loadOzonTypes();
+      const exact = list.find((one) => one.typeName.toLowerCase() === needle);
+      if (exact) return exact;
+      const contains = list.find((one) => one.typeName.length >= 3 && needle.includes(one.typeName.toLowerCase()));
+      if (contains) return contains;
+      // 中文：选标题里出现、且类型名长度最大的那个（毛衣 > 衣）
+      let best = null;
+      for (const one of zhList || []) {
+        const name = String(one.zhName || "").trim();
+        if (name.length < 2 || !raw.includes(name)) continue;
+        if (!best || name.length > best.zhName.length) best = one;
+      }
+      if (!best) return null;
+      const ru = list.find((one) => one.typeId === best.typeId);
+      return { typeId: best.typeId, categoryId: best.categoryId, typeName: (ru && ru.typeName) || best.zhName };
+    } catch (_e) { return null; }
   }
   let lastImageResults = [];     // 本轮生成结果 [{goalType,url,elapsedMs}]
   // 类目 ID → 俄文类型名（标题规则需要它；context.category 在无草稿时为空）
@@ -891,6 +942,20 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     // 只靠 ERP 会缺项（草稿经常只剩 2 个属性 → REQUIRED_ATTRIBUTES），
     // 只靠规则又会丢掉卖家在 ERP 里手工改过的值。
     // 类目优先级：面板手填 > 工作区 > 缓存（新商品常常三者只剩手填）
+    // 类目自动识别：手填优先；没填就用视觉报告的「类型」去类目树里找，再退回标题关键词。
+    // 这样「一键上架」只需要货号前缀 + 成本两个输入。
+    if (!(Number(catIdInput.value) > 0 && Number(typeIdInput.value) > 0)) {
+      const visionType = String(((lastVisionReport || {})["属性观察"] || {})["类型"] || "").trim();
+      const guessed = (await resolveCategoryFromText(visionType))
+        || (await resolveCategoryFromText(context.sourceTitle))
+        || null;
+      if (guessed) {
+        catIdInput.value = String(guessed.categoryId);
+        typeIdInput.value = String(guessed.typeId);
+        state.textContent = `类目自动识别：${guessed.typeName}（${guessed.categoryId}/${guessed.typeId}）`;
+        globalThis.__SSERP_AUTO_CATEGORY__ = guessed;
+      }
+    }
     const typedCategoryId = Number(catIdInput.value) || 0;
     const typedTypeId = Number(typeIdInput.value) || 0;
     const category = typedCategoryId > 0 && typedTypeId > 0
@@ -911,6 +976,33 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
     // 颜色兜底（与商品无关）：视觉报告解析失败时，从采集到的标题/描述里取颜色。
     // 之前颜色只能来自视觉，模型一次输出格式不对，整条商品就缺颜色、预检不过。
+    // 性别兜底：视觉报告缺「属性观察」时，从中文标题判断（女/男/童）。
+    // 与颜色兜底同理，避免换个类目就因为缺 9163 卡住预检。
+    {
+      const genderField = (workspace.fields || []).find((field) => field && /性别|пол/i.test(String(field.name || "")));
+      const genderId = genderField ? Number(genderField.attributeId || genderField.id) : 0;
+      if (genderId) {
+        const hasGender = (workspace.values || []).some((row) => Number(row.attributeId) === genderId
+          && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
+        if (!hasGender) {
+          const titleText = String(context.sourceTitle || "");
+          const guessRu = /女/.test(titleText) ? "женский" : (/男/.test(titleText) ? "мужской" : "");
+          if (guessRu) {
+            const listed = await send("ss-erp:direct-ozon-attribute-values", {
+              categoryId: category.categoryId, typeId: category.typeId, attributeIds: [genderId], query: "", limit: 100, language: "DEFAULT",
+            }).catch(() => null);
+            const list = (listed && listed.values && listed.values[genderId]) || [];
+            const chosen = matchDictionaryValue(list, guessRu) || pickDictionaryValue(list, "fuzzy", guessRu, {});
+            if (chosen) {
+              for (const sku of skus) {
+                workspace.values.push({ attributeId: genderId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
+              }
+              globalThis.__SSERP_GENDER_FALLBACK__ = { from: "title", value: chosen.value };
+            }
+          }
+        }
+      }
+    }
     {
       const colorField = ((workspace && workspace.fields) || []).find((field) => field &&
         /颜色|色彩/.test(String(field.name || "")) && String(field.ownership || "").toUpperCase() === "SKU");
