@@ -23,6 +23,46 @@ import { pickUsableWarehouse, setStocks, waitForProducts } from '../../shared/oz
  *      （/v1 已废弃）。
  */
 export function createDirectLanePanel({ root, make, send, getContext, status, report, onPublished }) {
+  // 视觉规范对齐参考实现（jp panel.html）：设计 token + 卡片 + status-pill + 进程日志。
+  try {
+    const style = document.createElement('style');
+    style.textContent = `
+      [data-direct-lane] {
+        --ssdl-line: #dbe3ef; --ssdl-brand: #0068ff; --ssdl-text: #16202a;
+        --ssdl-muted: #64748b; --ssdl-ok: #118a57; --ssdl-err: #c93d4b;
+        --ssdl-warn: #b7791f; --ssdl-bg: #fff;
+        font-size: 13px; color: var(--ssdl-text);
+      }
+      [data-direct-lane] .ssdl-card {
+        border: 1px solid var(--ssdl-line); border-radius: 12px;
+        background: var(--ssdl-bg); padding: 10px 12px; margin-bottom: 10px;
+      }
+      [data-direct-lane] .ssdl-card-title {
+        font-weight: 600; font-size: 12px; color: var(--ssdl-muted);
+        letter-spacing: .04em; margin-bottom: 8px; text-transform: none;
+      }
+      [data-direct-lane] .ssdl-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      [data-direct-lane] .ssdl-pill {
+        display: inline-flex; align-items: center; min-height: 22px; padding: 0 10px;
+        border-radius: 999px; font-size: 12px; line-height: 1.4;
+        background: #f1f5f9; color: var(--ssdl-muted); border: 1px solid var(--ssdl-line);
+        max-width: 100%; word-break: break-word;
+      }
+      [data-direct-lane] .ssdl-pill[data-tone="ok"] { background: #e8f7ef; color: var(--ssdl-ok); border-color: #bfe8d4; }
+      [data-direct-lane] .ssdl-pill[data-tone="err"] { background: #fdecef; color: var(--ssdl-err); border-color: #f6c9d0; }
+      [data-direct-lane] .ssdl-pill[data-tone="warn"] { background: #fdf6e7; color: var(--ssdl-warn); border-color: #f0dfb5; }
+      [data-direct-lane] .ssdl-log {
+        margin-top: 8px; max-height: 160px; overflow: auto; font-size: 12px;
+        font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ssdl-muted);
+        border-top: 1px dashed var(--ssdl-line); padding-top: 6px;
+      }
+      [data-direct-lane] .ssdl-log div { white-space: pre-wrap; word-break: break-word; }
+      [data-direct-lane] .ssdl-log div[data-tone="err"] { color: var(--ssdl-err); }
+      [data-direct-lane] .ssdl-log div[data-tone="ok"] { color: var(--ssdl-ok); }
+    `;
+    document.head.append(style);
+  } catch (_e) { /* 样式失败不影响功能 */ }
+
   const panel = make('section', 'precision-direct-lane');
   panel.setAttribute('data-direct-lane', '1');
   const head = make('div', 'precision-local-fields');
@@ -131,6 +171,24 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 已存在的 offer 只想补库存/修属性时用这个，不重新 import
   const restockBtn = make('button', 'ghost', '补库存');
   const state = make('span', '', '');
+  state.className = 'ssdl-pill';
+  // 把状态文字转成 pill：成功绿、失败红、其余中性。
+  const setStateTone = (text) => {
+    const value = String(text || "");
+    state.dataset.tone = /完成|通过|成功|Продается/.test(value) ? 'ok'
+      : /失败|错误|中断|未通过/.test(value) ? 'err' : '';
+  };
+  try {
+    new MutationObserver(() => setStateTone(state.textContent)).observe(state, { childList: true, characterData: true, subtree: true });
+  } catch (_e) {}
+  const processLog = make('div', 'ssdl-log');
+  const logLine = (text, tone) => {
+    const row = document.createElement("div");
+    row.textContent = new Date().toLocaleTimeString() + '  ' + String(text || '');
+    if (tone) row.dataset.tone = tone;
+    processLog.append(row);
+    processLog.scrollTop = processLog.scrollHeight;
+  };
   // 按钮和状态分行：以前挤在一行，状态一长就把按钮顶走，也看不清结果。
   const actionsRow = make('div');
   actionsRow.style.display = 'flex';
@@ -174,14 +232,36 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   } catch (_e) { /* 无 MutationObserver 也不影响主流程 */ }
   statusRow.append(state);
   actions.append(actionsRow, statusRow);
+  actions.append(processLog);
 
   const table = make('div');
   const output = make('pre');
   output.style.cssText = 'max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px;';
   panel.append(head, toolbar, copyRow, aiRow, actions, table, output);
+  // 分区标题（对齐参考实现的卡片式分区）
+  try {
+    const decorate = (el, title) => {
+      if (!el) return;
+      el.classList.add('ssdl-card');
+      const caption = document.createElement('div');
+      caption.className = 'ssdl-card-title';
+      caption.textContent = title;
+      el.prepend(caption);
+    };
+    decorate(copyRow, '① 商品与文案');
+    decorate(aiRow, '② AI 配置');
+    decorate(actions, '③ 上架');
+  } catch (_e) {}
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
   try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
+
+  // 直连面板是主路径，不能嵌在 ERP 编辑视图里（那样永远排在页面下方）。
+  // 挂载后搬到工作台内容区最前，重渲染时由 renderEditor 的钩子再兜一次。
+  try {
+    const host = document.querySelector('.content') || document.body;
+    if (root.parentElement !== host) host.prepend(root);
+  } catch (_e) { /* 容器不可用就保留原位 */ }
 
   // 面板输入持久化：类目/类型/前缀/成本/上限以前只活在 DOM 里，
   // 一旦面板重建或页面重载就清空，流程随后报「没有类目」，非常难排查。
