@@ -776,6 +776,13 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
    */
   // 兜底写入前先清掉该属性上的「未解析占位行」：否则 attributeMapFor 仍会看到那一行，
   // 预检照样报「字典没解析到属性 10096, 9163」。
+  // 该属性是否已有「已解析」的值（占位行不算）
+  function hasColorResolved(workspace, attributeId) {
+    return ((workspace && workspace.values) || []).some((row) => Number(row.attributeId) === Number(attributeId)
+      && !row.__unresolved
+      && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
+  }
+
   function replaceUnresolved(workspace, attributeId) {
     workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === Number(attributeId) && row.__unresolved));
   }
@@ -1099,6 +1106,28 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
                 workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(perSku.value || ''), dictionaryValueIds: [perSku.id] });
               }
               globalThis.__SSERP_COLOR_FALLBACK__ = { from: "text", candidates, value: chosen.value };
+        // 兜底 2：变体名不是颜色词（例如「斗篷猫睡袍」/「+裤子」这种套装差异），
+        // 用视觉描述里出现的颜色，最后退到中性色，保证 10096 有值可发。
+        if (!hasColorResolved(workspace, colorId)) {
+          const textSources = [
+            String((lastVisionReport && (lastVisionReport["视觉总结"] || lastVisionReport["核心卖点"])) || ""),
+            String(lastVisionText || ""),
+            String(context.sourceTitle || ""),
+          ].join(" ");
+          const guessed = colorsFromText(textSources)[0] || "бежевый";
+          const listed2 = await send("ss-erp:direct-ozon-attribute-values", {
+            categoryId: category.categoryId, typeId: category.typeId, attributeIds: [colorId], query: "", limit: 400, language: "DEFAULT",
+          }).catch(() => null);
+          const list2 = (listed2 && listed2.values && listed2.values[colorId]) || [];
+          const chosen2 = matchDictionaryValue(list2, guessed) || pickDictionaryValue(list2, "fuzzy", guessed, {});
+          if (chosen2) {
+            replaceUnresolved(workspace, colorId);
+            for (const sku of skus) {
+              workspace.values.push({ attributeId: colorId, skuKey: sku.key, value: String(chosen2.value || ""), dictionaryValueIds: [chosen2.id] });
+            }
+            globalThis.__SSERP_COLOR_FALLBACK__ = { from: "vision/text", value: chosen2.value };
+          }
+        }
             }
           }
         }
