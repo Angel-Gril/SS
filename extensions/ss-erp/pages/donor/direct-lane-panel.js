@@ -137,7 +137,28 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   actionsRow.style.alignItems = 'center';
   actionsRow.style.gap = '8px';
   actionsRow.style.flexWrap = 'wrap';
-  actionsRow.append(precheck, publishBtn, restockBtn);
+  // 一键上架：把「视觉 → 提示词 → 生图 → 预检 → 上架」串起来，
+  // 这是精铺/知了的主路径；其余按钮收进「高级操作」，默认隐藏。
+  const oneClickBtn = make('button', 'primary', '一键上架');
+  const advancedToggle = make('button', 'ghost', '高级操作');
+  const advancedRow = make('div');
+  advancedRow.style.display = 'none';
+  advancedRow.style.gap = '8px';
+  advancedRow.style.flexWrap = 'wrap';
+  advancedRow.style.marginTop = '6px';
+  actionsRow.append(oneClickBtn, advancedToggle, precheck, publishBtn, restockBtn);
+  actions.append(advancedRow);
+  advancedToggle.addEventListener('click', () => {
+    const hidden = advancedRow.style.display === 'none';
+    advancedRow.style.display = hidden ? 'flex' : 'none';
+    precheck.style.display = hidden ? '' : 'none';
+    publishBtn.style.display = hidden ? '' : 'none';
+    restockBtn.style.display = hidden ? '' : 'none';
+    advancedToggle.textContent = hidden ? '收起高级' : '高级操作';
+  });
+  precheck.style.display = 'none';
+  publishBtn.style.display = 'none';
+  restockBtn.style.display = 'none';
   const statusRow = make('div');
   statusRow.style.marginTop = '6px';
   statusRow.style.minHeight = '20px';
@@ -1532,6 +1553,41 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     })();
   });
 
+  // 一键上架：顺序点击现有按钮并等待状态推进，任一环节失败立即停止。
+  async function runOneClick() {
+    // 不能用 claimBusy：本函数依次点击预检/上架，它们各自也会 claimBusy，
+    // 一开始就占用会让后续步骤直接被拒（实测停在第 3 步后空等）。
+    if (oneClickBtn.disabled) return;
+    oneClickBtn.disabled = true;
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const step = async (button, done, failure, label, maxSeconds) => {
+      state.textContent = label;
+      button.click();
+      for (let elapsed = 0; elapsed < maxSeconds; elapsed += 2) {
+        await wait(2000);
+        const text = String(state.textContent || "");
+        if (failure && failure.test(text)) throw new Error(text);
+        if (done.test(text)) return;
+      }
+      throw new Error(label + " 超时");
+    };
+    try {
+      await step(describeBtn, /视觉描述：/, /失败/, "1/5 视觉分析…", 300);
+      await step(promptPlanBtn, /图片提示词：/, /失败/, "2/5 生成提示词…", 120);
+      await step(genAllBtn, /生图完成/, /失败/, "3/5 生成图片…", 900);
+      await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
+      await step(publishBtn, /上架完成/, /失败|补齐/, "5/5 上架…", 1200);
+    } catch (error) {
+      state.textContent = "一键上架中断：" + String((error && error.message) || error).slice(0, 120);
+    } finally {
+      oneClickBtn.disabled = false;
+      busy = false;
+    }
+  }
+  oneClickBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    void runOneClick();
+  });
   restockBtn.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
