@@ -820,7 +820,12 @@ if (!mountDirectLane.panel) {
   status, report,
   });
 }
-if (mountDirectLane.root.parentElement !== fieldsSection) fieldsSection.append(mountDirectLane.root);
+  // 直连面板挂到工作台内容区最前（.content）；不要塞进 ERP 编辑区的 fieldsSection，
+  // 那里属于默认隐藏的 .editor-view，塞进去界面上就是一片空白。
+  {
+    const directHost = document.querySelector('.content') || fieldsSection;
+    if (mountDirectLane.root.parentElement !== directHost) directHost.prepend(mountDirectLane.root);
+  }
 const copyEditor = createCopyEditor({ root: element('ui-scale-root'), getEditor: currentEditorForPublish,
   getBinding: currentEditorBinding, getSourceTitle: () => projection.source.title,
   getBusy: () => projection.busy || saveBusy || Boolean(lastSave), reloadEditor: loadEditor, saveEditor,
@@ -2471,6 +2476,51 @@ document.querySelectorAll('input[name="image-workflow-mode"]').forEach((radio) =
   radio.disabled = false;
 });
 element('plugin-version').textContent = 'SS ERP 接口适配版';
+// 直连车道是主路径：ERP 编辑视图（采集→类目→AI分析→图片→上架 那套，依赖 ERP 配对）
+// 默认不显示。这里保留 DOM（renderEditor 与一堆按钮 id 还挂在上面），只是让它不占界面，
+// 顶部留一个开关给确实要走 ERP 精铺的场景。
+try {
+  const erpView = document.querySelector('.content-view.editor-view');
+  if (erpView) {
+    erpView.style.display = 'none';
+    const bar = document.querySelector('.topbar') || document.querySelector('header') || document.querySelector('.overlay');
+    if (bar) {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'ghost';
+      toggle.textContent = 'ERP（可选）';
+      toggle.style.marginLeft = '8px';
+      toggle.addEventListener('click', () => {
+        const hidden = erpView.style.display === 'none';
+        erpView.style.display = hidden ? '' : 'none';
+        toggle.textContent = hidden ? '收起 ERP' : 'ERP（可选）';
+      });
+      bar.append(toggle);
+    }
+  }
+} catch (_e) { /* 拿不到容器就保持默认 */ }
+// 直连面板必须挂在可见容器里：之前它被挂到 #ui-scale-root（overlay，尺寸 0×0）或被塞进
+// 已隐藏的 .editor-view，结果界面上什么都看不到。这里在渲染后强制搬进 .content 顶部。
+try {
+  const placeDirectPanel = () => {
+    const panelEl = document.querySelector('[data-direct-lane]');
+    const content = document.querySelector('.content');
+    if (!panelEl || !content) return false;
+    if (content.contains(panelEl)) return true;
+    const holder = panelEl.parentElement;
+    const target = holder && holder !== document.body && holder !== document.documentElement ? holder : panelEl;
+    target.style.display = '';
+    content.prepend(target);
+    return true;
+  };
+  // 面板可能在之后任意时刻创建（挂载块/编辑器重渲染），用观察者持续纠位。
+  try {
+    const observer = new MutationObserver(() => placeDirectPanel());
+    observer.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => observer.disconnect(), 60000);
+  } catch (_e) { /* 忽略 */ }
+  placeDirectPanel();
+} catch (_e) { /* 忽略 */ }
 render();
 if (parent !== window) void command('READY').then(() => byok.initialize()).catch(report);
 else status('请从 1688、淘宝或拼多多商品页打开精铺工作台', 'warn');

@@ -34,10 +34,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
         font-size: 13px; color: var(--ssdl-text);
       }
       [data-direct-lane] .ssdl-card {
+      display: block !important; width: auto;
         border: 1px solid var(--ssdl-line); border-radius: 12px;
         background: var(--ssdl-bg); padding: 10px 12px; margin-bottom: 10px;
       }
       [data-direct-lane] .ssdl-card-title {
+        display: block; width: 100%; white-space: nowrap;
         font-weight: 600; font-size: 12px; color: var(--ssdl-muted);
         letter-spacing: .04em; margin-bottom: 8px; text-transform: none;
       }
