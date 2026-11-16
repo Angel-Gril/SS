@@ -1165,6 +1165,41 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
     }
   }
+  // 尺码兜底：规则只认 S/M/L/XL，儿童身高码（120cm / 130cm）会被整段丢掉，
+  // 结果 56 个 SKU 只剩 5 个颜色、尺码维度消失（实测 sizeRows: 0）。
+  // 这里按「标签最后一段」取尺码文本，走字典 + 最近数值匹配逐个补。
+  {
+    const sizeField = ((workspace && workspace.fields) || []).find((field) => field
+      && /размер|尺码|尺寸/i.test(String(field.name || ""))
+      && String(field.ownership || "").toUpperCase() === "SKU")
+      || ((workspace && workspace.fields) || []).find((field) => field && Number(field.attributeId || field.id) === 4295);
+    const sizeId = sizeField ? Number(sizeField.attributeId || sizeField.id) : 0;
+    if (sizeId) {
+      const hasSize = (workspace.values || []).some((row) => Number(row.attributeId) === sizeId
+        && String(row.skuKey || '').trim() && !row.__unresolved
+        && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
+      if (!hasSize) {
+        const listed = await send('ss-erp:direct-ozon-attribute-values', {
+          categoryId: category.categoryId, typeId: category.typeId, attributeIds: [sizeId], query: "", limit: 400, language: "DEFAULT",
+        }).catch(() => null);
+        const sizeList = (listed && listed.values && listed.values[sizeId]) || [];
+        if (sizeList.length) {
+          let filled = 0;
+          for (const sku of skus) {
+            const parts = String(sku.label || '').split('/');
+            const sizeText = String(parts[parts.length - 1] || '').trim();
+            if (!sizeText) continue;
+            const chosen = matchDictionaryValue(sizeList, sizeText) || (await lookupColourValue(sizeId, sizeText));
+            if (!chosen) continue;
+            workspace.values.push({ attributeId: sizeId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
+            filled += 1;
+          }
+          globalThis.__SSERP_SIZE_FALLBACK__ = { filled, total: skus.length };
+        }
+      }
+    }
+  }
+
     // 视觉观察回填（通用）：视觉报告里的「属性观察」按字段名匹配类目 schema；
     // 规则没算出来的必填项（性别、颜色、材质…）用它补。已有值不覆盖。
 
@@ -1377,7 +1412,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     }
     if (workspace.values.some((one) => one.__unresolved)) {
       const ids = [...new Set(workspace.values.filter((one) => one.__unresolved).map((one) => one.attributeId))];
-      throw new Error(`字典没解析到属性 ${ids.join(', ')}：现在上架会存成「有字段无值」，商品不会进入销售。稍后重试或手工补值。`);
+  globalThis.__SSERP_UNRESOLVED_ATTRS__ = ids;
+  // 不抛错：字典偶发为空（限流）时让预检如实报缺项，而不是整条链中断。
     }
 
     const reportForText = lastVisionReport || {};

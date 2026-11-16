@@ -785,7 +785,9 @@ if (!mountDirectLane.panel) {
     directSend({ type, payload: payload || {} }),
     new Promise((_resolve, reject) => {
       // 长任务要单独给预算：生图一次 40-60 秒，统一 20 秒会把正常请求掐断。
-      const slow = /image-generate|image-probe|direct-publish|direct-ai-text/.test(String(type));
+        // attribute-values / attributes 也要给长预算：字典和 schema 在限流时要等好几秒，
+        // 20 秒掐断会返回空列表，随后整条商品缺必填属性（实测颜色全丢、变体被合并）。
+        const slow = /image-generate|image-probe|direct-publish|direct-ai-text|attribute-values|direct-ozon-attributes/.test(String(type));
       setTimeout(() => reject(new Error('直连通道超时：' + String(type))), slow ? 300000 : 20000);
     }),
   ]),
