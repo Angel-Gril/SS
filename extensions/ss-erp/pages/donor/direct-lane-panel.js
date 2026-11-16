@@ -841,6 +841,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     };
     const schema = await send('ss-erp:direct-ozon-attributes', { categoryId: category.categoryId, typeId: category.typeId });
     const fields = (schema && schema.fields) || [];
+  // schema 为空多半是 Ozon 限流（今天同一个店铺调用了几百次）。
+  // 不重试就会带着空字段往下走，最后报「字典没解析到属性」，看不出真实原因。
+  if (!fields.length) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const retried = await send('ss-erp:direct-ozon-attributes', { categoryId: category.categoryId, typeId: category.typeId }).catch(() => null);
+    const retriedFields = (retried && retried.fields) || [];
+    if (!retriedFields.length) {
+      throw new Error("读取类目属性失败（Ozon 限流或接口异常）：" + String(category.categoryId) + "/" + String(category.typeId) + "，稍后重试");
+    }
+    fields.push(...retriedFields);
+  }
     if (!fields.length) return { fields: [], values: [] };
     const product = {
       title: context.sourceTitle || '',
