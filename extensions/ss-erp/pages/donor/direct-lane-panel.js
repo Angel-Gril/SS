@@ -124,6 +124,17 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   skuLimitInput.value = '0';
   skuLimitInput.style.width = '70px';
   skuLimitWrap.append(skuLimitInput);
+
+  // 变体组：1688 商品常把「套装 / 单件」放在规格第一段，而 Ozon 同一张卡里
+  // 同色同码只能留一个变体（DUPLICATE_VARIANT）。0 = 全部合并（会丢组），
+  // 1..N = 只发第 N 组，用不同货号前缀分别建卡。
+  const variantGroupWrap = make('label', '', '变体组（0=全部）');
+  const variantGroupInput = make('input');
+  variantGroupInput.type = 'number';
+  variantGroupInput.min = '0';
+  variantGroupInput.value = '0';
+  variantGroupInput.style.width = '70px';
+  variantGroupWrap.append(variantGroupInput);
   // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
   const catWrap = make('label', '', '类目（自动识别）');
   const catIdInput = make('input');
@@ -148,7 +159,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 输入与动作分开：动作按钮单独一行，别占栅格单元（截图里会把输入挤歪）。
   const toolbarButtons = make('div', 'ssdl-buttons');
   toolbarButtons.append(applyMultiplier, autoPricing, refreshWarehouses);
-  toolbar.append(offerBaseWrap, skuLimitWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap);
   toolbar.append(toolbarButtons);
 
@@ -778,7 +789,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   // 预检照样报「字典没解析到属性 10096, 9163」。
   // 该属性是否已有「已解析」的值（占位行不算）
   function hasColorResolved(workspace, attributeId) {
+    // 10096 是 SKU 级集合属性：产品级那一行不算数，否则会被误判成「已有颜色」而跳过兜底。
     return ((workspace && workspace.values) || []).some((row) => Number(row.attributeId) === Number(attributeId)
+      && String(row.skuKey || '').trim()
       && !row.__unresolved
       && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
   }
@@ -963,19 +976,31 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const allSkus = context.skus || [];
     const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
     // 规格去重：1688 有些商品的 SKU 规格名完全重复（同色同码出现两次）。
+  // 变体组过滤：先按「标签第一段」分组，再取第 N 组（0 = 全部）。
+  // 「斗篷猫睡袍」和「斗篷猫睡袍+裤子」这类套装差异必须拆卡，否则会被 DUPLICATE_VARIANT 合并。
+  const variantGroupValue = Number(String((variantGroupInput && variantGroupInput.value) || "0")) || 0;
+  const groupSegments = [];
+  for (const sku of allSkus) {
+    const segment = String((sku && sku.label) || "").split("/")[0].trim();
+    if (segment && !groupSegments.includes(segment)) groupSegments.push(segment);
+  }
+  const groupedSkus = variantGroupValue > 0 && groupSegments.length > 1
+    ? allSkus.filter((sku) => String((sku && sku.label) || "").split("/")[0].trim() === groupSegments[variantGroupValue - 1])
+    : allSkus;
+  globalThis.__SSERP_VARIANT_GROUPS__ = { segments: groupSegments, picked: variantGroupValue };
     // 直接发会得到 XXXL 和 XXXL-2 两个可变特性一样的变体，Ozon 报
     // 「无法与其他商品合并…至少更改一个可变特性」。这里按规格名去重，
     // 重复的那条直接丢掉（它和第一条是同一件商品）。
     const seenLabels = new Set();
-    const dedupedSkus = allSkus.filter((sku) => {
+    const dedupedSkus = groupedSkus.filter((sku) => {
       const labelKey = String((sku && sku.label) || '').trim().toLowerCase();
       if (!labelKey) return true;
       if (seenLabels.has(labelKey)) return false;
       seenLabels.add(labelKey);
       return true;
     });
-    if (dedupedSkus.length < allSkus.length) {
-      globalThis.__SSERP_DEDUPED_SKUS__ = { total: allSkus.length, kept: dedupedSkus.length };
+    if (dedupedSkus.length < groupedSkus.length) {
+      globalThis.__SSERP_DEDUPED_SKUS__ = { total: groupedSkus.length, kept: dedupedSkus.length };
     }
     const skus = limitValue > 0 ? dedupedSkus.slice(0, limitValue) : dedupedSkus;
     // 成本覆盖：采集值缺失或被人工改价时用面板输入
@@ -1037,6 +1062,30 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const rulesWorkspace = category ? await attributesFromRules(context, category, skus) : null;
     if (rulesWorkspace) context.category = category || context.category;
     const workspace = mergeWorkspaceValues(rulesWorkspace, erpWorkspace);
+  // 颜色兜底（最外层，必执行）：10096 是 SKU 级必填集合属性。
+  // 变体名常常不是颜色（「斗篷猫睡袍」这种套装名），这里直接保证每个 SKU 都有颜色，
+  // 取值顺序：标题/视觉里的颜色 → 中性默认。否则预检永远卡在 REQUIRED_ATTRIBUTES。
+  {
+    const colourField0 = ((workspace && workspace.fields) || []).find((field) => Number(field.attributeId || field.id) === 10096)
+      || ((workspace && workspace.fields) || []).find((field) => /颜色/i.test(String(field.name || "")));
+    const colourId0 = colourField0 ? Number(colourField0.attributeId || colourField0.id) : 0;
+    if (colourId0) {
+      const textForColour = [String(context.sourceTitle || ""), String(lastVisionText || "")].join(" ");
+      const guess0 = colorsFromText(textForColour)[0] || "бежевый";
+      const listed0 = await send("ss-erp:direct-ozon-attribute-values", {
+        categoryId: category.categoryId, typeId: category.typeId, attributeIds: [colourId0], query: "", limit: 400, language: "DEFAULT",
+      }).catch(() => null);
+      const list0 = (listed0 && listed0.values && listed0.values[colourId0]) || [];
+      const chosen0 = matchDictionaryValue(list0, guess0) || pickDictionaryValue(list0, "fuzzy", guess0, {});
+      if (chosen0) {
+        workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === colourId0 && row.__unresolved));
+        for (const sku of skus) {
+          workspace.values.push({ attributeId: colourId0, skuKey: sku.key, value: String(chosen0.value || ""), dictionaryValueIds: [chosen0.id] });
+        }
+        globalThis.__SSERP_COLOR_FALLBACK__ = { value: chosen0.value, guess: guess0 };
+      }
+    }
+  }
     // 视觉观察回填（通用）：视觉报告里的「属性观察」按字段名匹配类目 schema；
     // 规则没算出来的必填项（性别、颜色、材质…）用它补。已有值不覆盖。
 
