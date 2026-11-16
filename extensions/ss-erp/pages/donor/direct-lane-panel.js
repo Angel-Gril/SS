@@ -1629,7 +1629,11 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         .filter((row) => String(row.skuKey) === String(sku.key) && !row.__unresolved)
         .map((row) => String(row.value || "").trim())
         .find((value) => colourHeroMap.has(value)) || "");
-      const url = colourHeroMap.get(colourValue) || String(sku.imageUrl || "");
+      // 首图优先用「该颜色在 1688 的原图」：它就是真实商品照，颜色一定对。
+      // 生成的颜色主图只作兜底——实测四张生成图肉眼几乎一样，Ozon 上三个颜色
+      // 会共用同一张首图（майлстоун B1/C1 都踩过）。
+      const sourceCover = String(sku.imageUrl || "");
+      const url = /^https?:\/\//.test(sourceCover) ? sourceCover : (colourHeroMap.get(colourValue) || "");
       return { scope: 'SKU', skuKey: sku.key, url };
     })
           .filter((one) => /^https:\/\//.test(one.url)),
@@ -2093,7 +2097,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (!workspace) return { generated: 0 };
     const colourField = (workspace.fields || []).find((field) => field
       && /颜色|色彩/i.test(String(field.name || ""))
-      && String(field.ownership || "").toUpperCase() === "SKU");
+      && String(field.ownership || "").toUpperCase() === "SKU")
+      || (workspace.fields || []).find((field) => Number(field.attributeId || field.id) === 10096);
     const colourId = colourField ? Number(colourField.attributeId || colourField.id) : 0;
     if (!colourId) return { generated: 0 };
     const colours = [...new Set((workspace.values || [])
@@ -2104,6 +2109,16 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const planned = computeImagePlan(getContext());
     const limit = Math.min(colours.length, planned.heroes);
     const context = getContext();
+    // 每个颜色自己的 1688 原图：作为该颜色主图的参考图。
+    // 之前四种颜色共用同一组参考图，模型画出来的四张几乎一样，
+    // 结果 Ozon 上三个颜色共用一张首图（实测只有 коричневый 不同）。
+    const refByColour = new Map();
+    for (const sku of (context.skus || [])) {
+      const ru = colorsFromText(String(sku.label || ""))[0];
+      if (ru && !refByColour.has(ru) && /^https?:\/\//.test(String(sku.imageUrl || ""))) {
+        refByColour.set(ru, String(sku.imageUrl));
+      }
+    }
     let generated = 0;
     for (let index = 0; index < limit; index += 1) {
       const colour = colours[index];
@@ -2112,12 +2127,14 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const prompt = [
         "Studio product photograph of a woman wearing a long-sleeve half-turtleneck knit top.",
         `The garment colour is exactly ${colour} and it must dominate the frame - a viewer must read the colour as ${colour} at a glance.`,
-        "Full front view, plain light background, garment occupying 70-80% of the frame, no text, no watermark, no pattern changes.",
+        "Full front view, plain light background, garment occupying 70-80% of the frame, no text, no watermark.",
       ].join(" ");
+      const ownRef = refByColour.get(colour);
+      const refs = ownRef ? [ownRef] : (context.images || []).slice(0, 2);
       try {
         const result = await send("ss-erp:direct-image-generate", {
           prompt,
-          inputImageUrls: (context.images || []).slice(0, 2),
+          inputImageUrls: refs,
           timeoutMs: 180000,
         });
         const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
@@ -2125,6 +2142,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       } catch (_error) { /* 单色失败不拖垮整批 */ }
     }
     globalThis.__SSERP_COLOUR_HEROES__ = Object.fromEntries(colourHeroMap);
+    globalThis.__SSERP_COLOUR_REFS__ = Object.fromEntries(refByColour);
     return { generated, colours: colours.length };
   }
 
@@ -2218,13 +2236,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
       await step(promptPlanBtn, /图片计划：|图片提示词：/, /失败/, "2/5 生成提示词…", 120);
       await step(genAllBtn, /生图完成/, /失败/, "3/5 生成图片…", 900);
+      await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
+      // 颜色主图必须在预检之后：预检才建出 workspace（颜色已归一化），
+      // 之前放在生图之后跑，lastWorkspaceForPlan 还是空的，整步被静默跳过。
       // 多色商品先补每个颜色的主图，否则所有变体显示同一张（买家看到的都是灰的）。
       state.textContent = "3.5/5 颜色主图…";
       try {
         const colourRun = await runColourHeroes();
         if (colourRun && colourRun.generated) logLine(`颜色主图：${colourRun.generated}/${colourRun.colours} 个颜色`, "ok");
       } catch (_error) { /* 颜色主图失败不阻断上架 */ }
-      await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
       await step(publishBtn, /上架完成/, /失败|补齐/, "5/5 上架…", 1200);
     } catch (error) {
       state.textContent = "一键上架中断：" + String((error && error.message) || error).slice(0, 120);
