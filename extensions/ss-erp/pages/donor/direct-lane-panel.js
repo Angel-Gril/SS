@@ -1543,8 +1543,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     // 描述必须落在属性 4191「简介」上：实测 item 级 description 会被忽略，
     // /v1/product/info/description 一直是空，卡片审核被判「Не удалось создать описание」。
     try {
-      const introField = (workspace.fields || []).find((field) => Number(field.attributeId || field.id) === 4191
-        || /简介|描述|аннотац/i.test(String((field && field.name) || "")));
+    // 简介固定用 4191：按名字模糊匹配会命中 4180「名称」之类的属性，
+    // 描述就写到别处去了（实测 descLen 一直是 0）。
+    const introField = (workspace.fields || []).find((field) => Number(field.attributeId || field.id) === 4191);
       const introId = introField ? Number(introField.attributeId || introField.id) : 4191;
       const hasIntro = (workspace.values || []).some((row) => Number(row.attributeId) === introId
         && String(row.value || "").trim().length > 20);
@@ -2272,6 +2273,13 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
       await step(promptPlanBtn, /图片计划：|图片提示词：/, /失败/, "2/5 生成提示词…", 120);
       await step(genAllBtn, /生图完成/, /失败/, "3/5 生成图片…", 900);
+      // 标题必须按当前商品重算：输入框的值会跨商品保留，
+      // 之前长裙沿用了上一件短裙的标题（Юбка … короткая）。
+      try {
+        state.textContent = "3.6/5 刷新标题…";
+        generateTitle.click();
+        await wait(1200);
+      } catch (_e) { /* 刷不出来就用手里的标题 */ }
       await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
       // 颜色主图必须在预检之后：预检才建出 workspace（颜色已归一化），
       // 之前放在生图之后跑，lastWorkspaceForPlan 还是空的，整步被静默跳过。
