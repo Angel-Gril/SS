@@ -1078,11 +1078,22 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const list0 = (listed0 && listed0.values && listed0.values[colourId0]) || [];
       const chosen0 = matchDictionaryValue(list0, guess0) || pickDictionaryValue(list0, "fuzzy", guess0, {});
       if (chosen0) {
+        // 只补「没有颜色」的 SKU；已有真实颜色的绝不动——无条件覆盖会把多色商品
+        // 全部改成同一个颜色，56 个 SKU 会被判成重复变体只剩 1 条（已踩过）。
+        // 标签里能识别出颜色时不要兜底：那是「每个 SKU 一个颜色」的正路。
+        // 兜底只在标签完全没有颜色词时启用（否则会把多色商品涂成同一个颜色）。
+        const labelsHaveColour = skus.some((sku) => colorsFromText(String(sku.label || "")).length > 0);
+        if (!labelsHaveColour) {
+        const resolvedSkuKeys = new Set((workspace.values || [])
+          .filter((row) => Number(row.attributeId) === colourId0 && !row.__unresolved && String(row.skuKey || '').trim())
+          .map((row) => String(row.skuKey)));
         workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === colourId0 && row.__unresolved));
         for (const sku of skus) {
+          if (resolvedSkuKeys.has(String(sku.key))) continue;
           workspace.values.push({ attributeId: colourId0, skuKey: sku.key, value: String(chosen0.value || ""), dictionaryValueIds: [chosen0.id] });
         }
         globalThis.__SSERP_COLOR_FALLBACK__ = { value: chosen0.value, guess: guess0 };
+        }
       }
     }
   }
