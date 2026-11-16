@@ -812,7 +812,22 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const byFirst = rows.find((one) => norm(one.value).slice(0, 1) === needle.slice(0, 1));
     if (byFirst) return byFirst;
     const byTwo = rows.find((one) => norm(one.value).slice(0, 2) === needle.slice(0, 2));
-    return byTwo || null;
+  // 数值型（尺码等）：字典里没有这个数就取最近的。
+  // 实测儿童睡衣是 120/130/140cm，而 Ozon 俄罗斯尺码只有 116/122/128/134/140…，
+  // 没有最近值匹配就会整体缺尺码，所有变体被合并成一条。
+  const needleNum = Number(String(text || '').replace(/[^0-9.]/g, ''));
+  if (Number.isFinite(needleNum) && needleNum > 0) {
+    let best = null;
+    let bestGap = Infinity;
+    for (const one of rows) {
+      const num = Number(String(one.value || '').replace(/[^0-9.]/g, ''));
+      if (!Number.isFinite(num) || num <= 0) continue;
+      const gap = Math.abs(num - needleNum);
+      if (gap < bestGap) { bestGap = gap; best = one; }
+    }
+    if (best) return best;
+  }
+  return byTwo || null;
   }
 
   async function attributesFromRules(context, category, skus) {
@@ -824,6 +839,24 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   // 空结果 → 必填属性补齐失败 → 上架被拒。这里把成功过的字典存到 chrome.storage，
   // 读不到实时数据时退回缓存，颜色这类稳定字典完全没必要每次都拉。
   const dictStorageKey = (attributeId) => `ss-erp:dict:${category.categoryId}:${category.typeId}:${attributeId}`;
+  // 按颜色名精确查一个字典值：整份列表拉不到（限流）时也能逐个拿到，
+  // 否则每个 SKU 都会退回同一个默认色，多色商品会被合并成一条。
+  const colourValueCache = new Map();
+  async function lookupColourValue(attributeId, colourWord) {
+    const key = String(attributeId) + "|" + String(colourWord || "").trim();
+    if (colourValueCache.has(key)) return colourValueCache.get(key);
+    const asked = await send("ss-erp:direct-ozon-attribute-values", {
+      categoryId: category.categoryId, typeId: category.typeId,
+      attributeId, query: String(colourWord || ""), limit: 50, language: "DEFAULT",
+    }).catch(() => null);
+    const values = (asked && asked.values) || [];
+    const hit = values.find((one) => String(one.value || "").trim().toLowerCase() === String(colourWord || "").trim().toLowerCase())
+      || values.find((one) => String(one.value || "").toLowerCase().includes(String(colourWord || "").toLowerCase()))
+      || null;
+    colourValueCache.set(key, hit);
+    return hit;
+  }
+
   async function readCachedDict(attributeId) {
     try {
       const key = dictStorageKey(attributeId);
@@ -1200,7 +1233,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
                 const ownColours = colorsFromText(String(sku.label || ''));
                 let perSku = chosen;
                 if (ownColours.length) {
-                  const hit = matchDictionaryValue(list, ownColours[0]) || pickDictionaryValue(list, 'fuzzy', ownColours[0], {});
+        let hit = matchDictionaryValue(list, ownColours[0]) || pickDictionaryValue(list, 'fuzzy', ownColours[0], {});
+        // 列表为空（限流）或没命中时，按颜色名单独查一次，拿到它自己的字典值。
+        if (!hit) hit = await lookupColourValue(colorId, ownColours[0]);
                   if (hit) perSku = hit;
                 }
               replaceUnresolved(workspace, colorId);
@@ -1446,6 +1481,24 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         depthMm: Number(depthInput.input.value),
       })),
     };
+    // 定位用：把喂给计划层的字段/值快照暴露出来（颜色没进分组时用得上）。
+    try {
+      const colourRows = (workspace.values || []).filter((row) => Number(row.attributeId) === 10096);
+      globalThis.__SSERP_WS_DUMP__ = {
+        fields: (workspace.fields || []).map((f) => ({ id: f.attributeId || f.id, name: f.name, own: f.ownership })),
+        valueCount: (workspace.values || []).length,
+        colourRows: colourRows.length,
+        colourSkus: new Set(colourRows.map((row) => String(row.skuKey || ""))).size,
+        byAttr: (() => { const m = {}; for (const row of (workspace.values || [])) { const k = String(row.attributeId); m[k] = (m[k] || 0) + 1; } return m; })(),
+        sizeValues: [...new Set((workspace.values || []).filter((r) => Number(r.attributeId) === 4295).map((r) => String(r.value || '')))].slice(0, 10),
+        sizeRows: (workspace.values || []).filter((r) => Number(r.attributeId) === 4295).length,
+        distinctDicts: [...new Set(colourRows.map((row) => String((row.dictionaryValueIds || [])[0] || "")))].slice(0, 12),
+        distinctValues: [...new Set(colourRows.map((row) => String(row.value || "")))].slice(0, 12),
+        sampleColours: colourRows.slice(0, 3).map((row) => ({ sku: String(row.skuKey || "").slice(-12), v: row.value, dict: (row.dictionaryValueIds || [])[0] })),
+        skus: skus.length,
+      };
+    } catch (_e) { /* 定位代码不允许影响主流程 */ }
+
     const plan = planDirectItems({
       editor: editorStub,
       workspace,
