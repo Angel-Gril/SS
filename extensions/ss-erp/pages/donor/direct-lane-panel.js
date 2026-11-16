@@ -798,6 +798,26 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
   // Ozon 禁止文本属性里出现外部链接（error_external_link_in_text_attribute@4191）。
   // 生成的描述偶尔带来源链接，发之前统一清掉。
+  // 重复上架台账：同一个 1688 货源商品换前缀重发，Ozon 会判
+  // 「类似商品重复」（SPU_ALREADY_EXISTS）——之前我在同一个商品上发了 A1..E1 五遍，
+  // 80 条里 64 条报错。这里记账，重发前先拦。
+  const PUBLISHED_KEY = "ss-erp:published-sources:v1";
+  async function readPublishedSources() {
+    try {
+      const got = await chrome.storage.local.get([PUBLISHED_KEY]);
+      const value = got[PUBLISHED_KEY];
+      return value && typeof value === "object" ? value : {};
+    } catch (_e) { return {}; }
+  }
+  async function rememberPublished(sourceId, offerBase) {
+    if (!sourceId || !offerBase) return;
+    try {
+      const all = await readPublishedSources();
+      all[String(sourceId)] = { offerBase: String(offerBase), at: new Date().toISOString() };
+      await chrome.storage.local.set({ [PUBLISHED_KEY]: all });
+    } catch (_e) { /* 记不上不影响上架 */ }
+  }
+
   function stripLinks(text) {
     return String(text || "")
       .replace(/https?:\/\/\S+/gi, "")
@@ -1245,7 +1265,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
           && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
         if (!hasGender) {
           const titleText = String(context.sourceTitle || "");
-          const guessRu = /女/.test(titleText) ? "женский" : (/男/.test(titleText) ? "мужской" : "");
+          // 服装类目（200000933）默认女装：标题里常常一个性别字都没有，
+          // 不默认就等于永远缺 9163，20 条变体全被预检拦住。
+          const guessRu = /男/.test(titleText) ? "мужской" : "женский";
           if (guessRu) {
             const listed = await send("ss-erp:direct-ozon-attribute-values", {
               categoryId: category.categoryId, typeId: category.typeId, attributeIds: [genderId], query: "", limit: 100, language: "DEFAULT",
@@ -1692,6 +1714,20 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     precheck.disabled = publishBtn.disabled = true;
     try {
       const { plan } = await buildPlan();
+    // 同一个货源商品换前缀重发会被 Ozon 判「类似商品重复」（SPU_ALREADY_EXISTS），
+    // 之前我在同一个商品上发了 A1..E1 五遍，80 条里 64 条报错。这里先查台账。
+    {
+      const ctx0 = getContext() || {};
+      const sourceId = String((ctx0.sourceProductId || ctx0.offerBase || '').trim());
+      const ledger = await readPublishedSources();
+      const hit = ledger[sourceId];
+      const currentBase = String(ctx0.offerBase || '');
+      if (hit && hit.offerBase && hit.offerBase !== currentBase) {
+        throw new Error(`这个货源商品已经用前缀 ${hit.offerBase} 上架过了（${String(hit.at || '').slice(0, 10)}）。` +
+          '换前缀重发会被 Ozon 判「类似商品重复」。要改内容请用原前缀更新，要补库存请点「补库存」。');
+      }
+      void rememberPublished(sourceId, currentBase);
+    }
       const merged = applyPriceInputs(plan);
       lastPlan = merged;
       renderTable(merged);
