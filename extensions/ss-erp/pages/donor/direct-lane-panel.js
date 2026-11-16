@@ -807,6 +807,34 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       .trim();
   }
 
+  // 颜色按名查字典：buildPlan 与 attributesFromRules 都要用，必须放在工厂作用域。
+  // 之前定义在 attributesFromRules 内部，buildPlan 里调用会抛 ReferenceError，
+  // 而外层 catch 是静默的 —— 表现就是「归一化没生效但也不报错」。
+  const colourValueCache = new Map();
+  async function lookupColourValue(attributeId, colourWord) {
+    const key = [category.categoryId, category.typeId, attributeId, String(colourWord || "").trim()].join("|");
+    if (colourValueCache.has(key)) return colourValueCache.get(key);
+    const want = String(colourWord || "").trim().toLowerCase();
+    // Ozon 会忽略 /attribute/values 的 query 过滤（实测传 value=120 也返回同一批），
+    // 所以这里必须翻页拿全量再本地匹配，否则颜色会全部退化成默认色。
+    let hit = null;
+    let lastValueId = 0;
+    for (let page = 0; page < 8 && !hit; page += 1) {
+      const asked = await send("ss-erp:direct-ozon-attribute-values", {
+        categoryId: category.categoryId, typeId: category.typeId,
+        attributeId, query: "", limit: 200, lastValueId, language: "DEFAULT",
+      }).catch(() => null);
+      const values = (asked && asked.values && (asked.values[attributeId] || asked.values)) || [];
+      const list = Array.isArray(values) ? values : [];
+      if (!list.length) break;
+      hit = list.find((one) => String(one.value || "").trim().toLowerCase() === want) || null;
+      lastValueId = Number(list[list.length - 1].id) || 0;
+      if (!lastValueId || list.length < 200) break;
+    }
+    colourValueCache.set(key, hit);
+    return hit;
+  }
+
   function replaceUnresolved(workspace, attributeId) {
     workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === Number(attributeId) && row.__unresolved));
   }
@@ -857,30 +885,6 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   const dictStorageKey = (attributeId) => `ss-erp:dict:${category.categoryId}:${category.typeId}:${attributeId}`;
   // 按颜色名精确查一个字典值：整份列表拉不到（限流）时也能逐个拿到，
   // 否则每个 SKU 都会退回同一个默认色，多色商品会被合并成一条。
-  const colourValueCache = new Map();
-  async function lookupColourValue(attributeId, colourWord) {
-    const key = [category.categoryId, category.typeId, attributeId, String(colourWord || "").trim()].join("|");
-    if (colourValueCache.has(key)) return colourValueCache.get(key);
-    const want = String(colourWord || "").trim().toLowerCase();
-    // Ozon 会忽略 /attribute/values 的 query 过滤（实测传 value=120 也返回同一批），
-    // 所以这里必须翻页拿全量再本地匹配，否则颜色会全部退化成默认色。
-    let hit = null;
-    let lastValueId = 0;
-    for (let page = 0; page < 8 && !hit; page += 1) {
-      const asked = await send("ss-erp:direct-ozon-attribute-values", {
-        categoryId: category.categoryId, typeId: category.typeId,
-        attributeId, query: "", limit: 200, lastValueId, language: "DEFAULT",
-      }).catch(() => null);
-      const values = (asked && asked.values && (asked.values[attributeId] || asked.values)) || [];
-      const list = Array.isArray(values) ? values : [];
-      if (!list.length) break;
-      hit = list.find((one) => String(one.value || "").trim().toLowerCase() === want) || null;
-      lastValueId = Number(list[list.length - 1].id) || 0;
-      if (!lastValueId || list.length < 200) break;
-    }
-    colourValueCache.set(key, hit);
-    return hit;
-  }
 
   async function readCachedDict(attributeId) {
     try {
