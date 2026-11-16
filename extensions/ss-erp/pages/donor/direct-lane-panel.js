@@ -820,6 +820,25 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     // 12 个 SKU 就是上百次往返 + 大 JSON 解析，实测把渲染进程卡死。
     const dictCache = new Map();
     let dictFailures = 0;   // 熔断计数：SW 挂了的时候别一个属性等 45 秒，十个就是七八分钟
+  // 字典本地缓存：Ozon 限流时（实测同一天几百次调用后必然出现）字典会返回空，
+  // 空结果 → 必填属性补齐失败 → 上架被拒。这里把成功过的字典存到 chrome.storage，
+  // 读不到实时数据时退回缓存，颜色这类稳定字典完全没必要每次都拉。
+  const dictStorageKey = (attributeId) => `ss-erp:dict:${category.categoryId}:${category.typeId}:${attributeId}`;
+  async function readCachedDict(attributeId) {
+    try {
+      const key = dictStorageKey(attributeId);
+      const got = await chrome.storage.local.get([key]);
+      return Array.isArray(got[key]) ? got[key] : [];
+    } catch (_e) { return []; }
+  }
+  async function writeCachedDict(attributeId, list) {
+    if (!Array.isArray(list) || !list.length) return;
+    try {
+      const key = dictStorageKey(attributeId);
+      await chrome.storage.local.set({ [key]: list.slice(0, 400) });
+    } catch (_e) { /* 存不下不影响主流程 */ }
+  }
+
     const dictionaryOf = async (attributeId) => {
       if (dictFailures >= 2) return [];   // 已判定不可用：本轮直接当空
       const id = Number(attributeId);
@@ -835,7 +854,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (list.length > 400) list = list.slice(0, 400);
   // 只缓存「拿到了值」的结果：空结果缓存 + 熔断组合起来会把字典永久判死，
   // 表现就是换个类目后报「字典没解析到属性 10096, 9163」。
-  if (list.length) { dictCache.set(id, list); dictFailures = 0; }
+  if (list.length) { dictCache.set(id, list); dictFailures = 0; void writeCachedDict(id, list); }
+  else {
+    // 实时读失败（多半是限流）：用上次成功缓存的字典顶上。
+    const cached = await readCachedDict(id);
+    if (cached.length) { dictCache.set(id, cached); return cached; }
+  }
   return list;
       return list;
     };
@@ -1143,11 +1167,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
     }
     {
-      const colorField = ((workspace && workspace.fields) || []).find((field) => field &&
-        /颜色|色彩/.test(String(field.name || "")) && String(field.ownership || "").toUpperCase() === "SKU");
+  // ownership 不一定被填（实测有些 schema 只给 is_collection），
+  // 之前严格要求 ownership === 'SKU'，导致颜色字段找不到 → 每个变体都没颜色 → 全被合并。
+  const colorField = ((workspace && workspace.fields) || []).find((field) => field
+    && /颜色|色彩/.test(String(field.name || ""))
+    && String(field.ownership || "").toUpperCase() === "SKU")
+    || ((workspace && workspace.fields) || []).find((field) => field && Number(field.attributeId || field.id) === 10096)
+    || ((workspace && workspace.fields) || []).find((field) => field && /颜色|色彩/.test(String(field.name || "")));
       const colorId = colorField ? Number(colorField.attributeId || colorField.id) : 0;
       if (colorId) {
         const hasColor = ((workspace && workspace.values) || []).some((row) => Number(row.attributeId) === colorId
+    && String(row.skuKey || '').trim()
           && !row.__unresolved
           && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
         if (!hasColor) {
