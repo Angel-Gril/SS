@@ -167,6 +167,12 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const titleWrap = make('label', '', '俄文标题 ');
   const titleInput = make('input');
   titleInput.type = 'text';
+  // 规则版标题优先：标题输入框默认由规则生成（属性驱动，长裙会输出 длинная）。
+  // 只有用户**手动**改过（键盘输入）才保留人工值；之前是「输入框非空就保留」，
+  // 于是 AI 生成的 Юбка … короткая 一直压着规则版，长裙被写成短裙。
+  let titleTouched = false;
+  titleInput.addEventListener('input', () => { titleTouched = true; });
+  titleInput.addEventListener('keydown', () => { titleTouched = true; });
   titleInput.placeholder = '点「生成标题」或手填';
   titleInput.style.minWidth = '520px';
   titleWrap.append(titleInput);
@@ -1493,8 +1499,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       });
       const current = String(titleInput.value || "").trim();
       const noun = String((ruleTitle && ruleTitle.category) || "").toLowerCase();
-      const missingNoun = !current || (noun && !current.toLowerCase().includes(noun.split(/[\s,]/)[0]));
-      if (ruleTitle && ruleTitle.title && missingNoun) {
+    const useRule = !titleTouched || !current;
+    if (ruleTitle && ruleTitle.title && useRule) {
         titleInput.value = String(ruleTitle.title).slice(0, 200);
         globalThis.__SSERP_TITLE_SOURCE__ = "rules";
       } else {
@@ -2277,7 +2283,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       // 之前长裙沿用了上一件短裙的标题（Юбка … короткая）。
       try {
         state.textContent = "3.6/5 刷新标题…";
-        generateTitle.click();
+        // 不再点 AI 生成：规则版标题更稳（见 buildPlan 的规则优先逻辑）。
         await wait(1200);
       } catch (_e) { /* 刷不出来就用手里的标题 */ }
       await step(precheck, /预检通过/, /预检未通过|失败/, "4/5 预检…", 300);
