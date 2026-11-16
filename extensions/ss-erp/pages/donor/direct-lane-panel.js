@@ -796,6 +796,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
   }
 
+  // Ozon 禁止文本属性里出现外部链接（error_external_link_in_text_attribute@4191）。
+  // 生成的描述偶尔带来源链接，发之前统一清掉。
+  function stripLinks(text) {
+    return String(text || "")
+      .replace(/https?:\/\/\S+/gi, "")
+      .replace(/www\.\S+/gi, "")
+      .replace(/[a-z0-9-]+\.(com|cn|ru|net|org)(\/\S*)?/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
   function replaceUnresolved(workspace, attributeId) {
     workspace.values = (workspace.values || []).filter((row) => !(Number(row.attributeId) === Number(attributeId) && row.__unresolved));
   }
@@ -834,6 +845,11 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     // 字典列表按 attributeId 缓存：之前每个属性 × 每个 SKU 各请求一次（limit 1000），
     // 12 个 SKU 就是上百次往返 + 大 JSON 解析，实测把渲染进程卡死。
     const dictCache = new Map();
+  // 同一个 attributeId 在不同 类目/类型 下字典不同：
+  // 实测 10096 用睡衣(93176)的字典值发到半身裙(93283)，Ozon 回
+  // error_attribute_values_out_of_range。所以缓存 key 必须带类目和类型。
+  const dictScope = () => String(category.categoryId) + "|" + String(category.typeId);
+  const dictKeyOf = (attributeId) => dictScope() + "|" + String(attributeId);
     let dictFailures = 0;   // 熔断计数：SW 挂了的时候别一个属性等 45 秒，十个就是七八分钟
   // 字典本地缓存：Ozon 限流时（实测同一天几百次调用后必然出现）字典会返回空，
   // 空结果 → 必填属性补齐失败 → 上架被拒。这里把成功过的字典存到 chrome.storage，
@@ -843,16 +859,25 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   // 否则每个 SKU 都会退回同一个默认色，多色商品会被合并成一条。
   const colourValueCache = new Map();
   async function lookupColourValue(attributeId, colourWord) {
-    const key = String(attributeId) + "|" + String(colourWord || "").trim();
+    const key = [category.categoryId, category.typeId, attributeId, String(colourWord || "").trim()].join("|");
     if (colourValueCache.has(key)) return colourValueCache.get(key);
-    const asked = await send("ss-erp:direct-ozon-attribute-values", {
-      categoryId: category.categoryId, typeId: category.typeId,
-      attributeId, query: String(colourWord || ""), limit: 50, language: "DEFAULT",
-    }).catch(() => null);
-    const values = (asked && asked.values) || [];
-    const hit = values.find((one) => String(one.value || "").trim().toLowerCase() === String(colourWord || "").trim().toLowerCase())
-      || values.find((one) => String(one.value || "").toLowerCase().includes(String(colourWord || "").toLowerCase()))
-      || null;
+    const want = String(colourWord || "").trim().toLowerCase();
+    // Ozon 会忽略 /attribute/values 的 query 过滤（实测传 value=120 也返回同一批），
+    // 所以这里必须翻页拿全量再本地匹配，否则颜色会全部退化成默认色。
+    let hit = null;
+    let lastValueId = 0;
+    for (let page = 0; page < 8 && !hit; page += 1) {
+      const asked = await send("ss-erp:direct-ozon-attribute-values", {
+        categoryId: category.categoryId, typeId: category.typeId,
+        attributeId, query: "", limit: 200, lastValueId, language: "DEFAULT",
+      }).catch(() => null);
+      const values = (asked && asked.values && (asked.values[attributeId] || asked.values)) || [];
+      const list = Array.isArray(values) ? values : [];
+      if (!list.length) break;
+      hit = list.find((one) => String(one.value || "").trim().toLowerCase() === want) || null;
+      lastValueId = Number(list[list.length - 1].id) || 0;
+      if (!lastValueId || list.length < 200) break;
+    }
     colourValueCache.set(key, hit);
     return hit;
   }
@@ -875,7 +900,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const dictionaryOf = async (attributeId) => {
       if (dictFailures >= 2) return [];   // 已判定不可用：本轮直接当空
       const id = Number(attributeId);
-      if (dictCache.has(id)) return dictCache.get(id);
+  if (dictCache.has(dictKeyOf(id))) return dictCache.get(dictKeyOf(id));
       let list = [];
       try {
         const found = await send('ss-erp:direct-ozon-attribute-values', {
@@ -887,11 +912,11 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (list.length > 400) list = list.slice(0, 400);
   // 只缓存「拿到了值」的结果：空结果缓存 + 熔断组合起来会把字典永久判死，
   // 表现就是换个类目后报「字典没解析到属性 10096, 9163」。
-  if (list.length) { dictCache.set(id, list); dictFailures = 0; void writeCachedDict(id, list); }
+  if (list.length) { dictCache.set(dictKeyOf(id), list); dictFailures = 0; void writeCachedDict(id, list); }
   else {
     // 实时读失败（多半是限流）：用上次成功缓存的字典顶上。
     const cached = await readCachedDict(id);
-    if (cached.length) { dictCache.set(id, cached); return cached; }
+    if (cached.length) { dictCache.set(dictKeyOf(id), cached); return cached; }
   }
   return list;
       return list;
@@ -991,7 +1016,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
           const list = Array.isArray(map[id]) ? map[id].slice(0, 400) : [];
         if (!list.length) continue;   // 空结果不缓存、不计熔断（下次还能重试）
         dictFailures = 0;
-        dictCache.set(Number(id), list);
+        dictCache.set(dictKeyOf(Number(id)), list);
         }
         globalThis.__SSERP_DICT_BATCH__ = { need: need.length, ms: Date.now() - started };
       }
@@ -1498,13 +1523,13 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const hasIntro = (workspace.values || []).some((row) => Number(row.attributeId) === introId
         && String(row.value || "").trim().length > 20);
       if (!hasIntro && autoDescription) {
-        workspace.values.push({ attributeId: introId, skuKey: null, value: String(autoDescription).slice(0, 6000), dictionaryValueIds: [] });
+        workspace.values.push({ attributeId: introId, skuKey: null, value: stripLinks(autoDescription).slice(0, 6000), dictionaryValueIds: [] });
       }
     } catch (_e) { /* 没有该属性就不写 */ }
     const editorStub = {
       category: context.category,
       selectedSkuKeys: skus.map((sku) => sku.key),
-      copy: { titleRu: String(titleInput.value || '').trim(), descriptionRu: autoDescription },
+    copy: { titleRu: String(titleInput.value || '').trim(), descriptionRu: stripLinks(autoDescription) },
       pricing: { items: skus.map((sku) => {
         const computed = priceFor(sku.cost);
         return { skuKey: sku.key, price: computed ? computed.price : null, oldPrice: computed ? computed.oldPrice : null, currencyCode: 'CNY', vat: '0' };
@@ -1534,6 +1559,55 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         skus: skus.length,
       };
     } catch (_e) { /* 定位代码不允许影响主流程 */ }
+
+    // 颜色归一化：规则会把源标签的中文颜色直接写进去，且没有字典 id，
+    // Ozon 收到中文文本（或只有 id 没有文本）都会判 error_attribute_values_out_of_range。
+    // 这里统一走「中文 → 俄语词 → 字典项」把 value 和 dictionaryValueIds 一起补齐。
+    try {
+      const colourFieldX = ((workspace.fields) || []).find((field) => Number(field.attributeId || field.id) === 10096);
+      const colourIdX = colourFieldX ? Number(colourFieldX.attributeId || colourFieldX.id) : 0;
+      if (colourIdX) {
+        let fixed = 0;
+        for (const row of (workspace.values || [])) {
+          if (Number(row.attributeId) !== colourIdX) continue;
+          if (!String(row.skuKey || "").trim()) continue;
+          const current = String(row.value || "").trim();
+          const hasId = (row.dictionaryValueIds || []).length > 0;
+          const isRussian = /[а-яё]/i.test(current);
+          if (hasId && isRussian) continue;
+          const ru = colorsFromText(current)[0] || colorsFromText(String(row.skuKey))[0];
+          if (!ru) continue;
+          const hit = await lookupColourValue(colourIdX, ru);
+          if (!hit) continue;
+          row.value = String(hit.value || ru);
+          row.dictionaryValueIds = [Number(hit.id)];
+          fixed += 1;
+        }
+        globalThis.__SSERP_COLOUR_NORMALIZE__ = { fixed };
+      }
+    } catch (_e) { /* 归一化失败就让预检报缺项 */ }
+
+    // 补全字典文本：规则/兜底只填了 dictionaryValueIds 时 value 会是空的，
+    // Ozon 把这个当成「值不在字典里」（error_attribute_values_out_of_range）。
+    try {
+      const needText = (workspace.values || []).filter((row) => (row.dictionaryValueIds || []).length
+        && !String(row.value || "").trim());
+      if (needText.length) {
+        const ids = [...new Set(needText.map((row) => Number(row.attributeId)))];
+        const fetched = await send("ss-erp:direct-ozon-attribute-values", {
+          categoryId: category.categoryId, typeId: category.typeId, attributeIds: ids, query: "", limit: 400, language: "DEFAULT",
+        }).catch(() => null);
+        const byAttr = (fetched && fetched.values) || {};
+        let filledText = 0;
+        for (const row of needText) {
+          const list = byAttr[Number(row.attributeId)] || [];
+          const wantId = Number((row.dictionaryValueIds || [])[0]);
+          const hit = list.find((one) => Number(one.id) === wantId);
+          if (hit && String(hit.value || "").trim()) { row.value = String(hit.value); filledText += 1; }
+        }
+        globalThis.__SSERP_VALUE_TEXT_FILL__ = { need: needText.length, filled: filledText };
+      }
+    } catch (_e) { /* 补不上就让 Ozon 报错，至少不静默 */ }
 
     const plan = planDirectItems({
       editor: editorStub,
@@ -1876,7 +1950,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
       try {
-        if (!lastVisionReport) throw new Error('先点「视觉描述」——提示词计划要基于视觉报告');
+  // 视觉是增强项：模型偶发不返回时，规则版提示词照样能出图（标题/属性/参考图都在），
+  // 不能因为一次视觉失败就把整条上架链堵死。
+  if (!lastVisionReport) {
+    state.textContent = '视觉报告缺失，按规则生成提示词';
+    logLine('视觉报告缺失，按规则生成提示词', 'warn');
+  }
         const cfg = await readTitleAiConfig();
         if (!cfg) throw new Error('先在上面填 AI key');
         const context = getContext();

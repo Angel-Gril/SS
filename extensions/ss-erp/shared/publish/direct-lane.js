@@ -40,7 +40,13 @@ function valuesOfRow(row) {
   const ids = Array.isArray(row && row.dictionaryValueIds)
     ? row.dictionaryValueIds.filter((id) => Number.isSafeInteger(id) && id > 0)
     : [];
-  if (ids.length) return ids.map((id) => ({ dictionary_value_id: id }));
+  // 有字典 id 时**同时**带上文本：实测只发 id、value 留空，Ozon 回
+  // error_attribute_values_out_of_range@10096（库里存成 {"dictionary_value_id":61573,"value":""}），
+  // 看起来像字典不对，实际是文本没给。
+  if (ids.length) {
+    const text = String((row && row.value) != null ? row.value : '').trim();
+    return ids.map((id) => (text ? { dictionary_value_id: id, value: text } : { dictionary_value_id: id }));
+  }
   const raw = row && row.value;
   const list = Array.isArray(raw) ? raw : [raw];
   return list
