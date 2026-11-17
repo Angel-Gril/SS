@@ -194,6 +194,9 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   const promptPlanBtn = make('button', 'ghost', '生成图片提示词');
   const genImageBtn = make('button', 'ghost', '出 1 张主图');
   const genAllBtn = make('button', 'primary', '按计划出 8 张');
+  // 按款式出主图：拆卡场景专用。每个款式用它自己在 1688 的原图当参考图生成一张，
+  // 这样 55 张卡的首图各不相同（参考实现同样是「SKU 封面 = 该 SKU 自己的图」）。
+  const styleHeroBtn = make('button', 'ghost', '按款式出主图');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
@@ -202,7 +205,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   descWrap.append(descInput);
   // 文案按钮单独成行，避免和输入框抢栅格单元（截图里挤在左侧）
   const copyButtons = make('div', 'ssdl-buttons');
-  copyButtons.append(generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn);
+  copyButtons.append(generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn, styleHeroBtn);
   copyRow.append(titleWrap, descWrap, copyButtons);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
@@ -313,7 +316,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     decorate(actions, '③ 上架');
   } catch (_e) {}
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, debugSplitPlans: buildSplitPlans, debugStyleSegments: () => styleSegments((getContext() || {}).skus), debugDictionary: dictionaryFor, matchDictionaryValue }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, debugSplitPlans: buildSplitPlans, debugStyleSegments: () => styleSegments((getContext() || {}).skus), debugDictionary: dictionaryFor, debugStyleHeroes: runStyleHeroes, debugStyleHeroMap: () => styleHeroMap, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
   // 直连面板是主路径，不能嵌在 ERP 编辑视图里（那样永远排在页面下方）。
@@ -793,6 +796,86 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const list = got && got[key];
       return Array.isArray(list) ? list : [];
     } catch (_error) { return []; }
+  }
+
+  // ── 按款式出主图（拆卡用）──────────────────────────────────────────────
+  // 参考实现（精铺 §11.1）里 SKU 封面是「该 SKU 自己的图」，产品级共享图另算。
+  // 55 款商品如果共用一套生成图，店铺里就是 55 个长得一模一样的商品 —— 买家分不出款式。
+  // 所以每个款式用它自己在 1688 的原图当参考图生成一张主图，按款式名缓存。
+  const styleHeroKey = (sourceId) => 'ss-erp:direct-lane:style-hero:' + String(sourceId || '');
+  let styleHeroMap = new Map();
+
+  async function loadStyleHeroes(sourceId) {
+    styleHeroMap = new Map();
+    if (!sourceId) return styleHeroMap;
+    try {
+      const got = await chrome.storage.local.get(styleHeroKey(sourceId));
+      const list = got && got[styleHeroKey(sourceId)];
+      for (const one of (Array.isArray(list) ? list : [])) {
+        if (one && one.segment && /^https:\/\//.test(String(one.url || ''))) styleHeroMap.set(String(one.segment), String(one.url));
+      }
+    } catch (_error) { /* 读不到就当没生成过 */ }
+    return styleHeroMap;
+  }
+
+  async function saveStyleHero(segment, url) {
+    const sourceId = sourceIdOf(getContext());
+    if (!sourceId || !segment || !url) return;
+    styleHeroMap.set(String(segment), String(url));
+    try {
+      await chrome.storage.local.set({
+        [styleHeroKey(sourceId)]: [...styleHeroMap.entries()].map(([seg, u]) => ({ segment: seg, url: u, at: Date.now() })),
+      });
+    } catch (_error) { /* 存不下不影响本轮 */ }
+  }
+
+  // 提示词要点（实测出来的，别乱改）：
+  //   · 参考图是 1688 的礼盒照，袜口带 "alo" 字样 —— 必须显式要求「素罗纹袜口、无字样」，
+  //     否则模型会照抄字母（v2「只取配色」那版就抄回来了）。
+  //   · 只保留配色 / 条纹 / 针织物性，盒子、吊牌、卡片全部显式排除。
+  const STYLE_HERO_PROMPT = [
+    'Studio e-commerce product photograph for an Ozon listing, aspect ratio 3:4.',
+    'Show five loose socks standing side by side on a plain light grey seamless background.',
+    'Keep only the colour palette, the stripes and the knit texture of the reference image.',
+    'The cuffs are completely plain ribbed knit: no lettering, no monogram, no logo, no brand mark of any kind.',
+    'Do not copy any text, word or symbol from the reference image. Socks only, no box, no packaging, no tag.',
+    'Soft even studio light, front view, product fills about 75% of the frame, sharp commercial retouching.',
+  ].join(' ');
+
+  /** 逐款式出主图（已生成过的跳过；limit>0 只做前 N 个款式，便于先试几张） */
+  async function runStyleHeroes(limit) {
+    const context = getContext();
+    const allSkus = (context && context.skus) || [];
+    const segments = styleSegments(allSkus);
+    if (!segments.length) throw new Error('请先采集来源商品');
+    const picked = Number(limit) > 0 ? segments.slice(0, Number(limit)) : segments;
+    const failed = [];
+    let ok = 0;
+    let skipped = 0;
+    for (const [index, segment] of picked.entries()) {
+      if (styleHeroMap.has(segment)) { ok += 1; skipped += 1; continue; }
+      const sku = allSkus.find((one) => styleOf(one) === segment);
+      const reference = String((sku && sku.imageUrl) || '');
+      state.textContent = `款式主图 ${index + 1}/${picked.length}：${segment}…`;
+      try {
+        const result = await send('ss-erp:direct-image-generate', {
+          prompt: STYLE_HERO_PROMPT,
+          // 参考图必须带上：没有它，55 个款式会生成出 55 张几乎一样的图
+          inputImageUrls: /^https?:\/\//.test(reference) ? [reference] : [],
+          timeoutMs: 240000,
+        });
+        const url = result && (result.url || result.imageUrl || (result.urls && result.urls[0]));
+        if (!url) throw new Error('生图没有返回地址');
+        await saveStyleHero(segment, url);
+        ok += 1;
+      } catch (error) {
+        failed.push({ segment, error: String((error && error.message) || error).slice(0, 120) });
+        logLine(`款式主图失败 ${segment}：${String((error && error.message) || error).slice(0, 80)}`, 'err');
+      }
+    }
+    globalThis.__SSERP_STYLE_HEROES__ = { total: picked.length, ok, skipped, failed };
+    state.textContent = `款式主图完成：${ok}/${picked.length}` + (skipped ? `（跳过已有 ${skipped}）` : '') + (failed.length ? `，失败 ${failed.length}` : '');
+    return { ok, total: picked.length, skipped, failed };
   }
 
   /**
@@ -1799,7 +1882,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       // 生成的颜色主图只作兜底——实测四张生成图肉眼几乎一样，Ozon 上三个颜色
       // 会共用同一张首图（майлстоун B1/C1 都踩过）。
       const sourceCover = String(sku.imageUrl || "");
-      const url = /^https?:\/\//.test(sourceCover) ? sourceCover : (colourHeroMap.get(colourValue) || "");
+      // 拆卡时优先用「该款式自己的生成主图」：55 张卡各看各的，别长得一模一样。
+      // 没有该款式的生成图时，拆卡路径**不**退回 1688 原图 —— 原图会被审核判 decline（§12.5）。
+      const styleHero = styleHeroMap.get(styleOf(sku)) || "";
+      const splitting = Array.isArray(opts.skus) && opts.skus.length > 0;
+      const url = styleHero
+        || (splitting ? "" : (/^https?:\/\//.test(sourceCover) ? sourceCover : (colourHeroMap.get(colourValue) || "")));
       return { scope: 'SKU', skuKey: sku.key, url };
     })
           .filter((one) => /^https:\/\//.test(one.url)),
@@ -2667,6 +2755,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     });
   });
 
+  styleHeroBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    if (!claimBusy()) return;
+    styleHeroBtn.disabled = true;
+    void runStyleHeroes(0)
+      .catch((error) => { state.textContent = `款式主图失败：${String((error && error.message) || error).slice(0, 160)}`; })
+      .finally(() => { busy = false; styleHeroBtn.disabled = false; });
+  });
+
   autoPricing.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
@@ -2930,7 +3027,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     aiModel.value = cfg.model;
     aiStatus.textContent = `AI 已配置：${cfg.model}`;
   })();
-  // 生成图回填：之前生成过就直接用于 listing（等上下文就绪，最多 15 秒）
+  // 生成图 + 款式主图回填：之前生成过就直接用于 listing（等上下文就绪，最多 15 秒）
   void (async () => {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -2938,15 +3035,14 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const sourceId = sourceIdOf(context);
       if (!sourceId) continue;
       const stored = await loadGeneratedImages(sourceId);
-      if (!stored.length) return;
-      lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
-      if (Number(catIdInput.value) === 0 && Number(typeIdInput.value) === 0) {
+      const heroes = await loadStyleHeroes(sourceId);
+      if (!Number(catIdInput.value) && !Number(typeIdInput.value)) {
         const cached = await readCachedCategory(sourceId);
         if (cached) { catIdInput.value = String(cached.categoryId); typeIdInput.value = String(cached.typeId); }
       }
-      state.textContent = `已载入 ${stored.length} 张生成图，listing 会优先用它们`;
-      const cachedCat = await readCachedCategory(sourceId);
-      if (cachedCat && !Number(catIdInput.value)) { catIdInput.value = String(cachedCat.categoryId); typeIdInput.value = String(cachedCat.typeId); }
+      if (!stored.length && !heroes.size) return;
+      lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
+      state.textContent = `已载入 ${stored.length} 张生成图 / ${heroes.size} 张款式主图，listing 会优先用它们`;
       return;
     }
   })();

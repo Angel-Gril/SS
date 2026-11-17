@@ -207,6 +207,13 @@ async function generateImage(input, options = {}) {
 
 /** DashScope 原生异步：提交 → 轮询 /tasks/{id} */
 async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, startedAt }) {
+  // 参考图在 DashScope 通道里必须放进 messages 的 content 数组（{image: url} 在 {text} 之前）。
+  // 之前这条分支把 inputImageUrls 整段丢掉：面板明明传了「该款式自己的原图」，
+  // 模型只看到文字提示词 —— 55 个款式会生成出 55 张几乎一样的图（实测）。
+  const refs = Array.isArray(input && input.inputImageUrls)
+    ? input.inputImageUrls.filter((u) => /^https?:\/\//.test(String(u))).slice(0, 3)
+    : [];
+  const content = [...refs.map((url) => ({ image: String(url) })), { text: prompt }];
   const submit = await fetchWithTimeout(provider.baseUrl + '/api/v1/services/aigc/image-generation/generation', {
     method: 'POST',
     headers: {
@@ -217,7 +224,7 @@ async function generateDashScopeAsync({ provider, prompt, input, timeoutMs, star
     body: JSON.stringify({
       model: provider.model,
       // 千问新接口要 messages 结构，旧的 input.prompt 会回 url error
-      input: { messages: [{ role: 'user', content: [{ text: prompt }] }] },
+      input: { messages: [{ role: 'user', content }] },
       parameters: { size: String(provider.size || '1024*1024').replace('x', '*'), n: 1, response_format: 'url' },
     }),
   }, 30000);
