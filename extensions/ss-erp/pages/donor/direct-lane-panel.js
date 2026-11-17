@@ -1,5 +1,5 @@
 import { planDirectItems, offerIdFor } from '../../shared/publish/direct-lane.js';
-import { buildRuTitle } from '../../shared/ozon/title-rules.js';
+import { buildRuTitle, composeRuTitle } from '../../shared/ozon/title-rules.js';
 import { DEFAULT_TITLE_AI, generateTitleWithAi, generateDescriptionWithAi, readTitleAiConfig, writeTitleAiConfig } from '../../shared/ozon/title-ai.js';
 import { describeProductWithAi, visionToAttributePairs } from '../../shared/ozon/vision-ai.js';
 import { parseVariantSpecs, pickDictionaryValue, planPrefill, planVariantPrefill } from '../../shared/ozon/attribute-prefill.js';
@@ -148,6 +148,13 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     globalThis.__SSERP_SPLIT_BY_STYLE__ = Boolean(splitByStyle.checked);
   });
   splitByStyleWrap.append(splitByStyle);
+  // 更新已存在卡：卡已经在 Ozon 上时，同货号 import 就是更新（改标题/文案/属性），不新建。
+  const updateExistingWrap = make('label', '', '更新已存在卡 ');
+  const updateExistingInput = make('input');
+  updateExistingInput.type = 'checkbox';
+  updateExistingInput.id = 'ss-erp-update-existing';
+  updateExistingInput.title = '同货号重新 import = 更新（只改标题/文案/属性，不新建卡、不动价格库存）';
+  updateExistingWrap.append(updateExistingInput);
   // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
   const catWrap = make('label', '', '类目（自动识别）');
   const catIdInput = make('input');
@@ -172,7 +179,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 输入与动作分开：动作按钮单独一行，别占栅格单元（截图里会把输入挤歪）。
   const toolbarButtons = make('div', 'ssdl-buttons');
   toolbarButtons.append(applyMultiplier, autoPricing, refreshWarehouses);
-  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, splitByStyleWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, splitByStyleWrap, updateExistingWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap);
   toolbar.append(toolbarButtons);
 
@@ -197,6 +204,8 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 按款式出主图：拆卡场景专用。每个款式用它自己在 1688 的原图当参考图生成一张，
   // 这样 55 张卡的首图各不相同（参考实现同样是「SKU 封面 = 该 SKU 自己的图」）。
   const styleHeroBtn = make('button', 'ghost', '按款式出主图');
+  // 按款式出标题：读图取配色/图案 → 每款一条俄文标题（品类名词在最前）。
+  const styleTitleBtn = make('button', 'ghost', '按款式出标题');
   const descWrap = make('label', '', '俄文描述 ');
   const descInput = make('input');
   descInput.type = 'text';
@@ -205,7 +214,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   descWrap.append(descInput);
   // 文案按钮单独成行，避免和输入框抢栅格单元（截图里挤在左侧）
   const copyButtons = make('div', 'ssdl-buttons');
-  copyButtons.append(generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn, styleHeroBtn);
+  copyButtons.append(generateTitle, describeBtn, promptPlanBtn, genImageBtn, genAllBtn, styleHeroBtn, styleTitleBtn);
   copyRow.append(titleWrap, descWrap, copyButtons);
 
   // AI 文本配置：BYOK 的 profile 只登记了图像操作，文本走自己这份配置。
@@ -316,7 +325,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     decorate(actions, '③ 上架');
   } catch (_e) {}
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, debugSplitPlans: buildSplitPlans, debugStyleSegments: () => styleSegments((getContext() || {}).skus), debugDictionary: dictionaryFor, debugStyleHeroes: runStyleHeroes, debugStyleHeroMap: () => styleHeroMap, matchDictionaryValue }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, debugSplitPlans: buildSplitPlans, debugStyleSegments: () => styleSegments((getContext() || {}).skus), debugDictionary: dictionaryFor, debugStyleHeroes: runStyleHeroes, debugStyleHeroMap: () => styleHeroMap, debugStyleTitles: runStyleTitles, debugStyleTitleMap: () => styleTitleMap, composeRuTitle, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
   // 直连面板是主路径，不能嵌在 ERP 编辑视图里（那样永远排在页面下方）。
@@ -702,7 +711,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     return map;
   }
 
-  function planFromOzon(context, skus, offers, byOffer, priceMap) {
+  function planFromOzon(context, skus, offers, byOffer, priceMap, titleOverride) {
     const items = skus.map((sku, index) => {
       const offerId = offers[index];
       const row = byOffer.get(offerId);
@@ -727,7 +736,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         depth: Number(row.depth) || Number(depthInput.input.value),
         width: Number(row.width) || Number(widthInput.input.value),
       };
-      const name = String(titleInput.value || row.name || '').trim();
+      const name = String(titleOverride || titleInput.value || row.name || '').trim();
       const blockers = [];
       if (name.length < 3) blockers.push('TITLE_RU');
       if (!(price > 0)) blockers.push('PRICE');
@@ -818,8 +827,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     return styleHeroMap;
   }
 
-  async function saveStyleHero(segment, url) {
-    const sourceId = sourceIdOf(getContext());
+  async function saveStyleHero(segment, url) {    const sourceId = sourceIdOf(getContext());
     if (!sourceId || !segment || !url) return;
     styleHeroMap.set(String(segment), String(url));
     try {
@@ -844,6 +852,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
   /** 逐款式出主图（已生成过的跳过；limit>0 只做前 N 个款式，便于先试几张） */
   async function runStyleHeroes(limit) {
+    await refreshStyleCaches();
     const context = getContext();
     const allSkus = (context && context.skus) || [];
     const segments = styleSegments(allSkus);
@@ -876,6 +885,156 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     globalThis.__SSERP_STYLE_HEROES__ = { total: picked.length, ok, skipped, failed };
     state.textContent = `款式主图完成：${ok}/${picked.length}` + (skipped ? `（跳过已有 ${skipped}）` : '') + (failed.length ? `，失败 ${failed.length}` : '');
     return { ok, total: picked.length, skipped, failed };
+  }
+
+  // ── 款式标题（拆卡时每款一条，2026-11-18）────────────────────────────────
+  // 55 张卡共用一条标题，搜索侧完全一样，买家没法区分；这里按「款式名 + 视觉配色」
+  // 给每个款式一条自己的俄文标题，仍然遵守「品类名词在最前」这条硬约束。
+  const styleTitleKey = (sourceId) => 'ss-erp:direct-lane:style-title:' + String(sourceId || '');
+  let styleTitleMap = new Map();
+  // 生成标题时用到的输入（配色/图案）也一起缓存：改拼装规则时可以直接重算，
+  // 不用再对 55 张图跑一遍视觉（那次要 11 分钟）。
+  let styleMetaMap = new Map();
+  // 款式名里的高度/功能词（1688 的款式名是中文，只能按关键词映射）
+  const STYLE_HEIGHT = [
+    [/反光/, 'со светоотражающими элементами'],
+    [/中筒/, 'средней высоты'],
+    [/长筒|长袜/, 'длинные'],
+    [/船袜|隐形/, 'невидимые'],
+    [/短筒|短袜/, 'короткие'],
+  ];
+  // 视觉给出的图案词（中文）→ 俄文短语，用来把同色同族的款式再区分开
+  const STYLE_PATTERN = [
+    [/条纹|条子/, 'в полоску'],
+    [/人字|方框|菱形/, 'в елочку'],
+    [/扎染|喷染/, 'тай-дай'],
+    [/拼色|撞色/, 'двухцветные'],
+    [/印花|图案/, 'с принтом'],
+    [/纯色/, 'однотонные'],
+  ];
+
+  async function loadStyleTitles(sourceId) {
+    styleTitleMap = new Map();
+    styleMetaMap = new Map();
+    if (!sourceId) return styleTitleMap;
+    try {
+      const got = await chrome.storage.local.get(styleTitleKey(sourceId));
+      const list = got && got[styleTitleKey(sourceId)];
+      for (const one of (Array.isArray(list) ? list : [])) {
+        if (!one || !one.segment) continue;
+        if (String(one.title || '').trim()) styleTitleMap.set(String(one.segment), String(one.title));
+        if (Array.isArray(one.colours) || one.pattern) {
+          styleMetaMap.set(String(one.segment), { colours: Array.isArray(one.colours) ? one.colours : [], pattern: String(one.pattern || '') });
+        }
+      }
+    } catch (_error) { /* 读不到就当没生成过 */ }
+    return styleTitleMap;
+  }
+
+  async function saveStyleTitle(segment, title, meta) {
+    const sourceId = sourceIdOf(getContext());
+    if (!sourceId || !segment || !title) return;
+    styleTitleMap.set(String(segment), String(title));
+    if (meta) styleMetaMap.set(String(segment), meta);
+    try {
+      await chrome.storage.local.set({
+        [styleTitleKey(sourceId)]: [...styleTitleMap.entries()].map(([seg, t]) => ({
+          segment: seg,
+          title: t,
+          colours: (styleMetaMap.get(seg) || {}).colours || [],
+          pattern: (styleMetaMap.get(seg) || {}).pattern || '',
+          at: Date.now(),
+        })),
+      });
+    } catch (_error) { /* 存不下不影响本轮 */ }
+  }
+
+  /** 看图取「配色 + 图案」（中文），用于区分同族款式；失败返回空，标题仍能出 */
+  async function observeStylePattern(imageUrl, cfg) {
+    if (!cfg || !cfg.apiKey || !/^https?:\/\//.test(String(imageUrl || ''))) return { colours: [], pattern: '' };
+    try {
+      const result = await send('ss-erp:direct-ai-text', {
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        model: 'qwen3.8-flash',
+        maxTokens: 120,
+        timeoutMs: 60000,
+        responseFormat: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'Answer with one JSON object only.' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: '看这张袜子商品图，只回 JSON：{"颜色":"最主要的 1-2 个中文颜色词","图案":"中文图案词（纯色/条纹/人字纹/扎染/印花/拼色）"}。颜色只用常见词：黑/白/灰/米色/粉色/蓝色/深蓝/绿色/黄色/橙色/棕色/紫色/红色。' },
+              { type: 'image_url', image_url: { url: String(imageUrl) } },
+            ],
+          },
+        ],
+      });
+      let parsed = {};
+      try { parsed = JSON.parse(String((result && result.content) || '{}')); } catch (_error) { parsed = {}; }
+      const colourText = String(parsed['颜色'] || parsed.colors || '');
+      return { colours: colorsFromText(colourText).slice(0, 2), pattern: String(parsed['图案'] || parsed.pattern || '') };
+    } catch (_error) {
+      return { colours: [], pattern: '' };
+    }
+  }
+
+  /** 逐款式生成俄文标题（有配色缓存则只重算；limit>0 只做前 N 个款式） */
+  async function runStyleTitles(limit, force = false) {
+    await refreshStyleCaches();
+    const context = getContext();
+    if (!context || !context.skus || !context.skus.length) throw new Error('请先采集来源商品');
+    const cfg = await readTitleAiConfig();
+    const allSkus = context.skus || [];
+    const segments = styleSegments(allSkus);
+    const picked = Number(limit) > 0 ? segments.slice(0, Number(limit)) : segments;
+    // 品类名词 / 材质直接复用规则标题（它已经算出 «Носки» 与 «хлопковые»）
+    const base = buildRuTitle({
+      typeName: (context.category && context.category.typeName) || TYPE_NAME_BY_ID[Number(typeIdInput.value)] || '',
+      sourceTitle: context.sourceTitle || '',
+      fallbackTypeName: 'Носки',
+    });
+    const noun = base.category || 'Носки';
+    const material = base.material || '';
+    const failed = [];
+    let ok = 0;
+    let skipped = 0;
+    let collided = 0;
+    const used = new Set(styleTitleMap.values());
+    for (const [index, segment] of picked.entries()) {
+      const sku = allSkus.find((one) => styleOf(one) === segment);
+      const image = styleHeroMap.get(segment) || String((sku && sku.imageUrl) || '');
+      const cached = styleMetaMap.get(segment);
+      // 已经有配色缓存就直接重算标题（改拼装规则时不必再跑视觉）；
+      // 没有缓存才读图。
+      if (styleTitleMap.has(segment) && cached && !force) { ok += 1; skipped += 1; continue; }
+      state.textContent = `款式标题 ${index + 1}/${picked.length}：${segment}…`;
+      try {
+        const seen = cached || await observeStylePattern(image, cfg);
+        const gender = /男/.test(segment) ? 'мужск' : /女/.test(segment) ? 'женск' : '';
+        const features = STYLE_HEIGHT.filter(([re]) => re.test(segment)).map(([, ru]) => ru);
+        let { title } = composeRuTitle({ category: noun, gender, material, features, colours: seen.colours });
+        if (!title) throw new Error('标题为空');
+        // 同族同色会撞标题：加上图案短语，仍撞就带型号，保证 55 条互不相同
+        if (used.has(title) && styleTitleMap.get(segment) !== title) {
+          collided += 1;
+          const extra = STYLE_PATTERN.filter(([re]) => re.test(seen.pattern)).map(([, ru]) => ru);
+          const withPattern = composeRuTitle({ category: noun, gender, material, features: [...features, ...extra], colours: seen.colours }).title;
+          title = withPattern && !used.has(withPattern) ? withPattern : `${title}, модель ${index + 1}`;
+        }
+        used.delete(styleTitleMap.get(segment));
+        used.add(title);
+        await saveStyleTitle(segment, title, seen);
+        ok += 1;
+      } catch (error) {
+        failed.push({ segment, error: String((error && error.message) || error).slice(0, 120) });
+        logLine(`款式标题失败 ${segment}：${String((error && error.message) || error).slice(0, 80)}`, 'err');
+      }
+    }
+    globalThis.__SSERP_STYLE_TITLES__ = { total: picked.length, ok, skipped, collided, failed, titles: [...styleTitleMap.entries()].slice(0, 60) };
+    state.textContent = `款式标题完成：${ok}/${picked.length}` + (skipped ? `（跳过已有 ${skipped}）` : '') + (collided ? `，撞名修正 ${collided}` : '') + (failed.length ? `，失败 ${failed.length}` : '');
+    return { ok, total: picked.length, skipped, collided, failed };
   }
 
   /**
@@ -1357,7 +1516,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const existing = await fetchOzonProducts(probeOffers);
     if (existing && probeOffers.every((offer) => existing.has(offer))) {
       const priceMap = await fetchOzonPrices(probeOffers);
-      const plan = planFromOzon(context, skus, probeOffers, existing, priceMap);
+      const plan = planFromOzon(context, skus, probeOffers, existing, priceMap, opts.titleOverride);
       plan.__fromExisting = true;   // 这些 offer 已在 Ozon 存在：不能当新商品再发一次
       if (!String(titleInput.value || '').trim()) titleInput.value = plan.items[0] && plan.items[0].name || '';
       return { plan, context, workspace: null };
@@ -1782,7 +1941,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const editorStub = {
       category: context.category,
       selectedSkuKeys: skus.map((sku) => sku.key),
-    copy: { titleRu: String(titleInput.value || '').trim(), descriptionRu: stripLinks(autoDescription) },
+    // 拆卡时每个款式有自己的标题（规则 + 视觉配色）：优先用它，否则用输入框里那条
+    copy: { titleRu: String(opts.titleOverride || titleInput.value || '').trim(), descriptionRu: stripLinks(autoDescription) },
       pricing: { items: skus.map((sku) => {
         const computed = priceFor(sku.cost);
         return { skuKey: sku.key, price: computed ? computed.price : null, oldPrice: computed ? computed.oldPrice : null, currencyCode: 'CNY', vat: '0' };
@@ -1950,6 +2110,22 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   }
 
   /**
+   * 把「生成图 / 款式主图 / 款式标题」三份缓存从 storage 重新读一遍。
+   * 为什么要它：面板刚挂载时采集上下文可能还没到（挂载早于采集完成），
+   * 那时 sourceId 为空、三份缓存全读不到 —— 实测重载扩展后 heroes 变 0，
+   * 于是 55 张卡又退回同一套图。每次规划/出图前刷新一次，成本就是几次 storage.get。
+   */
+  async function refreshStyleCaches() {
+    const sourceId = sourceIdOf(getContext());
+    if (!sourceId) return;
+    const heroes = await loadStyleHeroes(sourceId);
+    const titles = await loadStyleTitles(sourceId);
+    const stored = await loadGeneratedImages(sourceId);
+    if (stored.length) lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
+    globalThis.__SSERP_STYLE_CACHE__ = { sourceId, heroes: heroes.size, titles: titles.size, generated: stored.length };
+  }
+
+  /**
    * 按款式拆卡（alignment §12）——规划阶段。
    *
    * 触发商品：1087518215857（袜子，55 个款式、全是均码、每款带图）。
@@ -1964,6 +2140,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   async function buildSplitPlans() {
     const context = getContext();
     if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+    await refreshStyleCaches();
     const base = String(offerBaseInput.value || '').trim() || String(context.offerBase || '').trim();
     const allSkus = context.skus || [];
     const segments = styleSegments(allSkus);
@@ -1974,11 +2151,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const limit = Number(String(skuLimitInput.value || '0')) || 0;
     const picked = limit > 0 ? segments.slice(0, limit) : segments;
     const originalBase = String(context.offerBase || '');
+    // 「更新已存在卡」：卡已经在 Ozon 上时，同货号重新 import 就是**更新**（标题/文案/属性），
+    // 不新建、不动价格库存。改 55 条标题就靠它，否则只能跳过。
+    const updateExisting = Boolean(updateExistingInput && updateExistingInput.checked);
     const cards = [];
     const items = [];
     const blockers = [];
     const notes = [];
     let skippedCount = 0;
+    let updatedCount = 0;
     try {
       for (const [index, segment] of picked.entries()) {
         const cardBase = base + String(index + 1);
@@ -1986,14 +2167,18 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         state.textContent = `拆卡规划 ${index + 1}/${picked.length}：${segment}`;
         let built = null;
         try {
-          built = await buildPlan({ skus: subSkus, offerBase: cardBase, ignoreVariantGroup: true, maxProductImages: 2 });
+          built = await buildPlan({
+            skus: subSkus, offerBase: cardBase, ignoreVariantGroup: true, maxProductImages: 2,
+            titleOverride: styleTitleMap.get(segment) || '',
+          });
         } catch (error) {
           blockers.push({ scope: cardBase, code: 'PLAN_FAILED', detail: `${segment}：${String((error && error.message) || error)}` });
           continue;
         }
         const plan = built.plan || {};
-        // 已经建过的卡不再重发：import 对同 offer 幂等，但重发会被判「类似商品重复」
-        if (plan.__fromExisting) {
+        // 已经建过的卡：不勾「更新已存在卡」就跳过（重发会被判「类似商品重复」）
+        const existingCard = Boolean(plan.__fromExisting);
+        if (existingCard && !updateExisting) {
           skippedCount += 1;
           notes.push({ scope: cardBase, code: 'CARD_EXISTS', detail: `${segment}：${cardBase} 在 Ozon 已存在，本次跳过` });
           continue;
@@ -2011,10 +2196,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
           item.__style = segment;
           item.__cardBase = cardBase;
           item.__sourceSkus = subSkus.map((sku) => String(sku.key)).join(',');
+          item.__update = existingCard;
           items.push(item);
         }
         for (const blocker of (plan.blockers || [])) blockers.push({ scope: blocker.scope || cardBase, code: blocker.code, detail: blocker.detail });
-        cards.push({ segment, cardBase, plan, items: cardItems });
+        if (existingCard) updatedCount += 1;
+        cards.push({ segment, cardBase, plan, items: cardItems, update: existingCard });
         // 首卡算出来的俄文描述直接复用：每张卡都调一次文本模型会把 55 张拖到一小时以上
         if (!String(descInput.value || '').trim()) {
           const firstDescription = String((cardItems[0] || {}).description || '').trim();
@@ -2037,6 +2224,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       segmentCount: picked.length,
       cardCount: cards.length,
       skipped: skippedCount,
+      updated: updatedCount,
       ready: blockers.length === 0 && (cards.length + skippedCount) === picked.length && (items.length > 0 || skippedCount > 0),
     };
     return { merged, cards, segments: picked };
@@ -2344,7 +2532,10 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
     }
     globalThis.__SSERP_SPLIT_PICTURES__ = { cards: cards.length, entries: pictureEntries.length, start: Date.now() };
-    if (pictureEntries.length) {
+    // 纯更新（改动只在标题/文案）时不用再提交图片：重发会让 Ozon 重新审图，
+    // 白白把「Продается」打回 pending（实测改标题这类操作不该动图）。
+    const needsPictures = cards.some((card) => !card.update);
+    if (needsPictures && pictureEntries.length) {
       await step('pictures', { entries: pictureEntries });
       globalThis.__SSERP_SPLIT_PICTURES__.doneAt = Date.now();
       await new Promise((resolve) => setTimeout(resolve, 40000));
@@ -2354,8 +2545,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     for (const [index, card] of cards.entries()) {
       const importItems = card.items.map(toImportItem);
       const offers = importItems.map((one) => one.offerId);
-      const record = { cardBase: card.cardBase, segment: card.segment, offers, created: [], rows: [], stock: 'skipped' };
-      state.textContent = `拆卡 ${index + 1}/${cards.length}：${card.segment}（${card.cardBase}）…`;
+      const record = { cardBase: card.cardBase, segment: card.segment, offers, created: [], rows: [], stock: 'skipped', update: Boolean(card.update) };
+      state.textContent = `拆卡 ${index + 1}/${cards.length}：${card.segment}（${card.cardBase}）${card.update ? ' 更新' : ''}…`;
       // 限流（periodic_limit_exceeded）不是失败：Ozon 的导入配额按周期恢复，
       // 等一会儿重发同一张卡就行（import 对同 offer 幂等）。55 张连发必然遇到。
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -2383,6 +2574,10 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         record.rows = products.rows || [];
         if (!record.created.length) {
           record.error = 'NOT_CREATED';
+        } else if (card.update) {
+          // 更新已存在卡：只 import（改标题/文案/属性），价格库存保持线上原值
+          record.price = 'kept';
+          record.stock = 'kept';
         } else {
           // 价格：import 已经带了价，这里再发一次是为了「已经建好但导入时价格没落库」的情况。
           // 新建卡在审核前会回 updated:false，所以要退避重试，不是失败。
@@ -2437,7 +2632,8 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     const createdCount = results.filter((one) => (one.created || []).length).length;
     // 3) 收尾对账：库存只能等审核过（NOT_PASS_MODERATION 是时序，不是失败）。
     // 逐卡设库存时几乎必然撞上「还在审核」，所以最后再对全部已创建的卡补一次。
-    const createdOffers = results.flatMap((one) => one.created || []);
+    // 更新模式的卡不动库存（线上已有），只对新建的卡补。
+    const createdOffers = results.filter((one) => !one.update).flatMap((one) => one.created || []);
     if (stockCount > 0 && warehouseId > 0 && createdOffers.length) {
       state.textContent = `拆卡：等审核后补库存（${createdOffers.length} 张）…`;
       let stocked = { ok: [], failed: [] };
@@ -2464,15 +2660,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     }
     const stockedCount = results.filter((one) => /^\d+\/\d+$/.test(String(one.stock || '')) && Number(String(one.stock).split('/')[0]) > 0).length;
     const failed = results.filter((one) => !(one.created || []).length);
+    const updatedDone = results.filter((one) => one.update && (one.created || []).length).length;
     globalThis.__SSERP_SPLIT_RESULT__ = {
-      total: cards.length, created: createdCount, stocked: stockedCount, skipped: skipped.length,
+      total: cards.length, created: createdCount, updated: updatedDone, stocked: stockedCount, skipped: skipped.length,
       offerBase: merged.offerBase,
       failed: failed.map((one) => ({ cardBase: one.cardBase, segment: one.segment, error: one.error, importErrors: one.importErrors, status: one.importStatus })),
       cards: results.map((one) => ({ cardBase: one.cardBase, segment: one.segment, created: one.created, stock: one.stock, price: one.price })),
     };
     output.textContent = JSON.stringify(globalThis.__SSERP_SPLIT_RESULT__, null, 1).slice(0, 4000);
     state.textContent = `拆卡上架完成：${createdCount}/${cards.length} 张卡已创建`
-      + (stockCount > 0 && warehouseId > 0 ? `，库存 ${stockedCount}/${createdCount}` : '（未设库存：仓库不可用）')
+      + (updatedDone ? `（其中更新 ${updatedDone} 张）` : '')
+      + (stockCount > 0 && warehouseId > 0 ? `，库存 ${stockedCount}/${createdCount - updatedDone}` : '（未设库存：仓库不可用）')
       + (skipped.length ? `，已存在跳过 ${skipped.length}` : '')
       + (failed.length ? `，失败 ${failed.length}` : '');
     onPublished?.({ split: true, total: cards.length, created: createdCount, results });
@@ -2764,6 +2962,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       .finally(() => { busy = false; styleHeroBtn.disabled = false; });
   });
 
+  styleTitleBtn.addEventListener('click', (event) => {
+    if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
+    if (!claimBusy()) return;
+    styleTitleBtn.disabled = true;
+    void runStyleTitles(0)
+      .catch((error) => { state.textContent = `款式标题失败：${String((error && error.message) || error).slice(0, 160)}`; })
+      .finally(() => { busy = false; styleTitleBtn.disabled = false; });
+  });
+
   autoPricing.addEventListener('click', (event) => {
     if (!SS_ERP_TRUST_GATE.ok(event, event.currentTarget || event.target)) return;
     void (async () => {
@@ -3036,13 +3243,14 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (!sourceId) continue;
       const stored = await loadGeneratedImages(sourceId);
       const heroes = await loadStyleHeroes(sourceId);
+      const titles = await loadStyleTitles(sourceId);
       if (!Number(catIdInput.value) && !Number(typeIdInput.value)) {
         const cached = await readCachedCategory(sourceId);
         if (cached) { catIdInput.value = String(cached.categoryId); typeIdInput.value = String(cached.typeId); }
       }
-      if (!stored.length && !heroes.size) return;
+      if (!stored.length && !heroes.size && !titles.size) return;
       lastImageResults = stored.map((one) => ({ goalType: one.goalType, url: one.url }));
-      state.textContent = `已载入 ${stored.length} 张生成图 / ${heroes.size} 张款式主图，listing 会优先用它们`;
+      state.textContent = `已载入 ${stored.length} 张生成图 / ${heroes.size} 张款式主图 / ${titles.size} 条款式标题`;
       return;
     }
   })();
