@@ -135,6 +135,19 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   variantGroupInput.value = '0';
   variantGroupInput.style.width = '70px';
   variantGroupWrap.append(variantGroupInput);
+  // 按款式拆卡（alignment §12）：1688 有整类商品把几十个款式塞进「颜色」这一个维度、
+  // 尺码全是均码。它们本来就不是「一张卡里的 N 个变体」，而是 N 个独立商品 ——
+  // 一起发只会因为同色同码被判 DUPLICATE_VARIANT，最后只剩一条。
+  // 勾上后按「标签第一段（款式名）」分组，一组一张单变体卡，货号 = 前缀 + 序号（A1…A55）。
+  const splitByStyleWrap = make('label', '', '按款式拆卡 ');
+  const splitByStyle = make('input');
+  splitByStyle.type = 'checkbox';
+  splitByStyle.id = 'ss-erp-split-by-style';
+  splitByStyle.title = '每个款式单独一张卡（款式 = 规格标签第一段）；货号 = 前缀 + 序号';
+  splitByStyle.addEventListener('change', () => {
+    globalThis.__SSERP_SPLIT_BY_STYLE__ = Boolean(splitByStyle.checked);
+  });
+  splitByStyleWrap.append(splitByStyle);
   // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
   const catWrap = make('label', '', '类目（自动识别）');
   const catIdInput = make('input');
@@ -159,7 +172,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 输入与动作分开：动作按钮单独一行，别占栅格单元（截图里会把输入挤歪）。
   const toolbarButtons = make('div', 'ssdl-buttons');
   toolbarButtons.append(applyMultiplier, autoPricing, refreshWarehouses);
-  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, splitByStyleWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap);
   toolbar.append(toolbarButtons);
 
@@ -300,7 +313,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
     decorate(actions, '③ 上架');
   } catch (_e) {}
   // 调试钩子（只暴露只读上下文，便于脚本核对 SKU key / 类目）
-  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, matchDictionaryValue }; } catch (_e) {}
+  try { globalThis.__SSERP_PANEL_DEBUG__ = { getContext, readCachedCategory, attributesFromRules, mergeWorkspaceValues, getLastVision: () => lastVisionReport, debugBuildPlan: buildPlan, debugApplyPrice: applyPriceInputs, debugRender: renderTable, debugSplitPlans: buildSplitPlans, debugStyleSegments: () => styleSegments((getContext() || {}).skus), debugDictionary: dictionaryFor, matchDictionaryValue }; } catch (_e) {}
   root.append(panel);
 
   // 直连面板是主路径，不能嵌在 ERP 编辑视图里（那样永远排在页面下方）。
@@ -315,19 +328,48 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 这里把它们存到 localStorage，重建后自动恢复。
   try {
     const PERSIST_KEY = 'ss-erp:direct-lane:inputs';
-    const tracked = () => [...root.querySelectorAll('input[placeholder="categoryId"], input[placeholder="typeId"], input[type="text"], input[type="number"]')];
+    const sourceNow = () => String(((getContext() || {}).sourceProductId) || '');
+    // 按**字段名**持久化，不再按 DOM 序号。序号会漂移：价格表格的行输入也在 root 里，
+    // 行数一变后面所有字段就串位 —— 实测把 AI baseUrl 存进了「俄文描述」，描述被
+    // stripLinks 清空，卡片判「Не удалось создать описание」。
+    const PERSIST_NAMES = new Map([
+      [offerBaseInput, 'offerBase'], [skuLimitInput, 'skuLimit'], [variantGroupInput, 'variantGroup'],
+      [catIdInput, 'catId'], [typeIdInput, 'typeId'],
+      [costInput.input, 'cost'], [multiplier.input, 'multiplier'], [markup.input, 'markup'],
+      [strike.input, 'strike'], [stockInput.input, 'stock'],
+      [weightInput.input, 'weight'], [widthInput.input, 'width'],
+      [heightInput.input, 'height'], [depthInput.input, 'depth'],
+      [titleInput, 'title'], [descInput, 'desc'], [aiBase, 'aiBase'], [aiModel, 'aiModel'],
+    ]);
+    for (const [el, name] of PERSIST_NAMES) {
+      try { el.setAttribute('data-persist', name); } catch (_e) {}
+    }
+    const persistables = () => [...root.querySelectorAll('[data-persist]')];
     const saveInputs = () => {
       const data = {};
-      tracked().forEach((el, index) => { data[index] = String(el.value || ""); });
+      for (const el of persistables()) data[el.getAttribute('data-persist')] = String(el.value || "");
+      // 记下这批输入属于哪个货源商品：换商品后类目/类型不能沿用上一个的。
+      data.__source = sourceNow();
       try { localStorage.setItem(PERSIST_KEY, JSON.stringify(data)); } catch (_e) {}
     };
     const restoreInputs = () => {
       let data = null;
       try { data = JSON.parse(localStorage.getItem(PERSIST_KEY) || "null"); } catch (_e) { data = null; }
-      if (!data) return;
-      tracked().forEach((el, index) => {
-        if (data[index] != null && !String(el.value || "").trim()) el.value = data[index];
-      });
+      if (!data || typeof data !== 'object') return;
+      // 旧版按序号存（键是 "0"/"1"…），字段已经串过位：整体丢弃，重新记一次就好。
+      if (!('offerBase' in data) && data['0'] != null) {
+        try { localStorage.removeItem(PERSIST_KEY); } catch (_e) {}
+        return;
+      }
+      // 类目/类型按商品隔离：实测袜子商品沿用了上一个裙子商品的类目（200000933/93283），
+      // 于是必填属性按裙子算、卡片按裙子建。换商品时这两个必须空着走自动识别。
+      const sameSource = !data.__source || data.__source === sourceNow();
+      for (const el of persistables()) {
+        const key = el.getAttribute('data-persist');
+        if (!sameSource && (key === 'catId' || key === 'typeId')) continue;
+        const value = data[key];
+        if (value != null && !String(el.value || '').trim()) el.value = value;
+      }
     };
     restoreInputs();
     root.addEventListener('input', saveInputs);
@@ -335,6 +377,11 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   } catch (_e) { /* 持久化失败不影响使用 */ }
 
   let busy = false;
+  // 采集上下文里的**原始**货号（源商品号）。buildPlan 会把 context.offerBase 改成前缀，
+  // 之后任何「按源商品取缓存」的地方（生成图/类目）都会拿到前缀键，全部读空。
+  // 第一次看到的货号记在这里，作为稳定的源身份。
+  let sourceOfferBase = '';
+  const sourceIdOf = (context) => String((context && (context.sourceProductId || sourceOfferBase || context.offerBase)) || '');
   // busy 卡死自愈：异常路径没走到 busy=false 时（实测踩过），10 分钟后自动放行
   let busySince = 0;
   const claimBusy = () => {
@@ -524,8 +571,10 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (!computed) continue;
       const inputs = priceInputs.get(item.offerId);
       if (!inputs) continue;
-      inputs.price.value = computed.price.toFixed(2);
-      inputs.oldPrice.value = computed.oldPrice.toFixed(2);
+      // priceInputs 里存的键是 priceInput/oldPriceInput；早先写成 price/oldPrice，
+      // 于是「按倍率填价」看起来点了、其实一行都没改（静默无效）。
+      inputs.priceInput.value = computed.price.toFixed(2);
+      inputs.oldPriceInput.value = computed.oldPrice.toFixed(2);
       item.price = computed.price.toFixed(2);
       item.oldPrice = computed.oldPrice.toFixed(2);
       item.priceSource = '成本×倍率';
@@ -537,7 +586,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     priceInputs.clear();
     for (const item of plan.items) {
       const row = make('div', 'precision-local-fields');
-      row.append(make('span', '', `${item.suffix} · 成本 ${item.__cost == null ? '—' : money(item.__cost)}`));
+      row.append(make('span', '', `${item.__style ? String(item.__style) + ' · ' : ''}${item.suffix} · 成本 ${item.__cost == null ? '—' : money(item.__cost)}`));
       const priceWrap = make('label', '', ' 售价 ');
       const priceEl = make('input');
       priceEl.type = 'number';
@@ -727,7 +776,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   /** 生成图落本地：重开面板/重载扩展都不丢，listing 直接复用 */
   async function saveGeneratedImages(results) {
     try {
-      const sourceId = (getContext() && getContext().sourceProductId) || '';
+      // 采集上下文不一定带 sourceProductId（1688 适配器只给 offerBase），
+      // 之前只用 sourceProductId → 空 → 生成图一张都没存下来，重载扩展就得重新生图。
+      const sourceId = sourceIdOf(getContext());
       if (!sourceId) return;
       const urls = (results || []).filter((one) => one && one.url).map((one) => ({ goalType: one.goalType, url: one.url, at: Date.now() }));
       await chrome.storage.local.set({ ['ss-erp:direct-lane:generated:' + sourceId]: urls });
@@ -815,11 +866,16 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       return value && typeof value === "object" ? value : {};
     } catch (_e) { return {}; }
   }
-  async function rememberPublished(sourceId, offerBase) {
+  async function rememberPublished(sourceId, offerBase, splitBase) {
     if (!sourceId || !offerBase) return;
     try {
       const all = await readPublishedSources();
-      all[String(sourceId)] = { offerBase: String(offerBase), at: new Date().toISOString() };
+      const previous = all[String(sourceId)] || {};
+      // splitBase：按款式拆卡时用的「卡号前缀」。普通上架没有这一项，保留旧值不影响判断。
+      all[String(sourceId)] = splitBase
+        ? { offerBase: String(offerBase), splitBase: String(splitBase), at: new Date().toISOString() }
+        : { offerBase: String(offerBase), at: new Date().toISOString() };
+      if (!splitBase && previous.splitBase) all[String(sourceId)].splitBase = previous.splitBase;
       await chrome.storage.local.set({ [PUBLISHED_KEY]: all });
     } catch (_e) { /* 记不上不影响上架 */ }
   }
@@ -893,6 +949,44 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (best) return best;
   }
   return byTwo || null;
+  }
+
+  /**
+   * 取一份字典值（内存 memo → 本地缓存 → 实时拉，带退避重试）。
+   * 为什么要有它：55 张卡连续规划时每一张都裸打一次 /attribute/values，Ozon 立刻限流、
+   * 返回空列表 → 尺码映射不上 → 31 张卡全报 REQUIRED_ATTRIBUTES（实测 2026-11-17）。
+   * 缓存键与 attributesFromRules 里的 dictStorageKey 保持一致，两边共用同一份。
+   */
+  const dictMemo = new Map();
+  async function dictionaryFor(categoryRef, attributeId) {
+    const id = Number(attributeId) || 0;
+    if (!id || !categoryRef) return [];
+    const memoKey = `${categoryRef.categoryId}|${categoryRef.typeId}|${id}`;
+    if (dictMemo.has(memoKey)) return dictMemo.get(memoKey);
+    const key = `ss-erp:dict:${categoryRef.categoryId}:${categoryRef.typeId}:${id}`;
+    const readCached = async () => {
+      try {
+        const got = await chrome.storage.local.get([key]);
+        return Array.isArray(got[key]) ? got[key] : [];
+      } catch (_e) { return []; }
+    };
+    const cached = await readCached();
+    if (cached.length) { dictMemo.set(memoKey, cached); return cached; }
+    // 限流时字典会连着回空：重试要够长（3s/6s/12s/18s），一次失败就判死会毁掉整批卡
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const listed = await send('ss-erp:direct-ozon-attribute-values', {
+        categoryId: categoryRef.categoryId, typeId: categoryRef.typeId,
+        attributeIds: [id], query: '', limit: 1000, language: 'DEFAULT',
+      }).catch(() => null);
+      const list = (listed && listed.values && listed.values[id]) || [];
+      if (list.length) {
+        dictMemo.set(memoKey, list);
+        try { await chrome.storage.local.set({ [key]: list.slice(0, 400) }); } catch (_e) {}
+        return list;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000 * attempt * (attempt > 1 ? 2 : 1)));
+    }
+    return [];
   }
 
   async function attributesFromRules(context, category, skus) {
@@ -1087,21 +1181,47 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     return { fields, values };
   }
 
-  async function buildPlan() {
+  /** 款式名 = 规格标签第一段（1688 常把钱 55 个款式放在「颜色」维度里） */
+  const styleOf = (sku) => String((sku && sku.label) || "").split("/")[0].trim();
+
+  /** 按款式名去重后的款式列表（保持采集顺序；「变体组」用的是同一套切分） */
+  function styleSegments(skus) {
+    const out = [];
+    const seen = new Set();
+    for (const sku of (Array.isArray(skus) ? skus : [])) {
+      const segment = styleOf(sku);
+      if (!segment || seen.has(segment)) continue;
+      seen.add(segment);
+      out.push(segment);
+    }
+    return out;
+  }
+
+  /**
+   * 组装一条上架计划。
+   * opts（拆卡模式用）：
+   *   skus              只用这些 SKU（一张卡一组款式）；默认取采集到的全部
+   *   offerBase         本张卡的货号前缀（A1…A55），优先于输入框
+   *   ignoreVariantGroup 忽略「变体组」过滤 —— 拆卡是按款式循环，不是只取第 N 组
+   */
+  async function buildPlan(opts = {}) {
     const context = getContext();
     if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+    if (!sourceOfferBase) sourceOfferBase = String(context.sourceProductId || context.offerBase || '');
     // 缓存键（类目/生成图）必须用**源商品号**，不能被下面改的货号前缀带跑
-    const sourceKey = String(context.sourceProductId || context.offerBase);
+    const sourceKey = sourceIdOf(context);
     // 货号前缀可改：用它就能基于同一份采集建一条全新 listing
-    const prefixed = String(offerBaseInput.value || '').trim();
-    if (!prefixed) offerBaseInput.value = context.offerBase;
+    // 拆卡时由调用方逐卡传入（A1…A55），这时不能回写输入框，只改本次上下文。
+    const prefixed = String(opts.offerBase || offerBaseInput.value || '').trim();
+    if (opts.offerBase) context.offerBase = prefixed;
+    else if (!prefixed) offerBaseInput.value = context.offerBase;
     else context.offerBase = prefixed;
-    const allSkus = context.skus || [];
+    const allSkus = (Array.isArray(opts.skus) && opts.skus.length) ? opts.skus : (context.skus || []);
     const limitValue = Number(String(skuLimitInput.value || '0')) || 0;
     // 规格去重：1688 有些商品的 SKU 规格名完全重复（同色同码出现两次）。
   // 变体组过滤：先按「标签第一段」分组，再取第 N 组（0 = 全部）。
   // 「斗篷猫睡袍」和「斗篷猫睡袍+裤子」这类套装差异必须拆卡，否则会被 DUPLICATE_VARIANT 合并。
-  const variantGroupValue = Number(String((variantGroupInput && variantGroupInput.value) || "0")) || 0;
+  const variantGroupValue = opts.ignoreVariantGroup ? 0 : (Number(String((variantGroupInput && variantGroupInput.value) || "0")) || 0);
   const groupSegments = [];
   for (const sku of allSkus) {
     const segment = String((sku && sku.label) || "").split("/")[0].trim();
@@ -1125,7 +1245,10 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (dedupedSkus.length < groupedSkus.length) {
       globalThis.__SSERP_DEDUPED_SKUS__ = { total: groupedSkus.length, kept: dedupedSkus.length };
     }
-    const skus = limitValue > 0 ? dedupedSkus.slice(0, limitValue) : dedupedSkus;
+    // 拆卡时 opts.skus 已经是「这一张卡」的 SKU 子集，上限在那边按卡数生效
+    const skus = (Array.isArray(opts.skus) && opts.skus.length)
+      ? dedupedSkus
+      : (limitValue > 0 ? dedupedSkus.slice(0, limitValue) : dedupedSkus);
     // 成本覆盖：采集值缺失或被人工改价时用面板输入
     const costOverride = Number(costInput.input.value) || 0;
     if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
@@ -1143,10 +1266,15 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
 
     // 已上架：属性/尺寸/图片从 Ozon 读（不依赖 ERP —— ERP 的 catalogRevision
     // 一变，editor/attributes 就会回 source_listing_catalog_stale，直连车道不该被它拖住）
-    const existing = await fetchOzonProducts(offers);
-    if (existing && offers.every((offer) => existing.has(offer))) {
-      const priceMap = await fetchOzonPrices(offers);
-      const plan = planFromOzon(context, skus, offers, existing, priceMap);
+    // 拆卡时一张卡只有一个款式，最终货号就是卡号（A1…A55，不带 -1 后缀）：
+    // 存在性预检必须用**最终货号**去查，否则已经建好的卡会被当成新商品重发。
+    const probeOffers = (Array.isArray(opts.skus) && opts.skus.length === 1 && opts.offerBase)
+      ? [String(opts.offerBase)]
+      : offers;
+    const existing = await fetchOzonProducts(probeOffers);
+    if (existing && probeOffers.every((offer) => existing.has(offer))) {
+      const priceMap = await fetchOzonPrices(probeOffers);
+      const plan = planFromOzon(context, skus, probeOffers, existing, priceMap);
       plan.__fromExisting = true;   // 这些 offer 已在 Ozon 存在：不能当新商品再发一次
       if (!String(titleInput.value || '').trim()) titleInput.value = plan.items[0] && plan.items[0].name || '';
       return { plan, context, workspace: null };
@@ -1224,26 +1352,35 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
   // 结果 56 个 SKU 只剩 5 个颜色、尺码维度消失（实测 sizeRows: 0）。
   // 这里按「标签最后一段」取尺码文本，走字典 + 最近数值匹配逐个补。
   {
-    const sizeField = ((workspace && workspace.fields) || []).find((field) => field
-      && /размер|尺码|尺寸/i.test(String(field.name || ""))
-      && String(field.ownership || "").toUpperCase() === "SKU")
-      || ((workspace && workspace.fields) || []).find((field) => field && Number(field.attributeId || field.id) === 4295);
+    // 4295「俄罗斯尺码」优先：服装类目里往往还有 9533「制造商尺码」，按名字模糊匹配会先
+    // 命中 9533 —— 均码在它的字典里根本不存在，于是 4295（必填）永远补不上（袜子实测）。
+    const sizeField = ((workspace && workspace.fields) || []).find((field) => field && Number(field.attributeId || field.id) === 4295)
+      || ((workspace && workspace.fields) || []).find((field) => field
+        && field.required
+        && /размер|尺码|尺寸/i.test(String(field.name || ""))
+        && String(field.ownership || "").toUpperCase() === "SKU")
+      || ((workspace && workspace.fields) || []).find((field) => field
+        && /размер|尺码|尺寸/i.test(String(field.name || ""))
+        && String(field.ownership || "").toUpperCase() === "SKU");
     const sizeId = sizeField ? Number(sizeField.attributeId || sizeField.id) : 0;
     if (sizeId) {
       const hasSize = (workspace.values || []).some((row) => Number(row.attributeId) === sizeId
         && String(row.skuKey || '').trim() && !row.__unresolved
         && (((row.dictionaryValueIds || []).length) || String(row.value || "").trim()));
       if (!hasSize) {
-        const listed = await send('ss-erp:direct-ozon-attribute-values', {
-          categoryId: category.categoryId, typeId: category.typeId, attributeIds: [sizeId], query: "", limit: 400, language: "DEFAULT",
-        }).catch(() => null);
-        const sizeList = (listed && listed.values && listed.values[sizeId]) || [];
+        const sizeList = await dictionaryFor(category, sizeId);
+        // 定位用：字典回空时能直接看出是「没拉到字典」还是「匹配不上」
+        globalThis.__SSERP_SIZE_DEBUG__ = { sizeId, hasSize, listLen: (sizeList || []).length, label: String(skus[0] && skus[0].label || '') };
         if (sizeList.length) {
           let filled = 0;
           for (const sku of skus) {
             const parts = String(sku.label || '').split('/');
-            const sizeText = String(parts[parts.length - 1] || '').trim();
-            if (!sizeText) continue;
+            const rawSize = String(parts[parts.length - 1] || '').trim();
+            if (!rawSize) continue;
+            // 均码：Ozon 的「俄罗斯尺码」字典里对应「универсальный」(35646)。
+            // 袜子 / 帽子 / 围巾这类整款均码的商品只有这一个可用值；不映射的话
+            // 4295 是必填项 → 每张卡都卡在 REQUIRED_ATTRIBUTES（实测袜子 55 款全中）。
+            const sizeText = /均码|统一码|均一码|free\s*size|one\s*size/i.test(rawSize) ? 'универсальный' : rawSize;
             const chosen = matchDictionaryValue(sizeList, sizeText) || (await lookupColourValue(sizeId, sizeText));
             if (!chosen) continue;
             workspace.values.push({ attributeId: sizeId, skuKey: sku.key, value: String(chosen.value || ""), dictionaryValueIds: [chosen.id] });
@@ -1666,7 +1803,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       return { scope: 'SKU', skuKey: sku.key, url };
     })
           .filter((one) => /^https:\/\//.test(one.url)),
-        ...imagesForPlan(context).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
+        // 产品级张数可限：拆卡时 55 张卡共用同一套图，9 张 2.1MB 的 PNG 会让 Ozon 的
+        // 异步抓图整批超时（实测 images:0 / primary 为空），3 张以内最稳。
+        ...imagesForPlan(context).slice(0, Number(opts.maxProductImages) > 0 ? Number(opts.maxProductImages) : 15).map((url) => ({ scope: 'PRODUCT', skuKey: null, url })),
       ],
       defaults: { currency: 'CNY', vat: '0' },
     });
@@ -1708,11 +1847,111 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       if (Number.isFinite(oldPrice) && oldPrice > 0) item.oldPrice = oldPrice.toFixed(2);
       if (!item.price) item.blockers.push('PRICE');
     }
-    plan.blockers = plan.items.flatMap((item) => item.blockers.map((code) => ({ scope: item.offerId, code, detail: '' })))
+    plan.blockers = plan.items.flatMap((item) => item.blockers.map((code) => ({
+      scope: item.offerId,
+      code,
+      // 缺哪个属性必须写出来：只有 REQUIRED_ATTRIBUTES 时根本没法定位（实测 31 张卡都缺 4295）
+      detail: code === 'REQUIRED_ATTRIBUTES'
+        ? (item.missingRequired || []).map((field) => field.name || field.id).join(' / ')
+        : '',
+    })))
       .concat(plan.blockers.filter((one) => !/^(TITLE_RU|PRICE|WEIGHT|DIMENSIONS|IMAGES|REQUIRED_ATTRIBUTES)$/.test(String(one.code))));
     plan.ready = plan.items.length > 0
       && plan.items.every((item) => item.blockers.length === 0);
     return plan;
+  }
+
+  /**
+   * 按款式拆卡（alignment §12）——规划阶段。
+   *
+   * 触发商品：1087518215857（袜子，55 个款式、全是均码、每款带图）。
+   * 为什么必须拆：变体只能靠**可变的字典属性**区分，而这 55 款的颜色/尺码都拉不开
+   * （款式名不是颜色词、尺码只有「均码」）→ 一起发只会大面积 DUPLICATE_VARIANT。
+   * 它们本来就不是一张卡里的 55 个变体，而是 55 个独立商品。
+   *
+   * 产物：每款一张单变体卡，货号 = 前缀 + 序号（前缀 A → A1…A55），
+   * 且每张卡的 8292「合并至一张卡片」取不同值，Ozon 不会把它们并成一张。
+   * 图只生成一次，N 张卡复用同一套（§12 关键约束）。
+   */
+  async function buildSplitPlans() {
+    const context = getContext();
+    if (!context || !context.offerBase) throw new Error('请先采集来源商品');
+    const base = String(offerBaseInput.value || '').trim() || String(context.offerBase || '').trim();
+    const allSkus = context.skus || [];
+    const segments = styleSegments(allSkus);
+    if (segments.length < 2) {
+      throw new Error(`按款式拆卡需要 ≥2 个款式（当前只有 ${segments.length} 个）。只有一个款式请用普通上架。`);
+    }
+    // 拆卡模式下「SKU 上限」按**卡数**算：分批试跑/续跑都靠它
+    const limit = Number(String(skuLimitInput.value || '0')) || 0;
+    const picked = limit > 0 ? segments.slice(0, limit) : segments;
+    const originalBase = String(context.offerBase || '');
+    const cards = [];
+    const items = [];
+    const blockers = [];
+    const notes = [];
+    let skippedCount = 0;
+    try {
+      for (const [index, segment] of picked.entries()) {
+        const cardBase = base + String(index + 1);
+        const subSkus = allSkus.filter((sku) => styleOf(sku) === segment);
+        state.textContent = `拆卡规划 ${index + 1}/${picked.length}：${segment}`;
+        let built = null;
+        try {
+          built = await buildPlan({ skus: subSkus, offerBase: cardBase, ignoreVariantGroup: true, maxProductImages: 2 });
+        } catch (error) {
+          blockers.push({ scope: cardBase, code: 'PLAN_FAILED', detail: `${segment}：${String((error && error.message) || error)}` });
+          continue;
+        }
+        const plan = built.plan || {};
+        // 已经建过的卡不再重发：import 对同 offer 幂等，但重发会被判「类似商品重复」
+        if (plan.__fromExisting) {
+          skippedCount += 1;
+          notes.push({ scope: cardBase, code: 'CARD_EXISTS', detail: `${segment}：${cardBase} 在 Ozon 已存在，本次跳过` });
+          continue;
+        }
+        // 单款式卡：货号就是卡号本身。planDirectItems 会给每 SKU 追加 -1/-S 这类后缀，
+        // 拆卡后一张卡只有一个款式，带着后缀反而和「货号 A1…A55」对不上。
+        if (Array.isArray(plan.items) && plan.items.length === 1) plan.items[0].offerId = cardBase;
+        applyPriceInputs(plan);
+        const cardItems = Array.isArray(plan.items) ? plan.items : [];
+        if (!cardItems.length) {
+          blockers.push({ scope: cardBase, code: 'NO_ITEM', detail: segment });
+          continue;
+        }
+        for (const item of cardItems) {
+          item.__style = segment;
+          item.__cardBase = cardBase;
+          item.__sourceSkus = subSkus.map((sku) => String(sku.key)).join(',');
+          items.push(item);
+        }
+        for (const blocker of (plan.blockers || [])) blockers.push({ scope: blocker.scope || cardBase, code: blocker.code, detail: blocker.detail });
+        cards.push({ segment, cardBase, plan, items: cardItems });
+        // 首卡算出来的俄文描述直接复用：每张卡都调一次文本模型会把 55 张拖到一小时以上
+        if (!String(descInput.value || '').trim()) {
+          const firstDescription = String((cardItems[0] || {}).description || '').trim();
+          if (firstDescription) descInput.value = firstDescription;
+        }
+      }
+    } finally {
+      // 上下文里的 offerBase 是「源商品号」，被逐卡前缀改过，必须还原
+      context.offerBase = originalBase || context.offerBase;
+    }
+    const merged = {
+      offerBase: base,
+      category: (cards[0] && cards[0].plan && cards[0].plan.category) || (context.category || { categoryId: null, typeId: null }),
+      skuCount: items.length,
+      requiredFieldCount: (cards[0] && cards[0].plan && cards[0].plan.requiredFieldCount) || 0,
+      items,
+      blockers,
+      notes,
+      split: true,
+      segmentCount: picked.length,
+      cardCount: cards.length,
+      skipped: skippedCount,
+      ready: blockers.length === 0 && (cards.length + skippedCount) === picked.length && (items.length > 0 || skippedCount > 0),
+    };
+    return { merged, cards, segments: picked };
   }
 
   async function runPrecheck() {
@@ -1720,22 +1959,29 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (!claimBusy()) { globalThis.__SSERP_BUSY_BLOCKED__ = (globalThis.__SSERP_BUSY_BLOCKED__ || 0) + 1; return; }
     precheck.disabled = publishBtn.disabled = true;
     try {
-      const { plan } = await buildPlan();
+      // 勾了「按款式拆卡」且确实有多个款式 → 走拆卡规划（N 张单变体卡）
+      const splitContext = getContext() || {};
+      const splitting = Boolean(splitByStyle.checked) && styleSegments(splitContext.skus).length > 1;
+      const splitBuilt = splitting ? await buildSplitPlans() : null;
+      const plan = splitting ? splitBuilt.merged : (await buildPlan()).plan;
     // 同一个货源商品换前缀重发会被 Ozon 判「类似商品重复」（SPU_ALREADY_EXISTS），
     // 之前我在同一个商品上发了 A1..E1 五遍，80 条里 64 条报错。这里先查台账。
     {
-      const ctx0 = getContext() || {};
+      const ctx0 = splitContext;
       const sourceId = String((ctx0.sourceProductId || ctx0.offerBase || '').trim());
       const ledger = await readPublishedSources();
       const hit = ledger[sourceId];
-      const currentBase = String(ctx0.offerBase || '');
-      if (hit && hit.offerBase && hit.offerBase !== currentBase) {
-        throw new Error(`这个货源商品已经用前缀 ${hit.offerBase} 上架过了（${String(hit.at || '').slice(0, 10)}）。` +
+      const splitBase = splitting ? String(plan.offerBase || '') : '';
+      // 拆卡时记的是「卡号前缀」（A）；普通上架记的是货号前缀。各比各的，别互相顶。
+      const currentBase = splitting ? splitBase : String(ctx0.offerBase || '');
+      const recorded = hit && (splitting ? String(hit.splitBase || '') : String(hit.offerBase || ''));
+      if (recorded && recorded !== currentBase) {
+        throw new Error(`这个货源商品已经用前缀 ${recorded} 上架过了（${String(hit.at || '').slice(0, 10)}）。` +
           '换前缀重发会被 Ozon 判「类似商品重复」。要改内容请用原前缀更新，要补库存请点「补库存」。');
       }
-      void rememberPublished(sourceId, currentBase);
+      void rememberPublished(sourceId, currentBase, splitBase);
     }
-      const merged = applyPriceInputs(plan);
+      const merged = splitting ? plan : applyPriceInputs(plan);
       lastPlan = merged;
       renderTable(merged);
       globalThis.__SSERP_PROGRESS__ = 'rendered';
@@ -1749,9 +1995,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         title: String(titleInput.value || ''),
         blockers: merged.blockers,
         notes: merged.notes,
-        items: merged.items.map((item) => ({ offerId: item.offerId, attributes: item.attributeCount, price: item.price, oldPrice: item.oldPrice, images: item.images.length, missingRequired: item.missingRequired })),
+        split: splitting ? { segments: merged.segmentCount, cards: merged.cardCount, cardBase: merged.offerBase } : undefined,
+        items: merged.items.map((item) => ({ offerId: item.offerId, style: item.__style || undefined, attributes: item.attributeCount, price: item.price, oldPrice: item.oldPrice, images: item.images.length, missingRequired: item.missingRequired })),
       }, null, 2);
-      state.textContent = merged.ready ? `预检通过：${merged.items.length} 条可上架` : `预检未通过：${merged.blockers.length} 个待补项`;
+      if (splitting) {
+        const skipped = (merged.notes || []).filter((one) => one.code === 'CARD_EXISTS').length;
+        state.textContent = merged.ready
+          ? `预检通过：拆卡 ${merged.cardCount} 张（${merged.segmentCount} 个款式）` + (skipped ? `，已存在跳过 ${skipped}` : '')
+          : `预检未通过：${merged.blockers.length} 个待补项`;
+      } else {
+        state.textContent = merged.ready ? `预检通过：${merged.items.length} 条可上架` : `预检未通过：${merged.blockers.length} 个待补项`;
+      }
     } catch (error) {
       state.textContent = String((error && error.message) || error);
       report?.(error);
@@ -1776,6 +2030,12 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     if (!claimBusy()) { globalThis.__SSERP_BUSY_BLOCKED__ = (globalThis.__SSERP_BUSY_BLOCKED__ || 0) + 1; return; }
     precheck.disabled = publishBtn.disabled = true;
     try {
+      // 按款式拆卡：一张卡一个款式，逐卡 import/价格/库存；图片只提交一次（见 runSplitPublish）
+      const splitContext = getContext() || {};
+      if (Boolean(splitByStyle.checked) && styleSegments(splitContext.skus).length > 1) {
+        await runSplitPublish();
+        return;
+      }
       const { plan } = await buildPlan();
       const merged = applyPriceInputs(plan);
     // 同一货号重复发布会撞 Ozon「已上架/归档」，一个前缀只当新商品用一次；补库存走「补库存」按钮
@@ -1925,6 +2185,209 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       busy = false;
       precheck.disabled = publishBtn.disabled = false;
     }
+  }
+
+  /**
+   * 按款式拆卡的上架执行（alignment §12）。
+   *
+   * 顺序（与普通上架同一套单步执行器，只是按卡循环）：
+   *   1. 图片**只提交一次**：55 个 offer 一起发 /v2/product/pictures/import，
+   *      然后只等一轮 40 秒。若每张卡都等一轮，55 × 40s 就白等 35 分钟。
+   *   2. 逐卡：import（1 条） → poll → products → price → stock。
+   *      每张卡单独 import，一张卡失败不影响其余 54 张，进度也能逐卡显示。
+   *   3. 结果落 __SSERP_SPLIT_RESULT__，失败卡片带错误码，便于定点重发。
+   */
+  async function runSplitPublish() {
+    const { merged, cards } = await buildSplitPlans();
+    lastPlan = merged;
+    renderTable(merged);
+    fillPricesManualGuard(merged);
+    const skipped = (merged.notes || []).filter((one) => one.code === 'CARD_EXISTS');
+    // 全部卡都已存在：不重发（重发会被判「类似商品重复」），直接收工
+    if (!cards.length && skipped.length) {
+      globalThis.__SSERP_SPLIT_RESULT__ = { total: 0, created: 0, stocked: 0, skipped: skipped.length, offerBase: merged.offerBase, cards: [], failed: [] };
+      state.textContent = `拆卡：${skipped.length} 张卡都已在 Ozon 存在，无需重发`;
+      return;
+    }
+    globalThis.__SSERP_PROGRESS__ = 'split-ready=' + merged.ready + ' blockers=' + JSON.stringify((merged.blockers || []).map((one) => one.code));
+    if (!merged.ready) {
+      const head = (merged.blockers || []).slice(0, 5).map((one) => `${one.scope}/${one.code}`).join(' / ');
+      throw new Error(`拆卡预检未通过（${(merged.blockers || []).length} 项）：${head}`);
+    }
+    // 与普通上架同一条硬门槛：必须有 AI 生成图，否则会把带中文水印的 1688 原图发上去
+    const generatedReady = (lastImageResults || [])
+      .map((one) => String((one && one.url) || ""))
+      .filter((url) => /^https:\/\//.test(url));
+    if (!generatedReady.length) {
+      throw new Error("还没有 AI 生成图：每张卡的首图会是 1688 原图（带中文水印）。先在「生图」里出图，再发布。");
+    }
+    const step = (action, payload) => send('ss-erp:direct-publish-step', Object.assign({ action }, payload || {}));
+    const toImportItem = (item) => ({
+      offerId: item.offerId,
+      name: item.name,
+      description: item.description,
+      categoryId: item.categoryId,
+      typeId: item.typeId,
+      price: item.price,
+      oldPrice: item.oldPrice,
+      currency: item.currency,
+      vat: item.vat,
+      weight: item.weight,
+      dimensions: item.dimensions,
+      images: item.images,
+      attributes: item.attributes,
+    });
+    // 库存仓库：先取一次，循环里不再重复读
+    const stockCount = Number(stockInput.input.value);
+    let warehouseId = Number(warehouse.value);
+    if (stockCount > 0 && !(warehouseId > 0)) {
+      await loadWarehouses();
+      if (!Number(warehouse.value) && warehouse.options.length) warehouse.value = warehouse.options[0].value;
+      warehouseId = Number(warehouse.value);
+    }
+    output.textContent = '';
+    // 1) 图片：55 张卡共用同一套生成图 + 各自的款式原图，一次性提交
+    state.textContent = `拆卡：提交图片（${cards.length} 张卡）…`;
+    const pictureEntries = [];
+    for (const card of cards) {
+      for (const item of card.items) {
+        const urls = (item.images || []).filter((url) => /^https:\/\//.test(String(url)));
+        if (urls.length) pictureEntries.push({ offerId: item.offerId, imageUrls: urls });
+      }
+    }
+    globalThis.__SSERP_SPLIT_PICTURES__ = { cards: cards.length, entries: pictureEntries.length, start: Date.now() };
+    if (pictureEntries.length) {
+      await step('pictures', { entries: pictureEntries });
+      globalThis.__SSERP_SPLIT_PICTURES__.doneAt = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 40000));
+    }
+    // 2) 逐卡上架
+    const results = [];
+    for (const [index, card] of cards.entries()) {
+      const importItems = card.items.map(toImportItem);
+      const offers = importItems.map((one) => one.offerId);
+      const record = { cardBase: card.cardBase, segment: card.segment, offers, created: [], rows: [], stock: 'skipped' };
+      state.textContent = `拆卡 ${index + 1}/${cards.length}：${card.segment}（${card.cardBase}）…`;
+      // 限流（periodic_limit_exceeded）不是失败：Ozon 的导入配额按周期恢复，
+      // 等一会儿重发同一张卡就行（import 对同 offer 幂等）。55 张连发必然遇到。
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        record.created = [];
+        record.rows = [];
+        record.error = undefined;
+        let retry = false;
+      try {
+        const imported = await step('import', { items: importItems });
+        if (!imported || !imported.taskId) throw new Error('Ozon 没有返回 task_id');
+        let poll = { done: false, items: [] };
+        for (let i = 0; i < 20 && !poll.done; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          poll = await step('poll', { taskId: imported.taskId });
+        }
+        record.importStatus = (poll.items || []).map((one) => one.status).join(',');
+        record.importErrors = [...new Set((poll.items || []).flatMap((one) => one.errors || []))];
+        let products = { ready: [], pending: offers, rows: [] };
+        for (let i = 0; i < 12; i += 1) {
+          if (i) await new Promise((resolve) => setTimeout(resolve, 5000));
+          products = await step('products', { offers });
+          if (!(products.pending || []).length) break;
+        }
+        record.created = products.ready || [];
+        record.rows = products.rows || [];
+        if (!record.created.length) {
+          record.error = 'NOT_CREATED';
+        } else {
+          // 价格：import 已经带了价，这里再发一次是为了「已经建好但导入时价格没落库」的情况。
+          // 新建卡在审核前会回 updated:false，所以要退避重试，不是失败。
+          let priced = { ok: [], failed: [] };
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            priced = await step('price', {
+              offers: record.created, price: importItems[0].price, oldPrice: importItems[0].oldPrice,
+              currency: importItems[0].currency, vat: importItems[0].vat,
+            }).catch((error) => ({ ok: [], failed: [], error: String((error && error.message) || error) }));
+            if (priced.error || (priced.ok || []).length) break;
+            await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+          }
+          record.price = priced && priced.error ? priced.error : `${(priced.ok || []).length}/${record.created.length}`;
+          record.priceErrors = [...new Set((priced.failed || []).flatMap((one) => one.codes || []))];
+          if (stockCount > 0 && warehouseId > 0) {
+            let stocked = { ok: [], failed: [] };
+            for (let attempt = 1; attempt <= 4; attempt += 1) {
+              stocked = await step('stock', { offers: record.created, stock: stockCount, warehouseId })
+                .catch(() => ({ ok: [], failed: record.created.map((offerId) => ({ offerId, codes: ['STOCK_CALL_FAILED'] })) }));
+              const retryable = (stocked.failed || []).some((one) => (one.codes || []).some((code) =>
+                ['PRODUCT_IS_NOT_CREATED', 'TOO_MANY_REQUESTS', 'NOT_PASS_MODERATION'].includes(code)));
+              if (!(stocked.failed || []).length || !retryable) break;
+              await new Promise((resolve) => setTimeout(resolve, 6000 * attempt));
+            }
+            record.stock = `${(stocked.ok || []).length}/${record.created.length}`;
+            record.stockErrors = [...new Set((stocked.failed || []).flatMap((one) => one.codes || []))];
+          }
+        }
+      } catch (error) {
+        const message = String((error && error.message) || error);
+        retry = attempt < 3 && /periodic_limit_exceeded|TOO_MANY_REQUESTS|HTTP 429|超时|连接失败/i.test(message);
+        if (retry) {
+          state.textContent = `拆卡 ${index + 1}/${cards.length}：限流，等 ${20 * attempt}s 重发（${attempt}/3）`;
+          await new Promise((resolve) => setTimeout(resolve, 20000 * attempt));
+        } else {
+          record.error = message.slice(0, 160);
+        }
+      }
+        if (!retry) break;
+      }
+      results.push(record);
+      logLine(`拆卡 ${index + 1}/${cards.length} ${card.cardBase} ${card.segment} → `
+        + (record.created.length ? `created ${record.created.join(',')}` : (record.error || 'pending'))
+        + (record.importErrors && record.importErrors.length ? ` | ${record.importErrors.slice(0, 2).join(',')}` : ''),
+      record.created.length ? 'ok' : 'err');
+      output.textContent = JSON.stringify({
+        done: results.length, total: cards.length,
+        created: results.filter((one) => (one.created || []).length).length,
+        tail: results.slice(-2),
+      }, null, 1).slice(0, 2500);
+    }
+    const createdCount = results.filter((one) => (one.created || []).length).length;
+    // 3) 收尾对账：库存只能等审核过（NOT_PASS_MODERATION 是时序，不是失败）。
+    // 逐卡设库存时几乎必然撞上「还在审核」，所以最后再对全部已创建的卡补一次。
+    const createdOffers = results.flatMap((one) => one.created || []);
+    if (stockCount > 0 && warehouseId > 0 && createdOffers.length) {
+      state.textContent = `拆卡：等审核后补库存（${createdOffers.length} 张）…`;
+      let stocked = { ok: [], failed: [] };
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        stocked = await step('stock', { offers: createdOffers, stock: stockCount, warehouseId })
+          .catch(() => ({ ok: [], failed: createdOffers.map((offerId) => ({ offerId, codes: ['STOCK_CALL_FAILED'] })) }));
+        const retryable = (stocked.failed || []).some((one) => (one.codes || []).some((code) =>
+          ['PRODUCT_IS_NOT_CREATED', 'TOO_MANY_REQUESTS', 'NOT_PASS_MODERATION'].includes(code)));
+        if (!(stocked.failed || []).length || !retryable) break;
+        state.textContent = `拆卡：补库存重试 ${attempt}（仍有 ${(stocked.failed || []).length} 张在审核）…`;
+        await new Promise((resolve) => setTimeout(resolve, 20000 * attempt));
+      }
+      globalThis.__SSERP_SPLIT_STOCK__ = { ok: stocked.ok || [], failed: stocked.failed || [] };
+      // 回填到逐卡结果：只有真收到库存的卡才算 stocked
+      for (const offerId of (stocked.ok || [])) {
+        const hit = results.find((one) => (one.created || []).includes(offerId));
+        if (hit) hit.stock = `${(hit.created || []).filter((id) => (stocked.ok || []).includes(id)).length}/${(hit.created || []).length}`;
+      }
+      for (const one of (stocked.failed || [])) {
+        const hit = results.find((item) => (item.created || []).includes(one.offerId));
+        if (hit && hit.stock === 'skipped') hit.stock = `0/${(hit.created || []).length}`;
+        if (hit) hit.stockErrors = [...new Set([...(hit.stockErrors || []), ...(one.codes || [])])];
+      }
+    }
+    const stockedCount = results.filter((one) => /^\d+\/\d+$/.test(String(one.stock || '')) && Number(String(one.stock).split('/')[0]) > 0).length;
+    const failed = results.filter((one) => !(one.created || []).length);
+    globalThis.__SSERP_SPLIT_RESULT__ = {
+      total: cards.length, created: createdCount, stocked: stockedCount, skipped: skipped.length,
+      offerBase: merged.offerBase,
+      failed: failed.map((one) => ({ cardBase: one.cardBase, segment: one.segment, error: one.error, importErrors: one.importErrors, status: one.importStatus })),
+      cards: results.map((one) => ({ cardBase: one.cardBase, segment: one.segment, created: one.created, stock: one.stock, price: one.price })),
+    };
+    output.textContent = JSON.stringify(globalThis.__SSERP_SPLIT_RESULT__, null, 1).slice(0, 4000);
+    state.textContent = `拆卡上架完成：${createdCount}/${cards.length} 张卡已创建`
+      + (stockCount > 0 && warehouseId > 0 ? `，库存 ${stockedCount}/${createdCount}` : '（未设库存：仓库不可用）')
+      + (skipped.length ? `，已存在跳过 ${skipped.length}` : '')
+      + (failed.length ? `，失败 ${failed.length}` : '');
+    onPublished?.({ split: true, total: cards.length, created: createdCount, results });
   }
 
   describeBtn.addEventListener('click', (event) => {
@@ -2320,7 +2783,16 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     // 成本覆盖：采集值缺失或被人工改价时用面板输入
     const costOverride = Number(costInput.input.value) || 0;
     if (costOverride > 0) for (const sku of skus) sku.cost = costOverride;
-        const offers = skus.map((sku, index) => offerIdFor(prefixed, sku.key, index));
+        const offers = (() => {
+          // 拆卡模式下货号是「前缀 + 卡序号」（A1…A55），不是「前缀-尺码后缀」，
+          // 补库存必须用同一套货号，否则一条都对不上。
+          const segments = styleSegments(allSkus);
+          if (Boolean(splitByStyle.checked) && segments.length > 1) {
+            const cards = limitValue > 0 ? segments.slice(0, limitValue) : segments;
+            return cards.map((_segment, index) => prefixed + String(index + 1));
+          }
+          return skus.map((sku, index) => offerIdFor(prefixed, sku.key, index));
+        })();
         const stockCount = Number(stockInput.input.value);
         if (!(stockCount > 0)) throw new Error('库存要大于 0');
         if (!Number(warehouse.value)) await loadWarehouses();
@@ -2463,7 +2935,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     for (let attempt = 0; attempt < 10; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const context = getContext();
-      const sourceId = (context && (context.sourceProductId || context.offerBase)) || '';
+      const sourceId = sourceIdOf(context);
       if (!sourceId) continue;
       const stored = await loadGeneratedImages(sourceId);
       if (!stored.length) return;
