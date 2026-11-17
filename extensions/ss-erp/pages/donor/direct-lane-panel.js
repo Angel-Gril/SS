@@ -155,6 +155,14 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   updateExistingInput.id = 'ss-erp-update-existing';
   updateExistingInput.title = '同货号重新 import = 更新（只改标题/文案/属性，不新建卡、不动价格库存）';
   updateExistingWrap.append(updateExistingInput);
+  // 只做指定款式（序号 = 款式在采集里的顺序，与卡号一致）：只重建/更新这几张卡
+  const stylePickWrap = make('label', '', '只做款式 ');
+  const stylePickInput = make('input');
+  stylePickInput.type = 'text';
+  stylePickInput.placeholder = '如 1,45,48';
+  stylePickInput.style.width = '110px';
+  stylePickInput.setAttribute('data-persist', 'stylePick');
+  stylePickWrap.append(stylePickInput);
   // 类目：新商品在 ERP 不可用时就靠这两个数字；有缓存会自动填
   const catWrap = make('label', '', '类目（自动识别）');
   const catIdInput = make('input');
@@ -179,7 +187,7 @@ export function createDirectLanePanel({ root, make, send, getContext, status, re
   // 输入与动作分开：动作按钮单独一行，别占栅格单元（截图里会把输入挤歪）。
   const toolbarButtons = make('div', 'ssdl-buttons');
   toolbarButtons.append(applyMultiplier, autoPricing, refreshWarehouses);
-  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, splitByStyleWrap, updateExistingWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
+  toolbar.append(offerBaseWrap, skuLimitWrap, variantGroupWrap, splitByStyleWrap, updateExistingWrap, stylePickWrap, catWrap, costInput.wrap, multiplier.wrap, markup.wrap, strike.wrap, stockInput.wrap,
     weightInput.wrap, widthInput.wrap, heightInput.wrap, depthInput.wrap, warehouseWrap);
   toolbar.append(toolbarButtons);
 
@@ -1113,17 +1121,34 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     try {
       const all = await readPublishedSources();
       const previous = all[String(sourceId)] || {};
-      // splitBase：按款式拆卡时用的「卡号前缀」。普通上架没有这一项，保留旧值不影响判断。
+      // splitBases 可能有多条：同货源用新前缀**重建**某些卡是允许的（旧卡会归档），
+      // 但每个用过的前缀都要记账，避免第三次又拿一个新前缀盲目重发。
+      const bases = Array.isArray(previous.splitBases) ? previous.splitBases.map(String) : (previous.splitBase ? [String(previous.splitBase)] : []);
+      if (splitBase && !bases.includes(String(splitBase))) bases.push(String(splitBase));
       all[String(sourceId)] = splitBase
-        ? { offerBase: String(offerBase), splitBase: String(splitBase), at: new Date().toISOString() }
+        ? { offerBase: String(offerBase), splitBase: String(splitBase), splitBases: bases, at: new Date().toISOString() }
         : { offerBase: String(offerBase), at: new Date().toISOString() };
-      if (!splitBase && previous.splitBase) all[String(sourceId)].splitBase = previous.splitBase;
+      if (!splitBase && bases.length) all[String(sourceId)].splitBases = bases;
       await chrome.storage.local.set({ [PUBLISHED_KEY]: all });
     } catch (_e) { /* 记不上不影响上架 */ }
   }
 
-  function stripLinks(text) {
-    return String(text || "")
+  /**
+   * 描述必须在句子边界收尾。
+   * 文本模型会在 max_tokens 处硬断（实测 662 字截在「…Универсальный дизайн идеаль」），
+   * 这种半个词的描述写进 4191 之后，Ozon 那边更新描述会一直失败。
+   */
+  function trimToSentence(text, maxLen = 2000) {
+    let out = String(text || '').trim();
+    if (out.length > maxLen) out = out.slice(0, maxLen);
+    if (!/[.!?]$/.test(out)) {
+      const cut = Math.max(out.lastIndexOf('. '), out.lastIndexOf('! '), out.lastIndexOf('? '));
+      if (cut > 80) out = out.slice(0, cut + 1);
+    }
+    return out.replace(/\s+/g, ' ').trim();
+  }
+
+  function stripLinks(text) {    return String(text || "")
       .replace(/https?:\/\/\S+/gi, "")
       .replace(/www\.\S+/gi, "")
       .replace(/[a-z0-9-]+\.(com|cn|ru|net|org)(\/\S*)?/gi, "")
@@ -1907,7 +1932,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       }
     }
     // 描述：不能直接发中文摘要（Ozon 侧会存成空），用 AI 生成俄文；失败退回俄文标题。
-    const autoDescription = await (async () => {
+    const autoDescription = trimToSentence(await (async () => {
       const manual = String(descInput.value || "").trim();
       if (manual) return manual;
       const summary = String(reportForText["视觉总结"] || lastVisionText || "").trim();
@@ -1924,7 +1949,7 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
         }
       } catch (_e) { /* 退回下面的兜底 */ }
       return [titleRu, typeRu].filter(Boolean).join(". ").slice(0, 600);
-    })();
+    })());
     // 描述必须落在属性 4191「简介」上：实测 item 级 description 会被忽略，
     // /v1/product/info/description 一直是空，卡片审核被判「Не удалось создать описание」。
     try {
@@ -2149,7 +2174,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     }
     // 拆卡模式下「SKU 上限」按**卡数**算：分批试跑/续跑都靠它
     const limit = Number(String(skuLimitInput.value || '0')) || 0;
-    const picked = limit > 0 ? segments.slice(0, limit) : segments;
+    // 「只做款式」：填 1,3,45 就只重做这几张卡（序号 = 款式在采集里的顺序，与卡号一致）。
+    // 用途：只重建被 Ozon 判 declined 的那几张，不去碰已经 approved 的卡。
+    const pickText = String((stylePickInput && stylePickInput.value) || '').trim();
+    const pickedSet = pickText
+      ? new Set(pickText.split(/[,，\s]+/).filter(Boolean)
+        .map((one) => (/^\d+$/.test(one) ? segments[Number(one) - 1] : one))
+        .filter(Boolean))
+      : null;
+    const picked = (limit > 0 ? segments.slice(0, limit) : segments)
+      .filter((segment) => !pickedSet || pickedSet.has(segment));
+    if (!picked.length) throw new Error('「只做款式」没有匹配到任何款式，检查序号/款式名');
     const originalBase = String(context.offerBase || '');
     // 「更新已存在卡」：卡已经在 Ozon 上时，同货号重新 import 就是**更新**（标题/文案/属性），
     // 不新建、不动价格库存。改 55 条标题就靠它，否则只能跳过。
@@ -2162,7 +2197,9 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
     let updatedCount = 0;
     try {
       for (const [index, segment] of picked.entries()) {
-        const cardBase = base + String(index + 1);
+        // 卡号跟「款式在采集里的顺序」绑定（不是本次 picked 的序号）：
+        // 只重做几张卡时 B45 仍然对应第 45 个款式，换前缀也不会错位。
+        const cardBase = base + String(segments.indexOf(segment) + 1);
         const subSkus = allSkus.filter((sku) => styleOf(sku) === segment);
         state.textContent = `拆卡规划 ${index + 1}/${picked.length}：${segment}`;
         let built = null;
@@ -2248,11 +2285,17 @@ let lastWorkspaceForPlan = null;   // 规则版提示词要读已填属性
       const ledger = await readPublishedSources();
       const hit = ledger[sourceId];
       const splitBase = splitting ? String(plan.offerBase || '') : '';
-      // 拆卡时记的是「卡号前缀」（A）；普通上架记的是货号前缀。各比各的，别互相顶。
+      // 拆卡时记的是「卡号前缀」（A/B…）；普通上架记的是货号前缀。各比各的，别互相顶。
       const currentBase = splitting ? splitBase : String(ctx0.offerBase || '');
-      const recorded = hit && (splitting ? String(hit.splitBase || '') : String(hit.offerBase || ''));
-      if (recorded && recorded !== currentBase) {
-        throw new Error(`这个货源商品已经用前缀 ${recorded} 上架过了（${String(hit.at || '').slice(0, 10)}）。` +
+      // 拆卡允许多个前缀（重建某些卡时会用新前缀，旧卡归档）；只要每次换前缀都被记进台账，
+      // 就不会出现「同一个货源漫无目的地换前缀重发」。
+      const recordedList = hit
+        ? (splitting
+          ? (Array.isArray(hit.splitBases) ? hit.splitBases.map(String) : (hit.splitBase ? [String(hit.splitBase)] : []))
+          : (hit.offerBase ? [String(hit.offerBase)] : []))
+        : [];
+      if (recordedList.length && !recordedList.includes(currentBase)) {
+        throw new Error(`这个货源商品已经用前缀 ${recordedList.join('/')} 上架过了（${String(hit.at || '').slice(0, 10)}）。` +
           '换前缀重发会被 Ozon 判「类似商品重复」。要改内容请用原前缀更新，要补库存请点「补库存」。');
       }
       void rememberPublished(sourceId, currentBase, splitBase);
